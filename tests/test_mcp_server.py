@@ -24,6 +24,10 @@ def test_mcp_server_has_tools():
         "advance_novel",
         "get_review_result",
         "get_fast_review_result",
+        "brainstorm_novel",
+        "plan_volume",
+        "get_synopsis",
+        "get_volume_plan",
     }
     assert set(mcp.tools.keys()) == expected
 
@@ -333,3 +337,115 @@ async def test_mcp_get_fast_review_result():
 
     result = await mcp.tools["get_fast_review_result"](novel_id)
     assert result["fast_review_score"] is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_brainstorm_novel():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_brain_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        await DocumentRepository(session).create(
+            f"d_{suffix}", novel_id, "worldview", "WV", "天玄大陆"
+        )
+        await session.commit()
+
+    result = await mcp.tools["brainstorm_novel"](novel_id)
+    assert result["title"] == "天玄纪元"
+    assert result["estimated_volumes"] > 0
+
+
+@pytest.mark.asyncio
+async def test_mcp_plan_volume():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.outline import SynopsisData
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_plan_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        await DocumentRepository(session).create(
+            f"d_{suffix}", novel_id, "worldview", "WV", "大陆"
+        )
+        director = NovelDirector(session=session)
+        synopsis = SynopsisData(
+            title="T", logline="L", core_conflict="C",
+            estimated_volumes=1, estimated_total_chapters=1, estimated_total_words=3000,
+        )
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.VOLUME_PLANNING,
+            checkpoint_data={"synopsis_data": synopsis.model_dump()},
+            volume_id=None,
+            chapter_id=None,
+        )
+        await session.commit()
+
+    result = await mcp.tools["plan_volume"](novel_id)
+    assert result["volume_id"] == "vol_1"
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_synopsis():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_syn_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        await DocumentRepository(session).create(
+            f"d_{suffix}", novel_id, "worldview", "WV", "大陆"
+        )
+        await session.commit()
+
+    await mcp.tools["brainstorm_novel"](novel_id)
+    result = await mcp.tools["get_synopsis"](novel_id)
+    assert "content" in result
+    assert "synopsis_data" in result
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_volume_plan():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.outline import SynopsisData
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_vp_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        await DocumentRepository(session).create(
+            f"d_{suffix}", novel_id, "worldview", "WV", "大陆"
+        )
+        director = NovelDirector(session=session)
+        synopsis = SynopsisData(
+            title="T", logline="L", core_conflict="C",
+            estimated_volumes=1, estimated_total_chapters=1, estimated_total_words=3000,
+        )
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.VOLUME_PLANNING,
+            checkpoint_data={"synopsis_data": synopsis.model_dump()},
+            volume_id=None,
+            chapter_id=None,
+        )
+        await session.commit()
+
+    await mcp.tools["plan_volume"](novel_id)
+    result = await mcp.tools["get_volume_plan"](novel_id)
+    assert result["volume_id"] == "vol_1"

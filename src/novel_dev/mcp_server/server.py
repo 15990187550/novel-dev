@@ -1,3 +1,5 @@
+from typing import Optional
+
 from novel_dev.db.engine import async_session_maker
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.extraction_service import ExtractionService
@@ -12,6 +14,8 @@ from novel_dev.agents.style_profiler import StyleProfilerAgent
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.agents.director import NovelDirector
+from novel_dev.agents.brainstorm_agent import BrainstormAgent
+from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.schemas.context import ChapterContext
 
 
@@ -38,6 +42,10 @@ class NovelDevMCPServer:
             "advance_novel": self.advance_novel,
             "get_review_result": self.get_review_result,
             "get_fast_review_result": self.get_fast_review_result,
+            "brainstorm_novel": self.brainstorm_novel,
+            "plan_volume": self.plan_volume,
+            "get_synopsis": self.get_synopsis,
+            "get_volume_plan": self.get_volume_plan,
         }
 
     async def query_entity(self, entity_id: str) -> dict:
@@ -267,6 +275,71 @@ class NovelDevMCPServer:
                 "fast_review_score": ch.fast_review_score,
                 "fast_review_feedback": ch.fast_review_feedback,
             }
+
+    async def brainstorm_novel(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            agent = BrainstormAgent(session)
+            try:
+                synopsis_data = await agent.brainstorm(novel_id)
+                await session.commit()
+                return {
+                    "title": synopsis_data.title,
+                    "logline": synopsis_data.logline,
+                    "estimated_volumes": synopsis_data.estimated_volumes,
+                    "estimated_total_chapters": synopsis_data.estimated_total_chapters,
+                }
+            except ValueError as e:
+                return {"error": str(e)}
+
+    async def plan_volume(self, novel_id: str, volume_number: Optional[int] = None) -> dict:
+        async with async_session_maker() as session:
+            agent = VolumePlannerAgent(session)
+            try:
+                plan = await agent.plan(novel_id, volume_number)
+                await session.commit()
+                return {
+                    "volume_id": plan.volume_id,
+                    "volume_number": plan.volume_number,
+                    "title": plan.title,
+                    "total_chapters": plan.total_chapters,
+                    "chapters": [
+                        {
+                            "chapter_id": ch.chapter_id,
+                            "chapter_number": ch.chapter_number,
+                            "title": ch.title,
+                            "summary": ch.summary,
+                        }
+                        for ch in plan.chapters
+                    ],
+                }
+            except ValueError as e:
+                return {"error": str(e)}
+            except RuntimeError as e:
+                return {"error": str(e)}
+
+    async def get_synopsis(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            repo = DocumentRepository(session)
+            state_repo = NovelStateRepository(session)
+            docs = await repo.get_by_type(novel_id, "synopsis")
+            if not docs:
+                return {"error": "Synopsis not found"}
+            state = await state_repo.get_state(novel_id)
+            synopsis_data = {}
+            if state and state.checkpoint_data:
+                synopsis_data = state.checkpoint_data.get("synopsis_data", {})
+            return {
+                "content": docs[0].content,
+                "synopsis_data": synopsis_data,
+            }
+
+    async def get_volume_plan(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            state_repo = NovelStateRepository(session)
+            state = await state_repo.get_state(novel_id)
+            if not state or not state.checkpoint_data.get("current_volume_plan"):
+                return {"error": "Volume plan not found"}
+            return state.checkpoint_data["current_volume_plan"]
 
 
 mcp = NovelDevMCPServer()
