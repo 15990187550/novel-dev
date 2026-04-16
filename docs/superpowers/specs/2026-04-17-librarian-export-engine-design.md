@@ -145,30 +145,49 @@ def fallback_extract(self, polished_text: str, checkpoint_data: dict) -> Extract
 ### 3.5 Persist Logic
 
 ```python
-async def persist(self, extraction: ExtractionResult) -> None:
+async def persist(self, extraction: ExtractionResult, chapter_id: str) -> None:
     # Timeline
     for event in extraction.timeline_events:
         await self.timeline_repo.create(event.tick, event.narrative, event.anchor_event_id)
 
-    # Spaceline
+    # Spaceline (add get_by_id to repository if missing)
     for change in extraction.spaceline_changes:
-        await self.spaceline_repo.create_or_update(change.location_id, change.name, change.parent_id, change.narrative)
+        node = await self.spaceline_repo.get_by_id(change.location_id)
+        if node:
+            node.name = change.name
+            node.parent_id = change.parent_id
+            node.narrative = change.narrative or node.narrative
+            await self.session.flush()
+        else:
+            await self.spaceline_repo.create(change.location_id, change.name, change.parent_id, change.narrative)
 
     # New entities + initial version
+    import uuid
     for entity in extraction.new_entities:
-        await self.entity_service.create_entity(entity.type, entity.name, entity.state)
+        eid = str(uuid.uuid4())
+        await self.entity_service.create_entity(eid, entity.type, entity.name)
+        await self.entity_service.update_state(eid, entity.state, diff_summary={"created": True})
 
     # Concept/Character updates → append version
     for update in extraction.concept_updates + extraction.character_updates:
-        await self.entity_service.append_version(update.entity_id, update.state, update.diff_summary)
+        await self.entity_service.update_state(update.entity_id, update.state, diff_summary=update.diff_summary)
 
     # Foreshadowings recovered
     for fs_id in extraction.foreshadowings_recovered:
-        await self.foreshadowing_repo.update_recovered(fs_id)
+        await self.foreshadowing_repo.mark_recovered(fs_id, chapter_id=chapter_id)
 
     # New foreshadowings
+    import uuid
     for fs in extraction.new_foreshadowings:
-        await self.foreshadowing_repo.create(fs)
+        fs_id = str(uuid.uuid4())
+        await self.foreshadowing_repo.create(
+            fs_id=fs_id,
+            content=fs.content,
+            埋下_chapter_id=fs.埋下_chapter_id,
+            埋下_time_tick=fs.埋下_time_tick,
+            埋下_location_id=fs.埋下_location_id,
+            回收条件=fs.回收条件,
+        )
 ```
 
 ---
@@ -347,7 +366,7 @@ async def _run_librarian(self, state: NovelState) -> NovelState:
                 f"Librarian extraction failed: LLM={llm_error}, fallback={fallback_error}"
             )
 
-    await agent.persist(extraction)
+    await agent.persist(extraction, chapter_id)
 
     settings = Settings()
     archive_svc = ArchiveService(self.session, settings.markdown_output_dir)
