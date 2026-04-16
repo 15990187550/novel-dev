@@ -25,7 +25,7 @@ VALID_TRANSITIONS = {
     Phase.EDITING: [Phase.FAST_REVIEWING],
     Phase.FAST_REVIEWING: [Phase.LIBRARIAN, Phase.DRAFTING, Phase.EDITING],
     Phase.LIBRARIAN: [Phase.COMPLETED],
-    Phase.COMPLETED: [Phase.CONTEXT_PREPARATION],
+    Phase.COMPLETED: [Phase.CONTEXT_PREPARATION, Phase.VOLUME_PLANNING],
 }
 
 
@@ -66,6 +66,8 @@ class NovelDirector:
             raise ValueError(f"Novel state not found for {novel_id}")
         current = Phase(state.current_phase)
 
+        if current == Phase.VOLUME_PLANNING:
+            return await self._run_volume_planner(state)
         if current == Phase.REVIEWING:
             return await self._run_critic(state)
         elif current == Phase.EDITING:
@@ -74,6 +76,12 @@ class NovelDirector:
             return await self._run_fast_review(state)
         else:
             raise ValueError(f"Cannot auto-advance from {current}")
+
+    async def _run_volume_planner(self, state: NovelState) -> NovelState:
+        from novel_dev.agents.volume_planner import VolumePlannerAgent
+        agent = VolumePlannerAgent(self.session)
+        await agent.plan(state.novel_id)
+        return await self.resume(state.novel_id)
 
     async def _run_critic(self, state: NovelState) -> NovelState:
         from novel_dev.agents.critic_agent import CriticAgent
