@@ -54,3 +54,11 @@ async def test_style_rollback(async_session):
     active = await svc.get_active_style_profile("n1")
     assert active is not None
     assert active.version == 1
+    assert "a" * 10000 in active.content or "Overall:" in active.content
+
+
+@pytest.mark.asyncio
+async def test_approve_nonexistent_pending(async_session):
+    svc = ExtractionService(async_session)
+    docs = await svc.approve_pending("pe_does_not_exist")
+    assert docs == []
