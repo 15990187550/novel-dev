@@ -1,3 +1,4 @@
+import uuid
 from enum import Enum
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -174,7 +175,6 @@ class NovelDirector:
             except ValueError:
                 pass
 
-        import uuid
         next_volume_id = f"vol_{current_volume_number + 1}"
         avg_word_count = checkpoint.get("archive_stats", {}).get("avg_word_count", 3000)
         placeholder_volume = {
