@@ -28,13 +28,13 @@ class NovelStateRepository:
                 current_phase=current_phase,
                 current_volume_id=current_volume_id,
                 current_chapter_id=current_chapter_id,
-                checkpoint_data=checkpoint_data,
+                checkpoint_data=dict(checkpoint_data),
             )
             self.session.add(state)
         else:
             state.current_phase = current_phase
             state.current_volume_id = current_volume_id
             state.current_chapter_id = current_chapter_id
-            state.checkpoint_data = checkpoint_data
+            state.checkpoint_data = dict(checkpoint_data)
         await self.session.flush()
         return state

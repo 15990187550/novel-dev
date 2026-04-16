@@ -22,7 +22,7 @@ class WriterAgent:
         if state.current_phase != Phase.DRAFTING.value:
             raise ValueError(f"Cannot write draft from phase {state.current_phase}")
 
-        checkpoint = state.checkpoint_data or {}
+        checkpoint = dict(state.checkpoint_data or {})
         if not checkpoint.get("chapter_context"):
             raise ValueError("chapter_context missing in checkpoint_data")
 

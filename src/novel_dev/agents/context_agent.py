@@ -34,7 +34,7 @@ class ContextAgent:
         if not self.director.can_transition(Phase(state.current_phase), Phase.DRAFTING):
             raise ValueError(f"Cannot prepare context from phase {state.current_phase}")
 
-        checkpoint = state.checkpoint_data or {}
+        checkpoint = dict(state.checkpoint_data or {})
         chapter_plan_data = checkpoint.get("current_chapter_plan")
         if not chapter_plan_data:
             raise ValueError("current_chapter_plan missing in checkpoint_data")

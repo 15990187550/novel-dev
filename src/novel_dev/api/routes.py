@@ -12,6 +12,9 @@ from pydantic import BaseModel
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.agents.context_agent import ContextAgent
+from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.schemas.context import ChapterContext
 
 router = APIRouter()
 settings = Settings()
@@ -85,6 +88,14 @@ class ApproveRequest(BaseModel):
 
 class RollbackRequest(BaseModel):
     version: int
+
+
+class ChapterContextRequest(BaseModel):
+    pass
+
+
+class ChapterDraftRequest(BaseModel):
+    pass
 
 
 @router.post("/api/novels/{novel_id}/documents/upload")
@@ -161,3 +172,72 @@ async def rollback_style_profile(novel_id: str, req: RollbackRequest, session: A
     svc = ExtractionService(session)
     await svc.rollback_style_profile(novel_id, req.version)
     return {"rolled_back_to_version": req.version}
+
+
+@router.post("/api/novels/{novel_id}/chapters/{chapter_id}/context")
+async def prepare_chapter_context(
+    novel_id: str,
+    chapter_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    agent = ContextAgent(session)
+    try:
+        context = await agent.assemble(novel_id, chapter_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "chapter_plan_title": context.chapter_plan.title,
+        "active_entities_count": len(context.active_entities),
+        "pending_foreshadowings_count": len(context.pending_foreshadowings),
+        "timeline_events_count": len(context.timeline_events),
+    }
+
+
+@router.post("/api/novels/{novel_id}/chapters/{chapter_id}/draft")
+async def generate_chapter_draft(
+    novel_id: str,
+    chapter_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    checkpoint = state.checkpoint_data or {}
+    context_data = checkpoint.get("chapter_context")
+    if not context_data:
+        raise HTTPException(status_code=400, detail="Chapter context not prepared. Call POST /context first.")
+
+    context = ChapterContext.model_validate(context_data)
+    agent = WriterAgent(session)
+    try:
+        metadata = await agent.write(novel_id, context, chapter_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    return metadata.model_dump()
+
+
+@router.get("/api/novels/{novel_id}/chapters/{chapter_id}/draft")
+async def get_chapter_draft(
+    novel_id: str,
+    chapter_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = ChapterRepository(session)
+    ch = await repo.get_by_id(chapter_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    checkpoint = state.checkpoint_data if state else {}
+
+    return {
+        "chapter_id": ch.id,
+        "status": ch.status,
+        "raw_draft": ch.raw_draft,
+        "drafting_progress": checkpoint.get("drafting_progress"),
+        "draft_metadata": checkpoint.get("draft_metadata"),
+    }
