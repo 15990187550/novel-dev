@@ -11,6 +11,7 @@ async def test_extract_from_text():
     修炼体系：炼气、筑基、金丹。
     势力：青云宗是正道魁首。
     主角林风，青云宗外门弟子，性格坚韧隐忍，目标为父报仇。
+    人物张三，反派头目，阴险狡诈。
     重要物品：残缺玉佩，上古魔宗信物，揭示主角身世。
     剧情：林风因家族被灭门，拜入青云宗。
     """
@@ -18,4 +19,5 @@ async def test_extract_from_text():
     assert isinstance(result, ExtractedSetting)
     assert "天玄大陆" in result.worldview
     assert any(c.name == "林风" for c in result.character_profiles)
+    assert any(c.name == "张三" for c in result.character_profiles)
     assert any(i.name == "残缺玉佩" for i in result.important_items)

@@ -56,7 +56,7 @@ class SettingExtractorAgent:
     def _extract_characters(self, text: str) -> List[CharacterProfile]:
         chars = []
         # Match lines like: 主角林风，青云宗外门弟子，性格坚韧隐忍，目标为父报仇。
-        pattern = re.compile(r"主角(\S+?)[，,、]\s*(.+?)(?=\n|。|$)")
+        pattern = re.compile(r"(?:主角|人物)(\S+?)[，,、]\s*(.+?)(?=\n|。|$)")
         for name, rest in pattern.findall(text):
             chars.append(CharacterProfile(name=name, identity=rest))
         return chars
