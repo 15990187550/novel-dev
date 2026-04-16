@@ -1,10 +1,18 @@
-import pytest
-
 from novel_dev.agents.profile_merger import ProfileMerger, MergeResult
 from novel_dev.agents.style_profiler import StyleProfile, StyleConfig
 
 
 def test_merge_no_conflict():
+    merger = ProfileMerger()
+    old = StyleProfile(style_guide="Old guide", style_config=StyleConfig(perspective="limited", tone="neutral"))
+    new = StyleProfile(style_guide="New guide", style_config=StyleConfig(perspective="limited", tone="neutral"))
+    result = merger.merge(old, new)
+    assert result.merged_profile.style_config.perspective == "limited"
+    assert result.merged_profile.style_config.tone == "neutral"
+    assert len(result.conflicts) == 0
+
+
+def test_merge_detects_conflict():
     merger = ProfileMerger()
     old = StyleProfile(style_guide="Old guide", style_config=StyleConfig(perspective="limited", tone="neutral"))
     new = StyleProfile(style_guide="New guide", style_config=StyleConfig(perspective="limited", tone="intense"))
