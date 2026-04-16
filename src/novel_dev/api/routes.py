@@ -18,7 +18,7 @@ from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
-from novel_dev.schemas.outline import SynopsisData, VolumePlan
+from novel_dev.schemas.outline import VolumePlan
 
 router = APIRouter()
 settings = Settings()
@@ -368,4 +368,19 @@ async def get_volume_plan(novel_id: str, session: AsyncSession = Depends(get_ses
     state = await state_repo.get_state(novel_id)
     if not state or not state.checkpoint_data.get("current_volume_plan"):
         raise HTTPException(status_code=404, detail="Volume plan not found")
-    return state.checkpoint_data["current_volume_plan"]
+    plan = VolumePlan.model_validate(state.checkpoint_data["current_volume_plan"])
+    return {
+        "volume_id": plan.volume_id,
+        "volume_number": plan.volume_number,
+        "title": plan.title,
+        "total_chapters": plan.total_chapters,
+        "chapters": [
+            {
+                "chapter_id": ch.chapter_id,
+                "chapter_number": ch.chapter_number,
+                "title": ch.title,
+                "summary": ch.summary,
+            }
+            for ch in plan.chapters
+        ],
+    }
