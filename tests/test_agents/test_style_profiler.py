@@ -28,4 +28,22 @@ async def test_profile_from_text():
     text = "林风握紧了剑。剑光一闪，敌人倒下。"
     profile = await agent.profile(text)
     assert profile.style_guide != ""
-    assert profile.style_config.perspective != ""
+    assert profile.style_config.perspective == "omniscient"
+    assert profile.style_config.tone == "intense"
+    assert profile.style_config.pacing == "moderate"
+
+
+@pytest.mark.asyncio
+async def test_profile_limited_perspective():
+    agent = StyleProfilerAgent()
+    text = "他走进了房间，看着窗外的风景。"
+    profile = await agent.profile(text)
+    assert profile.style_config.perspective == "limited"
+    assert profile.style_config.tone == "neutral"
+
+
+def test_dialogue_ratio():
+    agent = StyleProfilerAgent()
+    text = '他说："你好。"她又道："再见。"'
+    ratio = agent._dialogue_ratio(text)
+    assert ratio > 0

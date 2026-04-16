@@ -1,4 +1,5 @@
 import math
+from collections import Counter
 from typing import List
 from pydantic import BaseModel
 
@@ -57,7 +58,7 @@ class StyleProfilerAgent:
             pacing="fast" if len(sampled) > 10 else "moderate",
             vocabulary_preferences=self._extract_vocabulary(text),
             perspective="limited" if "他" in text or "她" in text else "omniscient",
-            tone="intense" if "杀" in text or "血" in text else "neutral",
+            tone="intense" if "杀" in text or "血" in text or "剑" in text else "neutral",
             evolution_notes="",
         )
 
@@ -77,14 +78,12 @@ class StyleProfilerAgent:
         return sum(len(s) for s in sentences) / len(sentences)
 
     def _dialogue_ratio(self, text: str) -> float:
-        quotes = text.count("\"") + text.count("\"") + text.count("'")
+        quotes = text.count('"') + text.count("'") + text.count("“") + text.count("”")
         return round(quotes / max(len(text), 1), 3)
 
     def _extract_vocabulary(self, text: str) -> List[str]:
         # Simple high-frequency bigrams
         words = list(text)
-        from collections import Counter
-
         bigrams = [words[i] + words[i + 1] for i in range(len(words) - 1)]
         freq = Counter(bigrams)
         return [bg for bg, _ in freq.most_common(5)]
