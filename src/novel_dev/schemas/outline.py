@@ -52,11 +52,11 @@ class VolumePlan(BaseModel):
 
 
 class VolumeScoreResult(BaseModel):
-    overall: int
-    outline_fidelity: int
-    character_plot_alignment: int
-    hook_distribution: int
-    foreshadowing_management: int
-    chapter_hooks: int
-    page_turning: int
+    overall: int = Field(ge=0, le=100)
+    outline_fidelity: int = Field(ge=0, le=100)
+    character_plot_alignment: int = Field(ge=0, le=100)
+    hook_distribution: int = Field(ge=0, le=100)
+    foreshadowing_management: int = Field(ge=0, le=100)
+    chapter_hooks: int = Field(ge=0, le=100)
+    page_turning: int = Field(ge=0, le=100)
     summary_feedback: str

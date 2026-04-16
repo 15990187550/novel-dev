@@ -60,3 +60,31 @@ def test_volume_score_result_creation():
         summary_feedback="Solid plan",
     )
     assert result.overall == 88
+
+
+def test_default_lists():
+    arc = CharacterArc(name="Hero", arc_summary="Grows")
+    assert arc.key_turning_points == []
+
+    milestone = PlotMilestone(act="Act 1", summary="Setup")
+    assert milestone.climax_event is None
+
+    data = SynopsisData(
+        title="T",
+        logline="L",
+        core_conflict="C",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=1000,
+    )
+    assert data.themes == []
+    assert data.character_arcs == []
+    assert data.milestones == []
+
+
+def test_volume_score_result_bounds():
+    with pytest.raises(ValueError):
+        VolumeScoreResult(overall=-1, outline_fidelity=0, character_plot_alignment=0, hook_distribution=0, foreshadowing_management=0, chapter_hooks=0, page_turning=0, summary_feedback="bad")
+
+    with pytest.raises(ValueError):
+        VolumeScoreResult(overall=101, outline_fidelity=0, character_plot_alignment=0, hook_distribution=0, foreshadowing_management=0, chapter_hooks=0, page_turning=0, summary_feedback="bad")
