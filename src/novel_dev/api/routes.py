@@ -8,6 +8,10 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
 from novel_dev.config import Settings
+from pydantic import BaseModel
+from novel_dev.services.extraction_service import ExtractionService
+from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.repositories.document_repo import DocumentRepository
 
 router = APIRouter()
 settings = Settings()
@@ -68,3 +72,88 @@ async def export_chapter(novel_id: str, chapter_id: str, session: AsyncSession =
     sync = MarkdownSync(settings.markdown_output_dir)
     path = await sync.write_chapter(novel_id, ch.volume_id, chapter_id, ch.polished_text)
     return {"exported_path": path, "content": ch.polished_text}
+
+
+class UploadRequest(BaseModel):
+    filename: str
+    content: str
+
+
+class ApproveRequest(BaseModel):
+    pending_id: str
+
+
+class RollbackRequest(BaseModel):
+    version: int
+
+
+@router.post("/api/novels/{novel_id}/documents/upload")
+async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    pe = await svc.process_upload(novel_id, req.filename, req.content)
+    return {
+        "id": pe.id,
+        "extraction_type": pe.extraction_type,
+        "status": pe.status,
+        "created_at": pe.created_at.isoformat(),
+    }
+
+
+@router.get("/api/novels/{novel_id}/documents/pending")
+async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = PendingExtractionRepository(session)
+    items = await repo.list_by_novel(novel_id)
+    return {
+        "items": [
+            {
+                "id": i.id,
+                "extraction_type": i.extraction_type,
+                "status": i.status,
+                "raw_result": i.raw_result,
+                "proposed_entities": i.proposed_entities,
+                "created_at": i.created_at.isoformat(),
+            }
+            for i in items
+        ]
+    }
+
+
+@router.post("/api/novels/{novel_id}/documents/pending/approve")
+async def approve_pending_document(novel_id: str, req: ApproveRequest, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    docs = await svc.approve_pending(req.pending_id)
+    return {
+        "documents": [
+            {
+                "id": d.id,
+                "doc_type": d.doc_type,
+                "title": d.title,
+                "content": d.content[:500],
+                "version": d.version,
+            }
+            for d in docs
+        ]
+    }
+
+
+@router.get("/api/novels/{novel_id}/style_profile/versions")
+async def list_style_profile_versions(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = DocumentRepository(session)
+    docs = await repo.get_by_type(novel_id, "style_profile")
+    return {
+        "versions": [
+            {
+                "version": d.version,
+                "updated_at": d.updated_at.isoformat(),
+                "title": d.title,
+            }
+            for d in docs
+        ]
+    }
+
+
+@router.post("/api/novels/{novel_id}/style_profile/rollback")
+async def rollback_style_profile(novel_id: str, req: RollbackRequest, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    await svc.rollback_style_profile(novel_id, req.version)
+    return {"rolled_back_to_version": req.version}
