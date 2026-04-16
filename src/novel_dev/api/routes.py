@@ -14,6 +14,7 @@ from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepo
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
 
 router = APIRouter()
@@ -240,4 +241,57 @@ async def get_chapter_draft(
         "raw_draft": ch.raw_draft,
         "drafting_progress": checkpoint.get("drafting_progress"),
         "draft_metadata": checkpoint.get("draft_metadata"),
+    }
+
+
+@router.post("/api/novels/{novel_id}/advance")
+async def advance_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    director = NovelDirector(session)
+    try:
+        state = await director.advance(novel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "novel_id": state.novel_id,
+        "current_phase": state.current_phase,
+        "checkpoint_data": state.checkpoint_data,
+    }
+
+
+@router.get("/api/novels/{novel_id}/review")
+async def get_review_result(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    if not state.current_chapter_id:
+        raise HTTPException(status_code=404, detail="Current chapter not set")
+    ch_repo = ChapterRepository(session)
+    ch = await ch_repo.get_by_id(state.current_chapter_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "score_overall": ch.score_overall,
+        "score_breakdown": ch.score_breakdown,
+        "review_feedback": ch.review_feedback,
+    }
+
+
+@router.get("/api/novels/{novel_id}/fast_review")
+async def get_fast_review_result(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    if not state.current_chapter_id:
+        raise HTTPException(status_code=404, detail="Current chapter not set")
+    ch_repo = ChapterRepository(session)
+    ch = await ch_repo.get_by_id(state.current_chapter_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "fast_review_score": ch.fast_review_score,
+        "fast_review_feedback": ch.fast_review_feedback,
     }
