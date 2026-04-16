@@ -1,4 +1,3 @@
-import os
 import pytest
 import tempfile
 
@@ -6,27 +5,80 @@ from novel_dev.services.export_service import ExportService
 from novel_dev.repositories.chapter_repo import ChapterRepository
 
 
+@pytest.fixture
+async def svc(async_session):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        yield ExportService(async_session, tmpdir)
+
+
 @pytest.mark.asyncio
-async def test_export_volume_and_novel(async_session):
+async def test_export_volume_filters_archived(async_session, svc):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
     await ChapterRepository(async_session).create("c2", "v1", 2, "Ch2")
     await ChapterRepository(async_session).update_text("c1", polished_text="p1")
     await ChapterRepository(async_session).update_text("c2", polished_text="p2")
     await ChapterRepository(async_session).update_status("c1", "archived")
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        svc = ExportService(async_session, tmpdir)
-        path = await svc.export_volume("n1", "v1", format="md")
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "p1" in content
-        assert "p2" not in content  # not archived
+    path = await svc.export_volume("n1", "v1", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-        path2 = await svc.export_novel("n1", format="md")
-        with open(path2, "r", encoding="utf-8") as f:
-            content2 = f.read()
-        assert "p1" in content2
-        assert "p2" not in content2
+    assert "# Ch1" in content
+    assert "p1" in content
+    assert "p2" not in content
 
-        with pytest.raises(ValueError):
-            await svc.export_novel("n1", format="pdf")
+
+@pytest.mark.asyncio
+async def test_export_novel_aggregates_volumes(async_session, svc):
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).update_text("c1", polished_text="p1")
+    await ChapterRepository(async_session).update_status("c1", "archived")
+
+    path = await svc.export_novel("n1", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "## Volume v1" in content
+    assert "# Ch1" in content
+    assert "p1" in content
+
+
+@pytest.mark.asyncio
+async def test_export_unsupported_format_raises(svc):
+    with pytest.raises(ValueError, match="Unsupported format: pdf"):
+        await svc.export_volume("n1", "v1", format="pdf")
+    with pytest.raises(ValueError, match="Unsupported format: pdf"):
+        await svc.export_novel("n1", format="pdf")
+
+
+@pytest.mark.asyncio
+async def test_export_txt_format(async_session, svc):
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).update_text("c1", polished_text="p1")
+    await ChapterRepository(async_session).update_status("c1", "archived")
+
+    path = await svc.export_volume("n1", "v1", format="txt")
+    assert path.endswith("volume.txt")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    assert "# Ch1" in content
+    assert "p1" in content
+
+    path2 = await svc.export_novel("n1", format="txt")
+    assert path2.endswith("novel.txt")
+    with open(path2, "r", encoding="utf-8") as f:
+        content2 = f.read()
+    assert "## Volume v1" in content2
+    assert "# Ch1" in content2
+
+
+@pytest.mark.asyncio
+async def test_export_volume_empty_archived_skips(async_session, svc):
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).update_text("c1", polished_text="p1")
+
+    path = await svc.export_volume("n1", "v1", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert content == ""

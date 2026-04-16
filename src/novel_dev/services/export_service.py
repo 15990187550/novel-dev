@@ -12,16 +12,19 @@ class ExportService:
         self.chapter_repo = ChapterRepository(session)
         self.sync = MarkdownSync(markdown_base_dir)
 
+    def _render_chapters(self, chapters) -> str:
+        lines = []
+        for ch in chapters:
+            title = ch.title or f"第{ch.chapter_number}章"
+            lines.append(f"# {title}\n\n{ch.polished_text}")
+        return "\n\n".join(lines)
+
     async def export_volume(self, novel_id: str, volume_id: str, format: str = "md") -> str:
         if format not in ("md", "txt"):
             raise ValueError(f"Unsupported format: {format}")
         chapters = await self.chapter_repo.list_by_volume(volume_id)
         archived = [ch for ch in chapters if ch.status == "archived"]
-        lines = []
-        for ch in archived:
-            title = ch.title or f"第{ch.chapter_number}章"
-            lines.append(f"# {title}\n\n{ch.polished_text}")
-        content = "\n\n".join(lines)
+        content = self._render_chapters(archived)
         return await self.sync.write_volume(novel_id, volume_id, f"volume.{format}", content)
 
     async def export_novel(self, novel_id: str, format: str = "md") -> str:
@@ -38,11 +41,8 @@ class ExportService:
             archived = [ch for ch in chapters if ch.status == "archived"]
             if not archived:
                 continue
-            lines = []
-            for ch in archived:
-                title = ch.title or f"第{ch.chapter_number}章"
-                lines.append(f"# {title}\n\n{ch.polished_text}")
-            parts.append(f"## Volume {vid}\n\n" + "\n\n".join(lines))
+            rendered = self._render_chapters(archived)
+            parts.append(f"## Volume {vid}\n\n{rendered}")
 
         content = "\n\n---\n\n".join(parts)
         return await self.sync.write_novel(novel_id, f"novel.{format}", content)
