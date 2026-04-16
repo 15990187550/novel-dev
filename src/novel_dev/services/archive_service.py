@@ -1,4 +1,3 @@
-from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.chapter_repo import ChapterRepository
@@ -17,12 +16,16 @@ class ArchiveService:
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch or not ch.polished_text:
             raise ValueError("Chapter has no polished text to archive")
+        if ch.status == "archived":
+            raise ValueError("Chapter is already archived")
+
+        chapter_word_count = len(ch.polished_text)
+        path_md = await self.sync.write_chapter(novel_id, ch.volume_id, chapter_id, ch.polished_text)
 
         await self.chapter_repo.update_status(chapter_id, "archived")
 
         state = await self.state_repo.get_state(novel_id)
         stats = dict(state.checkpoint_data.get("archive_stats", {}))
-        chapter_word_count = len(ch.polished_text)
         stats["total_word_count"] = stats.get("total_word_count", 0) + chapter_word_count
         stats["archived_chapter_count"] = stats.get("archived_chapter_count", 0) + 1
         stats["avg_word_count"] = stats["total_word_count"] // max(stats["archived_chapter_count"], 1)
@@ -37,8 +40,6 @@ class ArchiveService:
             current_volume_id=state.current_volume_id,
             current_chapter_id=state.current_chapter_id,
         )
-
-        path_md = await self.sync.write_chapter(novel_id, ch.volume_id, chapter_id, ch.polished_text)
 
         return {
             "word_count": chapter_word_count,

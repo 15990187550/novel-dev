@@ -19,7 +19,8 @@ async def test_archive_service(async_session):
         chapter_id="c1",
     )
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test Chapter")
-    await ChapterRepository(async_session).update_text("c1", polished_text=" polished ")
+    polished_text = " polished "
+    await ChapterRepository(async_session).update_text("c1", polished_text=polished_text)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         svc = ArchiveService(async_session, tmpdir)
@@ -27,6 +28,8 @@ async def test_archive_service(async_session):
 
         assert result["word_count"] == 10
         assert os.path.exists(result["path_md"])
+        with open(result["path_md"], "r", encoding="utf-8") as f:
+            assert f.read() == polished_text
 
     ch = await ChapterRepository(async_session).get_by_id("c1")
     assert ch.status == "archived"
