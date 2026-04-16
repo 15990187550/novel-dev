@@ -23,9 +23,9 @@ async def test_write_volume_and_novel():
         path = await sync.write_volume("n1", "v1", "volume.md", "# Vol 1\n\ncontent")
         assert os.path.exists(path)
         with open(path, "r", encoding="utf-8") as f:
-            assert "# Vol 1" in f.read()
+            assert f.read() == "# Vol 1\n\ncontent"
 
         path2 = await sync.write_novel("n1", "novel.md", "# Novel\n\ncontent")
         assert os.path.exists(path2)
         with open(path2, "r", encoding="utf-8") as f:
-            assert "# Novel" in f.read()
+            assert f.read() == "# Novel\n\ncontent"
