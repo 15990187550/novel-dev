@@ -145,7 +145,7 @@ class NovelDirector:
             chapter_id=chapter_id,
         )
 
-        return await self.resume(state.novel_id)
+        return await self._continue_to_next_chapter(state.novel_id)
 
     async def _continue_to_next_chapter(self, novel_id: str) -> NovelState:
         state = await self.resume(novel_id)

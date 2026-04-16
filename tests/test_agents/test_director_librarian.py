@@ -10,11 +10,16 @@ from novel_dev.schemas.context import ChapterPlan, BeatPlan
 @pytest.mark.asyncio
 async def test_director_librarian_to_completed(async_session):
     director = NovelDirector(session=async_session)
-    plan = ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")])
+    plans = [
+        ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump(),
+        ChapterPlan(chapter_number=2, title="Ch2", target_word_count=3000, beats=[BeatPlan(summary="B2", target_mood="calm")]).model_dump(),
+    ]
+    plans[0]["chapter_id"] = "c1"
+    plans[1]["chapter_id"] = "c2"
     await director.save_checkpoint(
         "n_dir",
         phase=Phase.LIBRARIAN,
-        checkpoint_data={"current_volume_plan": {"chapters": [plan.model_dump()]}},
+        checkpoint_data={"current_volume_plan": {"chapters": plans}},
         volume_id="v1",
         chapter_id="c1",
     )
@@ -24,7 +29,7 @@ async def test_director_librarian_to_completed(async_session):
     with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'):
         state = await director._run_librarian(await director.resume("n_dir"))
 
-    assert state.current_phase == Phase.COMPLETED.value
+    assert state.current_phase == Phase.CONTEXT_PREPARATION.value
     ch = await ChapterRepository(async_session).get_by_id("c1")
     assert ch.status == "archived"
 
