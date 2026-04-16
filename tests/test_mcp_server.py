@@ -1,3 +1,4 @@
+import uuid
 import pytest
 
 from novel_dev.mcp_server.server import mcp
@@ -37,18 +38,20 @@ async def test_mcp_get_pending_documents():
 
 @pytest.mark.asyncio
 async def test_mcp_list_style_profile_versions():
-    upload = await mcp.tools["upload_document"]("n3", "style.txt", "x" * 10000)
+    novel_id = f"n3_{uuid.uuid4().hex[:8]}"
+    upload = await mcp.tools["upload_document"](novel_id, "style.txt", "x" * 10000)
     await mcp.tools["approve_pending_documents"](upload["id"])
-    result = await mcp.tools["list_style_profile_versions"]("n3")
+    result = await mcp.tools["list_style_profile_versions"](novel_id)
     assert len(result) == 1
     assert result[0]["version"] == 1
 
 
 @pytest.mark.asyncio
 async def test_mcp_rollback_style_profile():
-    upload = await mcp.tools["upload_document"]("n4", "style.txt", "y" * 10000)
+    novel_id = f"n4_{uuid.uuid4().hex[:8]}"
+    upload = await mcp.tools["upload_document"](novel_id, "style.txt", "y" * 10000)
     await mcp.tools["approve_pending_documents"](upload["id"])
-    result = await mcp.tools["rollback_style_profile"]("n4", 1)
+    result = await mcp.tools["rollback_style_profile"](novel_id, 1)
     assert result["rolled_back_to_version"] == 1
 
 
