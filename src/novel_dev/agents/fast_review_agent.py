@@ -35,7 +35,7 @@ class FastReviewAgent:
         word_count_ok = abs(len(polished) - target) <= target * 0.1 if target > 0 else True
         # TODO: replace with actual heuristic checks
         consistency_fixed = True
-        ai_flavor_reduced = len(polished) >= len(raw) * 0.5
+        ai_flavor_reduced = len(polished) >= len(raw) * 0.5 if raw else len(polished) > 0
         # TODO: replace with actual heuristic checks
         beat_cohesion_ok = True
         notes = []

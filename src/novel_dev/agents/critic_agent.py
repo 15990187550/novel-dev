@@ -36,7 +36,7 @@ class CriticAgent:
         await self.chapter_repo.update_scores(
             chapter_id,
             overall=score_result.overall,
-            breakdown=score_result.model_dump()["dimensions"],
+            breakdown={d.name: {"score": d.score, "comment": d.comment} for d in score_result.dimensions},
             feedback={"summary": score_result.summary_feedback},
         )
 

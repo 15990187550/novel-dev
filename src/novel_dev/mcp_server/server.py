@@ -222,6 +222,7 @@ class NovelDevMCPServer:
             director = NovelDirector(session)
             try:
                 state = await director.advance(novel_id)
+                await session.commit()
                 return {
                     "novel_id": state.novel_id,
                     "current_phase": state.current_phase,

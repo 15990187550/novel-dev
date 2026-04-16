@@ -34,6 +34,11 @@ async def test_review_pass_high_score(async_session):
     result = await agent.review("novel_crit_pass", "c1")
     assert result.overall >= 70
 
+    ch = await ChapterRepository(async_session).get_by_id("c1")
+    assert ch.score_breakdown == {
+        d.name: {"score": d.score, "comment": d.comment} for d in result.dimensions
+    }
+
     state = await director.resume("novel_crit_pass")
     assert state.current_phase == Phase.EDITING.value
 
