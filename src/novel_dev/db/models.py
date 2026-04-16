@@ -5,7 +5,28 @@ from sqlalchemy import (
     ForeignKey, Text, Integer, Boolean, JSON, TIMESTAMP, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-from pgvector.sqlalchemy import Vector
+from sqlalchemy.types import TypeDecorator
+
+try:
+    from pgvector.sqlalchemy import Vector as PgVector
+except ImportError:
+    PgVector = None
+
+
+class VectorCompat(TypeDecorator):
+    """Compatibility type that uses pgvector.Vector on PostgreSQL and JSON on SQLite."""
+
+    impl = JSON
+    cache_ok = True
+
+    def __init__(self, dimensions: int = 1536):
+        super().__init__()
+        self.dimensions = dimensions
+
+    def load_dialect_impl(self, dialect):
+        if PgVector is not None and dialect.name == "postgresql":
+            return dialect.type_descriptor(PgVector(self.dimensions))
+        return dialect.type_descriptor(JSON)
 
 
 class Base(DeclarativeBase):
@@ -126,6 +147,6 @@ class NovelDocument(Base):
     doc_type: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    vector_embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(1536), nullable=True)
+    vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1536), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
