@@ -378,7 +378,6 @@ async def test_mcp_export_novel():
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.repositories.chapter_repo import ChapterRepository
-    import tempfile
 
     suffix = uuid.uuid4().hex[:8]
     novel_id = f"n_mcp_exp_{suffix}"
@@ -419,3 +418,4 @@ async def test_mcp_get_archive_stats():
     result = await mcp.tools["get_archive_stats"](novel_id)
     assert result["total_word_count"] == 42
     assert result["archived_chapter_count"] == 1
+    assert result["avg_word_count"] == 0

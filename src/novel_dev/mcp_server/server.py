@@ -14,6 +14,7 @@ from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.services.export_service import ExportService
+from novel_dev.config import Settings
 
 
 class NovelDevMCPServer:
@@ -289,7 +290,6 @@ class NovelDevMCPServer:
                 return {"error": str(e)}
 
     async def export_novel(self, novel_id: str, format: str = "md") -> dict:
-        from novel_dev.config import Settings
         settings = Settings()
         async with async_session_maker() as session:
             svc = ExportService(session, settings.markdown_output_dir)
