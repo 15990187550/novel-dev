@@ -47,6 +47,13 @@ class ChapterRepository:
             ch.review_feedback = feedback
             await self.session.flush()
 
+    async def update_fast_review(self, chapter_id: str, score: int, feedback: dict) -> None:
+        ch = await self.get_by_id(chapter_id)
+        if ch:
+            ch.fast_review_score = score
+            ch.fast_review_feedback = feedback
+            await self.session.flush()
+
     async def update_status(self, chapter_id: str, status: str) -> None:
         ch = await self.get_by_id(chapter_id)
         if ch:

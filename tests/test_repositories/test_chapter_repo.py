@@ -36,3 +36,13 @@ async def test_get_previous_chapter(async_session):
     prev = await repo.get_previous_chapter("v1", 2)
     assert prev is not None
     assert prev.chapter_number == 1
+
+
+@pytest.mark.asyncio
+async def test_update_fast_review(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c3", "v1", 3, "Third")
+    await repo.update_fast_review("c3", 92, {"word_count_ok": True})
+    ch = await repo.get_by_id("c3")
+    assert ch.fast_review_score == 92
+    assert ch.fast_review_feedback["word_count_ok"] is True
