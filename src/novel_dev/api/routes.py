@@ -121,6 +121,10 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
 @router.post("/api/novels/{novel_id}/documents/pending/approve")
 async def approve_pending_document(novel_id: str, req: ApproveRequest, session: AsyncSession = Depends(get_session)):
     svc = ExtractionService(session)
+    repo = PendingExtractionRepository(session)
+    pe = await repo.get_by_id(req.pending_id)
+    if not pe or pe.novel_id != novel_id:
+        raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
     docs = await svc.approve_pending(req.pending_id)
     return {
         "documents": [
