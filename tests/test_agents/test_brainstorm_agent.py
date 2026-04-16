@@ -18,12 +18,13 @@ async def test_brainstorm_success(async_session):
     agent = BrainstormAgent(async_session)
     synopsis_data = await agent.brainstorm("n_brain")
 
-    assert synopsis_data.title != ""
-    assert synopsis_data.estimated_volumes > 0
+    assert synopsis_data.title == "天玄纪元"
+    assert synopsis_data.estimated_volumes == 3
 
     state = await NovelStateRepository(async_session).get_state("n_brain")
     assert state.current_phase == Phase.VOLUME_PLANNING.value
     assert "synopsis_data" in state.checkpoint_data
+    assert state.checkpoint_data["synopsis_doc_id"] is not None
 
     docs = await DocumentRepository(async_session).get_by_type("n_brain", "synopsis")
     assert len(docs) == 1
@@ -33,5 +34,5 @@ async def test_brainstorm_success(async_session):
 @pytest.mark.asyncio
 async def test_brainstorm_missing_documents(async_session):
     agent = BrainstormAgent(async_session)
-    with pytest.raises(ValueError, match="No setting documents found"):
+    with pytest.raises(ValueError, match="No source documents found"):
         await agent.brainstorm("n_empty")

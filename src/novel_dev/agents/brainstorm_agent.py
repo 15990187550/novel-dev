@@ -1,3 +1,4 @@
+import uuid
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,7 +6,6 @@ from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
-import uuid
 
 
 class BrainstormAgent:
@@ -21,7 +21,7 @@ class BrainstormAgent:
         docs += await self.doc_repo.get_by_type(novel_id, "concept")
 
         if not docs:
-            raise ValueError("No setting documents found for brainstorming")
+            raise ValueError("No source documents found for brainstorming")
 
         combined = "\n\n".join(d.content for d in docs)
         synopsis_data = self._generate_synopsis(combined)
@@ -54,6 +54,7 @@ class BrainstormAgent:
         return synopsis_data
 
     def _generate_synopsis(self, combined_text: str) -> SynopsisData:
+        # TODO: replace with LLM-based synopsis generation
         title = "天玄纪元" if "天玄" in combined_text else "未命名小说"
         return SynopsisData(
             title=title,
