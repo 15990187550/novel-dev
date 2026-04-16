@@ -43,3 +43,18 @@ def test_merge_dict_fields():
     result = merger.merge(old, new)
     assert result.merged_profile.style_config.sentence_patterns == {"avg_length": 12, "variance": 2}
     assert len(result.conflicts) == 0
+
+
+def test_merge_list_fields():
+    merger = ProfileMerger()
+    old = StyleProfile(
+        style_guide="Old",
+        style_config=StyleConfig(vocabulary_preferences=["凌厉"]),
+    )
+    new = StyleProfile(
+        style_guide="New",
+        style_config=StyleConfig(vocabulary_preferences=["凌厉", "蛰伏"]),
+    )
+    result = merger.merge(old, new)
+    assert result.merged_profile.style_config.vocabulary_preferences == ["凌厉", "蛰伏"]
+    assert len(result.conflicts) == 0
