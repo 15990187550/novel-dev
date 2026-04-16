@@ -16,6 +16,9 @@ from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
+from novel_dev.agents.brainstorm_agent import BrainstormAgent
+from novel_dev.agents.volume_planner import VolumePlannerAgent
+from novel_dev.schemas.outline import SynopsisData, VolumePlan
 
 router = APIRouter()
 settings = Settings()
@@ -295,3 +298,74 @@ async def get_fast_review_result(novel_id: str, session: AsyncSession = Depends(
         "fast_review_score": ch.fast_review_score,
         "fast_review_feedback": ch.fast_review_feedback,
     }
+
+
+class VolumePlanRequest(BaseModel):
+    volume_number: Optional[int] = None
+
+
+@router.post("/api/novels/{novel_id}/brainstorm")
+async def brainstorm_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    agent = BrainstormAgent(session)
+    try:
+        synopsis_data = await agent.brainstorm(novel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "title": synopsis_data.title,
+        "logline": synopsis_data.logline,
+        "estimated_volumes": synopsis_data.estimated_volumes,
+        "estimated_total_chapters": synopsis_data.estimated_total_chapters,
+    }
+
+
+@router.post("/api/novels/{novel_id}/volume_plan")
+async def plan_volume(novel_id: str, req: VolumePlanRequest = VolumePlanRequest(), session: AsyncSession = Depends(get_session)):
+    agent = VolumePlannerAgent(session)
+    try:
+        plan = await agent.plan(novel_id, volume_number=req.volume_number)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "volume_id": plan.volume_id,
+        "volume_number": plan.volume_number,
+        "title": plan.title,
+        "total_chapters": plan.total_chapters,
+        "chapters": [
+            {
+                "chapter_id": ch.chapter_id,
+                "chapter_number": ch.chapter_number,
+                "title": ch.title,
+                "summary": ch.summary,
+            }
+            for ch in plan.chapters
+        ],
+    }
+
+
+@router.get("/api/novels/{novel_id}/synopsis")
+async def get_synopsis(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = DocumentRepository(session)
+    state_repo = NovelStateRepository(session)
+    docs = await repo.get_by_type(novel_id, "synopsis")
+    if not docs:
+        raise HTTPException(status_code=404, detail="Synopsis not found")
+    state = await state_repo.get_state(novel_id)
+    synopsis_data = {}
+    if state and state.checkpoint_data:
+        synopsis_data = state.checkpoint_data.get("synopsis_data", {})
+    return {
+        "content": docs[0].content,
+        "synopsis_data": synopsis_data,
+    }
+
+
+@router.get("/api/novels/{novel_id}/volume_plan")
+async def get_volume_plan(novel_id: str, session: AsyncSession = Depends(get_session)):
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    if not state or not state.checkpoint_data.get("current_volume_plan"):
+        raise HTTPException(status_code=404, detail="Volume plan not found")
+    return state.checkpoint_data["current_volume_plan"]
