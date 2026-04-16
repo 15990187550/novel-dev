@@ -24,6 +24,9 @@ def test_mcp_server_has_tools():
         "advance_novel",
         "get_review_result",
         "get_fast_review_result",
+        "run_librarian",
+        "export_novel",
+        "get_archive_stats",
     }
     assert set(mcp.tools.keys()) == expected
 
@@ -333,3 +336,86 @@ async def test_mcp_get_fast_review_result():
 
     result = await mcp.tools["get_fast_review_result"](novel_id)
     assert result["fast_review_score"] is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_run_librarian():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.repositories.chapter_repo import ChapterRepository
+    from novel_dev.schemas.context import ChapterPlan, BeatPlan
+    from unittest.mock import patch, AsyncMock
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_lib_{suffix}"
+    chapter_id = f"c_{suffix}"
+    volume_id = f"v_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        plan = ChapterPlan(chapter_number=1, title="MCP Lib", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump()
+        plan["chapter_id"] = chapter_id
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.LIBRARIAN,
+            checkpoint_data={"current_volume_plan": {"chapters": [plan]}},
+            volume_id=volume_id,
+            chapter_id=chapter_id,
+        )
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Lib")
+        await ChapterRepository(session).update_text(chapter_id, polished_text="abc")
+        await session.commit()
+
+    with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'):
+        result = await mcp.tools["run_librarian"](novel_id)
+    assert result["current_phase"] == Phase.VOLUME_PLANNING.value
+
+
+@pytest.mark.asyncio
+async def test_mcp_export_novel():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.chapter_repo import ChapterRepository
+    import tempfile
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_exp_{suffix}"
+    chapter_id = f"c_{suffix}"
+    volume_id = f"v_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Exp")
+        await ChapterRepository(session).update_text(chapter_id, polished_text="export me")
+        await ChapterRepository(session).update_status(chapter_id, "archived")
+        await session.commit()
+
+    result = await mcp.tools["export_novel"](novel_id, "md")
+    assert "exported_path" in result
+    assert result["format"] == "md"
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_archive_stats():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_stats_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.COMPLETED,
+            checkpoint_data={"archive_stats": {"total_word_count": 42, "archived_chapter_count": 1}},
+        )
+        await session.commit()
+
+    result = await mcp.tools["get_archive_stats"](novel_id)
+    assert result["total_word_count"] == 42
+    assert result["archived_chapter_count"] == 1

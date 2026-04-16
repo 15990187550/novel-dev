@@ -13,6 +13,7 @@ from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
+from novel_dev.services.export_service import ExportService
 
 
 class NovelDevMCPServer:
@@ -38,6 +39,9 @@ class NovelDevMCPServer:
             "advance_novel": self.advance_novel,
             "get_review_result": self.get_review_result,
             "get_fast_review_result": self.get_fast_review_result,
+            "run_librarian": self.run_librarian,
+            "export_novel": self.export_novel,
+            "get_archive_stats": self.get_archive_stats,
         }
 
     async def query_entity(self, entity_id: str) -> dict:
@@ -266,6 +270,46 @@ class NovelDevMCPServer:
             return {
                 "fast_review_score": ch.fast_review_score,
                 "fast_review_feedback": ch.fast_review_feedback,
+            }
+
+    async def run_librarian(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            director = NovelDirector(session)
+            try:
+                state = await director._run_librarian(await director.resume(novel_id))
+                await session.commit()
+                return {
+                    "novel_id": state.novel_id,
+                    "current_phase": state.current_phase,
+                    "checkpoint_data": state.checkpoint_data,
+                }
+            except ValueError as e:
+                return {"error": str(e)}
+            except RuntimeError as e:
+                return {"error": str(e)}
+
+    async def export_novel(self, novel_id: str, format: str = "md") -> dict:
+        from novel_dev.config import Settings
+        settings = Settings()
+        async with async_session_maker() as session:
+            svc = ExportService(session, settings.markdown_output_dir)
+            try:
+                path = await svc.export_novel(novel_id, format=format)
+                return {"exported_path": path, "format": format}
+            except ValueError as e:
+                return {"error": str(e)}
+
+    async def get_archive_stats(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            repo = NovelStateRepository(session)
+            state = await repo.get_state(novel_id)
+            if not state:
+                return {"error": "Novel state not found"}
+            stats = state.checkpoint_data.get("archive_stats", {})
+            return {
+                "total_word_count": stats.get("total_word_count", 0),
+                "archived_chapter_count": stats.get("archived_chapter_count", 0),
+                "avg_word_count": stats.get("avg_word_count", 0),
             }
 
 
