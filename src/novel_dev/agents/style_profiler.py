@@ -78,7 +78,7 @@ class StyleProfilerAgent:
         return sum(len(s) for s in sentences) / len(sentences)
 
     def _dialogue_ratio(self, text: str) -> float:
-        quotes = text.count('"') + text.count("'") + text.count("“") + text.count("”")
+        quotes = text.count('"') // 2 + text.count("'") // 2 + text.count("“") + text.count("”")
         return round(quotes / max(len(text), 1), 3)
 
     def _extract_vocabulary(self, text: str) -> List[str]:

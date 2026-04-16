@@ -44,6 +44,6 @@ async def test_profile_limited_perspective():
 
 def test_dialogue_ratio():
     agent = StyleProfilerAgent()
-    text = '他说："你好。"她又道："再见。"'
+    text = '他说："你好。"'
     ratio = agent._dialogue_ratio(text)
-    assert ratio > 0
+    assert ratio == round(1 / len(text), 3)
