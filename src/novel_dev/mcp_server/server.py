@@ -1,10 +1,13 @@
 from novel_dev.db.engine import async_session_maker
 from novel_dev.services.entity_service import EntityService
+from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.agents.style_profiler import StyleProfilerAgent
 
 
 class NovelDevMCPServer:
@@ -18,6 +21,12 @@ class NovelDevMCPServer:
             "get_spaceline_chain": self.get_spaceline_chain,
             "get_novel_state": self.get_novel_state,
             "get_novel_documents": self.get_novel_documents,
+            "upload_document": self.upload_document,
+            "get_pending_documents": self.get_pending_documents,
+            "approve_pending_documents": self.approve_pending_documents,
+            "list_style_profile_versions": self.list_style_profile_versions,
+            "rollback_style_profile": self.rollback_style_profile,
+            "analyze_style_from_text": self.analyze_style_from_text,
         }
 
     async def query_entity(self, entity_id: str) -> dict:
@@ -68,6 +77,77 @@ class NovelDevMCPServer:
             repo = DocumentRepository(session)
             docs = await repo.get_by_type(novel_id, doc_type)
             return [{"id": d.id, "title": d.title, "content": d.content[:500]} for d in docs]
+
+    async def upload_document(self, novel_id: str, filename: str, content: str) -> dict:
+        async with async_session_maker() as session:
+            svc = ExtractionService(session)
+            pe = await svc.process_upload(novel_id, filename, content)
+            await session.commit()
+            return {
+                "id": pe.id,
+                "extraction_type": pe.extraction_type,
+                "status": pe.status,
+                "created_at": pe.created_at.isoformat(),
+            }
+
+    async def get_pending_documents(self, novel_id: str) -> list:
+        async with async_session_maker() as session:
+            repo = PendingExtractionRepository(session)
+            items = await repo.list_by_novel(novel_id)
+            return [
+                {
+                    "id": i.id,
+                    "extraction_type": i.extraction_type,
+                    "status": i.status,
+                    "raw_result": i.raw_result,
+                    "proposed_entities": i.proposed_entities,
+                    "created_at": i.created_at.isoformat(),
+                }
+                for i in items
+            ]
+
+    async def approve_pending_documents(self, pending_id: str) -> dict:
+        async with async_session_maker() as session:
+            svc = ExtractionService(session)
+            docs = await svc.approve_pending(pending_id)
+            await session.commit()
+            return {
+                "documents": [
+                    {
+                        "id": d.id,
+                        "doc_type": d.doc_type,
+                        "title": d.title,
+                        "content": d.content[:500],
+                        "version": d.version,
+                    }
+                    for d in docs
+                ]
+            }
+
+    async def list_style_profile_versions(self, novel_id: str) -> list:
+        async with async_session_maker() as session:
+            repo = DocumentRepository(session)
+            docs = await repo.get_by_type(novel_id, "style_profile")
+            return [
+                {
+                    "version": d.version,
+                    "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                    "title": d.title,
+                }
+                for d in docs
+            ]
+
+    async def rollback_style_profile(self, novel_id: str, version: int) -> dict:
+        async with async_session_maker() as session:
+            svc = ExtractionService(session)
+            await svc.rollback_style_profile(novel_id, version)
+            await session.commit()
+            return {"rolled_back_to_version": version}
+
+    async def analyze_style_from_text(self, text: str) -> dict:
+        agent = StyleProfilerAgent()
+        profile = await agent.profile(text)
+        return profile.model_dump()
 
 
 mcp = NovelDevMCPServer()
