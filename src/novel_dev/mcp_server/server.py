@@ -11,6 +11,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.style_profiler import StyleProfilerAgent
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.agents.director import NovelDirector
 from novel_dev.schemas.context import ChapterContext
 
 
@@ -34,6 +35,9 @@ class NovelDevMCPServer:
             "prepare_chapter_context": self.prepare_chapter_context,
             "generate_chapter_draft": self.generate_chapter_draft,
             "get_chapter_draft_status": self.get_chapter_draft_status,
+            "advance_novel": self.advance_novel,
+            "get_review_result": self.get_review_result,
+            "get_fast_review_result": self.get_fast_review_result,
         }
 
     async def query_entity(self, entity_id: str) -> dict:
@@ -211,6 +215,56 @@ class NovelDevMCPServer:
                 "raw_draft": ch.raw_draft if ch else None,
                 "drafting_progress": checkpoint.get("drafting_progress"),
                 "draft_metadata": checkpoint.get("draft_metadata"),
+            }
+
+    async def advance_novel(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            director = NovelDirector(session)
+            try:
+                state = await director.advance(novel_id)
+                return {
+                    "novel_id": state.novel_id,
+                    "current_phase": state.current_phase,
+                    "checkpoint_data": state.checkpoint_data,
+                }
+            except ValueError as e:
+                return {"error": str(e)}
+            except RuntimeError as e:
+                return {"error": str(e)}
+
+    async def get_review_result(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            state_repo = NovelStateRepository(session)
+            state = await state_repo.get_state(novel_id)
+            if not state:
+                return {"error": "Novel state not found"}
+            if not state.current_chapter_id:
+                return {"error": "Current chapter not set"}
+            repo = ChapterRepository(session)
+            ch = await repo.get_by_id(state.current_chapter_id)
+            if not ch:
+                return {"error": "Chapter not found"}
+            return {
+                "score_overall": ch.score_overall,
+                "score_breakdown": ch.score_breakdown,
+                "review_feedback": ch.review_feedback,
+            }
+
+    async def get_fast_review_result(self, novel_id: str) -> dict:
+        async with async_session_maker() as session:
+            state_repo = NovelStateRepository(session)
+            state = await state_repo.get_state(novel_id)
+            if not state:
+                return {"error": "Novel state not found"}
+            if not state.current_chapter_id:
+                return {"error": "Current chapter not set"}
+            repo = ChapterRepository(session)
+            ch = await repo.get_by_id(state.current_chapter_id)
+            if not ch:
+                return {"error": "Chapter not found"}
+            return {
+                "fast_review_score": ch.fast_review_score,
+                "fast_review_feedback": ch.fast_review_feedback,
             }
 
 

@@ -21,6 +21,9 @@ def test_mcp_server_has_tools():
         "prepare_chapter_context",
         "generate_chapter_draft",
         "get_chapter_draft_status",
+        "advance_novel",
+        "get_review_result",
+        "get_fast_review_result",
     }
     assert set(mcp.tools.keys()) == expected
 
@@ -184,3 +187,149 @@ async def test_mcp_get_chapter_draft_status():
     assert result["status"] is not None
     assert result["drafting_progress"]["beat_index"] == 1
     assert result["draft_metadata"]["total_words"] == 100
+
+
+@pytest.mark.asyncio
+async def test_mcp_advance_novel():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.context import ChapterPlan, BeatPlan, ChapterContext, LocationContext
+    from novel_dev.repositories.chapter_repo import ChapterRepository
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_adv_{suffix}"
+    chapter_id = f"c_{suffix}"
+    volume_id = f"v_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        plan = ChapterPlan(
+            chapter_number=1,
+            title="MCP Adv",
+            target_word_count=3000,
+            beats=[BeatPlan(summary="B1", target_mood="tense")],
+        )
+        context = ChapterContext(
+            chapter_plan=plan,
+            style_profile={},
+            worldview_summary="",
+            active_entities=[],
+            location_context=LocationContext(current=""),
+            timeline_events=[],
+            pending_foreshadowings=[],
+        )
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.REVIEWING,
+            checkpoint_data={"chapter_context": context.model_dump()},
+            volume_id=volume_id,
+            chapter_id=chapter_id,
+        )
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Adv")
+        await ChapterRepository(session).update_text(chapter_id, raw_draft="a" * 100)
+        await session.commit()
+
+    result = await mcp.tools["advance_novel"](novel_id)
+    assert result["current_phase"] == Phase.EDITING.value
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_review_result():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.context import ChapterPlan, BeatPlan, ChapterContext, LocationContext
+    from novel_dev.repositories.chapter_repo import ChapterRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_review_{suffix}"
+    chapter_id = f"c_{suffix}"
+    volume_id = f"v_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        plan = ChapterPlan(
+            chapter_number=1,
+            title="MCP Review",
+            target_word_count=3000,
+            beats=[BeatPlan(summary="B1", target_mood="tense")],
+        )
+        context = ChapterContext(
+            chapter_plan=plan,
+            style_profile={},
+            worldview_summary="",
+            active_entities=[],
+            location_context=LocationContext(current=""),
+            timeline_events=[],
+            pending_foreshadowings=[],
+        )
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.REVIEWING,
+            checkpoint_data={"chapter_context": context.model_dump()},
+            volume_id=volume_id,
+            chapter_id=chapter_id,
+        )
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Review")
+        await ChapterRepository(session).update_scores(
+            chapter_id,
+            overall=85,
+            breakdown={"plot": 90, "character": 80},
+            feedback={"strengths": ["good pacing"], "weaknesses": []},
+        )
+        await session.commit()
+
+    result = await mcp.tools["get_review_result"](novel_id)
+    assert result["score_overall"] is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_fast_review_result():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.context import ChapterPlan, BeatPlan, ChapterContext, LocationContext
+    from novel_dev.repositories.chapter_repo import ChapterRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_mcp_fast_{suffix}"
+    chapter_id = f"c_{suffix}"
+    volume_id = f"v_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        plan = ChapterPlan(
+            chapter_number=1,
+            title="MCP Fast Review",
+            target_word_count=3000,
+            beats=[BeatPlan(summary="B1", target_mood="tense")],
+        )
+        context = ChapterContext(
+            chapter_plan=plan,
+            style_profile={},
+            worldview_summary="",
+            active_entities=[],
+            location_context=LocationContext(current=""),
+            timeline_events=[],
+            pending_foreshadowings=[],
+        )
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.FAST_REVIEWING,
+            checkpoint_data={"chapter_context": context.model_dump()},
+            volume_id=volume_id,
+            chapter_id=chapter_id,
+        )
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Fast Review")
+        await ChapterRepository(session).update_fast_review(
+            chapter_id,
+            score=78,
+            feedback={"summary": "decent", "issues": []},
+        )
+        await session.commit()
+
+    result = await mcp.tools["get_fast_review_result"](novel_id)
+    assert result["fast_review_score"] is not None
