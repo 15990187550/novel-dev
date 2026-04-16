@@ -1,0 +1,8 @@
+README.md
+pyproject.toml
+src/novel_dev/__init__.py
+src/novel_dev.egg-info/PKG-INFO
+src/novel_dev.egg-info/SOURCES.txt
+src/novel_dev.egg-info/dependency_links.txt
+src/novel_dev.egg-info/requires.txt
+src/novel_dev.egg-info/top_level.txt
