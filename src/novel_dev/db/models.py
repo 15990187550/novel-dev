@@ -150,3 +150,15 @@ class NovelDocument(Base):
     vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1536), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class PendingExtraction(Base):
+    __tablename__ = "pending_extractions"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    extraction_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    raw_result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    proposed_entities: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
