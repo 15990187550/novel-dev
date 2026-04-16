@@ -52,3 +52,12 @@ class ChapterRepository:
         if ch:
             ch.status = status
             await self.session.flush()
+
+    async def get_previous_chapter(self, volume_id: str, chapter_number: int) -> Optional[Chapter]:
+        result = await self.session.execute(
+            select(Chapter)
+            .where(Chapter.volume_id == volume_id, Chapter.chapter_number < chapter_number)
+            .order_by(Chapter.chapter_number.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()

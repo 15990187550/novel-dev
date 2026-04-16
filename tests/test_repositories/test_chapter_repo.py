@@ -26,3 +26,13 @@ async def test_novel_state_checkpoint(async_session):
     )
     state = await repo.get_state("novel_1")
     assert state.current_phase == "writing_chapter_1_draft"
+
+
+@pytest.mark.asyncio
+async def test_get_previous_chapter(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c1", "v1", 1, "First")
+    await repo.create("c2", "v1", 2, "Second")
+    prev = await repo.get_previous_chapter("v1", 2)
+    assert prev is not None
+    assert prev.chapter_number == 1

@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -29,3 +29,11 @@ class EntityRepository:
         if entity:
             entity.current_version = new_version
             await self.session.flush()
+
+    async def find_by_names(self, names: List[str]) -> List[Entity]:
+        if not names:
+            return []
+        result = await self.session.execute(
+            select(Entity).where(Entity.name.in_(names))
+        )
+        return result.scalars().all()
