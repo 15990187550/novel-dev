@@ -17,6 +17,7 @@ from novel_dev.agents.director import NovelDirector
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.schemas.context import ChapterContext
+from novel_dev.schemas.outline import VolumePlan
 
 
 class NovelDevMCPServer:
@@ -318,28 +319,49 @@ class NovelDevMCPServer:
                 return {"error": str(e)}
 
     async def get_synopsis(self, novel_id: str) -> dict:
-        async with async_session_maker() as session:
-            repo = DocumentRepository(session)
-            state_repo = NovelStateRepository(session)
-            docs = await repo.get_by_type(novel_id, "synopsis")
-            if not docs:
-                return {"error": "Synopsis not found"}
-            state = await state_repo.get_state(novel_id)
-            synopsis_data = {}
-            if state and state.checkpoint_data:
-                synopsis_data = state.checkpoint_data.get("synopsis_data", {})
-            return {
-                "content": docs[0].content,
-                "synopsis_data": synopsis_data,
-            }
+        try:
+            async with async_session_maker() as session:
+                repo = DocumentRepository(session)
+                state_repo = NovelStateRepository(session)
+                docs = await repo.get_by_type(novel_id, "synopsis")
+                if not docs:
+                    return {"error": "Synopsis not found"}
+                state = await state_repo.get_state(novel_id)
+                synopsis_data = {}
+                if state and state.checkpoint_data:
+                    synopsis_data = state.checkpoint_data.get("synopsis_data", {})
+                return {
+                    "content": docs[0].content,
+                    "synopsis_data": synopsis_data,
+                }
+        except Exception as e:
+            return {"error": str(e)}
 
     async def get_volume_plan(self, novel_id: str) -> dict:
-        async with async_session_maker() as session:
-            state_repo = NovelStateRepository(session)
-            state = await state_repo.get_state(novel_id)
-            if not state or not state.checkpoint_data.get("current_volume_plan"):
-                return {"error": "Volume plan not found"}
-            return state.checkpoint_data["current_volume_plan"]
+        try:
+            async with async_session_maker() as session:
+                state_repo = NovelStateRepository(session)
+                state = await state_repo.get_state(novel_id)
+                if not state or not state.checkpoint_data.get("current_volume_plan"):
+                    return {"error": "Volume plan not found"}
+                plan = VolumePlan.model_validate(state.checkpoint_data["current_volume_plan"])
+                return {
+                    "volume_id": plan.volume_id,
+                    "volume_number": plan.volume_number,
+                    "title": plan.title,
+                    "total_chapters": plan.total_chapters,
+                    "chapters": [
+                        {
+                            "chapter_id": ch.chapter_id,
+                            "chapter_number": ch.chapter_number,
+                            "title": ch.title,
+                            "summary": ch.summary,
+                        }
+                        for ch in plan.chapters
+                    ],
+                }
+        except Exception as e:
+            return {"error": str(e)}
 
 
 mcp = NovelDevMCPServer()
