@@ -37,3 +37,24 @@ async def test_archive_service(async_session):
     stats = state.checkpoint_data["archive_stats"]
     assert stats["total_word_count"] == 10
     assert stats["archived_chapter_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_archive_service_double_archive_raises(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_archive_double",
+        phase=Phase.LIBRARIAN,
+        checkpoint_data={},
+        volume_id="v1",
+        chapter_id="c_double",
+    )
+    await ChapterRepository(async_session).create("c_double", "v1", 1, "Test")
+    await ChapterRepository(async_session).update_text("c_double", polished_text="text")
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        svc = ArchiveService(async_session, tmpdir)
+        await svc.archive("n_archive_double", "c_double")
+        with pytest.raises(ValueError, match="already archived"):
+            await svc.archive("n_archive_double", "c_double")
