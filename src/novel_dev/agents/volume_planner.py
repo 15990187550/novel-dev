@@ -1,3 +1,4 @@
+import uuid
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +17,6 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
-import uuid
 
 
 class VolumePlannerAgent:
@@ -56,8 +56,8 @@ class VolumePlannerAgent:
             if score.overall >= 85:
                 break
             attempt += 1
+            checkpoint["volume_plan_attempt_count"] = attempt
             if attempt >= 3:
-                checkpoint["volume_plan_attempt_count"] = attempt
                 await self.director.save_checkpoint(
                     novel_id,
                     phase=Phase.VOLUME_PLANNING,
@@ -99,7 +99,7 @@ class VolumePlannerAgent:
         return 1
 
     def _generate_volume_plan(self, synopsis: SynopsisData, volume_number: int) -> VolumePlan:
-        total_chapters = max(1, synopsis.estimated_total_chapters // synopsis.estimated_volumes)
+        total_chapters = max(1, synopsis.estimated_total_chapters // max(1, synopsis.estimated_volumes))
         chapters_per_volume = total_chapters
         chapters = []
         for i in range(chapters_per_volume):
@@ -128,6 +128,7 @@ class VolumePlannerAgent:
         )
 
     def _generate_score(self, plan: VolumePlan) -> VolumeScoreResult:
+        # TODO: replace with LLM-based scoring
         base = 88 if plan.total_chapters > 0 else 50
         return VolumeScoreResult(
             overall=base,
@@ -141,9 +142,11 @@ class VolumePlannerAgent:
         )
 
     def _revise_volume_plan(self, plan: VolumePlan, feedback: str) -> VolumePlan:
+        # TODO: replace with LLM-based revision
         return plan
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
+        """Extract chapter plan from VolumeBeat, mutating beats[0] in place for foreshadowings."""
         chapter_plan = volume_beat.model_dump()
         if volume_beat.foreshadowings_to_embed and volume_beat.beats:
             if not volume_beat.beats[0].foreshadowings_to_embed:

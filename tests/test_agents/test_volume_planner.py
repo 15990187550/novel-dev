@@ -4,6 +4,7 @@ from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.repositories.document_repo import DocumentRepository
 
 
 @pytest.mark.asyncio
@@ -36,6 +37,10 @@ async def test_plan_volume_success(async_session):
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value
     assert "current_volume_plan" in state.checkpoint_data
     assert "current_chapter_plan" in state.checkpoint_data
+
+    docs = await DocumentRepository(async_session).get_by_type("n_plan", "volume_plan")
+    assert len(docs) == 1
+    assert docs[0].doc_type == "volume_plan"
 
 
 @pytest.mark.asyncio
@@ -89,6 +94,7 @@ async def test_plan_volume_max_attempts(async_session):
 
     state = await director.resume("n_max")
     assert state.current_phase == Phase.VOLUME_PLANNING.value
+    assert state.checkpoint_data["volume_plan_attempt_count"] == 3
 
 
 @pytest.mark.asyncio
