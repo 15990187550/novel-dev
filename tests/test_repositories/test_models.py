@@ -1,5 +1,4 @@
 import pytest
-from sqlalchemy import inspect
 
 from novel_dev.db.models import Entity, EntityVersion, Chapter, NovelState, PendingExtraction
 
