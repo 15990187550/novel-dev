@@ -93,5 +93,76 @@ async def test_get_archive_stats_success(async_session):
         assert response.status_code == 200
         assert response.json()["total_word_count"] == 100
         assert response.json()["archived_chapter_count"] == 1
+        assert response.json()["avg_word_count"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_post_librarian_novel_not_found(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/novels/nonexistent/librarian")
+        assert response.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_post_librarian_value_error(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        director = NovelDirector(session=async_session)
+        await director.save_checkpoint(
+            "n_api_lib_err",
+            phase=Phase.LIBRARIAN,
+            checkpoint_data={},
+            volume_id="v1",
+            chapter_id="c_err",
+        )
+        await async_session.commit()
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/novels/n_api_lib_err/librarian")
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_post_export_bad_format(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/novels/n_api_exp/export?format=pdf")
+        assert response.status_code == 400
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_archive_stats_not_found(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/api/novels/nonexistent/archive_stats")
+        assert response.status_code == 404
     finally:
         app.dependency_overrides.clear()

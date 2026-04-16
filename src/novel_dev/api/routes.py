@@ -300,8 +300,11 @@ async def get_fast_review_result(novel_id: str, session: AsyncSession = Depends(
 @router.post("/api/novels/{novel_id}/librarian")
 async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_session)):
     director = NovelDirector(session)
+    state = await director.resume(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
     try:
-        state = await director._run_librarian(await director.resume(novel_id))
+        state = await director._run_librarian(state)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
