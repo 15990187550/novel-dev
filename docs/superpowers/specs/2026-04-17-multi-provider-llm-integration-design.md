@@ -6,13 +6,14 @@
 
 ## 1. Architecture Overview
 
-The system introduces a dedicated `llm/` package with three responsibilities:
+The system introduces a dedicated `llm/` package with four responsibilities:
 
 1. **Driver layer** – One adapter per provider family (`anthropic`, `openai_compatible`, `minimax` placeholder). Each adapter translates a unified `ChatMessage`-based request into the provider’s native API call and returns a normalized `LLMResponse`.
-2. **Factory layer** – `LLMFactory` reads `llm_config.yaml`, resolves the correct `TaskConfig` for an `(agent_name, task_name)` pair, wraps the underlying driver with `RetryableDriver`, and caches driver instances by `(provider, model, base_url, api_key)`.
-3. **Tracking layer** – `UsageTracker` logs token consumption asynchronously after every call. The default implementation writes structured logs; a database-backed implementation can be swapped in later without touching agents.
+2. **Factory layer** – `LLMFactory` reads `llm_config.yaml`, resolves the correct `TaskConfig` for an `(agent_name, task_name)` pair, and caches driver instances by `(provider, model, base_url, api_key)`.
+3. **Resilience layer** – `RetryableDriver` applies per-task retry policies. `FallbackDriver` wraps a primary `RetryableDriver` and an optional fallback `RetryableDriver`; if the primary fails after all retries, the fallback model is invoked automatically.
+4. **Tracking layer** – `UsageTracker` logs token consumption asynchronously after every call. The default implementation writes structured logs; a database-backed implementation can be swapped in later without touching agents.
 
-Agents no longer contain stub logic. They call `llm_factory.get(agent_name, task=task_name)` and await `acomplete()`.
+Agents no longer contain stub logic. They call `llm_factory.get(agent_name, task=task_name)` and await `acomplete()`. The returned driver may transparently fallback to a backup model on failure.
 
 ---
 
@@ -29,6 +30,7 @@ Agents no longer contain stub logic. They call `llm_factory.get(agent_name, task
 | `src/novel_dev/llm/drivers/openai_compatible.py` | `OpenAICompatibleDriver` for GPT, Kimi, GLM, and any OpenAI-compatible endpoint |
 | `src/novel_dev/llm/drivers/anthropic.py` | `AnthropicDriver` using the native Anthropic SDK |
 | `src/novel_dev/llm/drivers/minimax.py` | `MinimaxDriver` (placeholder inheriting from `OpenAICompatibleDriver` for now, reserved for future native extension) |
+| `src/novel_dev/llm/fallback_driver.py` | `FallbackDriver`: transparent failover from primary model to fallback model |
 | `src/novel_dev/llm/factory.py` | `LLMFactory`: config loading, driver caching, retry wrapper injection, custom `user-agent` header setup |
 | `src/novel_dev/llm/usage_tracker.py` | `UsageTracker` protocol / ABC, `LoggingUsageTracker` default implementation |
 | `llm_config.yaml` | Per-agent and per-task LLM configuration (non-sensitive only) |
@@ -71,6 +73,8 @@ class TaskConfig(BaseModel):
     retries: int = 2
     temperature: float = 0.7
     max_tokens: int | None = None
+    fallback: "TaskConfig" | None = None
+
 
 class RetryConfig(BaseModel):
     retries: int = 2
@@ -142,7 +146,9 @@ class BaseDriver(ABC):
 
 ---
 
-## 6. Retry & Timeout Layer
+## 6. Retry, Timeout & Fallback Layer
+
+### 6.1 RetryableDriver
 
 `RetryableDriver` wraps any `BaseDriver` and applies runtime retry logic using `tenacity.AsyncRetrying`.
 
@@ -181,6 +187,53 @@ class RetryableDriver(BaseDriver):
 
 `LLMContentPolicyError` and `LLMConfigError` are **not** retried.
 
+### 6.2 FallbackDriver
+
+`FallbackDriver` wraps a primary `RetryableDriver` and an optional fallback `RetryableDriver`. When the primary fails after all retries, the fallback model is invoked transparently.
+
+```python
+class FallbackDriver(BaseDriver):
+    def __init__(
+        self,
+        primary: BaseDriver,
+        fallback: BaseDriver | None,
+        fallback_config: TaskConfig | None = None,
+        usage_tracker: UsageTracker | None = None,
+        agent: str | None = None,
+        task: str | None = None,
+    ):
+        self.primary = primary
+        self.fallback = fallback
+        self.fallback_config = fallback_config
+        self.usage_tracker = usage_tracker
+        self.agent = agent
+        self.task = task
+
+    async def acomplete(self, messages, config: TaskConfig) -> LLMResponse:
+        try:
+            return await self.primary.acomplete(messages, config)
+        except LLMConfigError:
+            raise
+        except LLMError as exc:
+            if self.fallback is None or self.fallback_config is None:
+                raise
+            if self.usage_tracker:
+                asyncio.create_task(
+                    self.usage_tracker.log(
+                        agent=self.agent,
+                        task=self.task,
+                        usage=None,
+                        meta={"event": "fallback_triggered", "reason": str(exc)},
+                    )
+                )
+            return await self.fallback.acomplete(messages, self.fallback_config)
+```
+
+**Fallback rules:**
+- `LLMConfigError` is **not** fall-backed (bad config should fail fast).
+- Any other `LLMError` subclass (`LLMTimeoutError`, `LLMRateLimitError`, `LLMContentPolicyError`) triggers fallback.
+- The fallback call uses the **fallback model's own** `TaskConfig` (provider, model, temperature, retries, etc.).
+
 ---
 
 ## 7. Factory Behavior
@@ -195,8 +248,27 @@ class LLMFactory:
 
     def get(self, agent_name: str, task: str | None = None) -> BaseDriver:
         task_cfg = self._resolve_config(agent_name, task)
-        inner = self._get_cached_driver(task_cfg)
-        retry_cfg = RetryConfig(retries=task_cfg.retries, timeout=task_cfg.timeout)
+        primary = self._build_retryable_driver(task_cfg, agent_name, task)
+
+        fallback_driver = None
+        if task_cfg.fallback:
+            fallback_driver = self._build_retryable_driver(task_cfg.fallback, agent_name, task)
+
+        if fallback_driver:
+            from novel_dev.llm.fallback_driver import FallbackDriver
+            return FallbackDriver(
+                primary=primary,
+                fallback=fallback_driver,
+                fallback_config=task_cfg.fallback,
+                usage_tracker=self.usage_tracker,
+                agent=agent_name,
+                task=task,
+            )
+        return primary
+
+    def _build_retryable_driver(self, config: TaskConfig, agent_name: str, task: str | None) -> BaseDriver:
+        inner = self._get_cached_driver(config)
+        retry_cfg = RetryConfig(retries=config.retries, timeout=config.timeout)
         return RetryableDriver(
             inner=inner,
             retry_config=retry_cfg,
@@ -273,6 +345,12 @@ agents:
     timeout: 120
     retries: 3
     temperature: 0.8
+    fallback:
+      provider: openai_compatible
+      model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      timeout: 60
+      retries: 2
 
   volume_planner_agent:
     provider: openai_compatible
@@ -319,8 +397,9 @@ Each migration introduces an internal `_call_llm(messages, task=None)` helper th
 ## 11. Testing Strategy
 
 ### Unit tests (no external calls)
-- `tests/llm/test_factory.py` – mock driver registry, verify config fallback logic, cache hits, exception translation, and missing-key errors.
+- `tests/llm/test_factory.py` – mock driver registry, verify config fallback logic, cache hits, exception translation, missing-key errors, and **fallback model resolution**.
 - `tests/llm/test_retryable_driver.py` – mock a failing inner driver, assert tenacity retry behavior for `LLMRateLimitError` and no retry for `LLMConfigError`.
+- `tests/llm/test_fallback_driver.py` – assert primary failure triggers fallback on `LLMRateLimitError`/`LLMTimeoutError`, `LLMConfigError` bypasses fallback, and fallback success returns valid `LLMResponse`.
 - `tests/llm/test_models.py` – serialization round-trips for `TaskConfig`, `LLMResponse`, `ChatMessage`.
 
 ### Agent migration tests

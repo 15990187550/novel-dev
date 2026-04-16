@@ -21,6 +21,7 @@
 - `src/novel_dev/llm/drivers/openai_compatible.py`
 - `src/novel_dev/llm/drivers/anthropic.py`
 - `src/novel_dev/llm/drivers/minimax.py`
+- `src/novel_dev/llm/fallback_driver.py`
 - `src/novel_dev/llm/usage_tracker.py`
 - `src/novel_dev/llm/factory.py`
 - `llm_config.yaml`
@@ -28,6 +29,7 @@
 - `tests/llm/test_openai_compatible_driver.py`
 - `tests/llm/test_anthropic_driver.py`
 - `tests/llm/test_usage_tracker.py`
+- `tests/llm/test_fallback_driver.py`
 - `tests/llm/test_factory.py`
 
 ### Modified files
@@ -172,6 +174,7 @@ class TaskConfig(BaseModel):
     retries: int = 2
     temperature: float = 0.7
     max_tokens: int | None = None
+    fallback: "TaskConfig" | None = None
 
 
 class RetryConfig(BaseModel):
@@ -600,6 +603,107 @@ git commit -m "feat(llm): add UsageTracker protocol and logging implementation"
 
 ---
 
+### Task 5b: FallbackDriver
+
+**Files:**
+- Create: `src/novel_dev/llm/fallback_driver.py`
+- Test: `tests/llm/test_fallback_driver.py`
+
+- [ ] **Step 1: Write failing fallback tests**
+
+Create `tests/llm/test_fallback_driver.py`:
+```python
+import pytest
+from unittest.mock import AsyncMock
+
+from novel_dev.llm.exceptions import LLMConfigError, LLMRateLimitError, LLMTimeoutError
+from novel_dev.llm.fallback_driver import FallbackDriver
+from novel_dev.llm.models import LLMResponse, TaskConfig
+
+
+@pytest.mark.asyncio
+async def test_fallback_triggered_on_rate_limit():
+    primary = AsyncMock()
+    primary.acomplete.side_effect = LLMRateLimitError("rate limit")
+    fallback = AsyncMock()
+    fallback.acomplete.return_value = LLMResponse(text="fallback ok")
+    driver = FallbackDriver(primary, fallback, TaskConfig(provider="openai", model="gpt-4"))
+    response = await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))
+    assert response.text == "fallback ok"
+    assert primary.acomplete.call_count == 1
+    assert fallback.acomplete.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_fallback_not_triggered_on_config_error():
+    primary = AsyncMock()
+    primary.acomplete.side_effect = LLMConfigError("bad key")
+    fallback = AsyncMock()
+    driver = FallbackDriver(primary, fallback, TaskConfig(provider="openai", model="gpt-4"))
+    with pytest.raises(LLMConfigError):
+        await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))
+    assert fallback.acomplete.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_no_fallback_raises_original_error():
+    primary = AsyncMock()
+    primary.acomplete.side_effect = LLMTimeoutError("timeout")
+    driver = FallbackDriver(primary, None, None)
+    with pytest.raises(LLMTimeoutError):
+        await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+Run: `python3 -m pytest tests/llm/test_fallback_driver.py -v`
+Expected: `ModuleNotFoundError: No module named 'novel_dev.llm.fallback_driver'`
+
+- [ ] **Step 3: Implement FallbackDriver**
+
+Create `src/novel_dev/llm/fallback_driver.py`:
+```python
+from novel_dev.llm.drivers.base import BaseDriver
+from novel_dev.llm.exceptions import LLMError, LLMConfigError
+from novel_dev.llm.models import LLMResponse, TaskConfig
+
+
+class FallbackDriver(BaseDriver):
+    def __init__(
+        self,
+        primary: BaseDriver,
+        fallback: BaseDriver | None,
+        fallback_config: TaskConfig | None = None,
+    ):
+        self.primary = primary
+        self.fallback = fallback
+        self.fallback_config = fallback_config
+
+    async def acomplete(self, messages, config: TaskConfig) -> LLMResponse:
+        try:
+            return await self.primary.acomplete(messages, config)
+        except LLMConfigError:
+            raise
+        except LLMError:
+            if self.fallback is None or self.fallback_config is None:
+                raise
+            return await self.fallback.acomplete(messages, self.fallback_config)
+```
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `python3 -m pytest tests/llm/test_fallback_driver.py -v`
+Expected: 3 tests pass
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/novel_dev/llm/fallback_driver.py tests/llm/test_fallback_driver.py
+git commit -m "feat(llm): add FallbackDriver for model failover"
+```
+
+---
+
 ### Task 6: LLMFactory, RetryableDriver, and Config YAML
 
 **Files:**
@@ -637,6 +741,12 @@ agents:
     model: claude-opus-4-6
     timeout: 120
     retries: 3
+    fallback:
+      provider: openai_compatible
+      model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      timeout: 60
+      retries: 2
     tasks:
       special_task:
         model: claude-sonnet
@@ -646,7 +756,7 @@ agents:
 
 
 def test_resolve_config_fallback_to_defaults(temp_yaml):
-    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak", openai_api_key="ok")
     factory = LLMFactory(settings)
     cfg = factory._resolve_config("unknown_agent", None)
     assert cfg.provider == "openai_compatible"
@@ -654,21 +764,25 @@ def test_resolve_config_fallback_to_defaults(temp_yaml):
 
 
 def test_resolve_config_agent_level(temp_yaml):
-    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak", openai_api_key="ok")
     factory = LLMFactory(settings)
     cfg = factory._resolve_config("test_agent", None)
     assert cfg.provider == "anthropic"
     assert cfg.model == "claude-opus-4-6"
     assert cfg.retries == 3
+    assert cfg.fallback is not None
+    assert cfg.fallback.model == "gpt-4.1"
 
 
 def test_resolve_config_task_level(temp_yaml):
-    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak", openai_api_key="ok")
     factory = LLMFactory(settings)
     cfg = factory._resolve_config("test_agent", "special_task")
     assert cfg.model == "claude-sonnet"
     assert cfg.timeout == 60
     assert cfg.retries == 3  # inherited from agent level
+    assert cfg.fallback is not None
+    assert cfg.fallback.model == "gpt-4.1"
 
 
 def test_missing_api_key_raises(temp_yaml):
@@ -676,6 +790,14 @@ def test_missing_api_key_raises(temp_yaml):
     factory = LLMFactory(settings)
     with pytest.raises(LLMConfigError, match="anthropic_api_key"):
         factory.get("test_agent")
+
+
+def test_factory_returns_fallback_driver_when_fallback_configured(temp_yaml):
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak", openai_api_key="ok")
+    factory = LLMFactory(settings)
+    driver = factory.get("test_agent")
+    from novel_dev.llm.fallback_driver import FallbackDriver
+    assert isinstance(driver, FallbackDriver)
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -700,6 +822,12 @@ agents:
     timeout: 120
     retries: 3
     temperature: 0.8
+    fallback:
+      provider: openai_compatible
+      model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      timeout: 60
+      retries: 2
 
   volume_planner_agent:
     provider: openai_compatible
@@ -729,6 +857,7 @@ from novel_dev.llm.drivers.base import BaseDriver
 from novel_dev.llm.drivers.minimax import MinimaxDriver
 from novel_dev.llm.drivers.openai_compatible import OpenAICompatibleDriver
 from novel_dev.llm.exceptions import LLMConfigError, LLMRateLimitError, LLMTimeoutError
+from novel_dev.llm.fallback_driver import FallbackDriver
 from novel_dev.llm.models import RetryConfig, TaskConfig
 from novel_dev.llm.usage_tracker import LoggingUsageTracker, UsageTracker
 
@@ -786,19 +915,25 @@ class LLMFactory:
         except FileNotFoundError:
             return {}
 
+    def _build_task_config(self, raw: dict) -> TaskConfig:
+        fallback_raw = raw.pop("fallback", None)
+        fallback = None
+        if fallback_raw:
+            fallback = self._build_task_config(fallback_raw)
+        return TaskConfig(fallback=fallback, **raw)
+
     def _resolve_config(self, agent_name: str, task: str | None) -> TaskConfig:
         defaults = self._config.get("defaults", {})
         agent_cfg = self._config.get("agents", {}).get(agent_name, {})
         task_cfg = agent_cfg.get("tasks", {}).get(task, {}) if task else {}
 
         merged = {**defaults, **agent_cfg, **task_cfg}
-        # remove nested tasks dict if inherited
         merged.pop("tasks", None)
 
         if not merged.get("provider") or not merged.get("model"):
             raise LLMConfigError(f"Missing provider or model for agent={agent_name} task={task}")
 
-        return TaskConfig(**merged)
+        return self._build_task_config(merged)
 
     def _resolve_api_key(self, provider: str, base_url: str | None) -> str:
         if provider == "anthropic":
@@ -851,10 +986,9 @@ class LLMFactory:
             self._cache[cache_key] = self._create_driver(config)
         return self._cache[cache_key]
 
-    def get(self, agent_name: str, task: str | None = None) -> BaseDriver:
-        task_cfg = self._resolve_config(agent_name, task)
-        inner = self._get_cached_driver(task_cfg)
-        retry_cfg = RetryConfig(retries=task_cfg.retries, timeout=task_cfg.timeout)
+    def _build_retryable_driver(self, config: TaskConfig, agent_name: str, task: str | None) -> BaseDriver:
+        inner = self._get_cached_driver(config)
+        retry_cfg = RetryConfig(retries=config.retries, timeout=config.timeout)
         return RetryableDriver(
             inner=inner,
             retry_config=retry_cfg,
@@ -862,6 +996,22 @@ class LLMFactory:
             agent=agent_name,
             task=task,
         )
+
+    def get(self, agent_name: str, task: str | None = None) -> BaseDriver:
+        task_cfg = self._resolve_config(agent_name, task)
+        primary = self._build_retryable_driver(task_cfg, agent_name, task)
+
+        fallback_driver = None
+        if task_cfg.fallback:
+            fallback_driver = self._build_retryable_driver(task_cfg.fallback, agent_name, task)
+
+        if fallback_driver:
+            return FallbackDriver(
+                primary=primary,
+                fallback=fallback_driver,
+                fallback_config=task_cfg.fallback,
+            )
+        return primary
 ```
 
 Update `src/novel_dev/llm/__init__.py` to append at the bottom:
@@ -875,13 +1025,13 @@ llm_factory = LLMFactory(settings=settings)
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python3 -m pytest tests/llm/test_factory.py -v`
-Expected: 4 tests pass
+Expected: 5 tests pass
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/novel_dev/llm/factory.py src/novel_dev/llm/__init__.py llm_config.yaml tests/llm/test_factory.py
-git commit -m "feat(llm): add LLMFactory, RetryableDriver, and config YAML"
+git commit -m "feat(llm): add LLMFactory with fallback model support"
 ```
 
 ---
@@ -1146,7 +1296,8 @@ git diff --quiet || git commit -am "test: full regression after LLM integration"
 - [ ] `AnthropicDriver` native integration with system message support (Task 4)
 - [ ] `MinimaxDriver` placeholder created (Task 4)
 - [ ] `UsageTracker` protocol + `LoggingUsageTracker` (Task 5)
-- [ ] `LLMFactory` with YAML config loading, fallback logic, caching, retry wrapper (Task 6)
+- [ ] `FallbackDriver` transparently switches to backup model on non-config LLM errors (Task 5b)
+- [ ] `LLMFactory` with YAML config loading, fallback model resolution, caching, retry wrapper (Task 6)
 - [ ] Custom user-agent injected via shared `httpx.AsyncClient` (Task 6)
 - [ ] `RetryableDriver` retries `LLMRateLimitError` and `LLMTimeoutError` only (Task 6/7)
 - [ ] `LibrarianAgent` migrated to factory (Task 8)
