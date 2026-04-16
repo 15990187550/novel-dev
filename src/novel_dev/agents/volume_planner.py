@@ -146,10 +146,11 @@ class VolumePlannerAgent:
         return plan
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
-        """Extract chapter plan from VolumeBeat, mutating beats[0] in place for foreshadowings."""
+        """Extract chapter plan from VolumeBeat without mutating input."""
         chapter_plan = volume_beat.model_dump()
-        if volume_beat.foreshadowings_to_embed and volume_beat.beats:
-            if not volume_beat.beats[0].foreshadowings_to_embed:
-                volume_beat.beats[0].foreshadowings_to_embed = volume_beat.foreshadowings_to_embed[:]
-        chapter_plan["beats"] = [b.model_dump() for b in volume_beat.beats]
+        beats = [b.model_dump() for b in volume_beat.beats]
+        if volume_beat.foreshadowings_to_embed and beats:
+            if not beats[0].get("foreshadowings_to_embed"):
+                beats[0]["foreshadowings_to_embed"] = list(volume_beat.foreshadowings_to_embed)
+        chapter_plan["beats"] = beats
         return chapter_plan

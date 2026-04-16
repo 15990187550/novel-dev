@@ -80,6 +80,12 @@ class NovelDirector:
         else:
             raise ValueError(f"Cannot auto-advance from {current}")
 
+    async def run_librarian(self, novel_id: str) -> NovelState:
+        state = await self.resume(novel_id)
+        if not state:
+            raise ValueError(f"Novel state not found for {novel_id}")
+        return await self._run_librarian(state)
+
     async def _run_volume_planner(self, state: NovelState) -> NovelState:
         from novel_dev.agents.volume_planner import VolumePlannerAgent
         agent = VolumePlannerAgent(self.session)

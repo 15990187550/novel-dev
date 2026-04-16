@@ -370,7 +370,7 @@ class NovelDevMCPServer:
         async with async_session_maker() as session:
             director = NovelDirector(session)
             try:
-                state = await director._run_librarian(await director.resume(novel_id))
+                state = await director.run_librarian(novel_id)
                 await session.commit()
                 return {
                     "novel_id": state.novel_id,

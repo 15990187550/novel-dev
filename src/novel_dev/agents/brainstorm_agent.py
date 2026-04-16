@@ -23,7 +23,7 @@ class BrainstormAgent:
         if not docs:
             raise ValueError("No source documents found for brainstorming")
 
-        combined = "\n\n".join(d.content for d in docs)
+        combined = "\n\n".join(f"[{d.doc_type}]\n{d.content}" for d in docs)
         synopsis_data = self._generate_synopsis(combined)
         synopsis_text = self._format_synopsis_text(synopsis_data, combined)
 

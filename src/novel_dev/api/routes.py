@@ -389,12 +389,11 @@ async def get_volume_plan(novel_id: str, session: AsyncSession = Depends(get_ses
 @router.post("/api/novels/{novel_id}/librarian")
 async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_session)):
     director = NovelDirector(session)
-    state = await director.resume(novel_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Novel state not found")
     try:
-        state = await director._run_librarian(state)
+        state = await director.run_librarian(novel_id)
     except ValueError as e:
+        if "Novel state not found" in str(e):
+            raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
