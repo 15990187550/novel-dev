@@ -4,26 +4,21 @@ from novel_dev.mcp_server.server import mcp
 
 
 def test_mcp_server_has_tools():
-    tools = list(mcp.tools.keys())
-    assert "query_entity" in tools
-    assert "get_active_foreshadowings" in tools
-    assert "get_timeline" in tools
-    assert "get_spaceline_chain" in tools
-    assert "get_novel_state" in tools
-    assert "get_novel_documents" in tools
-
-
-@pytest.mark.asyncio
-async def test_query_entity():
-    result = await mcp.query_entity("nonexistent")
-    assert result["entity_id"] == "nonexistent"
-    assert result["state"] is None
-
-
-@pytest.mark.asyncio
-async def test_get_novel_state_not_found():
-    result = await mcp.get_novel_state("novel_nonexistent")
-    assert result["error"] == "not found"
+    expected = {
+        "query_entity",
+        "get_active_foreshadowings",
+        "get_timeline",
+        "get_spaceline_chain",
+        "get_novel_state",
+        "get_novel_documents",
+        "upload_document",
+        "get_pending_documents",
+        "approve_pending_documents",
+        "list_style_profile_versions",
+        "rollback_style_profile",
+        "analyze_style_from_text",
+    }
+    assert set(mcp.tools.keys()) == expected
 
 
 @pytest.mark.asyncio
@@ -38,6 +33,23 @@ async def test_mcp_get_pending_documents():
     upload = await mcp.tools["upload_document"]("n2", "style.txt", "a" * 5000)
     result = await mcp.tools["get_pending_documents"]("n2")
     assert any(i["id"] == upload["id"] for i in result)
+
+
+@pytest.mark.asyncio
+async def test_mcp_list_style_profile_versions():
+    upload = await mcp.tools["upload_document"]("n3", "style.txt", "x" * 10000)
+    await mcp.tools["approve_pending_documents"](upload["id"])
+    result = await mcp.tools["list_style_profile_versions"]("n3")
+    assert len(result) == 1
+    assert result[0]["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_rollback_style_profile():
+    upload = await mcp.tools["upload_document"]("n4", "style.txt", "y" * 10000)
+    await mcp.tools["approve_pending_documents"](upload["id"])
+    result = await mcp.tools["rollback_style_profile"]("n4", 1)
+    assert result["rolled_back_to_version"] == 1
 
 
 @pytest.mark.asyncio

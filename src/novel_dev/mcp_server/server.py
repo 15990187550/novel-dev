@@ -138,16 +138,22 @@ class NovelDevMCPServer:
             ]
 
     async def rollback_style_profile(self, novel_id: str, version: int) -> dict:
-        async with async_session_maker() as session:
-            svc = ExtractionService(session)
-            await svc.rollback_style_profile(novel_id, version)
-            await session.commit()
-            return {"rolled_back_to_version": version}
+        try:
+            async with async_session_maker() as session:
+                svc = ExtractionService(session)
+                await svc.rollback_style_profile(novel_id, version)
+                await session.commit()
+                return {"rolled_back_to_version": version}
+        except Exception as e:
+            return {"error": str(e)}
 
     async def analyze_style_from_text(self, text: str) -> dict:
-        agent = StyleProfilerAgent()
-        profile = await agent.profile(text)
-        return profile.model_dump()
+        try:
+            agent = StyleProfilerAgent()
+            profile = await agent.profile(text)
+            return profile.model_dump()
+        except Exception as e:
+            return {"error": str(e)}
 
 
 mcp = NovelDevMCPServer()
