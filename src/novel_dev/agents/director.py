@@ -59,3 +59,36 @@ class NovelDirector:
         if self.state_repo is None:
             raise RuntimeError("NovelDirector requires a session to resume")
         return await self.state_repo.get_state(novel_id)
+
+    async def advance(self, novel_id: str) -> NovelState:
+        state = await self.resume(novel_id)
+        if not state:
+            raise ValueError(f"Novel state not found for {novel_id}")
+        current = Phase(state.current_phase)
+
+        if current == Phase.REVIEWING:
+            return await self._run_critic(state)
+        elif current == Phase.EDITING:
+            return await self._run_editor(state)
+        elif current == Phase.FAST_REVIEWING:
+            return await self._run_fast_review(state)
+        else:
+            raise ValueError(f"Cannot auto-advance from {current}")
+
+    async def _run_critic(self, state: NovelState) -> NovelState:
+        from novel_dev.agents.critic_agent import CriticAgent
+        agent = CriticAgent(self.session)
+        await agent.review(state.novel_id, state.current_chapter_id)
+        return await self.resume(state.novel_id)
+
+    async def _run_editor(self, state: NovelState) -> NovelState:
+        from novel_dev.agents.editor_agent import EditorAgent
+        agent = EditorAgent(self.session)
+        await agent.polish(state.novel_id, state.current_chapter_id)
+        return await self.resume(state.novel_id)
+
+    async def _run_fast_review(self, state: NovelState) -> NovelState:
+        from novel_dev.agents.fast_review_agent import FastReviewAgent
+        agent = FastReviewAgent(self.session)
+        await agent.review(state.novel_id, state.current_chapter_id)
+        return await self.resume(state.novel_id)
