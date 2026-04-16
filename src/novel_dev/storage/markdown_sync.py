@@ -16,6 +16,26 @@ class MarkdownSync:
         await asyncio.to_thread(self._sync_write, path, content)
         return path
 
+    def _volume_path(self, novel_id: str, volume_id: str, filename: str) -> str:
+        dir_path = os.path.join(self.base_dir, novel_id, volume_id)
+        os.makedirs(dir_path, exist_ok=True)
+        return os.path.join(dir_path, filename)
+
+    def _novel_path(self, novel_id: str, filename: str) -> str:
+        dir_path = os.path.join(self.base_dir, novel_id)
+        os.makedirs(dir_path, exist_ok=True)
+        return os.path.join(dir_path, filename)
+
+    async def write_volume(self, novel_id: str, volume_id: str, filename: str, content: str) -> str:
+        path = self._volume_path(novel_id, volume_id, filename)
+        await asyncio.to_thread(self._sync_write, path, content)
+        return path
+
+    async def write_novel(self, novel_id: str, filename: str, content: str) -> str:
+        path = self._novel_path(novel_id, filename)
+        await asyncio.to_thread(self._sync_write, path, content)
+        return path
+
     def _sync_write(self, path: str, content: str) -> None:
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)

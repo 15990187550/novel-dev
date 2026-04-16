@@ -21,6 +21,10 @@ class SpacelineRepository:
         await self.session.flush()
         return loc
 
+    async def get_by_id(self, location_id: str) -> Optional[Spaceline]:
+        result = await self.session.execute(select(Spaceline).where(Spaceline.id == location_id))
+        return result.scalar_one_or_none()
+
     async def get_chain(self, location_id: str) -> List[Spaceline]:
         chain = []
         current_id = location_id

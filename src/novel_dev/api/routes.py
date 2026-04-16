@@ -384,3 +384,48 @@ async def get_volume_plan(novel_id: str, session: AsyncSession = Depends(get_ses
             for ch in plan.chapters
         ],
     }
+
+
+@router.post("/api/novels/{novel_id}/librarian")
+async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_session)):
+    director = NovelDirector(session)
+    state = await director.resume(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    try:
+        state = await director._run_librarian(state)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {
+        "novel_id": state.novel_id,
+        "current_phase": state.current_phase,
+        "checkpoint_data": state.checkpoint_data,
+    }
+
+
+@router.post("/api/novels/{novel_id}/export")
+async def export_novel(novel_id: str, format: str = "md", session: AsyncSession = Depends(get_session)):
+    from novel_dev.services.export_service import ExportService
+    svc = ExportService(session, settings.markdown_output_dir)
+    try:
+        path = await svc.export_novel(novel_id, format=format)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"exported_path": path, "format": format}
+
+
+@router.get("/api/novels/{novel_id}/archive_stats")
+async def get_archive_stats(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    stats = state.checkpoint_data.get("archive_stats", {})
+    return {
+        "novel_id": novel_id,
+        "total_word_count": stats.get("total_word_count", 0),
+        "archived_chapter_count": stats.get("archived_chapter_count", 0),
+        "avg_word_count": stats.get("avg_word_count", 0),
+    }
