@@ -22,13 +22,11 @@ async def test_setting_upload_to_documents(async_session):
     assert pe.extraction_type == "setting"
 
     docs = await svc.approve_pending(pe.id)
-    assert len(docs) >= 4
+    # worldview, setting (power_system), setting (factions), synopsis, concept (chars), concept (items)
+    assert len(docs) == 6
 
     doc_types = {d.doc_type for d in docs}
-    assert "worldview" in doc_types
-    assert "setting" in doc_types
-    assert "synopsis" in doc_types
-    assert "concept" in doc_types
+    assert {"worldview", "setting", "synopsis", "concept"} <= doc_types
 
     doc_repo = DocumentRepository(async_session)
     worldview_docs = await doc_repo.get_by_type("novel_integration", "worldview")
@@ -44,6 +42,7 @@ async def test_style_upload_versioning_and_rollback(async_session):
     svc = ExtractionService(async_session)
     doc_repo = DocumentRepository(async_session)
 
+    # 12000 chars = 4 chunks, enough to exercise sampling and produce a style guide
     v1_text = "a" * 12000
     v2_text = "b" * 12000
 
@@ -61,5 +60,20 @@ async def test_style_upload_versioning_and_rollback(async_session):
     # Rollback to v1
     await svc.rollback_style_profile("novel_style", 1)
     active = await svc.get_active_style_profile("novel_style")
+    assert active is not None
     assert active.version == 1
-    assert v1_text in active.content or "Overall:" in active.content
+    # active.content is the generated style_guide, not raw input
+    assert "Overall:" in active.content
+
+
+@pytest.mark.asyncio
+async def test_rollback_nonexistent_version(async_session):
+    svc = ExtractionService(async_session)
+    pe = await svc.process_upload("novel_empty", "style.txt", "c" * 12000)
+    await svc.approve_pending(pe.id)
+
+    # Rollback to version 99 which does not exist
+    await svc.rollback_style_profile("novel_empty", 99)
+    active = await svc.get_active_style_profile("novel_empty")
+    # get_active_style_profile reads checkpoint_data version 99 and returns None when no doc matches
+    assert active is None
