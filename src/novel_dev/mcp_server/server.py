@@ -7,7 +7,11 @@ from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.style_profiler import StyleProfilerAgent
+from novel_dev.agents.context_agent import ContextAgent
+from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.schemas.context import ChapterContext
 
 
 class NovelDevMCPServer:
@@ -27,6 +31,9 @@ class NovelDevMCPServer:
             "list_style_profile_versions": self.list_style_profile_versions,
             "rollback_style_profile": self.rollback_style_profile,
             "analyze_style_from_text": self.analyze_style_from_text,
+            "prepare_chapter_context": self.prepare_chapter_context,
+            "generate_chapter_draft": self.generate_chapter_draft,
+            "get_chapter_draft_status": self.get_chapter_draft_status,
         }
 
     async def query_entity(self, entity_id: str) -> dict:
@@ -154,6 +161,57 @@ class NovelDevMCPServer:
             return profile.model_dump()
         except Exception as e:
             return {"error": str(e)}
+
+    async def prepare_chapter_context(self, novel_id: str, chapter_id: str) -> dict:
+        async with async_session_maker() as session:
+            agent = ContextAgent(session)
+            try:
+                context = await agent.assemble(novel_id, chapter_id)
+                await session.commit()
+                return {
+                    "success": True,
+                    "chapter_plan_title": context.chapter_plan.title,
+                    "active_entities_count": len(context.active_entities),
+                    "pending_foreshadowings_count": len(context.pending_foreshadowings),
+                }
+            except ValueError as e:
+                return {"success": False, "error": str(e)}
+
+    async def generate_chapter_draft(self, novel_id: str, chapter_id: str) -> dict:
+        async with async_session_maker() as session:
+            state_repo = NovelStateRepository(session)
+            state = await state_repo.get_state(novel_id)
+            if not state:
+                return {"error": "Novel state not found"}
+            checkpoint = state.checkpoint_data or {}
+            context_data = checkpoint.get("chapter_context")
+            if not context_data:
+                return {"error": "Chapter context not prepared"}
+            context = ChapterContext.model_validate(context_data)
+            agent = WriterAgent(session)
+            try:
+                metadata = await agent.write(novel_id, context, chapter_id)
+                await session.commit()
+                return metadata.model_dump()
+            except Exception as e:
+                return {"error": str(e)}
+
+    async def get_chapter_draft_status(self, novel_id: str, chapter_id: str) -> dict:
+        async with async_session_maker() as session:
+            repo = ChapterRepository(session)
+            ch = await repo.get_by_id(chapter_id)
+            state_repo = NovelStateRepository(session)
+            state = await state_repo.get_state(novel_id)
+            if not state:
+                return {"error": "Novel state not found"}
+            checkpoint = state.checkpoint_data if state else {}
+            return {
+                "chapter_id": chapter_id,
+                "status": ch.status if ch else None,
+                "raw_draft": ch.raw_draft if ch else None,
+                "drafting_progress": checkpoint.get("drafting_progress"),
+                "draft_metadata": checkpoint.get("draft_metadata"),
+            }
 
 
 mcp = NovelDevMCPServer()
