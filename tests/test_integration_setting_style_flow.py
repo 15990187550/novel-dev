@@ -22,7 +22,13 @@ async def test_setting_upload_to_documents(async_session):
     assert pe.extraction_type == "setting"
 
     docs = await svc.approve_pending(pe.id)
-    assert len(docs) >= 4  # worldview, setting, synopsis, concept chars, concept items
+    assert len(docs) >= 4
+
+    doc_types = {d.doc_type for d in docs}
+    assert "worldview" in doc_types
+    assert "setting" in doc_types
+    assert "synopsis" in doc_types
+    assert "concept" in doc_types
 
     doc_repo = DocumentRepository(async_session)
     worldview_docs = await doc_repo.get_by_type("novel_integration", "worldview")
@@ -38,12 +44,15 @@ async def test_style_upload_versioning_and_rollback(async_session):
     svc = ExtractionService(async_session)
     doc_repo = DocumentRepository(async_session)
 
+    v1_text = "a" * 12000
+    v2_text = "b" * 12000
+
     # v1
-    pe1 = await svc.process_upload("novel_style", "style_sample.txt", "a" * 12000)
+    pe1 = await svc.process_upload("novel_style", "style_sample.txt", v1_text)
     await svc.approve_pending(pe1.id)
 
     # v2
-    pe2 = await svc.process_upload("novel_style", "style_sample.txt", "b" * 12000)
+    pe2 = await svc.process_upload("novel_style", "style_sample.txt", v2_text)
     await svc.approve_pending(pe2.id)
 
     versions = await doc_repo.get_by_type("novel_style", "style_profile")
@@ -53,3 +62,4 @@ async def test_style_upload_versioning_and_rollback(async_session):
     await svc.rollback_style_profile("novel_style", 1)
     active = await svc.get_active_style_profile("novel_style")
     assert active.version == 1
+    assert v1_text in active.content or "Overall:" in active.content

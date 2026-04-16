@@ -31,7 +31,7 @@ class SettingExtractorAgent:
         worldview = self._extract_section(text, ["世界观", "worldview", "世界"])
         power_system = self._extract_section(text, ["修炼体系", "power system", "境界", " cultivation"])
         factions = self._extract_section(text, ["势力", "factions", "宗门", "门派"])
-        plot_synopsis = self._extract_section(text, ["剧情", "plot", "大纲", "synopsis"])
+        plot_synopsis = self._extract_section(text, ["剧情梗概", "剧情", "plot", "大纲", "synopsis"])
 
         characters = self._extract_characters(text)
         items = self._extract_items(text)
