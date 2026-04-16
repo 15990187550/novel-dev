@@ -1,8 +1,10 @@
+from typing import Literal
+
 from pydantic import BaseModel
 
 
 class FileClassificationResult(BaseModel):
-    file_type: str  # "setting" | "style_sample"
+    file_type: Literal["setting", "style_sample"]
     confidence: float
     reason: str
 
