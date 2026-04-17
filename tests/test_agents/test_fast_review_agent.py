@@ -1,8 +1,12 @@
+import json
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.fast_review_agent import FastReviewAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
@@ -18,8 +22,16 @@ async def test_fast_review_pass(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
     await ChapterRepository(async_session).update_text("c1", raw_draft="abc", polished_text="abc")
 
-    agent = FastReviewAgent(async_session)
-    report = await agent.review("novel_fr_pass", "c1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_pass", "c1")
+
     assert report.word_count_ok is True
     assert report.ai_flavor_reduced is True
     assert report.beat_cohesion_ok is True
@@ -47,8 +59,16 @@ async def test_fast_review_fail_ai_flavor(async_session):
         polished_text="short",
     )
 
-    agent = FastReviewAgent(async_session)
-    report = await agent.review("novel_fr_fail_flavor", "c1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_fail_flavor", "c1")
+
     assert report.ai_flavor_reduced is False
 
     state = await director.resume("novel_fr_fail_flavor")
@@ -68,8 +88,16 @@ async def test_fast_review_fail_word_count(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
     await ChapterRepository(async_session).update_text("c1", raw_draft="abc", polished_text="this is way too long")
 
-    agent = FastReviewAgent(async_session)
-    report = await agent.review("novel_fr_fail", "c1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_fail", "c1")
+
     assert report.word_count_ok is False
     assert "字数偏离目标超过10%" in report.notes
 
