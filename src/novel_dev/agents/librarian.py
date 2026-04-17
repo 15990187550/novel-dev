@@ -14,6 +14,7 @@ from novel_dev.schemas.librarian import (
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
+from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.llm import llm_factory
 
@@ -45,9 +46,10 @@ class LibrarianAgent:
             "你是一个小说世界状态提取器。从以下精修章节文本中提取对世界状态的变更。\n"
             "返回严格 JSON，包含以下顶级键："
             "timeline_events, spaceline_changes, new_entities, concept_updates, "
-            "character_updates, foreshadowings_recovered, new_foreshadowings。\n"
+            "character_updates, foreshadowings_recovered, new_foreshadowings, new_relationships。\n"
             "规则：只提取文本中明确发生或暗示的变更；人物状态变更必须是具体键值对；"
-            "若 pending_foreshadowings 中的内容在文本中被解答，将其 ID 放入 foreshadowings_recovered。\n"
+            "若 pending_foreshadowings 中的内容在文本中被解答，将其 ID 放入 foreshadowings_recovered；"
+            "new_relationships 的 source_entity_id 和 target_entity_id 必须是已存在的实体名（匹配 new_entities 或 character_updates 中的 name）。\n"
             f"当前 pending_foreshadowings: {json.dumps(context.get('pending_foreshadowings', []), ensure_ascii=False)}\n"
             f"当前时间 tick: {context.get('current_tick', 0)}\n"
             f"章节文本：\n{polished_text}\n"
@@ -73,6 +75,7 @@ class LibrarianAgent:
         concept_updates = []
         foreshadowings_recovered = []
         new_foreshadowings = []
+        new_relationships = []
 
         # Timeline heuristic
         time_matches = re.findall(r'\d+\s*天[前后]|三[天日]后|一[个]?月[前后]', polished_text)
@@ -113,6 +116,7 @@ class LibrarianAgent:
             concept_updates=concept_updates,
             foreshadowings_recovered=foreshadowings_recovered,
             new_foreshadowings=new_foreshadowings,
+            new_relationships=new_relationships,
         )
 
     async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
@@ -120,6 +124,10 @@ class LibrarianAgent:
         spaceline_repo = SpacelineRepository(self.session)
         entity_svc = EntityService(self.session)
         foreshadowing_repo = ForeshadowingRepository(self.session)
+        relationship_repo = RelationshipRepository(self.session)
+
+        # Track name -> entity_id for relationship resolution
+        name_to_id: dict[str, str] = {}
 
         for event in extraction.timeline_events:
             await timeline_repo.create(event.tick, event.narrative, anchor_chapter_id=chapter_id, anchor_event_id=event.anchor_event_id, novel_id=novel_id)
@@ -138,9 +146,12 @@ class LibrarianAgent:
             eid = str(uuid.uuid4())
             await entity_svc.create_entity(eid, entity.type, entity.name, chapter_id=chapter_id, novel_id=novel_id)
             await entity_svc.update_state(eid, entity.state, chapter_id=chapter_id, diff_summary={"created": True})
+            name_to_id[entity.name] = eid
 
         for update in extraction.concept_updates + extraction.character_updates:
             await entity_svc.update_state(update.entity_id, update.state, chapter_id=chapter_id, diff_summary=update.diff_summary)
+            if update.entity_id:
+                name_to_id[update.entity_id] = update.entity_id
 
         for fs_id in extraction.foreshadowings_recovered:
             await foreshadowing_repo.mark_recovered(fs_id, chapter_id=chapter_id)
@@ -155,4 +166,15 @@ class LibrarianAgent:
                 埋下_location_id=fs.埋下_location_id,
                 回收条件=fs.回收条件,
                 novel_id=novel_id,
+            )
+
+        for rel in extraction.new_relationships:
+            source_id = name_to_id.get(rel.source_entity_id, rel.source_entity_id)
+            target_id = name_to_id.get(rel.target_entity_id, rel.target_entity_id)
+            await relationship_repo.create(
+                source_id=source_id,
+                target_id=target_id,
+                relation_type=rel.relation_type,
+                meta=rel.meta,
+                chapter_id=chapter_id,
             )

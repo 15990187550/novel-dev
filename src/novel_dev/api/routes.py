@@ -251,14 +251,6 @@ class RollbackRequest(BaseModel):
     version: int
 
 
-class ChapterContextRequest(BaseModel):
-    pass
-
-
-class ChapterDraftRequest(BaseModel):
-    pass
-
-
 @router.post("/api/novels/{novel_id}/documents/upload")
 async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSession = Depends(get_session)):
     svc = ExtractionService(session)
@@ -594,6 +586,17 @@ async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_sessi
         "current_phase": state.current_phase,
         "checkpoint_data": state.checkpoint_data,
     }
+
+
+@router.get("/api/novels/{novel_id}/volumes/{volume_id}/export")
+async def export_volume(novel_id: str, volume_id: str, format: str = "md", session: AsyncSession = Depends(get_session)):
+    from novel_dev.services.export_service import ExportService
+    svc = ExportService(session, settings.markdown_output_dir)
+    try:
+        path = await svc.export_volume(novel_id, volume_id, format=format)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"exported_path": path, "format": format}
 
 
 @router.post("/api/novels/{novel_id}/export")

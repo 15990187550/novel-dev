@@ -35,6 +35,13 @@ class NewForeshadowing(BaseModel):
     回收条件: Optional[dict] = None
 
 
+class NewRelationship(BaseModel):
+    source_entity_id: str
+    target_entity_id: str
+    relation_type: str
+    meta: Optional[dict] = None
+
+
 class ExtractionResult(BaseModel):
     timeline_events: List[TimelineEvent] = Field(default_factory=list)
     spaceline_changes: List[SpacelineChange] = Field(default_factory=list)
@@ -43,3 +50,4 @@ class ExtractionResult(BaseModel):
     character_updates: List[EntityUpdate] = Field(default_factory=list)
     foreshadowings_recovered: List[str] = Field(default_factory=list)
     new_foreshadowings: List[NewForeshadowing] = Field(default_factory=list)
+    new_relationships: List[NewRelationship] = Field(default_factory=list)
