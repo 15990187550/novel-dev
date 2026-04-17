@@ -1,6 +1,7 @@
-import re
-from typing import List, Optional
+from typing import List
 from pydantic import BaseModel
+
+from novel_dev.agents._llm_helpers import call_and_parse
 
 
 class CharacterProfile(BaseModel):
@@ -27,43 +28,20 @@ class ExtractedSetting(BaseModel):
 
 class SettingExtractorAgent:
     async def extract(self, text: str) -> ExtractedSetting:
-        # Naive regex-based extraction for prototype
-        worldview = self._extract_section(text, ["世界观", "worldview", "世界"])
-        power_system = self._extract_section(text, ["修炼体系", "power system", "境界", " cultivation"])
-        factions = self._extract_section(text, ["势力", "factions", "宗门", "门派"])
-        plot_synopsis = self._extract_section(text, ["剧情梗概", "剧情", "plot", "大纲", "synopsis"])
-
-        characters = self._extract_characters(text)
-        items = self._extract_items(text)
-
-        return ExtractedSetting(
-            worldview=worldview,
-            power_system=power_system,
-            factions=factions,
-            character_profiles=characters,
-            important_items=items,
-            plot_synopsis=plot_synopsis,
+        MAX_CHARS = 24000
+        truncated = text[:MAX_CHARS]
+        prompt = (
+            "你是一位小说设定提取专家。请从以下设定文档中提取结构化信息，"
+            "返回严格符合 ExtractedSetting Schema 的 JSON：\n"
+            "1. worldview: 世界观概述\n"
+            "2. power_system: 修炼/力量体系\n"
+            "3. factions: 势力/宗门分布\n"
+            "4. character_profiles: 人物列表（每人含 name, identity, personality, goal）\n"
+            "5. important_items: 重要物品列表（每件含 name, description, significance）\n"
+            "6. plot_synopsis: 剧情梗概\n\n"
+            f"文档内容：\n\n{truncated}"
         )
-
-    def _extract_section(self, text: str, headers: List[str]) -> str:
-        for header in headers:
-            pattern = re.compile(rf"{re.escape(header)}[：:\s]+([^\n]+)", re.IGNORECASE)
-            match = pattern.search(text)
-            if match:
-                return match.group(1).strip()
-        return ""
-
-    def _extract_characters(self, text: str) -> List[CharacterProfile]:
-        chars = []
-        # Match lines like: 主角林风，青云宗外门弟子，性格坚韧隐忍，目标为父报仇。
-        pattern = re.compile(r"(?:主角|人物)[：:\s]*(\S+?)[，,、]\s*(.+?)(?=\n|。|$)")
-        for name, rest in pattern.findall(text):
-            chars.append(CharacterProfile(name=name, identity=rest))
-        return chars
-
-    def _extract_items(self, text: str) -> List[ImportantItem]:
-        items = []
-        pattern = re.compile(r"重要物品[：:]\s*(\S+?)[，,、]\s*(.+?)(?=\n|。|$)")
-        for name, rest in pattern.findall(text):
-            items.append(ImportantItem(name=name, description=rest))
-        return items
+        return await call_and_parse(
+            "SettingExtractorAgent", "extract_setting", prompt,
+            ExtractedSetting.model_validate_json, max_retries=3
+        )
