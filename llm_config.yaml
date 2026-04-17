@@ -4,6 +4,14 @@ defaults:
   retries: 2
   temperature: 0.7
 
+embedding:
+  provider: openai_compatible
+  model: text-embedding-3-small
+  base_url: https://api.openai.com/v1
+  timeout: 30
+  retries: 3
+  dimensions: 1536
+
 agents:
   brainstorm_agent:
     provider: anthropic
