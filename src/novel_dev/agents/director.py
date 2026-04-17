@@ -8,6 +8,7 @@ from novel_dev.db.models import NovelState
 
 
 class Phase(str, Enum):
+    BRAINSTORMING = "brainstorming"
     VOLUME_PLANNING = "volume_planning"
     CONTEXT_PREPARATION = "context_preparation"
     DRAFTING = "drafting"
@@ -19,7 +20,8 @@ class Phase(str, Enum):
 
 
 VALID_TRANSITIONS = {
-    Phase.VOLUME_PLANNING: [Phase.CONTEXT_PREPARATION],
+    Phase.BRAINSTORMING: [Phase.VOLUME_PLANNING],
+    Phase.VOLUME_PLANNING: [Phase.BRAINSTORMING, Phase.CONTEXT_PREPARATION],
     Phase.CONTEXT_PREPARATION: [Phase.DRAFTING],
     Phase.DRAFTING: [Phase.REVIEWING],
     Phase.REVIEWING: [Phase.EDITING, Phase.DRAFTING],
@@ -69,7 +71,7 @@ class NovelDirector:
 
         if current == Phase.VOLUME_PLANNING:
             return await self._run_volume_planner(state)
-        if current == Phase.REVIEWING:
+        elif current == Phase.REVIEWING:
             return await self._run_critic(state)
         elif current == Phase.EDITING:
             return await self._run_editor(state)
