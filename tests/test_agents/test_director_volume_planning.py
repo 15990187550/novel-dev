@@ -12,7 +12,7 @@ async def test_valid_transitions_completed_to_volume_planning(async_session):
 
 
 @pytest.mark.asyncio
-async def test_advance_volume_planning_to_context_preparation(async_session):
+async def test_advance_volume_planning_to_context_preparation(async_session, mock_llm_factory):
     director = NovelDirector(session=async_session)
     synopsis = SynopsisData(
         title="T",

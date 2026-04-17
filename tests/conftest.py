@@ -42,18 +42,64 @@ def mock_llm_factory(monkeypatch):
         estimated_total_words=270000,
     )
 
-    async def mock_acomplete(messages):
-        if isinstance(messages, list) and any(
-            (isinstance(m, dict) and "大纲生成专家" in str(m.get("content", "")))
-            or (hasattr(m, "content") and "大纲生成专家" in str(m.content))
-            for m in messages
-        ):
-            return LLMResponse(text=default_synopsis.model_dump_json())
-        return LLMResponse(text="{}")
+    def mock_get(agent, task=None):
+        from novel_dev.llm.models import LLMResponse
+        from novel_dev.schemas.outline import VolumeScoreResult, VolumePlan, VolumeBeat
+        from novel_dev.schemas.review import ScoreResult, DimensionScore
+        from novel_dev.schemas.context import BeatPlan
 
-    mock_client = AsyncMock()
-    mock_client.acomplete.side_effect = mock_acomplete
-    monkeypatch.setattr(llm_factory, "get", lambda agent, task=None: mock_client)
+        mock_client = AsyncMock()
+
+        if agent == "BrainstormAgent" and task == "generate_synopsis":
+            mock_client.acomplete.return_value = LLMResponse(text=default_synopsis.model_dump_json())
+        elif agent == "VolumePlannerAgent" and task == "score_volume_plan":
+            mock_client.acomplete.return_value = LLMResponse(text=VolumeScoreResult(
+                overall=88, outline_fidelity=88, character_plot_alignment=88,
+                hook_distribution=88, foreshadowing_management=88,
+                chapter_hooks=88, page_turning=88, summary_feedback="good",
+            ).model_dump_json())
+        elif agent == "VolumePlannerAgent" and task == "revise_volume_plan":
+            mock_client.acomplete.return_value = LLMResponse(text=VolumePlan(
+                volume_id="vol_1", volume_number=1, title="第一卷", summary="卷总述",
+                total_chapters=1, estimated_total_words=3000,
+                chapters=[VolumeBeat(
+                    chapter_id="ch_1", chapter_number=1, title="第一章",
+                    summary="章摘要", target_word_count=3000, target_mood="tense",
+                    beats=[BeatPlan(summary="B1", target_mood="tense")],
+                )],
+            ).model_dump_json())
+        elif agent == "WriterAgent":
+            mock_client.acomplete.return_value = LLMResponse(
+                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
+            )
+        elif agent == "CriticAgent" and task == "score_chapter":
+            mock_client.acomplete.return_value = LLMResponse(text=ScoreResult(
+                overall=88,
+                dimensions=[
+                    DimensionScore(name="plot_tension", score=85, comment=""),
+                    DimensionScore(name="characterization", score=85, comment=""),
+                    DimensionScore(name="readability", score=85, comment=""),
+                    DimensionScore(name="consistency", score=85, comment=""),
+                    DimensionScore(name="humanity", score=85, comment=""),
+                ],
+                summary_feedback="good",
+            ).model_dump_json())
+        elif agent == "CriticAgent" and task == "score_beats":
+            mock_client.acomplete.return_value = LLMResponse(
+                text='[{"beat_index": 0, "scores": {"plot_tension": 80, "humanity": 80}}]'
+            )
+        elif agent == "EditorAgent":
+            mock_client.acomplete.return_value = LLMResponse(text="润色后的正文内容，情节更加跌宕起伏，人物形象更加丰满，场景描写更加细腻生动，令人读起来欲罢不能。")
+        elif agent == "FastReviewAgent":
+            mock_client.acomplete.return_value = LLMResponse(
+                text='{"consistency_fixed": true, "beat_cohesion_ok": true, "notes": []}'
+            )
+        else:
+            mock_client.acomplete.return_value = LLMResponse(text="{}")
+
+        return mock_client
+
+    monkeypatch.setattr(llm_factory, "get", mock_get)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)

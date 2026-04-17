@@ -93,6 +93,22 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
             volume_id = volume_plan_resp.json()["volume_id"]
             chapter_id = volume_plan_resp.json()["chapters"][0]["chapter_id"]
 
+            # Adjust target_word_count in current_chapter_plan to match mock text length (~39 chars per beat, 3 beats)
+            director = NovelDirector(session=async_session)
+            state = await director.resume(novel_id)
+            checkpoint = dict(state.checkpoint_data or {})
+            chapter_plan = dict(checkpoint.get("current_chapter_plan", {}))
+            chapter_plan["target_word_count"] = 150
+            checkpoint["current_chapter_plan"] = chapter_plan
+            await director.save_checkpoint(
+                novel_id,
+                phase=Phase.CONTEXT_PREPARATION,
+                checkpoint_data=checkpoint,
+                volume_id=volume_id,
+                chapter_id=chapter_id,
+            )
+            await async_session.commit()
+
             # Create chapter record so WriterAgent can update it
             await ChapterRepository(async_session).create(
                 chapter_id, volume_id, 1, "第一章"
@@ -116,7 +132,7 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
             chapter_plan = ChapterPlan(
                 chapter_number=1,
                 title="第一章",
-                target_word_count=50,
+                target_word_count=40,
                 beats=[BeatPlan(summary="主角在青云宗后山意外觉醒体内隐藏的上古血脉，周身灵气狂暴涌动，引发天地异象", target_mood="tense")],
             )
             cp["chapter_context"] = ChapterContext(
@@ -198,7 +214,7 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path):
+async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, mock_llm_factory):
     """Pipeline with 2 chapters in same volume to test chapter continuation."""
 
     async def override():

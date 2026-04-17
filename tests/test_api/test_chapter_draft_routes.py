@@ -14,7 +14,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_prepare_context_and_generate_draft(async_session):
+async def test_prepare_context_and_generate_draft(async_session, mock_llm_factory):
     async def override():
         yield async_session
 

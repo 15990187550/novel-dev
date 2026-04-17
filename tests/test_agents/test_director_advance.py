@@ -6,7 +6,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 
 
 @pytest.mark.asyncio
-async def test_advance_review_to_editing(async_session):
+async def test_advance_review_to_editing(async_session, mock_llm_factory):
     director = NovelDirector(session=async_session)
     plan = ChapterPlan(chapter_number=1, title="T", target_word_count=100, beats=[BeatPlan(summary="B1", target_mood="tense")])
     context = ChapterContext(

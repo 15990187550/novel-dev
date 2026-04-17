@@ -12,7 +12,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_advance_and_get_review(async_session):
+async def test_advance_and_get_review(async_session, mock_llm_factory):
     async def override():
         yield async_session
 

@@ -226,7 +226,7 @@ async def test_mcp_prepare_chapter_context():
 
 
 @pytest.mark.asyncio
-async def test_mcp_generate_chapter_draft():
+async def test_mcp_generate_chapter_draft(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase
@@ -310,7 +310,7 @@ async def test_mcp_get_chapter_draft_status():
 
 
 @pytest.mark.asyncio
-async def test_mcp_advance_novel():
+async def test_mcp_advance_novel(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase
@@ -477,7 +477,7 @@ async def test_mcp_brainstorm_novel(mock_llm_factory):
 
 
 @pytest.mark.asyncio
-async def test_mcp_plan_volume():
+async def test_mcp_plan_volume(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase
@@ -533,7 +533,7 @@ async def test_mcp_get_synopsis(mock_llm_factory):
 
 
 @pytest.mark.asyncio
-async def test_mcp_get_volume_plan():
+async def test_mcp_get_volume_plan(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase
