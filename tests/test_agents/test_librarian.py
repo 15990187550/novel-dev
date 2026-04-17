@@ -40,12 +40,13 @@ async def test_librarian_persist_writes_to_database(async_session):
         spaceline_changes=[{"location_id": "loc_1", "name": "Cloud City"}],
         new_foreshadowings=[{"content": "神秘的戒指"}],
     )
-    await agent.persist(extraction, "c1")
+    await agent.persist(extraction, "c1", "n1")
     await async_session.commit()
 
     timeline = await TimelineRepository(async_session).get_current_tick()
     assert timeline == 5
     sp = await SpacelineRepository(async_session).get_by_id("loc_1")
     assert sp is not None
+    assert sp.novel_id == "n1"
     fs_list = await ForeshadowingRepository(async_session).list_active()
-    assert any(fs.content == "神秘的戒指" for fs in fs_list)
+    assert any(fs.content == "神秘的戒指" and fs.novel_id == "n1" for fs in fs_list)
