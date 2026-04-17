@@ -31,8 +31,121 @@ def test_mcp_server_has_tools():
         "run_librarian",
         "export_novel",
         "get_archive_stats",
+        "get_novel_document_full",
+        "save_brainstorm_draft",
+        "confirm_brainstorm",
     }
     assert set(mcp._tool_manager._tools.keys()) == expected
+
+
+@pytest.mark.asyncio
+async def test_mcp_get_novel_document_full():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_doc_full_{suffix}"
+    content = "a" * 2000
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        doc = await DocumentRepository(session).create(
+            f"d_{suffix}", novel_id, "worldview", "WV", content
+        )
+        await session.commit()
+
+    result = await mcp._tool_manager._tools["get_novel_document_full"].fn(novel_id=novel_id, doc_id=doc.id)
+    assert result["content"] == content
+    assert result["doc_type"] == "worldview"
+
+
+@pytest.mark.asyncio
+async def test_mcp_save_brainstorm_draft():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.outline import SynopsisData
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_draft_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.BRAINSTORMING,
+            checkpoint_data={},
+            volume_id=None,
+            chapter_id=None,
+        )
+        await session.commit()
+
+    synopsis = SynopsisData(
+        title="T",
+        logline="L",
+        core_conflict="C",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+    result = await mcp._tool_manager._tools["save_brainstorm_draft"].fn(
+        novel_id=novel_id, synopsis_data=synopsis.model_dump()
+    )
+    assert result["saved"] is True
+
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        state = await director.resume(novel_id)
+        assert state.checkpoint_data["pending_synopsis"]["title"] == "T"
+
+
+@pytest.mark.asyncio
+async def test_mcp_confirm_brainstorm():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.agents.director import NovelDirector, Phase
+    from novel_dev.schemas.outline import SynopsisData
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_confirm_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.BRAINSTORMING,
+            checkpoint_data={},
+            volume_id=None,
+            chapter_id=None,
+        )
+        await session.commit()
+
+    synopsis = SynopsisData(
+        title="T2",
+        logline="L2",
+        core_conflict="C2",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+    await mcp._tool_manager._tools["save_brainstorm_draft"].fn(
+        novel_id=novel_id, synopsis_data=synopsis.model_dump()
+    )
+
+    result = await mcp._tool_manager._tools["confirm_brainstorm"].fn(novel_id=novel_id)
+    assert result["confirmed"] is True
+
+    async with async_session_local() as session:
+        director = NovelDirector(session=session)
+        state = await director.resume(novel_id)
+        assert state.current_phase == Phase.VOLUME_PLANNING.value
+        assert "pending_synopsis" not in state.checkpoint_data
+        docs = await DocumentRepository(session).get_by_type(novel_id, "synopsis")
+        assert any(d.title == "T2" for d in docs)
 
 
 @pytest.mark.asyncio

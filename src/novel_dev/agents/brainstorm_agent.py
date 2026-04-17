@@ -100,3 +100,6 @@ class BrainstormAgent:
             lines.append("## 参考资料")
             lines.append(source_text)
         return "\n".join(lines)
+
+    def format_synopsis_text(self, data: SynopsisData, source_text: str = "") -> str:
+        return self._format_synopsis_text(data, source_text)

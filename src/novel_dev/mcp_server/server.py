@@ -15,12 +15,13 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.style_profiler import StyleProfilerAgent
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
-from novel_dev.agents.director import NovelDirector
+from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.schemas.context import ChapterContext
-from novel_dev.schemas.outline import VolumePlan
+from novel_dev.schemas.outline import VolumePlan, SynopsisData
 from novel_dev.services.export_service import ExportService
+import uuid as uuid_mod
 from novel_dev.config import Settings
 
 mcp = FastMCP("novel-dev")
@@ -425,3 +426,76 @@ async def get_archive_stats(novel_id: str) -> dict:
             "archived_chapter_count": stats.get("archived_chapter_count", 0),
             "avg_word_count": stats.get("avg_word_count", 0),
         }
+
+
+@mcp.tool()
+async def get_novel_document_full(novel_id: str, doc_id: str) -> dict:
+    async with async_session_maker() as session:
+        repo = DocumentRepository(session)
+        doc = await repo.get_by_id(doc_id)
+        if not doc or doc.novel_id != novel_id:
+            return {"error": "Document not found"}
+        return {
+            "id": doc.id,
+            "title": doc.title,
+            "content": doc.content,
+            "doc_type": doc.doc_type,
+        }
+
+
+@mcp.tool()
+async def save_brainstorm_draft(novel_id: str, synopsis_data: dict) -> dict:
+    async with async_session_maker() as session:
+        state_repo = NovelStateRepository(session)
+        state = await state_repo.get_state(novel_id)
+        if not state or state.current_phase != Phase.BRAINSTORMING.value:
+            return {"error": "Novel is not in brainstorming phase"}
+        synopsis = SynopsisData.model_validate(synopsis_data)
+        checkpoint = dict(state.checkpoint_data or {})
+        checkpoint["pending_synopsis"] = synopsis.model_dump()
+        director = NovelDirector(session)
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.BRAINSTORMING,
+            checkpoint_data=checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
+        await session.commit()
+        return {"saved": True}
+
+
+@mcp.tool()
+async def confirm_brainstorm(novel_id: str) -> dict:
+    async with async_session_maker() as session:
+        state_repo = NovelStateRepository(session)
+        state = await state_repo.get_state(novel_id)
+        if not state or state.current_phase != Phase.BRAINSTORMING.value:
+            return {"error": "Novel is not in brainstorming phase"}
+        checkpoint = dict(state.checkpoint_data or {})
+        pending = checkpoint.get("pending_synopsis")
+        if not pending:
+            return {"error": "No pending synopsis found"}
+        synopsis = SynopsisData.model_validate(pending)
+        agent = BrainstormAgent(session)
+        synopsis_text = agent.format_synopsis_text(synopsis, "")
+        doc_repo = DocumentRepository(session)
+        await doc_repo.create(
+            doc_id=f"doc_{uuid_mod.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type="synopsis",
+            title=synopsis.title,
+            content=synopsis_text,
+        )
+        checkpoint["synopsis_data"] = synopsis.model_dump()
+        checkpoint.pop("pending_synopsis", None)
+        director = NovelDirector(session)
+        await director.save_checkpoint(
+            novel_id,
+            phase=Phase.VOLUME_PLANNING,
+            checkpoint_data=checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
+        await session.commit()
+        return {"confirmed": True}
