@@ -1,7 +1,6 @@
 import json
 import re
 import uuid
-from typing import Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.schemas.librarian import (
@@ -16,6 +15,7 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.services.entity_service import EntityService
+from novel_dev.llm import llm_factory
 
 
 class LibrarianAgent:
@@ -54,10 +54,9 @@ class LibrarianAgent:
         )
 
     async def _call_llm(self, prompt: str) -> str:
-        # Prototype: simulate a structured JSON response
-        # In production this would call an actual LLM API
-        dummy = ExtractionResult()
-        return dummy.model_dump_json()
+        client = llm_factory.get("LibrarianAgent", task="extract")
+        response = await client.acomplete(prompt)
+        return response.text
 
     async def extract(self, novel_id: str, chapter_id: str, polished_text: str) -> ExtractionResult:
         context = await self._load_context(novel_id, chapter_id)
