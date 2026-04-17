@@ -143,6 +143,8 @@ class Chapter(Base):
     review_feedback: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     fast_review_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fast_review_feedback: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
 
 
 class NovelDocument(Base):
