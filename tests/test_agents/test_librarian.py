@@ -2,7 +2,28 @@ import pytest
 from unittest.mock import AsyncMock, patch
 
 from novel_dev.agents.librarian import LibrarianAgent
+from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.librarian import ExtractionResult
+
+
+@pytest.mark.asyncio
+async def test_librarian_calls_llm_factory(async_session):
+    agent = LibrarianAgent(async_session)
+    mock_response = ExtractionResult(
+        timeline_events=[{"tick": 10, "narrative": "战斗结束"}],
+        new_entities=[{"type": "character", "name": "Lin Feng", "state": {"level": 2}}],
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=mock_response.model_dump_json())
+
+    with patch("novel_dev.agents.librarian.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await agent.extract("n1", "c1", "Lin Feng leveled up after the battle.")
+
+    assert len(result.timeline_events) == 1
+    assert result.timeline_events[0].tick == 10
+    mock_factory.get.assert_called_once_with("LibrarianAgent", task="extract")
+    mock_client.acomplete.assert_called_once()
 
 
 @pytest.mark.asyncio
