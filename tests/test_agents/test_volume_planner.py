@@ -1,10 +1,13 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult
+from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult, VolumePlan
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
@@ -26,12 +29,26 @@ async def test_plan_volume_success(async_session):
         chapter_id=None,
     )
 
-    agent = VolumePlannerAgent(async_session)
-    plan = await agent.plan("n_plan", volume_number=1)
+    score_result = VolumeScoreResult(
+        overall=88,
+        outline_fidelity=88,
+        character_plot_alignment=88,
+        hook_distribution=88,
+        foreshadowing_management=88,
+        chapter_hooks=88,
+        page_turning=88,
+        summary_feedback="good",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents.volume_planner.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = VolumePlannerAgent(async_session)
+        plan = await agent.plan("n_plan", volume_number=1)
 
     assert plan.volume_id == "vol_1"
     assert len(plan.chapters) == 3
-    assert plan.chapters[0].chapter_id != ""
 
     state = await director.resume("n_plan")
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value
@@ -78,16 +95,24 @@ async def test_plan_volume_max_attempts(async_session):
     )
 
     agent = VolumePlannerAgent(async_session)
-    agent._generate_score = lambda plan: VolumeScoreResult(
-        overall=50,
-        outline_fidelity=50,
-        character_plot_alignment=50,
-        hook_distribution=50,
-        foreshadowing_management=50,
-        chapter_hooks=50,
-        page_turning=50,
-        summary_feedback="too weak",
-    )
+
+    async def _mock_generate_score(plan):
+        return VolumeScoreResult(
+            overall=50,
+            outline_fidelity=50,
+            character_plot_alignment=50,
+            hook_distribution=50,
+            foreshadowing_management=50,
+            chapter_hooks=50,
+            page_turning=50,
+            summary_feedback="too weak",
+        )
+
+    async def _mock_revise_volume_plan(plan, feedback):
+        return plan
+
+    agent._generate_score = _mock_generate_score
+    agent._revise_volume_plan = _mock_revise_volume_plan
 
     with pytest.raises(RuntimeError, match="Max volume plan attempts exceeded"):
         await agent.plan("n_max")

@@ -18,6 +18,8 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.llm import llm_factory
+from novel_dev.llm.models import ChatMessage
 
 
 class VolumePlannerAgent:
@@ -53,7 +55,7 @@ class VolumePlannerAgent:
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         while True:
-            score = self._generate_score(volume_plan)
+            score = await self._generate_score(volume_plan)
             if score.overall >= 85:
                 break
             attempt += 1
@@ -67,7 +69,7 @@ class VolumePlannerAgent:
                     chapter_id=state.current_chapter_id,
                 )
                 raise RuntimeError("Max volume plan attempts exceeded")
-            volume_plan = self._revise_volume_plan(volume_plan, score.summary_feedback)
+            volume_plan = await self._revise_volume_plan(volume_plan, score.summary_feedback)
 
         checkpoint["current_volume_plan"] = volume_plan.model_dump()
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
@@ -128,23 +130,26 @@ class VolumePlannerAgent:
             chapters=chapters,
         )
 
-    def _generate_score(self, plan: VolumePlan) -> VolumeScoreResult:
-        # TODO: replace with LLM-based scoring
-        base = 88 if plan.total_chapters > 0 else 50
-        return VolumeScoreResult(
-            overall=base,
-            outline_fidelity=base,
-            character_plot_alignment=base,
-            hook_distribution=base,
-            foreshadowing_management=base,
-            chapter_hooks=base,
-            page_turning=base,
-            summary_feedback="基础评分通过",
+    async def _generate_score(self, plan: VolumePlan) -> VolumeScoreResult:
+        prompt = (
+            "你是一个小说分卷规划评审专家。请根据以下 VolumePlan JSON 进行多维度评分，"
+            "返回严格符合 VolumeScoreResult Schema 的 JSON。"
+            f"\n\n{plan.model_dump_json()}"
         )
+        client = llm_factory.get("VolumePlannerAgent", task="score_volume_plan")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return VolumeScoreResult.model_validate_json(response.text)
 
-    def _revise_volume_plan(self, plan: VolumePlan, feedback: str) -> VolumePlan:
-        # TODO: replace with LLM-based revision
-        return plan
+    async def _revise_volume_plan(self, plan: VolumePlan, feedback: str) -> VolumePlan:
+        prompt = (
+            "你是一个小说分卷规划专家。请根据以下 VolumePlan 和评审反馈进行修正，"
+            "返回严格符合 VolumePlan Schema 的 JSON。"
+            f"\n\nVolumePlan:\n{plan.model_dump_json()}"
+            f"\n\n反馈：{feedback}"
+        )
+        client = llm_factory.get("VolumePlannerAgent", task="revise_volume_plan")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return VolumePlan.model_validate_json(response.text)
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
         """Extract chapter plan from VolumeBeat without mutating input."""
