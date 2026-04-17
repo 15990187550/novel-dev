@@ -1,18 +1,21 @@
-from typing import List
+import asyncio
+from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
+from novel_dev.services.embedding_service import EmbeddingService
 
 
 class EditorAgent:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
+        self.embedding_service = embedding_service
 
     async def polish(self, novel_id: str, chapter_id: str):
         state = await self.state_repo.get_state(novel_id)
@@ -42,6 +45,11 @@ class EditorAgent:
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
+        if self.embedding_service:
+            try:
+                asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
+            except Exception:
+                pass
         await self.chapter_repo.update_status(chapter_id, "edited")
 
         await self.director.save_checkpoint(

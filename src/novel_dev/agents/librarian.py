@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.schemas.librarian import (
@@ -17,14 +18,16 @@ from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.llm import llm_factory
+from novel_dev.services.embedding_service import EmbeddingService
 
 
 class LibrarianAgent:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
         self.session = session
+        self.embedding_service = embedding_service
 
     async def _load_context(self, novel_id: str, chapter_id: str) -> dict:
-        entity_svc = EntityService(self.session)
+        entity_svc = EntityService(self.session, self.embedding_service)
         foreshadowing_repo = ForeshadowingRepository(self.session)
         spaceline_repo = SpacelineRepository(self.session)
         timeline_repo = TimelineRepository(self.session)
@@ -122,7 +125,7 @@ class LibrarianAgent:
     async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
         timeline_repo = TimelineRepository(self.session)
         spaceline_repo = SpacelineRepository(self.session)
-        entity_svc = EntityService(self.session)
+        entity_svc = EntityService(self.session, self.embedding_service)
         foreshadowing_repo = ForeshadowingRepository(self.session)
         relationship_repo = RelationshipRepository(self.session)
 

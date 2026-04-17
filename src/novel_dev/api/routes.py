@@ -81,7 +81,9 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
         select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
     )
     entities = list(result.scalars().all())
-    svc = EntityService(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = EntityService(session, embedding_service)
     states = await svc.get_latest_states([ent.id for ent in entities])
     items = []
     for ent in entities:
@@ -98,7 +100,9 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
 
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
 async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depends(get_session)):
-    svc = EntityService(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = EntityService(session, embedding_service)
     state = await svc.get_latest_state(entity_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
@@ -253,7 +257,9 @@ class RollbackRequest(BaseModel):
 
 @router.post("/api/novels/{novel_id}/documents/upload")
 async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSession = Depends(get_session)):
-    svc = ExtractionService(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
     pe = await svc.process_upload(novel_id, req.filename, req.content)
     return {
         "id": pe.id,
@@ -284,7 +290,9 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
 
 @router.post("/api/novels/{novel_id}/documents/pending/approve")
 async def approve_pending_document(novel_id: str, req: ApproveRequest, session: AsyncSession = Depends(get_session)):
-    svc = ExtractionService(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
     repo = PendingExtractionRepository(session)
     pe = await repo.get_by_id(req.pending_id)
     if not pe or pe.novel_id != novel_id:
@@ -322,7 +330,9 @@ async def list_style_profile_versions(novel_id: str, session: AsyncSession = Dep
 
 @router.post("/api/novels/{novel_id}/style_profile/rollback")
 async def rollback_style_profile(novel_id: str, req: RollbackRequest, session: AsyncSession = Depends(get_session)):
-    svc = ExtractionService(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
     await svc.rollback_style_profile(novel_id, req.version)
     return {"rolled_back_to_version": req.version}
 
@@ -365,7 +375,9 @@ async def generate_chapter_draft(
         raise HTTPException(status_code=400, detail="Chapter context not prepared. Call POST /context first.")
 
     context = ChapterContext.model_validate(context_data)
-    agent = WriterAgent(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    agent = WriterAgent(session, embedding_service)
     try:
         metadata = await agent.write(novel_id, context, chapter_id)
     except ValueError as e:

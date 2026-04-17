@@ -1,5 +1,6 @@
 import uuid
 import json
+import logging
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,11 +12,14 @@ from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.services.entity_service import EntityService
+from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.db.models import NovelDocument, PendingExtraction
+
+logger = logging.getLogger(__name__)
 
 
 class ExtractionService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
         self.session = session
         self.classifier = FileClassifier()
         self.setting_agent = SettingExtractorAgent()
@@ -24,7 +28,7 @@ class ExtractionService:
         self.doc_repo = DocumentRepository(session)
         self.pending_repo = PendingExtractionRepository(session)
         self.state_repo = NovelStateRepository(session)
-        self.entity_svc = EntityService(session)
+        self.entity_svc = EntityService(session, embedding_service)
 
     async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
         classification = await self.classifier.classify(filename, content)

@@ -32,7 +32,9 @@ mcp = FastMCP("novel-dev")
 @mcp.tool()
 async def query_entity(entity_id: str) -> dict:
     async with async_session_maker() as session:
-        svc = EntityService(session)
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(session, embedder)
+        svc = EntityService(session, embedding_service)
         state = await svc.get_latest_state(entity_id)
         return {"entity_id": entity_id, "state": state}
 
@@ -93,7 +95,9 @@ async def get_novel_documents(novel_id: str, doc_type: str) -> list:
 @mcp.tool()
 async def upload_document(novel_id: str, filename: str, content: str) -> dict:
     async with async_session_maker() as session:
-        svc = ExtractionService(session)
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(session, embedder)
+        svc = ExtractionService(session, embedding_service)
         pe = await svc.process_upload(novel_id, filename, content)
         await session.commit()
         return {
@@ -125,7 +129,9 @@ async def get_pending_documents(novel_id: str) -> list:
 @mcp.tool()
 async def approve_pending_documents(pending_id: str) -> dict:
     async with async_session_maker() as session:
-        svc = ExtractionService(session)
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(session, embedder)
+        svc = ExtractionService(session, embedding_service)
         docs = await svc.approve_pending(pending_id)
         await session.commit()
         return {
@@ -161,7 +167,9 @@ async def list_style_profile_versions(novel_id: str) -> list:
 async def rollback_style_profile(novel_id: str, version: int) -> dict:
     try:
         async with async_session_maker() as session:
-            svc = ExtractionService(session)
+            embedder = llm_factory.get_embedder()
+            embedding_service = EmbeddingService(session, embedder)
+            svc = ExtractionService(session, embedding_service)
             await svc.rollback_style_profile(novel_id, version)
             await session.commit()
             return {"rolled_back_to_version": version}
@@ -210,7 +218,9 @@ async def generate_chapter_draft(novel_id: str, chapter_id: str) -> dict:
         if not context_data:
             return {"error": "Chapter context not prepared"}
         context = ChapterContext.model_validate(context_data)
-        agent = WriterAgent(session)
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(session, embedder)
+        agent = WriterAgent(session, embedding_service)
         try:
             metadata = await agent.write(novel_id, context, chapter_id)
             await session.commit()
