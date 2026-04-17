@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
@@ -88,9 +89,14 @@ class LLMFactory:
             fallback = self._build_task_config(fallback_raw)
         return TaskConfig(fallback=fallback, **raw)
 
+    def _normalize_agent_name(self, name: str) -> str:
+        s1 = re.sub("(.)([A-Z][a-z]+)", r"\1_\2", name)
+        return re.sub("([a-z0-9])([A-Z])", r"\1_\2", s1).lower()
+
     def _resolve_config(self, agent_name: str, task: Optional[str]) -> TaskConfig:
         defaults = self._config.get("defaults", {})
-        agent_cfg = self._config.get("agents", {}).get(agent_name, {})
+        normalized_name = self._normalize_agent_name(agent_name)
+        agent_cfg = self._config.get("agents", {}).get(normalized_name, {})
         task_cfg = agent_cfg.get("tasks", {}).get(task, {}) if task else {}
 
         merged = {**defaults, **agent_cfg, **task_cfg}
