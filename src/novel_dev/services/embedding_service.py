@@ -5,6 +5,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.llm.embedder import BaseEmbedder
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.entity_repo import EntityRepository
+from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.schemas.similar_document import SimilarDocument
 
 logger = logging.getLogger(__name__)
@@ -66,3 +68,42 @@ class EmbeddingService:
         return await repo.similarity_search(
             novel_id, query_vector, limit, doc_type_filter
         )
+
+    async def index_entity(self, entity_id: str) -> None:
+        entity_repo = EntityRepository(self.session)
+        version_repo = EntityVersionRepository(self.session)
+        entity = await entity_repo.get_by_id(entity_id)
+        if not entity:
+            return
+        version = await version_repo.get_latest(entity_id)
+        state = version.state if version else {}
+        text = self._flatten_entity_state(entity.name, entity.type, state)
+        try:
+            vector = await self.generate_embedding(text)
+        except Exception as exc:
+            logger.warning("entity_embedding_failed", extra={"entity_id": entity_id, "error": str(exc)})
+            return
+        entity.vector_embedding = vector
+        await self.session.flush()
+
+    @staticmethod
+    def _flatten_entity_state(name: str, entity_type: str, state: dict) -> str:
+        parts = [f"名称：{name}", f"类型：{entity_type}"]
+        for key, value in state.items():
+            if isinstance(value, dict):
+                sub = ", ".join(f"{k}={v}" for k, v in value.items())
+                parts.append(f"{key}：{sub}")
+            else:
+                parts.append(f"{key}：{value}")
+        return "\n".join(parts)[:8000]
+
+    async def search_similar_entities(
+        self,
+        novel_id: str,
+        query_text: str,
+        limit: int = 5,
+        type_filter: Optional[str] = None,
+    ) -> list[SimilarDocument]:
+        query_vector = await self.generate_embedding(query_text)
+        repo = EntityRepository(self.session)
+        return await repo.similarity_search(novel_id, query_vector, limit, type_filter)
