@@ -52,3 +52,16 @@ async def test_list_timelines_by_novel(async_session):
     assert len(results) == 2
     assert [e.tick for e in results] == [1, 5]
     assert [e.novel_id for e in results] == ["n1", "n1"]
+
+
+@pytest.mark.asyncio
+async def test_list_between(async_session):
+    repo = TimelineRepository(async_session)
+    await repo.create(tick=1, narrative="事件1", novel_id="n_test")
+    await repo.create(tick=3, narrative="事件3", novel_id="n_test")
+    await repo.create(tick=5, narrative="事件5", novel_id="n_test")
+
+    result = await repo.list_between(2, 4, novel_id="n_test")
+    assert len(result) == 1
+    assert result[0].tick == 3
+    assert result[0].narrative == "事件3"

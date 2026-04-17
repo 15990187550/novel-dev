@@ -65,3 +65,12 @@ class TimelineRepository:
             .order_by(Timeline.tick.asc())
         )
         return list(result.scalars().all())
+
+    async def list_between(
+        self, start: int, end: int, novel_id: Optional[str] = None
+    ) -> List[Timeline]:
+        stmt = select(Timeline).where(Timeline.tick >= start, Timeline.tick <= end)
+        if novel_id is not None:
+            stmt = stmt.where(Timeline.novel_id == novel_id)
+        result = await self.session.execute(stmt.order_by(Timeline.tick.asc()))
+        return list(result.scalars().all())
