@@ -1,4 +1,5 @@
 import pytest
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
@@ -17,6 +18,27 @@ async def test_foreshadowing_lifecycle(async_session):
     await repo.mark_recovered("fs_001", "ch_010", "evt_010")
     recovered = await repo.get_by_id("fs_001")
     assert recovered.回收状态 == "recovered"
+
+
+@pytest.mark.asyncio
+async def test_create_foreshadowing_with_novel_id(async_session: AsyncSession):
+    repo = ForeshadowingRepository(async_session)
+    fs = await repo.create(fs_id="fs_1", content="Hint", novel_id="n1")
+    assert fs.novel_id == "n1"
+
+
+@pytest.mark.asyncio
+async def test_list_foreshadowings_by_novel(async_session: AsyncSession):
+    repo = ForeshadowingRepository(async_session)
+    await repo.create(fs_id="fs_1", content="A", novel_id="n1")
+    await repo.create(fs_id="fs_2", content="B", novel_id="n1")
+    await repo.create(fs_id="fs_3", content="C", novel_id="n2")
+    await async_session.commit()
+
+    items = await repo.list_by_novel("n1")
+    assert len(items) == 2
+    contents = {f.content for f in items}
+    assert contents == {"A", "B"}
 
 
 @pytest.mark.asyncio
