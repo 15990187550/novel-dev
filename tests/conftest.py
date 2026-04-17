@@ -108,7 +108,14 @@ def mock_llm_factory(monkeypatch):
 
         return mock_client
 
+    def mock_get_embedder():
+        class MockEmbedder:
+            async def aembed(self, texts: list[str]) -> list[list[float]]:
+                return [[0.0] * 768 for _ in texts]
+        return MockEmbedder()
+
     monkeypatch.setattr(llm_factory, "get", mock_get)
+    monkeypatch.setattr(llm_factory, "get_embedder", mock_get_embedder)
 
 
 @pytest_asyncio.fixture(scope="session", autouse=True)

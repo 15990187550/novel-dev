@@ -15,6 +15,8 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.style_profiler import StyleProfilerAgent
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.llm import llm_factory
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
@@ -180,7 +182,9 @@ async def analyze_style_from_text(text: str) -> dict:
 @mcp.tool()
 async def prepare_chapter_context(novel_id: str, chapter_id: str) -> dict:
     async with async_session_maker() as session:
-        agent = ContextAgent(session)
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(session, embedder)
+        agent = ContextAgent(session, embedding_service)
         try:
             context = await agent.assemble(novel_id, chapter_id)
             await session.commit()
