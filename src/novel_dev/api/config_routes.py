@@ -1,8 +1,10 @@
+import os
 from typing import Optional
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 from novel_dev.config import settings
+from novel_dev.llm.models import TaskConfig
 from dotenv import set_key, find_dotenv
 
 router = APIRouter()
@@ -33,8 +35,13 @@ async def get_llm_config():
 
 @router.post("/api/config/llm")
 async def save_llm_config(payload: LLMConfigPayload):
-    # TODO: validate defaults with TaskConfig once novel_dev.llm.models is available
     import yaml
+    defaults = payload.config.get("defaults", {})
+    if defaults:
+        TaskConfig.model_validate(defaults)
+    config_dir = os.path.dirname(settings.llm_config_path)
+    if config_dir:
+        os.makedirs(config_dir, exist_ok=True)
     with open(settings.llm_config_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(payload.config, f, allow_unicode=True, sort_keys=False)
     return {"saved": True}

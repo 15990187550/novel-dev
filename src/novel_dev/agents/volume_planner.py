@@ -1,3 +1,4 @@
+import math
 import uuid
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -99,7 +100,7 @@ class VolumePlannerAgent:
         return 1
 
     def _generate_volume_plan(self, synopsis: SynopsisData, volume_number: int) -> VolumePlan:
-        total_chapters = max(1, synopsis.estimated_total_chapters // max(1, synopsis.estimated_volumes))
+        total_chapters = math.ceil(synopsis.estimated_total_chapters / max(1, synopsis.estimated_volumes))
         chapters_per_volume = total_chapters
         chapters = []
         for i in range(chapters_per_volume):

@@ -27,3 +27,23 @@ class EntityService:
     async def get_latest_state(self, entity_id: str) -> Optional[dict]:
         latest = await self.version_repo.get_latest(entity_id)
         return latest.state if latest else None
+
+    async def get_latest_states(self, entity_ids: list[str]) -> dict[str, dict]:
+        from sqlalchemy import select
+        from novel_dev.db.models import EntityVersion
+
+        if not entity_ids:
+            return {}
+
+        result = await self.version_repo.session.execute(
+            select(EntityVersion.entity_id, EntityVersion.state, EntityVersion.version)
+            .where(EntityVersion.entity_id.in_(entity_ids))
+            .order_by(EntityVersion.version.desc())
+        )
+
+        states: dict[str, dict] = {}
+        for row in result.all():
+            eid = row.entity_id
+            if eid not in states:
+                states[eid] = row.state
+        return states

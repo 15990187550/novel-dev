@@ -35,7 +35,9 @@ class FallbackDriver(BaseDriver):
         except LLMError as exc:
             if self.fallback is None:
                 raise
-            fallback_config = self.fallback_config or config
+            if self.fallback_config is None:
+                raise
+            fallback_config = self.fallback_config
             if self.usage_tracker:
                 async def _log():
                     try:

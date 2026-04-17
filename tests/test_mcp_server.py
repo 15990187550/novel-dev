@@ -343,7 +343,7 @@ async def test_mcp_get_fast_review_result():
 
 
 @pytest.mark.asyncio
-async def test_mcp_brainstorm_novel():
+async def test_mcp_brainstorm_novel(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.repositories.document_repo import DocumentRepository
@@ -398,7 +398,7 @@ async def test_mcp_plan_volume():
 
 
 @pytest.mark.asyncio
-async def test_mcp_get_synopsis():
+async def test_mcp_get_synopsis(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.repositories.document_repo import DocumentRepository

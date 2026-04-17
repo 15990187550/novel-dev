@@ -18,7 +18,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path):
+async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_llm_factory):
     """Full pipeline: upload -> brainstorm -> volume plan -> context -> draft -> review -> edit -> fast review -> librarian -> export."""
 
     async def override():

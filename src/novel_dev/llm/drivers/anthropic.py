@@ -61,10 +61,8 @@ class AnthropicDriver(BaseDriver):
             return LLMRateLimitError(str(exc))
         if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
             return LLMTimeoutError(str(exc))
-        if isinstance(exc, anthropic.AuthenticationError):
+        if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
             return LLMConfigError(str(exc))
-        if isinstance(exc, anthropic.PermissionDeniedError):
-            return LLMContentPolicyError(str(exc))
         if isinstance(exc, httpx.TimeoutException):
             return LLMTimeoutError(str(exc))
         return exc

@@ -50,7 +50,7 @@ async def test_list_chapters(async_session):
             c1 = data["items"][0]
             assert c1["chapter_number"] == 1
             assert c1["status"] == "pending"
-            assert c1["word_count"] == 11
+            assert c1["word_count"] == 10
     finally:
         app.dependency_overrides.clear()
 

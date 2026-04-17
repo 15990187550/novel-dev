@@ -22,7 +22,7 @@ def test_client(async_session):
 
 
 @pytest.mark.asyncio
-async def test_brainstorm_and_volume_plan_flow(async_session, test_client):
+async def test_brainstorm_and_volume_plan_flow(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_outline", "worldview", "WV", "天玄大陆"
     )
@@ -47,7 +47,7 @@ async def test_brainstorm_and_volume_plan_flow(async_session, test_client):
 
 
 @pytest.mark.asyncio
-async def test_get_synopsis(async_session, test_client):
+async def test_get_synopsis(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_syn", "worldview", "WV", "大陆"
     )
@@ -59,7 +59,7 @@ async def test_get_synopsis(async_session, test_client):
 
 
 @pytest.mark.asyncio
-async def test_get_volume_plan(async_session, test_client):
+async def test_get_volume_plan(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_vp", "worldview", "WV", "大陆"
     )

@@ -14,7 +14,7 @@ from novel_dev.db.models import Base
 from novel_dev.db.engine import engine, async_session_maker
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def mock_llm_factory(monkeypatch):
     from novel_dev.llm import llm_factory
     from novel_dev.llm.models import LLMResponse

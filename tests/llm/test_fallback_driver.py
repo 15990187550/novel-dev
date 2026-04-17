@@ -63,16 +63,16 @@ async def test_fallback_triggered_on_content_policy_error():
 
 
 @pytest.mark.asyncio
-async def test_fallback_uses_incoming_config_when_fallback_config_none():
+async def test_fallback_raises_when_fallback_config_none():
     primary = AsyncMock()
     primary.acomplete.side_effect = LLMRateLimitError("rate limit")
     fallback = AsyncMock()
     fallback.acomplete.return_value = LLMResponse(text="fallback ok")
     driver = FallbackDriver(primary, fallback, fallback_config=None)
     incoming_config = TaskConfig(provider="anthropic", model="claude", temperature=0.5)
-    response = await driver.acomplete("hi", incoming_config)
-    assert response.text == "fallback ok"
-    fallback.acomplete.assert_called_once_with("hi", incoming_config)
+    with pytest.raises(LLMRateLimitError):
+        await driver.acomplete("hi", incoming_config)
+    fallback.acomplete.assert_not_called()
 
 
 @pytest.mark.asyncio

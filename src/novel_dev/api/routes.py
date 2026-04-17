@@ -1,14 +1,16 @@
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from pydantic import BaseModel
 
 from novel_dev.db.engine import async_session_maker
+from novel_dev.db.models import NovelState, Entity, Timeline, Spaceline, Foreshadowing, Chapter
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
 from novel_dev.config import Settings
-from pydantic import BaseModel
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -24,13 +26,16 @@ router = APIRouter()
 settings = Settings()
 
 
+def _word_count(text: Optional[str]) -> int:
+    if not text:
+        return 0
+    # For CJK novels, word count is approximately the character count excluding whitespace.
+    return len(text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+
+
 async def get_session():
     async with async_session_maker() as session:
         yield session
-
-
-from sqlalchemy import select
-from novel_dev.db.models import NovelState
 
 
 @router.get("/api/novels")
@@ -70,22 +75,21 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
 
 @router.get("/api/novels/{novel_id}/entities")
 async def list_entities(novel_id: str, session: AsyncSession = Depends(get_session)):
-    from sqlalchemy import select
-    from novel_dev.db.models import Entity
     result = await session.execute(
         select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
     )
+    entities = list(result.scalars().all())
     svc = EntityService(session)
+    states = await svc.get_latest_states([ent.id for ent in entities])
     items = []
-    for ent in result.scalars().all():
-        state = await svc.get_latest_state(ent.id)
+    for ent in entities:
         items.append({
             "entity_id": ent.id,
             "type": ent.type,
             "name": ent.name,
             "current_version": ent.current_version,
             "created_at_chapter_id": ent.created_at_chapter_id,
-            "latest_state": state,
+            "latest_state": states.get(ent.id),
         })
     return {"items": items}
 
@@ -101,8 +105,6 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
 
 @router.get("/api/novels/{novel_id}/timelines")
 async def list_timelines(novel_id: str, session: AsyncSession = Depends(get_session)):
-    from sqlalchemy import select
-    from novel_dev.db.models import Timeline
     result = await session.execute(
         select(Timeline).where(Timeline.novel_id == novel_id).order_by(Timeline.tick)
     )
@@ -121,8 +123,6 @@ async def list_timelines(novel_id: str, session: AsyncSession = Depends(get_sess
 
 @router.get("/api/novels/{novel_id}/spacelines")
 async def list_spacelines(novel_id: str, session: AsyncSession = Depends(get_session)):
-    from sqlalchemy import select
-    from novel_dev.db.models import Spaceline
     result = await session.execute(
         select(Spaceline).where(Spaceline.novel_id == novel_id).order_by(Spaceline.name)
     )
@@ -141,8 +141,6 @@ async def list_spacelines(novel_id: str, session: AsyncSession = Depends(get_ses
 
 @router.get("/api/novels/{novel_id}/foreshadowings")
 async def list_foreshadowings(novel_id: str, session: AsyncSession = Depends(get_session)):
-    from sqlalchemy import select
-    from novel_dev.db.models import Foreshadowing
     result = await session.execute(
         select(Foreshadowing).where(Foreshadowing.novel_id == novel_id).order_by(Foreshadowing.id)
     )
@@ -173,8 +171,6 @@ async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_sessi
     chapter_ids = [c.get("chapter_id") for c in plan_chapters if c.get("chapter_id")]
     db_chapters = {}
     if chapter_ids:
-        from sqlalchemy import select
-        from novel_dev.db.models import Chapter
         result = await session.execute(select(Chapter).where(Chapter.id.in_(chapter_ids)))
         for ch in result.scalars().all():
             db_chapters[ch.id] = ch
@@ -183,7 +179,7 @@ async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_sessi
     for pc in plan_chapters:
         cid = pc.get("chapter_id")
         ch = db_chapters.get(cid)
-        word_count = len(ch.polished_text or ch.raw_draft or "") if ch else 0
+        word_count = _word_count(ch.polished_text or ch.raw_draft) if ch else 0
         items.append({
             "chapter_id": cid,
             "volume_id": pc.get("volume_id") or (ch.volume_id if ch else None),
@@ -225,7 +221,7 @@ async def get_chapter_text(novel_id: str, chapter_id: str, session: AsyncSession
         "status": ch.status,
         "raw_draft": ch.raw_draft,
         "polished_text": ch.polished_text,
-        "word_count": len(ch.polished_text or ch.raw_draft or ""),
+        "word_count": _word_count(ch.polished_text or ch.raw_draft),
     }
 
 
