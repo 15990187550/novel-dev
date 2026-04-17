@@ -16,9 +16,10 @@ from novel_dev.llm.drivers.anthropic import AnthropicDriver
 from novel_dev.llm.drivers.base import BaseDriver
 from novel_dev.llm.drivers.minimax import MinimaxDriver
 from novel_dev.llm.drivers.openai_compatible import OpenAICompatibleDriver
+from novel_dev.llm.embedder import BaseEmbedder
 from novel_dev.llm.exceptions import LLMConfigError, LLMRateLimitError, LLMTimeoutError
 from novel_dev.llm.fallback_driver import FallbackDriver
-from novel_dev.llm.models import RetryConfig, TaskConfig
+from novel_dev.llm.models import EmbeddingConfig, RetryConfig, TaskConfig
 from novel_dev.llm.usage_tracker import LoggingUsageTracker, UsageTracker
 
 
@@ -191,3 +192,20 @@ class LLMFactory:
                 task=task,
             )
         return primary
+
+    def get_embedder(self) -> BaseEmbedder:
+        from novel_dev.llm.embedder import OpenAIEmbedder
+        from openai import AsyncOpenAI
+
+        raw = self._config.get("embedding", {})
+        if not raw:
+            raise LLMConfigError("Missing 'embedding' configuration in llm_config.yaml")
+
+        config = EmbeddingConfig(**raw)
+        key = self._resolve_api_key(config.provider, config.base_url)
+        client = AsyncOpenAI(
+            api_key=key,
+            base_url=config.base_url,
+            http_client=self._get_http_client(),
+        )
+        return OpenAIEmbedder(client=client, model=config.model, dimensions=config.dimensions)

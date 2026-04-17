@@ -1,0 +1,10 @@
+defaults:
+  provider: openai_compatible
+
+embedding:
+  provider: openai_compatible
+  model: text-embedding-3-small
+  base_url: https://api.openai.com/v1
+  timeout: 30
+  retries: 3
+  dimensions: 1536
