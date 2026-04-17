@@ -73,3 +73,33 @@ agents:
     model: MiniMax-Text-01
     base_url: https://api.minimax.chat/v1
     timeout: 60
+
+  critic_agent:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    timeout: 60
+    fallback:
+      provider: openai_compatible
+      model: kimi-k2.5
+      base_url: https://api.moonshot.cn/v1
+      timeout: 60
+
+  editor_agent:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    timeout: 60
+    fallback:
+      provider: openai_compatible
+      model: kimi-k2.5
+      base_url: https://api.moonshot.cn/v1
+      timeout: 60
+
+  fast_review_agent:
+    provider: anthropic
+    model: claude-haiku-4-5-20251001
+    timeout: 30
+    fallback:
+      provider: openai_compatible
+      model: kimi-k2.5
+      base_url: https://api.moonshot.cn/v1
+      timeout: 30

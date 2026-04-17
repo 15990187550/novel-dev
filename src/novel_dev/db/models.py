@@ -77,9 +77,10 @@ class EntityRelationship(Base):
 
 class Timeline(Base):
     __tablename__ = "timeline"
+    __table_args__ = (UniqueConstraint("novel_id", "tick", name="uix_timeline_novel_tick"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    tick: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    tick: Mapped[int] = mapped_column(Integer, nullable=False)
     narrative: Mapped[str] = mapped_column(Text, nullable=False)
     anchor_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anchor_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
