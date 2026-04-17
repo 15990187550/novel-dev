@@ -68,6 +68,28 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
     }
 
 
+@router.get("/api/novels/{novel_id}/entities")
+async def list_entities(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Entity
+    result = await session.execute(
+        select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
+    )
+    svc = EntityService(session)
+    items = []
+    for ent in result.scalars().all():
+        state = await svc.get_latest_state(ent.id)
+        items.append({
+            "entity_id": ent.id,
+            "type": ent.type,
+            "name": ent.name,
+            "current_version": ent.current_version,
+            "created_at_chapter_id": ent.created_at_chapter_id,
+            "latest_state": state,
+        })
+    return {"items": items}
+
+
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
 async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depends(get_session)):
     svc = EntityService(session)
@@ -75,6 +97,68 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"entity_id": entity_id, "latest_state": state}
+
+
+@router.get("/api/novels/{novel_id}/timelines")
+async def list_timelines(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Timeline
+    result = await session.execute(
+        select(Timeline).where(Timeline.novel_id == novel_id).order_by(Timeline.tick)
+    )
+    items = [
+        {
+            "id": t.id,
+            "tick": t.tick,
+            "narrative": t.narrative,
+            "anchor_chapter_id": t.anchor_chapter_id,
+            "anchor_event_id": t.anchor_event_id,
+        }
+        for t in result.scalars().all()
+    ]
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/spacelines")
+async def list_spacelines(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Spaceline
+    result = await session.execute(
+        select(Spaceline).where(Spaceline.novel_id == novel_id).order_by(Spaceline.name)
+    )
+    items = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "parent_id": s.parent_id,
+            "narrative": s.narrative,
+            "meta": s.meta,
+        }
+        for s in result.scalars().all()
+    ]
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/foreshadowings")
+async def list_foreshadowings(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Foreshadowing
+    result = await session.execute(
+        select(Foreshadowing).where(Foreshadowing.novel_id == novel_id).order_by(Foreshadowing.id)
+    )
+    items = [
+        {
+            "id": f.id,
+            "content": f.content,
+            "埋下_chapter_id": f.埋下_chapter_id,
+            "埋下_time_tick": f.埋下_time_tick,
+            "回收状态": f.回收状态,
+            "回收条件": f.回收条件,
+            "recovered_chapter_id": f.recovered_chapter_id,
+        }
+        for f in result.scalars().all()
+    ]
+    return {"items": items}
 
 
 @router.get("/api/novels/{novel_id}/chapters")
