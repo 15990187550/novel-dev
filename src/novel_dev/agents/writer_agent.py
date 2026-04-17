@@ -81,7 +81,7 @@ class WriterAgent:
 
     async def _generate_beat(self, beat: BeatPlan, context: ChapterContext, previous_text: str) -> str:
         prompt = (
-            "你是一位小说创作助手。请根据以下节拍计划和上下文，生成该节拍的正文。"
+            "你是一位小说家。请根据以下节拍计划和上下文，生成该节拍的正文。"
             "要求：只返回正文内容，不添加解释。\n\n"
             f"### 节拍计划\n{beat.model_dump_json()}\n\n"
             f"### 章节上下文\n{context.model_dump_json()}\n\n"
@@ -95,7 +95,7 @@ class WriterAgent:
 
     async def _rewrite_angle(self, beat: BeatPlan, original_text: str, context: ChapterContext) -> str:
         prompt = (
-            "你是一位小说创作助手。当前节拍过短，请扩写并保持与上下文的连贯。"
+            "你是一位小说家。当前节拍过短，请扩写并保持与上下文的连贯。"
             "只返回扩写后的正文，不添加解释。\n\n"
             f"### 节拍计划\n{beat.model_dump_json()}\n\n"
             f"### 章节上下文\n{context.model_dump_json()}\n\n"
