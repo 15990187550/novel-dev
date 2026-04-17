@@ -1,3 +1,4 @@
+import json
 from typing import List
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -5,6 +6,7 @@ from novel_dev.schemas.review import ScoreResult, DimensionScore
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.llm.models import ChatMessage
 
 
 class CriticAgent:
@@ -30,8 +32,8 @@ class CriticAgent:
         if not context_data:
             raise ValueError("chapter_context missing in checkpoint_data")
 
-        score_result = self._generate_score(ch.raw_draft or "", context_data)
-        beat_scores = self._generate_beat_scores(context_data)
+        score_result = await self._generate_score(ch.raw_draft or "", context_data)
+        beat_scores = await self._generate_beat_scores(context_data)
 
         await self.chapter_repo.update_scores(
             chapter_id,
@@ -75,22 +77,34 @@ class CriticAgent:
 
         return score_result
 
-    def _generate_score(self, raw_draft: str, context_data: dict) -> ScoreResult:
-        target = context_data.get("chapter_plan", {}).get("target_word_count", 3000)
-        word_count = len(raw_draft)
-        base = 80 if word_count > 50 else 50
-        dimensions = [
-            DimensionScore(name="plot_tension", score=base, comment="节奏稳定"),
-            DimensionScore(name="characterization", score=base, comment="人物行为一致"),
-            DimensionScore(name="readability", score=base, comment="可读性良好"),
-            DimensionScore(name="consistency", score=base, comment="设定无冲突"),
-            DimensionScore(name="humanity", score=base, comment="自然流畅"),
-        ]
-        weights = {"plot_tension": 1.0, "characterization": 1.0, "readability": 1.0, "consistency": 1.2, "humanity": 1.2}
-        total_weight = sum(weights.values())
-        overall = int(sum(d.score * weights.get(d.name, 1.0) for d in dimensions) / total_weight)
-        return ScoreResult(overall=overall, dimensions=dimensions, summary_feedback="基础评分通过")
+    async def _generate_score(self, raw_draft: str, context_data: dict) -> ScoreResult:
+        from novel_dev.llm import llm_factory
+        prompt = (
+            "你是一位小说评审专家。请根据以下章节草稿和章节上下文，"
+            "从 plot_tension、characterization、readability、consistency、humanity "
+            "五个维度进行评分（0-100），并给出 overall 和 summary_feedback。"
+            "返回严格符合 ScoreResult Schema 的 JSON。\n\n"
+            f"### 章节上下文\n{json.dumps(context_data, ensure_ascii=False)}\n\n"
+            f"### 草稿\n{raw_draft}\n\n"
+            "请评分："
+        )
+        client = llm_factory.get("CriticAgent", task="score_chapter")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return ScoreResult.model_validate_json(response.text)
 
-    def _generate_beat_scores(self, context_data: dict) -> List[dict]:
+    async def _generate_beat_scores(self, context_data: dict) -> List[dict]:
+        from novel_dev.llm import llm_factory
         beats = context_data.get("chapter_plan", {}).get("beats", [])
-        return [{"beat_index": i, "scores": {"plot_tension": 75, "humanity": 75}} for i in range(len(beats))]
+        if not beats:
+            return []
+        prompt = (
+            "你是一位小说评审专家。请根据以下节拍列表和章节上下文，"
+            "为每个节拍给出 plot_tension 和 humanity 评分。"
+            "返回 JSON 数组，每个元素格式为："
+            '{"beat_index": 0, "scores": {"plot_tension": 75, "humanity": 75}}'
+            f"\n\n章节上下文：\n{json.dumps(context_data, ensure_ascii=False)}"
+            "\n\n请评分："
+        )
+        client = llm_factory.get("CriticAgent", task="score_beats")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return json.loads(response.text)
