@@ -1,49 +1,34 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
-from novel_dev.agents.style_profiler import StyleProfilerAgent
-
-
-def test_chunk_sampling():
-    agent = StyleProfilerAgent()
-    text = "a" * 9000  # 3 blocks
-    chunks = agent._chunk_text(text, chunk_size=3000)
-    assert len(chunks) == 3
-
-    sampled = agent._sample_chunks(chunks)
-    # 3 blocks -> sample all (min 8 not reached, but 50% rounds up)
-    assert len(sampled) == 3
-
-
-def test_large_text_sampling():
-    agent = StyleProfilerAgent()
-    text = "a" * (50 * 3000)  # 50 blocks
-    chunks = agent._chunk_text(text, chunk_size=3000)
-    sampled = agent._sample_chunks(chunks)
-    assert len(sampled) == 24  # capped at 24
+from novel_dev.agents.style_profiler import StyleProfilerAgent, StyleProfile
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
-async def test_profile_from_text():
-    agent = StyleProfilerAgent()
-    text = "林风握紧了剑。剑光一闪，敌人倒下。"
-    profile = await agent.profile(text)
-    assert profile.style_guide != ""
-    assert profile.style_config.perspective == "omniscient"
-    assert profile.style_config.tone == "intense"
-    assert profile.style_config.pacing == "moderate"
+async def test_profile_success():
+    profile = StyleProfile(
+        style_guide="节奏快，第三人称有限视角",
+        style_config={
+            "sentence_patterns": {"avg_length": 25, "complexity": "moderate"},
+            "dialogue_style": {"direct_speech_ratio": 0.3},
+            "rhetoric_devices": ["比喻", "排比"],
+            "pacing": "fast",
+            "vocabulary_preferences": ["剑", "血", "杀"],
+            "perspective": "limited",
+            "tone": "intense",
+            "evolution_notes": "",
+        },
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=profile.model_dump_json())
 
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = StyleProfilerAgent()
+        result = await agent.profile("测试文本")
 
-@pytest.mark.asyncio
-async def test_profile_limited_perspective():
-    agent = StyleProfilerAgent()
-    text = "他走进了房间，看着窗外的风景。"
-    profile = await agent.profile(text)
-    assert profile.style_config.perspective == "limited"
-    assert profile.style_config.tone == "neutral"
-
-
-def test_dialogue_ratio():
-    agent = StyleProfilerAgent()
-    text = '他说："你好。"'
-    ratio = agent._dialogue_ratio(text)
-    assert ratio == round(1 / len(text), 3)
+    assert result.style_guide != ""
+    assert result.style_config.perspective == "limited"
+    assert result.style_config.tone == "intense"

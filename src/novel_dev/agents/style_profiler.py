@@ -1,13 +1,13 @@
-import math
-from collections import Counter
 from typing import List
 from pydantic import BaseModel
+
+from novel_dev.agents._llm_helpers import call_and_parse
 
 
 class StyleConfig(BaseModel):
     sentence_patterns: dict = {}
     dialogue_style: dict = {}
-    rhetoric_devices: dict = {}
+    rhetoric_devices: list = []
     pacing: str = ""
     vocabulary_preferences: List[str] = []
     perspective: str = ""
@@ -21,69 +21,25 @@ class StyleProfile(BaseModel):
 
 
 class StyleProfilerAgent:
-    CHUNK_SIZE = 3000
-    MIN_SAMPLES = 8
-    MAX_SAMPLES = 24
-    SAMPLE_RATIO = 0.5
-
-    def _chunk_text(self, text: str, chunk_size: int = CHUNK_SIZE) -> List[str]:
-        return [text[i : i + chunk_size] for i in range(0, len(text), chunk_size)]
-
-    def _sample_chunks(self, chunks: List[str]) -> List[str]:
-        total = len(chunks)
-        if total == 0:
-            return []
-        target = max(self.MIN_SAMPLES, min(self.MAX_SAMPLES, math.ceil(total * self.SAMPLE_RATIO)))
-        target = min(target, total)
-
-        if total <= target:
-            return chunks
-
-        step = total / target
-        sampled = []
-        for i in range(target):
-            idx = min(int(i * step), total - 1)
-            sampled.append(chunks[idx])
-        return sampled
-
     async def profile(self, text: str) -> StyleProfile:
-        chunks = self._chunk_text(text)
-        sampled = self._sample_chunks(chunks)
-
-        # Prototype: simple heuristic analysis without LLM
-        config = StyleConfig(
-            sentence_patterns={"avg_length": self._avg_sentence_length(text)},
-            dialogue_style={"direct_speech_ratio": self._dialogue_ratio(text)},
-            rhetoric_devices={},
-            pacing="fast" if len(sampled) > 10 else "moderate",
-            vocabulary_preferences=self._extract_vocabulary(text),
-            perspective="limited" if "他" in text or "她" in text else "omniscient",
-            tone="intense" if "杀" in text or "血" in text or "剑" in text else "neutral",
-            evolution_notes="",
+        MAX_CHARS = 24000
+        sampled = text[:MAX_CHARS]
+        prompt = (
+            "你是一位文学风格分析师。请分析以下小说文本的写作风格，"
+            "返回严格符合 StyleProfile Schema 的 JSON：\n"
+            "1. style_guide: 一段自然语言风格描述（100字以内）\n"
+            "2. style_config:\n"
+            "   - sentence_patterns: 句式特点（如 avg_length、complexity）\n"
+            "   - dialogue_style: 对话风格（如 direct_speech_ratio、dialogue_tag_style）\n"
+            "   - rhetoric_devices: 常用修辞手法\n"
+            "   - pacing: 叙事节奏（fast/moderate/slow）\n"
+            "   - vocabulary_preferences: 高频或特色词汇列表（5-10个）\n"
+            "   - perspective: 叙事视角（first_person/limited/omniscient）\n"
+            "   - tone: 整体基调（intense/dark/hopeful/romantic 等）\n"
+            "   - evolution_notes: 风格演变迹象\n\n"
+            f"文本样本：\n\n{sampled}"
         )
-
-        guide = (
-            f"Overall: {config.pacing} pacing, "
-            f"{config.perspective} perspective, "
-            f"{config.tone} tone. "
-            f"Samples analyzed: {len(sampled)} chunks."
+        return await call_and_parse(
+            "StyleProfilerAgent", "profile_style", prompt,
+            StyleProfile.model_validate_json, max_retries=3
         )
-
-        return StyleProfile(style_guide=guide, style_config=config)
-
-    def _avg_sentence_length(self, text: str) -> float:
-        sentences = [s.strip() for s in text.replace("。", ".").replace("！", "!").replace("？", "?").split(".") if s.strip()]
-        if not sentences:
-            return 0.0
-        return sum(len(s) for s in sentences) / len(sentences)
-
-    def _dialogue_ratio(self, text: str) -> float:
-        quotes = text.count('"') // 2 + text.count("'") // 2 + text.count("“") + text.count("”")
-        return round(quotes / max(len(text), 1), 3)
-
-    def _extract_vocabulary(self, text: str) -> List[str]:
-        # Simple high-frequency bigrams
-        words = list(text)
-        bigrams = [words[i] + words[i + 1] for i in range(len(words) - 1)]
-        freq = Counter(bigrams)
-        return [bg for bg, _ in freq.most_common(5)]
