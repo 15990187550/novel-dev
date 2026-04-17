@@ -144,7 +144,7 @@ class NovelDirector:
                     f"Librarian extraction failed: LLM={llm_error}, fallback={fallback_error}"
                 )
 
-        await agent.persist(extraction, chapter_id)
+        await agent.persist(extraction, chapter_id, state.novel_id)
 
         settings = Settings()
         archive_svc = ArchiveService(self.session, settings.markdown_output_dir)

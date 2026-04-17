@@ -29,6 +29,29 @@ async def get_session():
         yield session
 
 
+from sqlalchemy import select
+from novel_dev.db.models import NovelState
+
+
+@router.get("/api/novels")
+async def list_novels(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(NovelState.novel_id, NovelState.current_phase, NovelState.last_updated)
+        .order_by(NovelState.last_updated.desc())
+    )
+    rows = result.all()
+    return {
+        "items": [
+            {
+                "novel_id": r.novel_id,
+                "current_phase": r.current_phase,
+                "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.get("/api/novels/{novel_id}/state")
 async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_session)):
     repo = NovelStateRepository(session)
@@ -45,6 +68,28 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
     }
 
 
+@router.get("/api/novels/{novel_id}/entities")
+async def list_entities(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Entity
+    result = await session.execute(
+        select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
+    )
+    svc = EntityService(session)
+    items = []
+    for ent in result.scalars().all():
+        state = await svc.get_latest_state(ent.id)
+        items.append({
+            "entity_id": ent.id,
+            "type": ent.type,
+            "name": ent.name,
+            "current_version": ent.current_version,
+            "created_at_chapter_id": ent.created_at_chapter_id,
+            "latest_state": state,
+        })
+    return {"items": items}
+
+
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
 async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depends(get_session)):
     svc = EntityService(session)
@@ -52,6 +97,104 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"entity_id": entity_id, "latest_state": state}
+
+
+@router.get("/api/novels/{novel_id}/timelines")
+async def list_timelines(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Timeline
+    result = await session.execute(
+        select(Timeline).where(Timeline.novel_id == novel_id).order_by(Timeline.tick)
+    )
+    items = [
+        {
+            "id": t.id,
+            "tick": t.tick,
+            "narrative": t.narrative,
+            "anchor_chapter_id": t.anchor_chapter_id,
+            "anchor_event_id": t.anchor_event_id,
+        }
+        for t in result.scalars().all()
+    ]
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/spacelines")
+async def list_spacelines(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Spaceline
+    result = await session.execute(
+        select(Spaceline).where(Spaceline.novel_id == novel_id).order_by(Spaceline.name)
+    )
+    items = [
+        {
+            "id": s.id,
+            "name": s.name,
+            "parent_id": s.parent_id,
+            "narrative": s.narrative,
+            "meta": s.meta,
+        }
+        for s in result.scalars().all()
+    ]
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/foreshadowings")
+async def list_foreshadowings(novel_id: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import Foreshadowing
+    result = await session.execute(
+        select(Foreshadowing).where(Foreshadowing.novel_id == novel_id).order_by(Foreshadowing.id)
+    )
+    items = [
+        {
+            "id": f.id,
+            "content": f.content,
+            "埋下_chapter_id": f.埋下_chapter_id,
+            "埋下_time_tick": f.埋下_time_tick,
+            "回收状态": f.回收状态,
+            "回收条件": f.回收条件,
+            "recovered_chapter_id": f.recovered_chapter_id,
+        }
+        for f in result.scalars().all()
+    ]
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/chapters")
+async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_session)):
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    plan_chapters = []
+    if state and state.checkpoint_data:
+        volume_plan = state.checkpoint_data.get("current_volume_plan", {})
+        plan_chapters = volume_plan.get("chapters", [])
+
+    chapter_ids = [c.get("chapter_id") for c in plan_chapters if c.get("chapter_id")]
+    db_chapters = {}
+    if chapter_ids:
+        from sqlalchemy import select
+        from novel_dev.db.models import Chapter
+        result = await session.execute(select(Chapter).where(Chapter.id.in_(chapter_ids)))
+        for ch in result.scalars().all():
+            db_chapters[ch.id] = ch
+
+    items = []
+    for pc in plan_chapters:
+        cid = pc.get("chapter_id")
+        ch = db_chapters.get(cid)
+        word_count = len(ch.polished_text or ch.raw_draft or "") if ch else 0
+        items.append({
+            "chapter_id": cid,
+            "volume_id": pc.get("volume_id") or (ch.volume_id if ch else None),
+            "volume_number": pc.get("volume_number", 1),
+            "chapter_number": pc.get("chapter_number"),
+            "title": pc.get("title"),
+            "summary": pc.get("summary"),
+            "status": ch.status if ch else "pending",
+            "word_count": word_count,
+        })
+    return {"items": items}
 
 
 @router.get("/api/novels/{novel_id}/chapters/{chapter_id}")
@@ -67,6 +210,22 @@ async def get_chapter(novel_id: str, chapter_id: str, session: AsyncSession = De
         "title": ch.title,
         "status": ch.status,
         "score_overall": ch.score_overall,
+    }
+
+
+@router.get("/api/novels/{novel_id}/chapters/{chapter_id}/text")
+async def get_chapter_text(novel_id: str, chapter_id: str, session: AsyncSession = Depends(get_session)):
+    repo = ChapterRepository(session)
+    ch = await repo.get_by_id(chapter_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "chapter_id": ch.id,
+        "title": ch.title,
+        "status": ch.status,
+        "raw_draft": ch.raw_draft,
+        "polished_text": ch.polished_text,
+        "word_count": len(ch.polished_text or ch.raw_draft or ""),
     }
 
 

@@ -32,3 +32,23 @@ async def test_get_around_tick(async_session):
     events = await repo.get_around_tick(18, radius=2)
     assert len(events) == 4
     assert [e.tick for e in events] == [10, 15, 20, 25]
+
+
+@pytest.mark.asyncio
+async def test_create_timeline_with_novel_id(async_session):
+    repo = TimelineRepository(async_session)
+    entry = await repo.create(tick=1, narrative="Year 384", novel_id="n1")
+    assert entry.tick == 1
+    assert entry.novel_id == "n1"
+
+
+@pytest.mark.asyncio
+async def test_list_timelines_by_novel(async_session):
+    repo = TimelineRepository(async_session)
+    await repo.create(tick=5, narrative="event 5", novel_id="n1")
+    await repo.create(tick=1, narrative="event 1", novel_id="n1")
+    await repo.create(tick=3, narrative="event 3", novel_id="n2")
+    results = await repo.list_by_novel("n1")
+    assert len(results) == 2
+    assert [e.tick for e in results] == [1, 5]
+    assert [e.novel_id for e in results] == ["n1", "n1"]

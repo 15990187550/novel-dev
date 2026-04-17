@@ -9,6 +9,11 @@ from typing import Sequence, Union
 
 from alembic import op
 import sqlalchemy as sa
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+from novel_dev.db.models import VectorCompat
 
 
 # revision identifiers, used by Alembic.
@@ -66,7 +71,7 @@ def upgrade() -> None:
     sa.Column('doc_type', sa.Text(), nullable=False),
     sa.Column('title', sa.Text(), nullable=False),
     sa.Column('content', sa.Text(), nullable=False),
-    sa.Column('vector_embedding', novel_dev.db.models.VectorCompat(), nullable=True),
+    sa.Column('vector_embedding', VectorCompat(), nullable=True),
     sa.Column('version', sa.Integer(), nullable=False),
     sa.Column('updated_at', sa.TIMESTAMP(), nullable=False),
     sa.PrimaryKeyConstraint('id')

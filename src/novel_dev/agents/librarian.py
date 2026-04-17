@@ -63,7 +63,8 @@ class LibrarianAgent:
         context = await self._load_context(novel_id, chapter_id)
         prompt = self._build_prompt(polished_text, context)
         response = await self._call_llm(prompt)
-        return ExtractionResult.model_validate_json(response)
+        extraction = ExtractionResult.model_validate_json(response)
+        return extraction
 
     def fallback_extract(self, polished_text: str, checkpoint_data: dict) -> ExtractionResult:
         timeline_events = []
@@ -115,14 +116,14 @@ class LibrarianAgent:
             new_foreshadowings=new_foreshadowings,
         )
 
-    async def persist(self, extraction: ExtractionResult, chapter_id: str) -> None:
+    async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
         timeline_repo = TimelineRepository(self.session)
         spaceline_repo = SpacelineRepository(self.session)
         entity_svc = EntityService(self.session)
         foreshadowing_repo = ForeshadowingRepository(self.session)
 
         for event in extraction.timeline_events:
-            await timeline_repo.create(event.tick, event.narrative, anchor_chapter_id=chapter_id, anchor_event_id=event.anchor_event_id)
+            await timeline_repo.create(event.tick, event.narrative, anchor_chapter_id=chapter_id, anchor_event_id=event.anchor_event_id, novel_id=novel_id)
 
         for change in extraction.spaceline_changes:
             node = await spaceline_repo.get_by_id(change.location_id)
@@ -132,15 +133,15 @@ class LibrarianAgent:
                 node.narrative = change.narrative or node.narrative
                 await self.session.flush()
             else:
-                await spaceline_repo.create(change.location_id, change.name, change.parent_id, change.narrative)
+                await spaceline_repo.create(change.location_id, change.name, change.parent_id, change.narrative, novel_id=novel_id)
 
         for entity in extraction.new_entities:
             eid = str(uuid.uuid4())
-            await entity_svc.create_entity(eid, entity.type, entity.name)
-            await entity_svc.update_state(eid, entity.state, diff_summary={"created": True})
+            await entity_svc.create_entity(eid, entity.type, entity.name, chapter_id=chapter_id, novel_id=novel_id)
+            await entity_svc.update_state(eid, entity.state, chapter_id=chapter_id, diff_summary={"created": True})
 
         for update in extraction.concept_updates + extraction.character_updates:
-            await entity_svc.update_state(update.entity_id, update.state, diff_summary=update.diff_summary)
+            await entity_svc.update_state(update.entity_id, update.state, chapter_id=chapter_id, diff_summary=update.diff_summary)
 
         for fs_id in extraction.foreshadowings_recovered:
             await foreshadowing_repo.mark_recovered(fs_id, chapter_id=chapter_id)
@@ -154,4 +155,5 @@ class LibrarianAgent:
                 埋下_time_tick=fs.埋下_time_tick,
                 埋下_location_id=fs.埋下_location_id,
                 回收条件=fs.回收条件,
+                novel_id=novel_id,
             )

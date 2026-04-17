@@ -35,7 +35,7 @@ async def test_prepare_context_and_generate_draft(async_session):
             volume_id="v1",
             chapter_id="c1",
         )
-        await EntityRepository(async_session).create("e1", "character", "林风")
+        await EntityRepository(async_session).create("e1", "character", "林风", novel_id="n_api")
         await EntityVersionRepository(async_session).create("e1", 1, {}, chapter_id="c1")
         await ChapterRepository(async_session).create("c1", "v1", 1, "API Test")
 

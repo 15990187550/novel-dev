@@ -42,10 +42,10 @@ class ContextAgent:
         chapter_plan = ChapterPlan.model_validate(chapter_plan_data)
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
-        active_entities = await self._load_active_entities(key_entity_names)
-        location_context = await self._load_location_context(key_entity_names)
-        timeline_events = await self._load_timeline_events(checkpoint)
-        pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint)
+        active_entities = await self._load_active_entities(key_entity_names, novel_id)
+        location_context = await self._load_location_context(key_entity_names, novel_id)
+        timeline_events = await self._load_timeline_events(checkpoint, novel_id)
+        pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
         style_profile = await self._load_style_profile(novel_id, checkpoint)
         worldview_doc = await self.doc_repo.get_latest_by_type(novel_id, "worldview")
         worldview_summary = worldview_doc.content if worldview_doc else ""
@@ -86,10 +86,10 @@ class ContextAgent:
             names.update(beat.key_entities)
         return list(names)
 
-    async def _load_active_entities(self, names: List[str]) -> List[EntityState]:
+    async def _load_active_entities(self, names: List[str], novel_id: str) -> List[EntityState]:
         if not names:
             return []
-        entities = await self.entity_repo.find_by_names(names)
+        entities = await self.entity_repo.find_by_names(names, novel_id=novel_id)
         result = []
         for entity in entities:
             latest = await self.version_repo.get_latest(entity.id)
@@ -104,14 +104,14 @@ class ContextAgent:
             )
         return result
 
-    async def _load_location_context(self, names: List[str]) -> LocationContext:
+    async def _load_location_context(self, names: List[str], novel_id: str) -> LocationContext:
         return LocationContext(current="")
 
-    async def _load_timeline_events(self, checkpoint: dict) -> List[dict]:
+    async def _load_timeline_events(self, checkpoint: dict, novel_id: str) -> List[dict]:
         tick = checkpoint.get("current_time_tick")
         if tick is None:
             return []
-        events = await self.timeline_repo.get_around_tick(tick, radius=3)
+        events = await self.timeline_repo.get_around_tick(tick, radius=3, novel_id=novel_id)
         return [{"tick": e.tick, "narrative": e.narrative} for e in events]
 
     async def _load_foreshadowings(
@@ -119,9 +119,10 @@ class ContextAgent:
         chapter_plan: ChapterPlan,
         active_entities: List[EntityState],
         checkpoint: dict,
+        novel_id: str,
     ) -> List[dict]:
         active_ids = {e.entity_id for e in active_entities}
-        all_active = await self.foreshadowing_repo.list_active()
+        all_active = await self.foreshadowing_repo.list_active(novel_id=novel_id)
         result = []
         for fs in all_active:
             match = False

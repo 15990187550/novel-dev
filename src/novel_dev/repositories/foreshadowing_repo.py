@@ -19,6 +19,7 @@ class ForeshadowingRepository:
         相关人物_ids: Optional[List[str]] = None,
         回收条件: Optional[dict] = None,
         回收影响: Optional[dict] = None,
+        novel_id: Optional[str] = None,
     ) -> Foreshadowing:
         fs = Foreshadowing(
             id=fs_id,
@@ -29,6 +30,7 @@ class ForeshadowingRepository:
             相关人物_ids=相关人物_ids,
             回收条件=回收条件,
             回收影响=回收影响,
+            novel_id=novel_id,
         )
         self.session.add(fs)
         await self.session.flush()
@@ -38,10 +40,11 @@ class ForeshadowingRepository:
         result = await self.session.execute(select(Foreshadowing).where(Foreshadowing.id == fs_id))
         return result.scalar_one_or_none()
 
-    async def list_active(self) -> List[Foreshadowing]:
-        result = await self.session.execute(
-            select(Foreshadowing).where(Foreshadowing.回收状态 == "pending")
-        )
+    async def list_active(self, novel_id: Optional[str] = None) -> List[Foreshadowing]:
+        stmt = select(Foreshadowing).where(Foreshadowing.回收状态 == "pending")
+        if novel_id is not None:
+            stmt = stmt.where(Foreshadowing.novel_id == novel_id)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def mark_recovered(self, fs_id: str, chapter_id: str, event_id: Optional[str] = None) -> None:
@@ -51,3 +54,9 @@ class ForeshadowingRepository:
             fs.recovered_chapter_id = chapter_id
             fs.recovered_event_id = event_id
             await self.session.flush()
+
+    async def list_by_novel(self, novel_id: str) -> List[Foreshadowing]:
+        result = await self.session.execute(
+            select(Foreshadowing).where(Foreshadowing.novel_id == novel_id).order_by(Foreshadowing.id)
+        )
+        return list(result.scalars().all())
