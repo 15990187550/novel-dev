@@ -41,6 +41,7 @@ class Entity(Base):
     name: Mapped[str] = mapped_column(Text, nullable=False)
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
@@ -82,6 +83,7 @@ class Timeline(Base):
     narrative: Mapped[str] = mapped_column(Text, nullable=False)
     anchor_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     anchor_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Spaceline(Base):
@@ -92,6 +94,7 @@ class Spaceline(Base):
     parent_id: Mapped[Optional[str]] = mapped_column(ForeignKey("spaceline.id"), nullable=True)
     narrative: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Foreshadowing(Base):
@@ -108,6 +111,7 @@ class Foreshadowing(Base):
     recovered_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     recovered_event_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     回收影响: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class NovelState(Base):
