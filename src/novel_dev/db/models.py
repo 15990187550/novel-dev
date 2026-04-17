@@ -43,6 +43,7 @@ class Entity(Base):
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
 
