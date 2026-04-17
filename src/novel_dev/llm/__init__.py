@@ -21,7 +21,7 @@ __all__ = [
     "llm_factory",
 ]
 
-from novel_dev.config import Settings
+from novel_dev.config import settings
 from novel_dev.llm.factory import LLMFactory
 
-llm_factory = LLMFactory(settings=Settings())
+llm_factory = LLMFactory(settings=settings)

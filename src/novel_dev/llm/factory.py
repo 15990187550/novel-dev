@@ -44,10 +44,13 @@ class RetryableDriver(BaseDriver):
             wait=tenacity.wait_exponential(multiplier=1, min=2, max=10),
             reraise=True,
         )
-        response = await asyncio.wait_for(
-            retryer(self.inner.acomplete, messages, config),
-            timeout=self.retry_config.timeout,
-        )
+        try:
+            response = await asyncio.wait_for(
+                retryer(self.inner.acomplete, messages, config),
+                timeout=self.retry_config.timeout,
+            )
+        except asyncio.TimeoutError as exc:
+            raise LLMTimeoutError("Request timed out") from exc
         if self.usage_tracker and response.usage:
             async def _log():
                 try:
@@ -183,5 +186,8 @@ class LLMFactory:
                 primary=primary,
                 fallback=fallback_driver,
                 fallback_config=task_cfg.fallback,
+                usage_tracker=self.usage_tracker,
+                agent=agent_name,
+                task=task,
             )
         return primary

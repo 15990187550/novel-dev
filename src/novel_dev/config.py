@@ -16,3 +16,6 @@ class Settings(BaseSettings):
     moonshot_api_key: Optional[str] = None
     minimax_api_key: Optional[str] = None
     zhipu_api_key: Optional[str] = None
+
+
+settings = Settings()
