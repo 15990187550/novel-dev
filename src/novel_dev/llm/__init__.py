@@ -18,4 +18,10 @@ __all__ = [
     "RetryConfig",
     "TaskConfig",
     "TokenUsage",
+    "llm_factory",
 ]
+
+from novel_dev.config import Settings
+from novel_dev.llm.factory import LLMFactory
+
+llm_factory = LLMFactory(settings=Settings())
