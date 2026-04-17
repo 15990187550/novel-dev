@@ -41,6 +41,7 @@ class ChapterContext(BaseModel):
     pending_foreshadowings: List[dict]
     previous_chapter_summary: Optional[str] = None
     relevant_documents: list[SimilarDocument] = Field(default_factory=list)
+    related_entities: list[EntityState] = Field(default_factory=list)
 
 
 class DraftMetadata(BaseModel):

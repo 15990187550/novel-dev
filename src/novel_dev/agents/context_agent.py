@@ -51,6 +51,29 @@ class ContextAgent:
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
+
+        # Semantic entity retrieval
+        related_entities: list[EntityState] = []
+        if self.embedding_service:
+            query_text = self._build_search_query(chapter_plan)
+            try:
+                results = await self.embedding_service.search_similar_entities(
+                    novel_id=novel_id,
+                    query_text=query_text,
+                    limit=3,
+                )
+                active_ids = {e.entity_id for e in active_entities}
+                for sim in results:
+                    if sim.doc_id not in active_ids:
+                        related_entities.append(EntityState(
+                            entity_id=sim.doc_id,
+                            name=sim.title,
+                            type=sim.doc_type,
+                            current_state=sim.content_preview,
+                        ))
+            except Exception as exc:
+                logger.warning("entity_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+
         location_context = await self._load_location_context(chapter_plan, novel_id)
         timeline_events = await self._load_timeline_events(checkpoint, novel_id)
         pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
@@ -83,6 +106,7 @@ class ContextAgent:
             pending_foreshadowings=pending_foreshadowings,
             previous_chapter_summary=prev_summary,
             relevant_documents=relevant_docs,
+            related_entities=related_entities,
         )
 
         checkpoint["chapter_context"] = context.model_dump()

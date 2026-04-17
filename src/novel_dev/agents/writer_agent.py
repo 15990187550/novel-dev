@@ -91,6 +91,18 @@ class WriterAgent:
             f"{docs_block}\n"
         )
 
+    def _build_related_entities_text(self, context: ChapterContext) -> str:
+        if not context.related_entities:
+            return ""
+        entities_block = "\n".join(
+            f"- [{e.type}] {e.name}：{e.current_state}"
+            for e in context.related_entities
+        )
+        return (
+            f"\n\n### 相关角色/势力/地点（请注意设定一致性）\n"
+            f"{entities_block}\n"
+        )
+
     async def _generate_beat(self, beat: BeatPlan, context: ChapterContext, previous_text: str) -> str:
         prompt = self._build_beat_prompt(beat, context, previous_text)
         from novel_dev.llm import llm_factory
@@ -100,24 +112,28 @@ class WriterAgent:
 
     def _build_beat_prompt(self, beat: BeatPlan, context: ChapterContext, previous_text: str) -> str:
         relevant_docs_text = self._build_relevant_docs_text(context)
+        related_entities_text = self._build_related_entities_text(context)
         return (
             "你是一位小说家。请根据以下节拍计划和上下文，生成该节拍的正文。"
             "要求：只返回正文内容，不添加解释。\n\n"
             f"### 节拍计划\n{beat.model_dump_json()}\n\n"
             f"### 章节上下文\n{context.model_dump_json()}\n\n"
             f"{relevant_docs_text}"
+            f"{related_entities_text}"
             f"### 已写文本\n{previous_text}\n\n"
             "请生成正文："
         )
 
     async def _rewrite_angle(self, beat: BeatPlan, original_text: str, context: ChapterContext) -> str:
         relevant_docs_text = self._build_relevant_docs_text(context)
+        related_entities_text = self._build_related_entities_text(context)
         prompt = (
             "你是一位小说家。当前节拍过短，请扩写并保持与上下文的连贯。"
             "只返回扩写后的正文，不添加解释。\n\n"
             f"### 节拍计划\n{beat.model_dump_json()}\n\n"
             f"### 章节上下文\n{context.model_dump_json()}\n\n"
             f"{relevant_docs_text}"
+            f"{related_entities_text}"
             f"### 当前过短文本\n{original_text}\n\n"
             "请扩写："
         )
