@@ -189,7 +189,7 @@ async def test_mcp_analyze_style_from_text():
 
 
 @pytest.mark.asyncio
-async def test_mcp_prepare_chapter_context():
+async def test_mcp_prepare_chapter_context(mock_llm_factory):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase

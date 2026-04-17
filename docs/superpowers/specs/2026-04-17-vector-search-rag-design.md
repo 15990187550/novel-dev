@@ -382,7 +382,7 @@ async def _generate_beat(self, beat: BeatPlan, context: ChapterContext, previous
         )
 
     prompt = (
-        "你是一位小说创作助手。请根据以下节拍计划和上下文，生成该节拍的正文。"
+        "你是一位小说家。请根据以下节拍计划和上下文，生成该节拍的正文。"
         "要求：只返回正文内容，不添加解释。\n\n"
         f"### 节拍计划\n{beat.model_dump_json()}\n\n"
         f"### 章节上下文\n{context.model_dump_json()}\n\n"

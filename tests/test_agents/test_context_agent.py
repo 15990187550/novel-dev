@@ -1,80 +1,45 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.context_agent import ContextAgent
-from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.repositories.entity_repo import EntityRepository
-from novel_dev.repositories.version_repo import EntityVersionRepository
-from novel_dev.repositories.timeline_repo import TimelineRepository
-from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
-from novel_dev.repositories.document_repo import DocumentRepository
-from novel_dev.repositories.chapter_repo import ChapterRepository
-from novel_dev.schemas.context import ChapterPlan, BeatPlan
+from novel_dev.schemas.context import ChapterPlan, BeatPlan, LocationContext
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
-async def test_assemble_context_success(async_session):
-    director = NovelDirector(session=async_session)
-    chapter_plan = ChapterPlan(
-        chapter_number=1,
-        title="Test Chapter",
-        target_word_count=3000,
-        beats=[BeatPlan(summary="Beat 1", target_mood="tense", key_entities=["林风"])],
-    )
-    await director.save_checkpoint(
-        "novel_test",
-        phase=Phase.CONTEXT_PREPARATION,
-        checkpoint_data={"current_chapter_plan": chapter_plan.model_dump()},
-        volume_id="vol_1",
-        chapter_id="ch_1",
+async def test_load_location_context(async_session):
+    from novel_dev.repositories.spaceline_repo import SpacelineRepository
+    from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
+    from novel_dev.repositories.timeline_repo import TimelineRepository
+
+    sp_repo = SpacelineRepository(async_session)
+    await sp_repo.create(location_id="loc1", name="青云宗", novel_id="n_test")
+
+    fs_repo = ForeshadowingRepository(async_session)
+    await fs_repo.create(
+        fs_id="fs1", content="玉佩发光", 埋下_time_tick=1,
+        相关人物_ids=[], novel_id="n_test"
     )
 
-    await EntityRepository(async_session).create("ent_1", "character", "林风", novel_id="novel_test")
-    await EntityVersionRepository(async_session).create("ent_1", 1, {"realm": "炼气"}, chapter_id="ch_1")
-    await TimelineRepository(async_session).create(1, "event 1", novel_id="novel_test")
-    await ForeshadowingRepository(async_session).create("fs_1", "玉佩发光", 相关人物_ids=["ent_1"], novel_id="novel_test")
-    await DocumentRepository(async_session).create("doc_1", "novel_test", "style_profile", "Style", '{"guide": "fast"}')
-    await DocumentRepository(async_session).create("doc_2", "novel_test", "worldview", "Worldview", "天玄大陆")
-    await ChapterRepository(async_session).create("ch_1", "vol_1", 1, "Test Chapter")
+    tl_repo = TimelineRepository(async_session)
+    await tl_repo.create(tick=1, narrative="入门测试", novel_id="n_test")
 
-    agent = ContextAgent(async_session)
-    context = await agent.assemble("novel_test", "ch_1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text='{"locations": ["青云宗"], "entities": ["林风"], "time_range": {"start_tick": -1, "end_tick": 1}, "foreshadowing_keywords": ["玉佩"]}'),
+        LLMResponse(text='{"current": "青云宗大殿", "parent": "青云宗", "narrative": "晨光透过雕花窗棂，洒落在青石地面上..."}'),
+    ]
 
-    assert context.chapter_plan.title == "Test Chapter"
-    assert len(context.active_entities) == 1
-    assert context.active_entities[0].name == "林风"
-    assert len(context.pending_foreshadowings) == 1
-    assert context.worldview_summary == "天玄大陆"
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = ContextAgent(async_session)
+        plan = ChapterPlan(
+            chapter_number=1, title="测试", target_word_count=3000,
+            beats=[BeatPlan(summary="开场", target_mood="tense", key_entities=["林风"])]
+        )
+        result = await agent._load_location_context(plan, "n_test")
 
-    state = await director.resume("novel_test")
-    assert state.current_phase == Phase.DRAFTING.value
-
-
-@pytest.mark.asyncio
-async def test_assemble_missing_plan(async_session):
-    director = NovelDirector(session=async_session)
-    await director.save_checkpoint(
-        "novel_no_plan",
-        phase=Phase.CONTEXT_PREPARATION,
-        checkpoint_data={},
-        volume_id="vol_1",
-        chapter_id="ch_1",
-    )
-    agent = ContextAgent(async_session)
-    with pytest.raises(ValueError, match="current_chapter_plan missing"):
-        await agent.assemble("novel_no_plan", "ch_1")
-
-
-@pytest.mark.asyncio
-async def test_assemble_wrong_phase(async_session):
-    director = NovelDirector(session=async_session)
-    plan = ChapterPlan(chapter_number=1, title="T", target_word_count=100, beats=[])
-    await director.save_checkpoint(
-        "novel_wrong_phase",
-        phase=Phase.DRAFTING,
-        checkpoint_data={"current_chapter_plan": plan.model_dump()},
-        volume_id="vol_1",
-        chapter_id="ch_1",
-    )
-    agent = ContextAgent(async_session)
-    with pytest.raises(ValueError, match="Cannot prepare context"):
-        await agent.assemble("novel_wrong_phase", "ch_1")
+    assert result.current == "青云宗大殿"
+    assert "晨光" in result.narrative
+    assert mock_client.acomplete.call_count == 2

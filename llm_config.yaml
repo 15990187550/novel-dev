@@ -23,6 +23,50 @@ agents:
     model: kimi-k2.5
     base_url: https://api.moonshot.cn/v1
     timeout: 60
+    tasks:
+      generate_volume_plan:
+        timeout: 120
+        retries: 3
+
+  setting_extractor_agent:
+    provider: openai_compatible
+    model: kimi-k2.5
+    base_url: https://api.moonshot.cn/v1
+    timeout: 60
+    fallback:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      timeout: 60
+
+  style_profiler_agent:
+    provider: openai_compatible
+    model: kimi-k2.5
+    base_url: https://api.moonshot.cn/v1
+    timeout: 60
+    fallback:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      timeout: 60
+
+  file_classifier:
+    provider: openai_compatible
+    model: kimi-k2.5
+    base_url: https://api.moonshot.cn/v1
+    timeout: 30
+    fallback:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      timeout: 30
+
+  context_agent:
+    provider: openai_compatible
+    model: kimi-k2.5
+    base_url: https://api.moonshot.cn/v1
+    timeout: 30
+    fallback:
+      provider: anthropic
+      model: claude-haiku-4-5-20251001
+      timeout: 30
 
   writer_agent:
     provider: minimax

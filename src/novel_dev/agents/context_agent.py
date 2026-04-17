@@ -1,6 +1,8 @@
+import json
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from novel_dev.agents._llm_helpers import call_and_parse
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -43,7 +45,7 @@ class ContextAgent:
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
-        location_context = await self._load_location_context(key_entity_names, novel_id)
+        location_context = await self._load_location_context(chapter_plan, novel_id)
         timeline_events = await self._load_timeline_events(checkpoint, novel_id)
         pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
         style_profile = await self._load_style_profile(novel_id, checkpoint)
@@ -104,8 +106,96 @@ class ContextAgent:
             )
         return result
 
-    async def _load_location_context(self, names: List[str], novel_id: str) -> LocationContext:
-        return LocationContext(current="")
+    async def _analyze_context_needs(self, chapter_plan: ChapterPlan, novel_id: str) -> dict:
+        prompt = (
+            "你是一位小说场景分析师。请根据以下章节计划，分析写这一章需要哪些上下文信息。\n"
+            "返回严格 JSON：\n"
+            "{\n"
+            '  "locations": ["地点名1"],\n'
+            '  "entities": ["实体名1"],\n'
+            '  "time_range": {"start_tick": -3, "end_tick": 2},\n'
+            '  "foreshadowing_keywords": ["关键词1"]\n'
+            "}\n\n"
+            "说明：\n"
+            "- locations: 场景涉及的主要地点\n"
+            "- entities: 需要知道最新状态的关键人物/物品（超出章节计划已有实体）\n"
+            "- time_range: 相对于 current_tick 的时间范围\n"
+            "- foreshadowing_keywords: 用于筛选相关伏笔的关键词\n\n"
+            f"章节计划：\n{chapter_plan.model_dump_json()}"
+        )
+        return await call_and_parse(
+            "ContextAgent", "analyze_context_needs", prompt,
+            json.loads, max_retries=3
+        )
+
+    async def _load_location_context(
+        self, chapter_plan: ChapterPlan, novel_id: str
+    ) -> LocationContext:
+        needs = await self._analyze_context_needs(chapter_plan, novel_id)
+
+        location_names = needs.get("locations", [])
+        locations = []
+        if location_names:
+            all_locs = await self.spaceline_repo.list_by_novel(novel_id)
+            locations = [loc for loc in all_locs if loc.name in location_names]
+
+        entity_names = list(set(
+            needs.get("entities", []) + self._extract_key_entities_from_plan(chapter_plan)
+        ))
+        entity_states = []
+        if entity_names:
+            entities = await self.entity_repo.find_by_names(entity_names, novel_id=novel_id)
+            for entity in entities:
+                latest = await self.version_repo.get_latest(entity.id)
+                entity_states.append({
+                    "name": entity.name,
+                    "type": entity.type,
+                    "state": str(latest.state) if latest else "",
+                })
+
+        state = await self.state_repo.get_state(novel_id)
+        current_tick = state.checkpoint_data.get("current_time_tick") if state else None
+        timeline_events = []
+        if current_tick is not None:
+            time_range = needs.get("time_range", {})
+            start = current_tick + time_range.get("start_tick", -2)
+            end = current_tick + time_range.get("end_tick", 2)
+            events = await self.timeline_repo.list_between(start, end, novel_id)
+            timeline_events = [{"tick": e.tick, "narrative": e.narrative} for e in events]
+
+        keywords = needs.get("foreshadowing_keywords", [])
+        all_foreshadowings = await self.foreshadowing_repo.list_active(novel_id=novel_id)
+        pending_fs = [
+            {"id": fs.id, "content": fs.content}
+            for fs in all_foreshadowings
+            if any(kw in fs.content for kw in keywords) or not keywords
+        ]
+
+        prompt = (
+            "你是一位导演，正在为下一幕戏撰写场景说明。请根据以下所有信息，"
+            "写一段 200-300 字的场景镜头描述。这段文字将被直接交给小说家作为写作参考，"
+            "所以请用具体、可感知的细节，不要抽象概括。必须包含：\n"
+            "- 空间环境（地点、光线、声音、气味、天气等感官细节）\n"
+            "- 时间状态（时辰、季节、时间推移感）\n"
+            "- 在场人物（谁在场、他们在做什么、彼此的空间关系）\n"
+            "- 物品线索（场景中有什么道具、伏笔物品、环境线索）\n"
+            "- 情绪基调（压抑、紧张、欢快等，用氛围描写传达）\n"
+            "- 与上一场景的衔接\n"
+            "返回严格 JSON 格式：\n"
+            "{\n"
+            '  "current": "当前主要地点名称",\n'
+            '  "parent": "上级地点/区域（如有）",\n'
+            '  "narrative": "完整的场景镜头描述（200-300字）"\n'
+            "}\n\n"
+            f"地点：{[{'name': loc.name, 'narrative': loc.narrative, 'meta': loc.meta} for loc in locations]}\n"
+            f"实体状态：{entity_states}\n"
+            f"近期时间线：{timeline_events}\n"
+            f"待回收伏笔：{pending_fs}\n"
+        )
+        return await call_and_parse(
+            "ContextAgent", "build_scene_context", prompt,
+            LocationContext.model_validate_json, max_retries=3
+        )
 
     async def _load_timeline_events(self, checkpoint: dict, novel_id: str) -> List[dict]:
         tick = checkpoint.get("current_time_tick")
@@ -148,7 +238,6 @@ class ContextAgent:
         else:
             doc = await self.doc_repo.get_latest_by_type(novel_id, "style_profile")
         if doc:
-            import json
             try:
                 return json.loads(doc.content)
             except Exception:

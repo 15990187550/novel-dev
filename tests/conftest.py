@@ -94,6 +94,15 @@ def mock_llm_factory(monkeypatch):
             mock_client.acomplete.return_value = LLMResponse(
                 text='{"consistency_fixed": true, "beat_cohesion_ok": true, "notes": []}'
             )
+        elif agent == "ContextAgent" and task == "analyze_context_needs":
+            mock_client.acomplete.return_value = LLMResponse(
+                text='{"locations": [], "entities": [], "time_range": {"start_tick": -2, "end_tick": 2}, "foreshadowing_keywords": []}'
+            )
+        elif agent == "ContextAgent" and task == "build_scene_context":
+            from novel_dev.schemas.context import LocationContext
+            mock_client.acomplete.return_value = LLMResponse(
+                text=LocationContext(current="默认地点", parent=None, narrative="场景描述").model_dump_json()
+            )
         else:
             mock_client.acomplete.return_value = LLMResponse(text="{}")
 
