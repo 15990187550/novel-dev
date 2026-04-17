@@ -31,6 +31,7 @@
         <el-menu :default-active="currentView" @select="handleMenuSelect">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
           <el-menu-item index="documents">设定资料</el-menu-item>
+          <el-menu-item index="volume_plan">卷规划</el-menu-item>
           <el-sub-menu index="encyclopedia">
             <template #title>世界百科</template>
             <el-menu-item index="entities">实体百科</el-menu-item>
@@ -72,10 +73,19 @@
 
             <el-card style="margin-top: 16px;" v-if="currentChapter">
               <template #header><span>当前章节：{{ currentChapter.title }}</span></template>
-              <div>状态：<el-tag>{{ currentChapter.status }}</el-tag></div>
+              <div>状态：<el-tag :type="statusTagType(currentChapter.status)">{{ currentChapter.status }}</el-tag></div>
               <div style="margin-top: 8px;">字数：{{ currentChapter.word_count }}</div>
               <div style="margin-top: 8px;" v-if="currentChapter.score_overall != null">审核总分：{{ currentChapter.score_overall }}</div>
               <div style="margin-top: 8px;" v-if="currentChapter.fast_review_score != null">速审分数：{{ currentChapter.fast_review_score }}</div>
+              <div style="margin-top: 12px;" v-if="currentChapter.score_breakdown">
+                <div><strong>审核详情：</strong></div>
+                <el-row :gutter="8" style="margin-top: 4px;">
+                  <el-col :span="8" v-for="(val, key) in currentChapter.score_breakdown" :key="key">
+                    <div style="font-size: 12px; color: #606266;">{{ key }}: <strong>{{ val.score }}</strong></div>
+                    <div style="font-size: 11px; color: #909399;" v-if="val.comment">{{ val.comment }}</div>
+                  </el-col>
+                </el-row>
+              </div>
               <el-button style="margin-top: 12px;" @click="openChapterDrawer(currentChapter.chapter_id)">查看正文</el-button>
             </el-card>
 
@@ -184,7 +194,7 @@
 
           <!-- Locations -->
           <div v-if="currentView === 'locations'">
-            <el-table :data="spacelines" row-key="id" :tree-props="{children: 'children', hasChildren: 'hasChildren'}">
+            <el-table :data="buildSpacelineTree(spacelines)" row-key="id" :tree-props="{children: 'children', hasChildren: 'hasChildren'}">
               <el-table-column prop="name" label="名称" />
               <el-table-column prop="narrative" label="描述" />
             </el-table>
@@ -203,13 +213,45 @@
             </el-table>
           </div>
 
+          <!-- Volume Plan -->
+          <div v-if="currentView === 'volume_plan' && volumePlan">
+            <el-card>
+              <template #header><span>{{ volumePlan.title }}</span></template>
+              <div style="margin-bottom: 8px;"><strong>总述：</strong>{{ volumePlan.summary }}</div>
+              <div style="margin-bottom: 8px;"><strong>章节数：</strong>{{ volumePlan.total_chapters }} / <strong>估算字数：</strong>{{ volumePlan.estimated_total_words }}</div>
+              <el-timeline>
+                <el-timeline-item v-for="ch in volumePlan.chapters" :key="ch.chapter_id" :type="ch.chapter_number === 1 ? 'primary' : ''">
+                  <div><strong>{{ ch.title }}</strong>（第{{ ch.chapter_number }}章）</div>
+                  <div style="color: #606266; font-size: 13px;">{{ ch.summary }}</div>
+                  <div style="margin-top: 4px;">
+                    <el-tag size="small" type="info">目标字数：{{ ch.target_word_count }}</el-tag>
+                    <el-tag size="small" style="margin-left: 4px;">氛围：{{ ch.target_mood }}</el-tag>
+                  </div>
+                  <el-collapse style="margin-top: 4px;">
+                    <el-collapse-item title="节拍" name="beats">
+                      <ol>
+                        <li v-for="(beat, idx) in ch.beats" :key="idx">
+                          {{ beat.summary }}（{{ beat.target_mood }}）
+                        </li>
+                      </ol>
+                    </el-collapse-item>
+                  </el-collapse>
+                </el-timeline-item>
+              </el-timeline>
+            </el-card>
+          </div>
+
           <!-- Chapters -->
           <div v-if="currentView === 'chapters'">
             <el-table :data="chapters">
               <el-table-column prop="volume_number" label="卷号" width="80" />
               <el-table-column prop="chapter_number" label="章号" width="80" />
               <el-table-column prop="title" label="标题" />
-              <el-table-column prop="status" label="状态" />
+              <el-table-column prop="status" label="状态">
+                <template #default="scope">
+                  <el-tag :type="statusTagType(scope.row.status)" size="small">{{ scope.row.status }}</el-tag>
+                </template>
+              </el-table-column>
               <el-table-column prop="word_count" label="字数" />
               <el-table-column label="操作">
                 <template #default="scope">
@@ -303,6 +345,7 @@
         const activeConfigPanels = ref(['defaults']);
         const agentNames = ['BrainstormAgent', 'VolumePlannerAgent', 'WriterAgent', 'CriticAgent', 'EditorAgent', 'FastReviewAgent', 'LibrarianAgent', 'ContextAgent'];
         const brainstormPrompt = ref('');
+        const volumePlan = ref(null);
 
         const phaseMap = {
           brainstorming: '脑暴中',
@@ -317,6 +360,23 @@
         };
 
         const phaseLabel = (p) => phaseMap[p] || p;
+        const statusTagType = (s) => {
+          const map = { pending: 'info', drafted: 'primary', edited: 'success', archived: 'warning' };
+          return map[s] || 'info';
+        };
+        const buildSpacelineTree = (flat) => {
+          const root = [];
+          const map = {};
+          flat.forEach(item => { map[item.id] = { ...item, children: [] }; });
+          flat.forEach(item => {
+            if (item.parent_id && map[item.parent_id]) {
+              map[item.parent_id].children.push(map[item.id]);
+            } else {
+              root.push(map[item.id]);
+            }
+          });
+          return root;
+        };
         const currentVolumeChapter = computed(() => {
           if (novelState.value.current_volume_id && novelState.value.current_chapter_id) {
             return `${novelState.value.current_volume_id} / ${novelState.value.current_chapter_id}`;
@@ -460,6 +520,7 @@
               approvedDocs.value.push({ id: 'synopsis', doc_type: 'synopsis', title: '大纲', content: syn.value.data.content || JSON.stringify(syn.value.data.synopsis_data) });
             }
             if (vp.status === 'fulfilled') {
+              volumePlan.value = vp.value.data;
               approvedDocs.value.push({ id: 'volume_plan', doc_type: 'volume_plan', title: '卷计划', content: JSON.stringify(vp.value.data, null, 2) });
             }
           } catch (e) {
@@ -593,7 +654,8 @@
           uploading, chapterDrawerVisible, drawerTitle, drawerContent,
           entityTab, llmConfig, envConfig, savingConfig, savingEnv,
           activeConfigPanels, agentNames, phaseLabel, currentVolumeChapter,
-          brainstormPrompt, brainstormButtonText,
+          brainstormPrompt, brainstormButtonText, volumePlan,
+          statusTagType, buildSpacelineTree,
           canBrainstorm, canVolumePlan, canContext, canDraft, canAdvance, canLibrarian,
           filteredEntities, pendingSynopsis, loadNovel, doAction, fetchDocuments, approvePending,
           handleFileChange, uploadFile, fetchEncyclopedia, fetchChapters,
