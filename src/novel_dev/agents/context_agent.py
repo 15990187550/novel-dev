@@ -1,9 +1,12 @@
 import json
+import logging
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents._llm_helpers import call_and_parse
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext
+from novel_dev.schemas.similar_document import SimilarDocument
+from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.entity_repo import EntityRepository
@@ -14,9 +17,11 @@ from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 
+logger = logging.getLogger(__name__)
+
 
 class ContextAgent:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, embedding_service: EmbeddingService | None = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.doc_repo = DocumentRepository(session)
@@ -27,6 +32,7 @@ class ContextAgent:
         self.foreshadowing_repo = ForeshadowingRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
+        self.embedding_service = embedding_service
 
     async def assemble(self, novel_id: str, chapter_id: str) -> ChapterContext:
         state = await self.state_repo.get_state(novel_id)
@@ -55,6 +61,18 @@ class ContextAgent:
             state.current_volume_id, chapter_plan
         )
 
+        # Semantic search augmentation
+        relevant_docs: list[SimilarDocument] = []
+        if self.embedding_service:
+            query_text = self._build_search_query(chapter_plan)
+            try:
+                results = await self.embedding_service.search_similar(
+                    novel_id=novel_id, query_text=query_text, limit=3)
+                exclude_id = worldview_doc.id if worldview_doc else None
+                relevant_docs = [r for r in results if r.doc_id != exclude_id]
+            except Exception as exc:
+                logger.warning("semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+
         context = ChapterContext(
             chapter_plan=chapter_plan,
             style_profile=style_profile,
@@ -64,6 +82,7 @@ class ContextAgent:
             timeline_events=timeline_events,
             pending_foreshadowings=pending_foreshadowings,
             previous_chapter_summary=prev_summary,
+            relevant_documents=relevant_docs,
         )
 
         checkpoint["chapter_context"] = context.model_dump()
@@ -243,6 +262,14 @@ class ContextAgent:
             except Exception:
                 return {"style_guide": doc.content}
         return {}
+
+    def _build_search_query(self, chapter_plan: ChapterPlan) -> str:
+        parts = []
+        if chapter_plan.title:
+            parts.append(chapter_plan.title)
+        for beat in chapter_plan.beats[:2]:
+            parts.append(beat.summary)
+        return "\n".join(parts)[:8000]
 
     async def _load_previous_chapter_summary(
         self,
