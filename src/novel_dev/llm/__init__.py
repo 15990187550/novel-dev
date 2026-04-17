@@ -5,7 +5,15 @@ from novel_dev.llm.exceptions import (
     LLMRateLimitError,
     LLMTimeoutError,
 )
-from novel_dev.llm.models import ChatMessage, LLMResponse, RetryConfig, TaskConfig, TokenUsage
+from novel_dev.llm.models import (
+    ChatMessage,
+    EmbeddingConfig,
+    LLMResponse,
+    RetryConfig,
+    TaskConfig,
+    TokenUsage,
+)
+from novel_dev.llm.embedder import BaseEmbedder, OpenAIEmbedder
 
 __all__ = [
     "LLMError",
@@ -14,10 +22,13 @@ __all__ = [
     "LLMRateLimitError",
     "LLMTimeoutError",
     "ChatMessage",
+    "EmbeddingConfig",
     "LLMResponse",
     "RetryConfig",
     "TaskConfig",
     "TokenUsage",
+    "BaseEmbedder",
+    "OpenAIEmbedder",
     "llm_factory",
 ]
 

@@ -16,6 +16,8 @@ from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepo
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
+from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.llm import llm_factory
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
@@ -339,7 +341,9 @@ async def prepare_chapter_context(
     chapter_id: str,
     session: AsyncSession = Depends(get_session),
 ):
-    agent = ContextAgent(session)
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    agent = ContextAgent(session, embedding_service)
     try:
         context = await agent.assemble(novel_id, chapter_id)
     except ValueError as e:

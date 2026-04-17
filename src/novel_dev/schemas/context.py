@@ -1,6 +1,8 @@
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
+from novel_dev.schemas.similar_document import SimilarDocument
+
 
 class BeatPlan(BaseModel):
     summary: str
@@ -38,6 +40,7 @@ class ChapterContext(BaseModel):
     timeline_events: List[dict]
     pending_foreshadowings: List[dict]
     previous_chapter_summary: Optional[str] = None
+    relevant_documents: list[SimilarDocument] = Field(default_factory=list)
 
 
 class DraftMetadata(BaseModel):

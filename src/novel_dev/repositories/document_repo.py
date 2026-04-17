@@ -1,8 +1,10 @@
+import math
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from novel_dev.db.models import NovelDocument
+from novel_dev.schemas.similar_document import SimilarDocument
 
 
 class DocumentRepository:
@@ -16,7 +18,6 @@ class DocumentRepository:
         doc_type: str,
         title: str,
         content: str,
-        vector_embedding: Optional[List[float]] = None,
         version: int = 1,
     ) -> NovelDocument:
         doc = NovelDocument(
@@ -25,12 +26,89 @@ class DocumentRepository:
             doc_type=doc_type,
             title=title,
             content=content,
-            vector_embedding=vector_embedding,
             version=version,
         )
         self.session.add(doc)
         await self.session.flush()
         return doc
+
+    @staticmethod
+    def _cosine_similarity(a: List[float], b: List[float]) -> float:
+        dot = sum(x * y for x, y in zip(a, b))
+        norm_a = math.sqrt(sum(x * x for x in a))
+        norm_b = math.sqrt(sum(x * x for x in b))
+        if norm_a == 0 or norm_b == 0:
+            return 0.0
+        return dot / (norm_a * norm_b)
+
+    async def similarity_search(
+        self,
+        novel_id: str,
+        query_vector: List[float],
+        limit: int = 5,
+        doc_type_filter: Optional[str] = None,
+    ) -> List[SimilarDocument]:
+        dialect_name = self.session.bind.dialect.name if self.session.bind else "sqlite"
+
+        if dialect_name == "postgresql":
+            vector_str = "[" + ",".join(str(v) for v in query_vector) + "]"
+            sql = """
+                SELECT id, doc_type, title, content,
+                       1 - (vector_embedding <=> :query_vector) AS similarity
+                FROM novel_documents
+                WHERE novel_id = :novel_id
+                  AND vector_embedding IS NOT NULL
+            """
+            params = {"novel_id": novel_id, "query_vector": vector_str}
+            if doc_type_filter:
+                sql += " AND doc_type = :doc_type"
+                params["doc_type"] = doc_type_filter
+            sql += " ORDER BY similarity DESC LIMIT :limit"
+            params["limit"] = limit
+
+            result = await self.session.execute(text(sql), params)
+            rows = result.all()
+            return [
+                SimilarDocument(
+                    doc_id=row.id,
+                    doc_type=row.doc_type,
+                    title=row.title,
+                    content_preview=(row.content or "")[:200],
+                    similarity_score=float(row.similarity),
+                )
+                for row in rows
+            ]
+
+        # SQLite fallback: load vectors and compute in Python
+        stmt = select(NovelDocument).where(
+            NovelDocument.novel_id == novel_id,
+            NovelDocument.vector_embedding.is_not(None),
+        )
+        if doc_type_filter:
+            stmt = stmt.where(NovelDocument.doc_type == doc_type_filter)
+
+        result = await self.session.execute(stmt)
+        docs = result.scalars().all()
+
+        scored = []
+        for doc in docs:
+            emb = doc.vector_embedding
+            if not emb:
+                continue
+            score = self._cosine_similarity(query_vector, emb)
+            scored.append((score, doc))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [
+            SimilarDocument(
+                doc_id=doc.id,
+                doc_type=doc.doc_type,
+                title=doc.title,
+                content_preview=(doc.content or "")[:200],
+                similarity_score=score,
+            )
+            for score, doc in scored[:limit]
+        ]
 
     async def get_by_id(self, doc_id: str) -> Optional[NovelDocument]:
         result = await self.session.execute(select(NovelDocument).where(NovelDocument.id == doc_id))

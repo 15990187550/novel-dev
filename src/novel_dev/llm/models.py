@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Literal, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -35,3 +35,12 @@ class TaskConfig(BaseModel):
 class RetryConfig(BaseModel):
     retries: int = 2
     timeout: int = 30
+
+
+class EmbeddingConfig(BaseModel):
+    provider: str
+    model: str
+    base_url: Optional[str] = None
+    timeout: int = 30
+    retries: int = 3
+    dimensions: int = Field(default=1536, gt=0)
