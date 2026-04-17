@@ -16,7 +16,7 @@ from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepo
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
-from novel_dev.agents.director import NovelDirector
+from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
@@ -472,6 +472,39 @@ async def brainstorm_novel(novel_id: str, session: AsyncSession = Depends(get_se
         "estimated_volumes": synopsis_data.estimated_volumes,
         "estimated_total_chapters": synopsis_data.estimated_total_chapters,
     }
+
+
+@router.post("/api/novels/{novel_id}/brainstorm/start")
+async def start_brainstorm(novel_id: str, session: AsyncSession = Depends(get_session)):
+    doc_repo = DocumentRepository(session)
+    docs = (
+        await doc_repo.get_by_type(novel_id, "worldview")
+        + await doc_repo.get_by_type(novel_id, "setting")
+        + await doc_repo.get_by_type(novel_id, "concept")
+    )
+    if not docs:
+        raise HTTPException(status_code=400, detail="请先上传世界观或设定文档")
+
+    director = NovelDirector(session)
+    state = await director.resume(novel_id)
+    checkpoint = dict(state.checkpoint_data or {}) if state else {}
+    await director.save_checkpoint(
+        novel_id,
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data=checkpoint,
+        volume_id=state.current_volume_id if state else None,
+        chapter_id=state.current_chapter_id if state else None,
+    )
+
+    doc_list = "\n".join(f"- [{d.doc_type}] {d.title} (doc_id={d.id})" for d in docs)
+    prompt = (
+        f'请为小说 "{novel_id}" 脑暴一份大纲。\n\n'
+        f"已上传的设定文档列表如下，你可以调用 get_novel_document_full 获取完整内容：\n"
+        f"{doc_list}\n\n"
+        f"请基于这些文档生成大纲。每次修改后请调用 save_brainstorm_draft 保存。\n"
+        f'当我确认满意后，调用 confirm_brainstorm 完成脑暴。'
+    )
+    return {"prompt": prompt}
 
 
 @router.post("/api/novels/{novel_id}/volume_plan")
