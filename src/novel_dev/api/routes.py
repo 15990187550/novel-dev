@@ -77,6 +77,42 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
     return {"entity_id": entity_id, "latest_state": state}
 
 
+@router.get("/api/novels/{novel_id}/chapters")
+async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_session)):
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    plan_chapters = []
+    if state and state.checkpoint_data:
+        volume_plan = state.checkpoint_data.get("current_volume_plan", {})
+        plan_chapters = volume_plan.get("chapters", [])
+
+    chapter_ids = [c.get("chapter_id") for c in plan_chapters if c.get("chapter_id")]
+    db_chapters = {}
+    if chapter_ids:
+        from sqlalchemy import select
+        from novel_dev.db.models import Chapter
+        result = await session.execute(select(Chapter).where(Chapter.id.in_(chapter_ids)))
+        for ch in result.scalars().all():
+            db_chapters[ch.id] = ch
+
+    items = []
+    for pc in plan_chapters:
+        cid = pc.get("chapter_id")
+        ch = db_chapters.get(cid)
+        word_count = len(ch.polished_text or ch.raw_draft or "") if ch else 0
+        items.append({
+            "chapter_id": cid,
+            "volume_id": pc.get("volume_id") or (ch.volume_id if ch else None),
+            "volume_number": pc.get("volume_number", 1),
+            "chapter_number": pc.get("chapter_number"),
+            "title": pc.get("title"),
+            "summary": pc.get("summary"),
+            "status": ch.status if ch else "pending",
+            "word_count": word_count,
+        })
+    return {"items": items}
+
+
 @router.get("/api/novels/{novel_id}/chapters/{chapter_id}")
 async def get_chapter(novel_id: str, chapter_id: str, session: AsyncSession = Depends(get_session)):
     repo = ChapterRepository(session)
@@ -90,6 +126,22 @@ async def get_chapter(novel_id: str, chapter_id: str, session: AsyncSession = De
         "title": ch.title,
         "status": ch.status,
         "score_overall": ch.score_overall,
+    }
+
+
+@router.get("/api/novels/{novel_id}/chapters/{chapter_id}/text")
+async def get_chapter_text(novel_id: str, chapter_id: str, session: AsyncSession = Depends(get_session)):
+    repo = ChapterRepository(session)
+    ch = await repo.get_by_id(chapter_id)
+    if not ch:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "chapter_id": ch.id,
+        "title": ch.title,
+        "status": ch.status,
+        "raw_draft": ch.raw_draft,
+        "polished_text": ch.polished_text,
+        "word_count": len(ch.polished_text or ch.raw_draft or ""),
     }
 
 
