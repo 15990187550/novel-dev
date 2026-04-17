@@ -39,7 +39,7 @@ async def test_advance_volume_planning_to_context_preparation(async_session, moc
 
 
 @pytest.mark.asyncio
-async def test_advance_unsupported_phase_still_raises(async_session):
+async def test_advance_drafting_missing_draft(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
         "n_unsup",
@@ -48,5 +48,5 @@ async def test_advance_unsupported_phase_still_raises(async_session):
         volume_id="v1",
         chapter_id="c1",
     )
-    with pytest.raises(ValueError, match="Cannot auto-advance from"):
+    with pytest.raises(ValueError, match="Chapter draft not generated"):
         await director.advance("n_unsup")

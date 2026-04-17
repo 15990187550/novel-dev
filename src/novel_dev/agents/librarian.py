@@ -180,4 +180,5 @@ class LibrarianAgent:
                 relation_type=rel.relation_type,
                 meta=rel.meta,
                 chapter_id=chapter_id,
+                novel_id=novel_id,
             )

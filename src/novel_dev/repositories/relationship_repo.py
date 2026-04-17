@@ -16,6 +16,7 @@ class RelationshipRepository:
         relation_type: str,
         meta: Optional[dict] = None,
         chapter_id: Optional[str] = None,
+        novel_id: Optional[str] = None,
     ) -> EntityRelationship:
         rel = EntityRelationship(
             source_id=source_id,
@@ -23,16 +24,18 @@ class RelationshipRepository:
             relation_type=relation_type,
             meta=meta,
             created_at_chapter_id=chapter_id,
+            novel_id=novel_id,
         )
         self.session.add(rel)
         await self.session.flush()
         return rel
 
-    async def list_by_source(self, source_id: str) -> list:
-        result = await self.session.execute(
-            select(EntityRelationship).where(
-                EntityRelationship.source_id == source_id,
-                EntityRelationship.is_active == True,
-            )
+    async def list_by_source(self, source_id: str, novel_id: Optional[str] = None) -> list:
+        stmt = select(EntityRelationship).where(
+            EntityRelationship.source_id == source_id,
+            EntityRelationship.is_active == True,
         )
+        if novel_id is not None:
+            stmt = stmt.where(EntityRelationship.novel_id == novel_id)
+        result = await self.session.execute(stmt)
         return result.scalars().all()

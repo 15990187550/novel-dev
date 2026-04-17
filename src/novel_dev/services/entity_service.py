@@ -24,7 +24,7 @@ class EntityService:
         await self.entity_repo.update_version(entity_id, 1)
         if self.embedding_service:
             try:
-                asyncio.create_task(self.embedding_service.index_entity(entity_id))
+                await self.embedding_service.index_entity(entity_id)
             except Exception as exc:
                 logger.warning("entity_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
         return entity
@@ -36,7 +36,7 @@ class EntityService:
         await self.entity_repo.update_version(entity_id, new_version)
         if self.embedding_service:
             try:
-                asyncio.create_task(self.embedding_service.index_entity(entity_id))
+                await self.embedding_service.index_entity(entity_id)
             except Exception as exc:
                 logger.warning("entity_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
         return ver

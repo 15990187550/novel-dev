@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class ExtractionService:
     def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
         self.session = session
+        self.embedding_service = embedding_service
         self.classifier = FileClassifier()
         self.setting_agent = SettingExtractorAgent()
         self.style_agent = StyleProfilerAgent()

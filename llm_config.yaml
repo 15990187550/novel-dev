@@ -31,6 +31,10 @@ agents:
     model: kimi-k2.5
     base_url: https://api.moonshot.cn/v1
     timeout: 60
+    fallback:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      timeout: 120
     tasks:
       generate_volume_plan:
         timeout: 120
@@ -81,6 +85,11 @@ agents:
     model: MiniMax-Text-01
     base_url: https://api.minimax.chat/v1
     timeout: 60
+    fallback:
+      provider: openai_compatible
+      model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      timeout: 60
 
   critic_agent:
     provider: anthropic
@@ -111,3 +120,13 @@ agents:
       model: kimi-k2.5
       base_url: https://api.moonshot.cn/v1
       timeout: 30
+
+  librarian_agent:
+    provider: anthropic
+    model: claude-sonnet-4-6
+    timeout: 60
+    fallback:
+      provider: openai_compatible
+      model: gpt-4.1
+      base_url: https://api.openai.com/v1
+      timeout: 60

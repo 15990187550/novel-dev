@@ -68,9 +68,41 @@ class NovelDirector:
         if not state:
             raise ValueError(f"Novel state not found for {novel_id}")
         current = Phase(state.current_phase)
+        checkpoint = dict(state.checkpoint_data or {})
 
-        if current == Phase.VOLUME_PLANNING:
+        if current == Phase.BRAINSTORMING:
+            from novel_dev.repositories.document_repo import DocumentRepository
+            docs = await DocumentRepository(self.session).get_by_type(novel_id, "synopsis")
+            if not docs:
+                raise ValueError("Synopsis not generated yet. Call POST /brainstorm first.")
+            return await self.save_checkpoint(
+                novel_id, Phase.VOLUME_PLANNING, checkpoint,
+                volume_id=state.current_volume_id,
+                chapter_id=state.current_chapter_id,
+            )
+        elif current == Phase.VOLUME_PLANNING:
             return await self._run_volume_planner(state)
+        elif current == Phase.CONTEXT_PREPARATION:
+            if not checkpoint.get("chapter_context"):
+                raise ValueError("Chapter context not prepared. Call POST /chapters/{cid}/context first.")
+            return await self.save_checkpoint(
+                novel_id, Phase.DRAFTING, checkpoint,
+                volume_id=state.current_volume_id,
+                chapter_id=state.current_chapter_id,
+            )
+        elif current == Phase.DRAFTING:
+            chapter_id = state.current_chapter_id
+            if not chapter_id:
+                raise ValueError("No current chapter set for DRAFTING phase")
+            from novel_dev.repositories.chapter_repo import ChapterRepository
+            ch = await ChapterRepository(self.session).get_by_id(chapter_id)
+            if not ch or not ch.raw_draft:
+                raise ValueError("Chapter draft not generated. Call POST /chapters/{cid}/draft first.")
+            return await self.save_checkpoint(
+                novel_id, Phase.REVIEWING, checkpoint,
+                volume_id=state.current_volume_id,
+                chapter_id=chapter_id,
+            )
         elif current == Phase.REVIEWING:
             return await self._run_critic(state)
         elif current == Phase.EDITING:
@@ -79,6 +111,8 @@ class NovelDirector:
             return await self._run_fast_review(state)
         elif current == Phase.LIBRARIAN:
             return await self._run_librarian(state)
+        elif current == Phase.COMPLETED:
+            return await self._continue_to_next_chapter(novel_id)
         else:
             raise ValueError(f"Cannot auto-advance from {current}")
 

@@ -46,8 +46,9 @@ async def test_advance_missing_novel(async_session):
 
 
 @pytest.mark.asyncio
-async def test_advance_unsupported_phase(async_session):
+async def test_advance_drafting_missing_draft(async_session):
     director = NovelDirector(session=async_session)
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
     await director.save_checkpoint(
         "novel_draft",
         phase=Phase.DRAFTING,
@@ -55,5 +56,5 @@ async def test_advance_unsupported_phase(async_session):
         volume_id="v1",
         chapter_id="c1",
     )
-    with pytest.raises(ValueError, match="Cannot auto-advance from"):
+    with pytest.raises(ValueError, match="Chapter draft not generated"):
         await director.advance("novel_draft")

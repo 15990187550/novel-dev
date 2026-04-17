@@ -73,6 +73,7 @@ class EntityRelationship(Base):
     meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
 
 
