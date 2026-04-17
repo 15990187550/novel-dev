@@ -29,6 +29,29 @@ async def get_session():
         yield session
 
 
+from sqlalchemy import select
+from novel_dev.db.models import NovelState
+
+
+@router.get("/api/novels")
+async def list_novels(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(NovelState.novel_id, NovelState.current_phase, NovelState.last_updated)
+        .order_by(NovelState.last_updated.desc())
+    )
+    rows = result.all()
+    return {
+        "items": [
+            {
+                "novel_id": r.novel_id,
+                "current_phase": r.current_phase,
+                "last_updated": r.last_updated.isoformat() if r.last_updated else None,
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.get("/api/novels/{novel_id}/state")
 async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_session)):
     repo = NovelStateRepository(session)
