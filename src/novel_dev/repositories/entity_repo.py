@@ -31,12 +31,13 @@ class EntityRepository:
             entity.current_version = new_version
             await self.session.flush()
 
-    async def find_by_names(self, names: List[str]) -> List[Entity]:
+    async def find_by_names(self, names: List[str], novel_id: Optional[str] = None) -> List[Entity]:
         if not names:
             return []
-        result = await self.session.execute(
-            select(Entity).where(Entity.name.in_(names))
-        )
+        stmt = select(Entity).where(Entity.name.in_(names))
+        if novel_id is not None:
+            stmt = stmt.where(Entity.novel_id == novel_id)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def list_by_novel(self, novel_id: str) -> List[Entity]:

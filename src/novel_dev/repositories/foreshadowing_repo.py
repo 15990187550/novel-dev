@@ -40,10 +40,11 @@ class ForeshadowingRepository:
         result = await self.session.execute(select(Foreshadowing).where(Foreshadowing.id == fs_id))
         return result.scalar_one_or_none()
 
-    async def list_active(self) -> List[Foreshadowing]:
-        result = await self.session.execute(
-            select(Foreshadowing).where(Foreshadowing.回收状态 == "pending")
-        )
+    async def list_active(self, novel_id: Optional[str] = None) -> List[Foreshadowing]:
+        stmt = select(Foreshadowing).where(Foreshadowing.回收状态 == "pending")
+        if novel_id is not None:
+            stmt = stmt.where(Foreshadowing.novel_id == novel_id)
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def mark_recovered(self, fs_id: str, chapter_id: str, event_id: Optional[str] = None) -> None:

@@ -28,10 +28,10 @@ async def test_assemble_context_success(async_session):
         chapter_id="ch_1",
     )
 
-    await EntityRepository(async_session).create("ent_1", "character", "林风")
+    await EntityRepository(async_session).create("ent_1", "character", "林风", novel_id="novel_test")
     await EntityVersionRepository(async_session).create("ent_1", 1, {"realm": "炼气"}, chapter_id="ch_1")
-    await TimelineRepository(async_session).create(1, "event 1")
-    await ForeshadowingRepository(async_session).create("fs_1", "玉佩发光", 相关人物_ids=["ent_1"])
+    await TimelineRepository(async_session).create(1, "event 1", novel_id="novel_test")
+    await ForeshadowingRepository(async_session).create("fs_1", "玉佩发光", 相关人物_ids=["ent_1"], novel_id="novel_test")
     await DocumentRepository(async_session).create("doc_1", "novel_test", "style_profile", "Style", '{"guide": "fast"}')
     await DocumentRepository(async_session).create("doc_2", "novel_test", "worldview", "Worldview", "天玄大陆")
     await ChapterRepository(async_session).create("ch_1", "vol_1", 1, "Test Chapter")

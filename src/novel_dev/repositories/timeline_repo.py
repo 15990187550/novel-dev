@@ -35,19 +35,24 @@ class TimelineRepository:
         )
         return prev_result.scalars().first(), next_result.scalars().first()
 
-    async def get_around_tick(self, tick: int, radius: int = 3) -> List[Timeline]:
-        prev_result = await self.session.execute(
+    async def get_around_tick(self, tick: int, radius: int = 3, novel_id: Optional[str] = None) -> List[Timeline]:
+        prev_stmt = (
             select(Timeline)
             .where(Timeline.tick < tick)
             .order_by(Timeline.tick.desc())
             .limit(radius)
         )
-        next_result = await self.session.execute(
+        next_stmt = (
             select(Timeline)
             .where(Timeline.tick >= tick)
             .order_by(Timeline.tick.asc())
             .limit(radius)
         )
+        if novel_id is not None:
+            prev_stmt = prev_stmt.where(Timeline.novel_id == novel_id)
+            next_stmt = next_stmt.where(Timeline.novel_id == novel_id)
+        prev_result = await self.session.execute(prev_stmt)
+        next_result = await self.session.execute(next_stmt)
         prev_items = list(prev_result.scalars().all())
         prev_items.reverse()
         next_items = list(next_result.scalars().all())
