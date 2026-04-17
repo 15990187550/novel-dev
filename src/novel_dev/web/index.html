@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Novel Dev</title>
+  <link rel="stylesheet" href="https://unpkg.com/element-plus@2.5.6/dist/index.css">
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+    .sidebar-header { padding: 16px; border-bottom: 1px solid #e4e7ed; }
+    .main-header { padding: 16px; border-bottom: 1px solid #e4e7ed; background: #fff; }
+    .chapter-drawer-content { font-size: 16px; line-height: 1.8; white-space: pre-wrap; padding: 16px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <el-container style="height: 100vh;">
+      <el-aside width="200px" style="border-right: 1px solid #e4e7ed;">
+        <div class="sidebar-header">
+          <el-select-v2
+            v-model="selectedNovel"
+            :options="novelOptions"
+            placeholder="选择或输入小说"
+            filterable
+            allow-create
+            clearable
+            style="width: 100%;"
+          />
+          <el-button type="primary" size="small" style="margin-top: 8px; width: 100%;" @click="loadNovel">加载</el-button>
+        </div>
+        <el-menu :default-active="currentView" @select="handleMenuSelect">
+          <el-menu-item index="dashboard">仪表盘</el-menu-item>
+          <el-menu-item index="documents">设定资料</el-menu-item>
+          <el-sub-menu index="encyclopedia">
+            <template #title>世界百科</template>
+            <el-menu-item index="entities">实体百科</el-menu-item>
+            <el-menu-item index="timeline">时间线</el-menu-item>
+            <el-menu-item index="locations">地点</el-menu-item>
+            <el-menu-item index="foreshadowings">伏笔</el-menu-item>
+          </el-sub-menu>
+          <el-menu-item index="chapters">章节列表</el-menu-item>
+          <el-menu-item index="config">模型配置</el-menu-item>
+        </el-menu>
+      </el-aside>
+
+      <el-container>
+        <el-header class="main-header" height="60px">
+          <strong>{{ novelId || '未选择小说' }}</strong>
+          <el-tag v-if="novelState.current_phase" style="margin-left: 12px;">{{ phaseLabel(novelState.current_phase) }}</el-tag>
+          <span v-if="novelState.current_volume_id" style="margin-left: 12px; color: #606266;">
+            {{ novelState.current_volume_id }} / {{ novelState.current_chapter_id }}
+          </span>
+        </el-header>
+
+        <el-main style="background: #f5f7fa; overflow-y: auto;">
+          <!-- Dashboard -->
+          <div v-if="currentView === 'dashboard'">
+            <el-row :gutter="16">
+              <el-col :span="6">
+                <el-card><div>当前阶段</div><div style="font-size: 24px; font-weight: bold;">{{ phaseLabel(novelState.current_phase) }}</div></el-card>
+              </el-col>
+              <el-col :span="6">
+                <el-card><div>当前卷/章</div><div style="font-size: 24px; font-weight: bold;">{{ currentVolumeChapter }}</div></el-card>
+              </el-col>
+              <el-col :span="6">
+                <el-card><div>已归档章节</div><div style="font-size: 24px; font-weight: bold;">{{ archiveStats.archived_chapter_count || 0 }}</div></el-card>
+              </el-col>
+              <el-col :span="6">
+                <el-card><div>总字数</div><div style="font-size: 24px; font-weight: bold;">{{ archiveStats.total_word_count || 0 }}</div></el-card>
+              </el-col>
+            </el-row>
+
+            <el-card style="margin-top: 16px;" v-if="currentChapter">
+              <template #header><span>当前章节：{{ currentChapter.title }}</span></template>
+              <div>状态：<el-tag>{{ currentChapter.status }}</el-tag></div>
+              <div style="margin-top: 8px;">字数：{{ currentChapter.word_count }}</div>
+              <div style="margin-top: 8px;" v-if="currentChapter.score_overall != null">审核总分：{{ currentChapter.score_overall }}</div>
+              <div style="margin-top: 8px;" v-if="currentChapter.fast_review_score != null">速审分数：{{ currentChapter.fast_review_score }}</div>
+              <el-button style="margin-top: 12px;" @click="openChapterDrawer(currentChapter.chapter_id)">查看正文</el-button>
+            </el-card>
+
+            <el-card style="margin-top: 16px;">
+              <template #header><span>操作</span></template>
+              <el-button type="primary" :loading="loadingAction === 'brainstorm'" :disabled="!canBrainstorm" @click="doAction('brainstorm')">生成大纲</el-button>
+              <el-button type="primary" :loading="loadingAction === 'volume_plan'" :disabled="!canVolumePlan" @click="doAction('volume_plan')">卷规划</el-button>
+              <el-button type="primary" :loading="loadingAction === 'context'" :disabled="!canContext" @click="doAction('context')">准备上下文</el-button>
+              <el-button type="primary" :loading="loadingAction === 'draft'" :disabled="!canDraft" @click="doAction('draft')">生成草稿</el-button>
+              <el-button type="primary" :loading="loadingAction === 'advance'" :disabled="!canAdvance" @click="doAction('advance')">推进</el-button>
+              <el-button type="primary" :loading="loadingAction === 'librarian'" :disabled="!canLibrarian" @click="doAction('librarian')">归档</el-button>
+              <el-button :loading="loadingAction === 'export'" @click="doAction('export')">导出小说</el-button>
+            </el-card>
+          </div>
+
+          <!-- Documents -->
+          <div v-if="currentView === 'documents'">
+            <el-card>
+              <template #header><span>上传设定文件</span></template>
+              <input type="file" accept=".txt,.md" @change="handleFileChange" />
+              <el-button type="primary" style="margin-left: 8px;" :loading="uploading" @click="uploadFile">上传</el-button>
+            </el-card>
+
+            <el-card style="margin-top: 16px;">
+              <template #header><span>待审批</span></template>
+              <el-table :data="pendingDocs">
+                <el-table-column prop="extraction_type" label="类型" />
+                <el-table-column prop="status" label="状态" />
+                <el-table-column prop="created_at" label="创建时间" />
+                <el-table-column label="操作">
+                  <template #default="scope">
+                    <el-button size="small" @click="approvePending(scope.row.id)">批准</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </el-card>
+
+            <el-card style="margin-top: 16px;">
+              <template #header><span>已批准文档</span></template>
+              <div v-for="doc in approvedDocs" :key="doc.id" style="margin-bottom: 12px;">
+                <el-collapse>
+                  <el-collapse-item :title="doc.title + ' (' + doc.doc_type + ')'">
+                    <pre style="white-space: pre-wrap;">{{ doc.content }}</pre>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+            </el-card>
+          </div>
+
+          <!-- Entities -->
+          <div v-if="currentView === 'entities'">
+            <el-tabs v-model="entityTab">
+              <el-tab-pane label="人物" name="character"></el-tab-pane>
+              <el-tab-pane label="物品" name="item"></el-tab-pane>
+              <el-tab-pane label="其他" name="other"></el-tab-pane>
+            </el-tabs>
+            <el-table :data="filteredEntities">
+              <el-table-column prop="name" label="名称" />
+              <el-table-column prop="type" label="类型" />
+              <el-table-column prop="current_version" label="版本" />
+              <el-table-column label="最新状态">
+                <template #default="scope">
+                  <pre style="white-space: pre-wrap; max-height: 100px; overflow: auto;">{{ JSON.stringify(scope.row.latest_state, null, 2) }}</pre>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- Timeline -->
+          <div v-if="currentView === 'timeline'">
+            <el-timeline>
+              <el-timeline-item v-for="t in timelines" :key="t.id" :timestamp="'Tick ' + t.tick">
+                {{ t.narrative }}
+              </el-timeline-item>
+            </el-timeline>
+          </div>
+
+          <!-- Locations -->
+          <div v-if="currentView === 'locations'">
+            <el-table :data="spacelines" row-key="id" :tree-props="{children: 'children', hasChildren: 'hasChildren'}">
+              <el-table-column prop="name" label="名称" />
+              <el-table-column prop="narrative" label="描述" />
+            </el-table>
+          </div>
+
+          <!-- Foreshadowings -->
+          <div v-if="currentView === 'foreshadowings'">
+            <el-table :data="foreshadowings">
+              <el-table-column prop="content" label="内容" />
+              <el-table-column prop="回收状态" label="回收状态">
+                <template #default="scope">
+                  <el-tag :type="scope.row.回收状态 === 'recovered' ? 'success' : 'warning'">{{ scope.row.回收状态 }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="埋下_chapter_id" label="埋下章节" />
+            </el-table>
+          </div>
+
+          <!-- Chapters -->
+          <div v-if="currentView === 'chapters'">
+            <el-table :data="chapters">
+              <el-table-column prop="volume_number" label="卷号" width="80" />
+              <el-table-column prop="chapter_number" label="章号" width="80" />
+              <el-table-column prop="title" label="标题" />
+              <el-table-column prop="status" label="状态" />
+              <el-table-column prop="word_count" label="字数" />
+              <el-table-column label="操作">
+                <template #default="scope">
+                  <el-button size="small" @click="openChapterDrawer(scope.row.chapter_id)">查看正文</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <!-- Config -->
+          <div v-if="currentView === 'config'">
+            <el-row :gutter="24">
+              <el-col :span="14">
+                <h3>LLM 配置</h3>
+                <el-collapse v-model="activeConfigPanels">
+                  <el-collapse-item title="全局默认值" name="defaults">
+                    <config-form v-model="llmConfig.defaults" />
+                  </el-collapse-item>
+                  <el-collapse-item v-for="agent in agentNames" :key="agent" :title="agent" :name="agent">
+                    <config-form v-model="llmConfig.agents[agent]" />
+                  </el-collapse-item>
+                </el-collapse>
+                <el-button type="primary" style="margin-top: 16px;" :loading="savingConfig" @click="saveLLMConfig">保存配置</el-button>
+              </el-col>
+              <el-col :span="10">
+                <h3>API Key</h3>
+                <el-form label-width="140px">
+                  <el-form-item label="Anthropic">
+                    <el-input v-model="envConfig.anthropic_api_key" />
+                  </el-form-item>
+                  <el-form-item label="OpenAI">
+                    <el-input v-model="envConfig.openai_api_key" />
+                  </el-form-item>
+                  <el-form-item label="Moonshot">
+                    <el-input v-model="envConfig.moonshot_api_key" />
+                  </el-form-item>
+                  <el-form-item label="MiniMax">
+                    <el-input v-model="envConfig.minimax_api_key" />
+                  </el-form-item>
+                  <el-form-item label="Zhipu">
+                    <el-input v-model="envConfig.zhipu_api_key" />
+                  </el-form-item>
+                </el-form>
+                <el-button type="primary" :loading="savingEnv" @click="saveEnvConfig">保存 Key</el-button>
+              </el-col>
+            </el-row>
+          </div>
+        </el-main>
+      </el-container>
+    </el-container>
+
+    <el-drawer v-model="chapterDrawerVisible" :title="drawerTitle" size="60%">
+      <div class="chapter-drawer-content">{{ drawerContent }}</div>
+    </el-drawer>
+  </div>
+
+  <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.js"></script>
+  <script src="https://unpkg.com/element-plus@2.5.6/dist/index.full.js"></script>
+  <script src="https://unpkg.com/axios@1.6.7/dist/axios.min.js"></script>
+  <script>
+    const { createApp, ref, computed, onMounted } = Vue;
+    const { ElMessage } = ElementPlus;
+
+    const app = createApp({
+      setup() {
+        const selectedNovel = ref('');
+        const novelId = ref('');
+        const currentView = ref('dashboard');
+        const novelState = ref({});
+        const archiveStats = ref({});
+        const chapters = ref([]);
+        const currentChapter = ref(null);
+        const pendingDocs = ref([]);
+        const approvedDocs = ref([]);
+        const entities = ref([]);
+        const timelines = ref([]);
+        const spacelines = ref([]);
+        const foreshadowings = ref([]);
+        const novelOptions = ref([]);
+        const loadingAction = ref('');
+        const uploading = ref(false);
+        const uploadFileRaw = ref(null);
+        const chapterDrawerVisible = ref(false);
+        const drawerTitle = ref('');
+        const drawerContent = ref('');
+        const entityTab = ref('character');
+        const llmConfig = ref({ defaults: {}, agents: {} });
+        const envConfig = ref({});
+        const savingConfig = ref(false);
+        const savingEnv = ref(false);
+        const activeConfigPanels = ref(['defaults']);
+        const agentNames = ['BrainstormAgent', 'VolumePlannerAgent', 'WriterAgent', 'CriticAgent', 'EditorAgent', 'FastReviewAgent', 'LibrarianAgent', 'ContextAgent'];
+
+        const phaseMap = {
+          volume_planning: '卷规划',
+          context_preparation: '准备上下文',
+          drafting: '起草中',
+          reviewing: '审核中',
+          editing: '编辑中',
+          fast_reviewing: '速审中',
+          librarian: '归档中',
+          completed: '已完成',
+        };
+
+        const phaseLabel = (p) => phaseMap[p] || p;
+        const currentVolumeChapter = computed(() => {
+          if (novelState.value.current_volume_id && novelState.value.current_chapter_id) {
+            return `${novelState.value.current_volume_id} / ${novelState.value.current_chapter_id}`;
+          }
+          return '-';
+        });
+        const canBrainstorm = computed(() => novelState.value.current_phase === 'volume_planning');
+        const canVolumePlan = computed(() => novelState.value.current_phase === 'volume_planning');
+        const canContext = computed(() => novelState.value.current_phase === 'context_preparation');
+        const canDraft = computed(() => novelState.value.current_phase === 'drafting');
+        const canAdvance = computed(() => ['reviewing', 'editing', 'fast_reviewing'].includes(novelState.value.current_phase));
+        const canLibrarian = computed(() => novelState.value.current_phase === 'librarian');
+        const filteredEntities = computed(() => entities.value.filter(e => e.type === entityTab.value));
+
+        async function fetchNovels() {
+          try {
+            const resp = await axios.get('/api/novels');
+            novelOptions.value = (resp.data.items || []).map(i => ({ label: i.novel_id, value: i.novel_id }));
+          } catch (e) {
+            ElMessage.error('获取小说列表失败');
+          }
+        }
+
+        async function loadNovel() {
+          if (!selectedNovel.value) return;
+          novelId.value = selectedNovel.value;
+          await refreshDashboard();
+          await fetchDocuments();
+          await fetchEncyclopedia();
+          await fetchChapters();
+          await fetchConfig();
+        }
+
+        async function refreshDashboard() {
+          try {
+            const [s, a] = await Promise.all([
+              axios.get(`/api/novels/${novelId.value}/state`),
+              axios.get(`/api/novels/${novelId.value}/archive_stats`),
+            ]);
+            novelState.value = s.data;
+            archiveStats.value = a.data;
+            if (novelState.value.current_chapter_id) {
+              const ch = await axios.get(`/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}`);
+              currentChapter.value = ch.data;
+              const textResp = await axios.get(`/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}/text`);
+              currentChapter.value.word_count = textResp.data.word_count;
+            } else {
+              currentChapter.value = null;
+            }
+          } catch (e) {
+            ElMessage.error('加载小说状态失败');
+          }
+        }
+
+        async function doAction(action) {
+          loadingAction.value = action;
+          try {
+            let url = '';
+            if (action === 'brainstorm') url = `/api/novels/${novelId.value}/brainstorm`;
+            else if (action === 'volume_plan') url = `/api/novels/${novelId.value}/volume_plan`;
+            else if (action === 'context') {
+              if (!novelState.value.current_chapter_id) throw new Error('当前章节未设置');
+              url = `/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}/context`;
+            } else if (action === 'draft') {
+              if (!novelState.value.current_chapter_id) throw new Error('当前章节未设置');
+              url = `/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}/draft`;
+            } else if (action === 'advance') url = `/api/novels/${novelId.value}/advance`;
+            else if (action === 'librarian') url = `/api/novels/${novelId.value}/librarian`;
+            else if (action === 'export') url = `/api/novels/${novelId.value}/export?format=md`;
+            await axios.post(url);
+            ElMessage.success('操作成功');
+            await refreshDashboard();
+            if (action === 'export') await fetchChapters();
+          } catch (e) {
+            const msg = e.response?.data?.detail || e.message || '操作失败';
+            ElMessage.error(msg);
+          } finally {
+            loadingAction.value = '';
+          }
+        }
+
+        async function fetchDocuments() {
+          try {
+            const p = await axios.get(`/api/novels/${novelId.value}/documents/pending`);
+            pendingDocs.value = p.data.items || [];
+            // Simplification: volume_plan and synopsis have dedicated routes
+            const [syn, vp] = await Promise.allSettled([
+              axios.get(`/api/novels/${novelId.value}/synopsis`),
+              axios.get(`/api/novels/${novelId.value}/volume_plan`),
+            ]);
+            approvedDocs.value = [];
+            if (syn.status === 'fulfilled') {
+              approvedDocs.value.push({ id: 'synopsis', doc_type: 'synopsis', title: '大纲', content: syn.value.data.content || JSON.stringify(syn.value.data.synopsis_data) });
+            }
+            if (vp.status === 'fulfilled') {
+              approvedDocs.value.push({ id: 'volume_plan', doc_type: 'volume_plan', title: '卷计划', content: JSON.stringify(vp.value.data, null, 2) });
+            }
+          } catch (e) {
+            ElMessage.warning('文档加载失败');
+          }
+        }
+
+        async function approvePending(id) {
+          try {
+            await axios.post(`/api/novels/${novelId.value}/documents/pending/approve`, { pending_id: id });
+            ElMessage.success('已批准');
+            await fetchDocuments();
+          } catch (e) {
+            ElMessage.error('批准失败');
+          }
+        }
+
+        function handleFileChange(e) {
+          uploadFileRaw.value = e.target.files[0];
+        }
+
+        async function uploadFile() {
+          if (!uploadFileRaw.value) return;
+          uploading.value = true;
+          const reader = new FileReader();
+          reader.onload = async () => {
+            try {
+              await axios.post(`/api/novels/${novelId.value}/documents/upload`, {
+                filename: uploadFileRaw.value.name,
+                content: reader.result,
+              });
+              ElMessage.success('上传成功');
+              uploadFileRaw.value = null;
+              await fetchDocuments();
+            } catch (e) {
+              ElMessage.error('上传失败');
+            } finally {
+              uploading.value = false;
+            }
+          };
+          reader.readAsText(uploadFileRaw.value);
+        }
+
+        async function fetchEncyclopedia() {
+          try {
+            const [e, t, s, f] = await Promise.all([
+              axios.get(`/api/novels/${novelId.value}/entities`),
+              axios.get(`/api/novels/${novelId.value}/timelines`),
+              axios.get(`/api/novels/${novelId.value}/spacelines`),
+              axios.get(`/api/novels/${novelId.value}/foreshadowings`),
+            ]);
+            entities.value = e.data.items || [];
+            timelines.value = t.data.items || [];
+            spacelines.value = s.data.items || [];
+            foreshadowings.value = f.data.items || [];
+          } catch (err) {
+            ElMessage.warning('百科加载失败');
+          }
+        }
+
+        async function fetchChapters() {
+          try {
+            const resp = await axios.get(`/api/novels/${novelId.value}/chapters`);
+            chapters.value = resp.data.items || [];
+          } catch (e) {
+            chapters.value = [];
+          }
+        }
+
+        async function openChapterDrawer(cid) {
+          try {
+            const resp = await axios.get(`/api/novels/${novelId.value}/chapters/${cid}/text`);
+            drawerTitle.value = resp.data.title || cid;
+            drawerContent.value = resp.data.polished_text || resp.data.raw_draft || '（无内容）';
+            chapterDrawerVisible.value = true;
+          } catch (e) {
+            ElMessage.error('加载正文失败');
+          }
+        }
+
+        async function fetchConfig() {
+          try {
+            const [c, e] = await Promise.all([
+              axios.get('/api/config/llm'),
+              axios.get('/api/config/env'),
+            ]);
+            llmConfig.value = c.data || { defaults: {}, agents: {} };
+            if (!llmConfig.value.agents) llmConfig.value.agents = {};
+            envConfig.value = e.data;
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        async function saveLLMConfig() {
+          savingConfig.value = true;
+          try {
+            await axios.post('/api/config/llm', { config: llmConfig.value });
+            ElMessage.success('配置已保存');
+          } catch (e) {
+            ElMessage.error('保存配置失败');
+          } finally {
+            savingConfig.value = false;
+          }
+        }
+
+        async function saveEnvConfig() {
+          savingEnv.value = true;
+          try {
+            await axios.post('/api/config/env', envConfig.value);
+            ElMessage.success('API Key 已保存');
+          } catch (e) {
+            ElMessage.error('保存失败');
+          } finally {
+            savingEnv.value = false;
+          }
+        }
+
+        function handleMenuSelect(index, indexPath) {
+          currentView.value = index;
+        }
+
+        onMounted(() => {
+          fetchNovels();
+        });
+
+        return {
+          selectedNovel, novelId, currentView, novelState, archiveStats,
+          chapters, currentChapter, pendingDocs, approvedDocs, entities,
+          timelines, spacelines, foreshadowings, novelOptions, loadingAction,
+          uploading, chapterDrawerVisible, drawerTitle, drawerContent,
+          entityTab, llmConfig, envConfig, savingConfig, savingEnv,
+          activeConfigPanels, agentNames, phaseLabel, currentVolumeChapter,
+          canBrainstorm, canVolumePlan, canContext, canDraft, canAdvance, canLibrarian,
+          filteredEntities, loadNovel, doAction, fetchDocuments, approvePending,
+          handleFileChange, uploadFile, fetchEncyclopedia, fetchChapters,
+          openChapterDrawer, fetchConfig, saveLLMConfig, saveEnvConfig, handleMenuSelect,
+        };
+      },
+    });
+
+    app.component('config-form', {
+      props: ['modelValue'],
+      emits: ['update:modelValue'],
+      template: `
+        <div>
+          <el-form label-width="120px" :model="modelValue">
+            <el-form-item label="Provider"><el-input v-model="modelValue.provider" /></el-form-item>
+            <el-form-item label="Model"><el-input v-model="modelValue.model" /></el-form-item>
+            <el-form-item label="Base URL"><el-input v-model="modelValue.base_url" /></el-form-item>
+            <el-form-item label="Timeout"><el-input-number v-model="modelValue.timeout" :min="1" /></el-form-item>
+            <el-form-item label="Retries"><el-input-number v-model="modelValue.retries" :min="0" /></el-form-item>
+            <el-form-item label="Temperature"><el-input-number v-model="modelValue.temperature" :min="0" :max="2" :step="0.1" /></el-form-item>
+            <el-form-item label="Max Tokens"><el-input-number v-model="modelValue.max_tokens" :min="1" /></el-form-item>
+          </el-form>
+        </div>
+      `,
+    });
+
+    app.use(ElementPlus);
+    app.mount('#app');
+  </script>
+</body>
+</html>
