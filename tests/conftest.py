@@ -14,7 +14,7 @@ from novel_dev.db.models import Base
 from novel_dev.db.engine import engine, async_session_maker
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def mock_llm_factory(monkeypatch):
     from novel_dev.llm import llm_factory
     from novel_dev.llm.models import LLMResponse
@@ -103,6 +103,50 @@ def mock_llm_factory(monkeypatch):
             mock_client.acomplete.return_value = LLMResponse(
                 text=LocationContext(current="默认地点", parent=None, narrative="场景描述").model_dump_json()
             )
+        elif agent == "FileClassifier" and task == "classify_file":
+            from novel_dev.agents.file_classifier import FileClassificationResult
+
+            async def smart_classify(messages):
+                prompt = messages[0].content if messages else ""
+                # 根据文件名判断：文件名行以 "文件名：style" 开头则为 style_sample
+                if "文件名：style" in prompt:
+                    return LLMResponse(
+                        text=FileClassificationResult(file_type="style_sample", confidence=0.9, reason="mock").model_dump_json()
+                    )
+                return LLMResponse(
+                    text=FileClassificationResult(file_type="setting", confidence=0.9, reason="mock").model_dump_json()
+                )
+
+            mock_client.acomplete.side_effect = smart_classify
+        elif agent == "StyleProfilerAgent" and task == "profile_style":
+            from novel_dev.agents.style_profiler import StyleProfile, StyleConfig
+            mock_client.acomplete.return_value = LLMResponse(
+                text=StyleProfile(style_guide="Overall: mock style guide", style_config=StyleConfig()).model_dump_json()
+            )
+        elif agent == "SettingExtractorAgent" and task == "extract_setting":
+            from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile, ImportantItem
+            mock_client.acomplete.return_value = LLMResponse(
+                text=ExtractedSetting(
+                    worldview="mock worldview",
+                    power_system="mock power",
+                    factions="mock factions",
+                    character_profiles=[CharacterProfile(name="Mock", identity="mock", personality="mock", goal="mock")],
+                    important_items=[ImportantItem(name="MockItem", description="mock", significance="mock")],
+                    plot_synopsis="mock synopsis",
+                ).model_dump_json()
+            )
+        elif agent == "VolumePlannerAgent" and task == "generate_volume_plan":
+            from novel_dev.schemas.outline import VolumePlan, VolumeBeat
+            from novel_dev.schemas.context import BeatPlan
+            mock_client.acomplete.return_value = LLMResponse(text=VolumePlan(
+                volume_id="vol_1", volume_number=1, title="第一卷", summary="卷总述",
+                total_chapters=1, estimated_total_words=3000,
+                chapters=[VolumeBeat(
+                    chapter_id="ch_1", chapter_number=1, title="第一章",
+                    summary="章摘要", target_word_count=3000, target_mood="tense",
+                    beats=[BeatPlan(summary="B1", target_mood="tense")],
+                )],
+            ).model_dump_json())
         else:
             mock_client.acomplete.return_value = LLMResponse(text="{}")
 
