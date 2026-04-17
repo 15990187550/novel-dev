@@ -85,9 +85,7 @@ async def test_plan_volume_success(async_session):
         LLMResponse(text=score_result.model_dump_json()),
     ]
 
-    with patch("novel_dev.agents.volume_planner.llm_factory") as mock_factory, \
-         patch("novel_dev.agents._llm_helpers.llm_factory") as mock_helpers_factory:
-        mock_factory.get.return_value = mock_client
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_helpers_factory:
         mock_helpers_factory.get.return_value = mock_client
         agent = VolumePlannerAgent(async_session)
         plan = await agent.plan("n_plan", volume_number=1)

@@ -13,14 +13,16 @@ class FileClassificationResult(BaseModel):
 class FileClassifier:
     async def classify(self, filename: str, content_preview: str) -> FileClassificationResult:
         MAX_CHARS = 3000
+        safe_filename = filename.replace("{", "{{").replace("}", "}}")[:200]
+        safe_preview = content_preview.replace("{", "{{").replace("}", "}}")[:MAX_CHARS]
         prompt = (
             "你是一位文件分类专家。请根据文件名和内容片段，判断这是小说设定文档还是风格样本。"
             "返回严格符合 FileClassificationResult Schema 的 JSON：\n"
             "file_type: 'setting' 或 'style_sample'\n"
             "confidence: 0.0-1.0 的置信度\n"
             "reason: 分类理由（简短）\n\n"
-            f"文件名：{filename}\n"
-            f"内容片段：\n{content_preview[:MAX_CHARS]}"
+            f"文件名：{safe_filename}\n"
+            f"内容片段：\n{safe_preview}"
         )
         return await call_and_parse(
             "FileClassifier", "classify_file", prompt,

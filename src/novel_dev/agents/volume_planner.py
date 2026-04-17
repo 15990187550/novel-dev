@@ -18,8 +18,6 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.llm import llm_factory
-from novel_dev.llm.models import ChatMessage
 from novel_dev.agents._llm_helpers import call_and_parse
 
 
@@ -130,9 +128,10 @@ class VolumePlannerAgent:
             "返回严格符合 VolumeScoreResult Schema 的 JSON。"
             f"\n\n{plan.model_dump_json()}"
         )
-        client = llm_factory.get("VolumePlannerAgent", task="score_volume_plan")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return VolumeScoreResult.model_validate_json(response.text)
+        return await call_and_parse(
+            "VolumePlannerAgent", "score_volume_plan", prompt,
+            VolumeScoreResult.model_validate_json, max_retries=3
+        )
 
     async def _revise_volume_plan(self, plan: VolumePlan, feedback: str) -> VolumePlan:
         prompt = (
@@ -141,9 +140,10 @@ class VolumePlannerAgent:
             f"\n\nVolumePlan:\n{plan.model_dump_json()}"
             f"\n\n反馈：{feedback}"
         )
-        client = llm_factory.get("VolumePlannerAgent", task="revise_volume_plan")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return VolumePlan.model_validate_json(response.text)
+        return await call_and_parse(
+            "VolumePlannerAgent", "revise_volume_plan", prompt,
+            VolumePlan.model_validate_json, max_retries=3
+        )
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
         """Extract chapter plan from VolumeBeat without mutating input."""
