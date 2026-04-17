@@ -27,7 +27,7 @@ class ExtractionService:
         self.entity_svc = EntityService(session)
 
     async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
-        classification = self.classifier.classify(filename, content)
+        classification = await self.classifier.classify(filename, content)
 
         if classification.file_type == "setting":
             extracted = await self.setting_agent.extract(content)

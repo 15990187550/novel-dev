@@ -1,6 +1,7 @@
 from typing import Literal
-
 from pydantic import BaseModel
+
+from novel_dev.agents._llm_helpers import call_and_parse
 
 
 class FileClassificationResult(BaseModel):
@@ -10,39 +11,18 @@ class FileClassificationResult(BaseModel):
 
 
 class FileClassifier:
-    SETTING_KEYWORDS = ["设定", "世界观", "大纲", "setting", "worldview", "outline"]
-    STYLE_KEYWORDS = ["样本", "风格", "sample", "style"]
-
-    def classify(self, filename: str, content_preview: str) -> FileClassificationResult:
-        lower_name = filename.lower()
-        lower_preview = content_preview[:500].lower()
-
-        for kw in self.SETTING_KEYWORDS:
-            if kw in lower_name:
-                return FileClassificationResult(
-                    file_type="setting",
-                    confidence=0.95,
-                    reason=f"Filename contains '{kw}'",
-                )
-
-        for kw in self.STYLE_KEYWORDS:
-            if kw in lower_name:
-                return FileClassificationResult(
-                    file_type="style_sample",
-                    confidence=0.95,
-                    reason=f"Filename contains '{kw}'",
-                )
-
-        # Simple heuristic fallback
-        if "修炼" in lower_preview or "境界" in lower_preview or "world" in lower_preview:
-            return FileClassificationResult(
-                file_type="setting",
-                confidence=0.7,
-                reason="Content heuristic matched setting terms",
-            )
-
-        return FileClassificationResult(
-            file_type="style_sample",
-            confidence=0.6,
-            reason="Default fallback to style_sample",
+    async def classify(self, filename: str, content_preview: str) -> FileClassificationResult:
+        MAX_CHARS = 3000
+        prompt = (
+            "你是一位文件分类专家。请根据文件名和内容片段，判断这是小说设定文档还是风格样本。"
+            "返回严格符合 FileClassificationResult Schema 的 JSON：\n"
+            "file_type: 'setting' 或 'style_sample'\n"
+            "confidence: 0.0-1.0 的置信度\n"
+            "reason: 分类理由（简短）\n\n"
+            f"文件名：{filename}\n"
+            f"内容片段：\n{content_preview[:MAX_CHARS]}"
+        )
+        return await call_and_parse(
+            "FileClassifier", "classify_file", prompt,
+            FileClassificationResult.model_validate_json, max_retries=3
         )

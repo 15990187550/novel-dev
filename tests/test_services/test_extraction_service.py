@@ -1,13 +1,49 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.services.extraction_service import ExtractionService
-from novel_dev.repositories.document_repo import DocumentRepository
-from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
-from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.agents.file_classifier import FileClassificationResult
+from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
+from novel_dev.agents.style_profiler import StyleProfile, StyleConfig
+
+
+@pytest.fixture
+def mock_llm():
+    with patch("novel_dev.llm.llm_factory.get") as mock_get:
+        mock_client = AsyncMock()
+
+        async def acomplete(messages, **kwargs):
+            prompt = messages[0].content if messages else ""
+            if "文件分类专家" in prompt:
+                # The prompt always contains 'style_sample' in schema instructions,
+                # so discriminate by the actual filename line in the prompt.
+                if "文件名：style.txt" in prompt or "文件名：style" in prompt:
+                    return type("Resp", (), {"text": FileClassificationResult(file_type="style_sample", confidence=0.95, reason="mock").model_dump_json()})()
+                return type("Resp", (), {"text": FileClassificationResult(file_type="setting", confidence=0.95, reason="mock").model_dump_json()})()
+            if "设定提取专家" in prompt:
+                return type("Resp", (), {"text": ExtractedSetting(
+                    worldview="天玄大陆",
+                    power_system="修炼体系",
+                    factions="宗门分布",
+                    character_profiles=[CharacterProfile(name="林风", identity="外门弟子")],
+                    important_items=[],
+                    plot_synopsis="剧情梗概",
+                ).model_dump_json()})()
+            if "文学风格分析师" in prompt:
+                # Return the input text as style_guide so rollback assertions work.
+                text_start = prompt.find("文本样本：\n\n")
+                style_guide = prompt[text_start + len("文本样本：\n\n"):] if text_start != -1 else "简洁有力"
+                return type("Resp", (), {"text": StyleProfile(style_guide=style_guide, style_config=StyleConfig()).model_dump_json()})()
+            raise ValueError(f"Unexpected prompt: {prompt[:50]}")
+
+        mock_client.acomplete.side_effect = acomplete
+        mock_get.return_value = mock_client
+        yield mock_get
 
 
 @pytest.mark.asyncio
-async def test_process_setting_upload(async_session):
+async def test_process_setting_upload(async_session, mock_llm):
     svc = ExtractionService(async_session)
     pe = await svc.process_upload(
         novel_id="n1",
@@ -25,7 +61,7 @@ async def test_process_setting_upload(async_session):
 
 
 @pytest.mark.asyncio
-async def test_process_style_upload(async_session):
+async def test_process_style_upload(async_session, mock_llm):
     svc = ExtractionService(async_session)
     pe = await svc.process_upload(
         novel_id="n1",
@@ -40,7 +76,7 @@ async def test_process_style_upload(async_session):
 
 
 @pytest.mark.asyncio
-async def test_style_rollback(async_session):
+async def test_style_rollback(async_session, mock_llm):
     svc = ExtractionService(async_session)
     # Create v1
     pe1 = await svc.process_upload("n1", "style.txt", "a" * 10000)

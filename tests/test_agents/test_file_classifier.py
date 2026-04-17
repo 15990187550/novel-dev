@@ -1,31 +1,21 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.file_classifier import FileClassifier, FileClassificationResult
+from novel_dev.llm.models import LLMResponse
 
 
-def test_rule_based_setting():
-    classifier = FileClassifier()
-    result = classifier.classify(filename="world_setting.txt", content_preview="The cultivation world...")
-    assert result.file_type == "setting"
-    assert result.confidence == 0.95
+@pytest.mark.asyncio
+async def test_classify_setting():
+    result = FileClassificationResult(file_type="setting", confidence=0.95, reason="设定文档")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=result.model_dump_json())
 
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        classifier = FileClassifier()
+        classification = await classifier.classify("setting.txt", "世界观内容")
 
-def test_rule_based_style_sample():
-    classifier = FileClassifier()
-    result = classifier.classify(filename="style_sample.txt", content_preview="He walked into the room...")
-    assert result.file_type == "style_sample"
-    assert result.confidence == 0.95
-
-
-def test_content_heuristic_setting():
-    classifier = FileClassifier()
-    result = classifier.classify(filename="notes.txt", content_preview="修炼体系与world构建")
-    assert result.file_type == "setting"
-    assert result.confidence == 0.7
-
-
-def test_fallback_unknown():
-    classifier = FileClassifier()
-    result = classifier.classify(filename="notes.txt", content_preview="random notes")
-    assert result.file_type in ("setting", "style_sample")
-    assert result.confidence == 0.6
+    assert classification.file_type == "setting"
+    assert classification.confidence == 0.95
