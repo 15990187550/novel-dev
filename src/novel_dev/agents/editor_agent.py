@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.llm.models import ChatMessage
 
 
 class EditorAgent:
@@ -34,7 +35,7 @@ class EditorAgent:
             score_entry = beat_scores[idx] if idx < len(beat_scores) else {}
             scores = score_entry.get("scores", {})
             if any(s < 70 for s in scores.values()):
-                polished = self._rewrite_beat(beat_text, scores)
+                polished = await self._rewrite_beat(beat_text, scores)
             else:
                 polished = beat_text
             polished_beats.append(polished)
@@ -51,9 +52,16 @@ class EditorAgent:
             chapter_id=state.current_chapter_id,
         )
 
-    def _rewrite_beat(self, text: str, scores: dict) -> str:
-        if scores.get("humanity", 100) < 70:
-            return text + "（润色后：增强人味儿）"
-        if scores.get("readability", 100) < 70:
-            return text + "（润色后：优化读感）"
-        return text + "（润色后）"
+    async def _rewrite_beat(self, text: str, scores: dict) -> str:
+        low_dims = [k for k, v in scores.items() if v < 70]
+        prompt = (
+            "你是一位小说编辑。请根据以下低分维度对文本进行润色重写，"
+            "只返回重写后的正文，不添加解释。\n\n"
+            f"低分维度：{', '.join(low_dims)}\n\n"
+            f"原文：\n{text}\n\n"
+            "重写："
+        )
+        from novel_dev.llm import llm_factory
+        client = llm_factory.get("EditorAgent", task="polish_beat")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return response.text.strip()

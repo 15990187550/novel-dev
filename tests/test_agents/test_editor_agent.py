@@ -1,8 +1,11 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.editor_agent import EditorAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
@@ -23,11 +26,16 @@ async def test_polish_low_score_beats(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
     await ChapterRepository(async_session).update_text("c1", raw_draft="Beat one\n\nBeat two")
 
-    agent = EditorAgent(async_session)
-    await agent.polish("novel_edit", "c1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="润色后的 Beat one")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent.polish("novel_edit", "c1")
 
     ch = await ChapterRepository(async_session).get_by_id("c1")
-    assert "润色后：增强人味儿" in ch.polished_text
+    assert "润色后的 Beat one" in ch.polished_text
     assert "Beat two" in ch.polished_text
     assert ch.status == "edited"
 
@@ -57,5 +65,4 @@ async def test_polish_preserves_high_readability(async_session):
 
     ch = await ChapterRepository(async_session).get_by_id("c2")
     assert ch.polished_text == "A readable beat"
-    assert "优化读感" not in ch.polished_text
     assert ch.status == "edited"
