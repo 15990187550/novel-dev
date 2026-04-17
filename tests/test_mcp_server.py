@@ -32,29 +32,29 @@ def test_mcp_server_has_tools():
         "export_novel",
         "get_archive_stats",
     }
-    assert set(mcp.tools.keys()) == expected
+    assert set(mcp._tool_manager._tools.keys()) == expected
 
 
 @pytest.mark.asyncio
 async def test_mcp_upload_document():
-    result = await mcp.tools["upload_document"]("n1", "setting.txt", "世界观：天玄大陆。")
+    result = await mcp._tool_manager._tools["upload_document"].fn("n1", "setting.txt", "世界观：天玄大陆。")
     assert result["extraction_type"] == "setting"
     assert "id" in result
 
 
 @pytest.mark.asyncio
 async def test_mcp_get_pending_documents():
-    upload = await mcp.tools["upload_document"]("n2", "style.txt", "a" * 5000)
-    result = await mcp.tools["get_pending_documents"]("n2")
+    upload = await mcp._tool_manager._tools["upload_document"].fn("n2", "style.txt", "a" * 5000)
+    result = await mcp._tool_manager._tools["get_pending_documents"].fn("n2")
     assert any(i["id"] == upload["id"] for i in result)
 
 
 @pytest.mark.asyncio
 async def test_mcp_list_style_profile_versions():
     novel_id = f"n3_{uuid.uuid4().hex[:8]}"
-    upload = await mcp.tools["upload_document"](novel_id, "style.txt", "x" * 10000)
-    await mcp.tools["approve_pending_documents"](upload["id"])
-    result = await mcp.tools["list_style_profile_versions"](novel_id)
+    upload = await mcp._tool_manager._tools["upload_document"].fn(novel_id, "style.txt", "x" * 10000)
+    await mcp._tool_manager._tools["approve_pending_documents"].fn(upload["id"])
+    result = await mcp._tool_manager._tools["list_style_profile_versions"].fn(novel_id)
     assert len(result) == 1
     assert result[0]["version"] == 1
 
@@ -62,15 +62,15 @@ async def test_mcp_list_style_profile_versions():
 @pytest.mark.asyncio
 async def test_mcp_rollback_style_profile():
     novel_id = f"n4_{uuid.uuid4().hex[:8]}"
-    upload = await mcp.tools["upload_document"](novel_id, "style.txt", "y" * 10000)
-    await mcp.tools["approve_pending_documents"](upload["id"])
-    result = await mcp.tools["rollback_style_profile"](novel_id, 1)
+    upload = await mcp._tool_manager._tools["upload_document"].fn(novel_id, "style.txt", "y" * 10000)
+    await mcp._tool_manager._tools["approve_pending_documents"].fn(upload["id"])
+    result = await mcp._tool_manager._tools["rollback_style_profile"].fn(novel_id, 1)
     assert result["rolled_back_to_version"] == 1
 
 
 @pytest.mark.asyncio
 async def test_mcp_analyze_style_from_text():
-    result = await mcp.tools["analyze_style_from_text"]("剑光一闪。敌人倒下。")
+    result = await mcp._tool_manager._tools["analyze_style_from_text"].fn("剑光一闪。敌人倒下。")
     assert "style_guide" in result
     assert "style_config" in result
 
@@ -107,7 +107,7 @@ async def test_mcp_prepare_chapter_context():
         await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Test")
         await session.commit()
 
-    result = await mcp.tools["prepare_chapter_context"](novel_id, chapter_id)
+    result = await mcp._tool_manager._tools["prepare_chapter_context"].fn(novel_id, chapter_id)
     assert result["success"] is True
     assert result["chapter_plan_title"] == "MCP Test"
 
@@ -154,7 +154,7 @@ async def test_mcp_generate_chapter_draft():
         await ChapterRepository(session).create(chapter_id, volume_id, 1, "Draft Test")
         await session.commit()
 
-    result = await mcp.tools["generate_chapter_draft"](novel_id, chapter_id)
+    result = await mcp._tool_manager._tools["generate_chapter_draft"].fn(novel_id, chapter_id)
     assert "total_words" in result
     assert result["total_words"] > 0
     assert len(result["beat_coverage"]) == 1
@@ -189,7 +189,7 @@ async def test_mcp_get_chapter_draft_status():
         await ChapterRepository(session).create(chapter_id, volume_id, 1, "Status Test")
         await session.commit()
 
-    result = await mcp.tools["get_chapter_draft_status"](novel_id, chapter_id)
+    result = await mcp._tool_manager._tools["get_chapter_draft_status"].fn(novel_id, chapter_id)
     assert result["chapter_id"] == chapter_id
     assert result["status"] is not None
     assert result["drafting_progress"]["beat_index"] == 1
@@ -237,7 +237,7 @@ async def test_mcp_advance_novel():
         await ChapterRepository(session).update_text(chapter_id, raw_draft="a" * 100)
         await session.commit()
 
-    result = await mcp.tools["advance_novel"](novel_id)
+    result = await mcp._tool_manager._tools["advance_novel"].fn(novel_id)
     assert result["current_phase"] == Phase.EDITING.value
 
 
@@ -288,7 +288,7 @@ async def test_mcp_get_review_result():
         )
         await session.commit()
 
-    result = await mcp.tools["get_review_result"](novel_id)
+    result = await mcp._tool_manager._tools["get_review_result"].fn(novel_id)
     assert result["score_overall"] is not None
 
 
@@ -338,7 +338,7 @@ async def test_mcp_get_fast_review_result():
         )
         await session.commit()
 
-    result = await mcp.tools["get_fast_review_result"](novel_id)
+    result = await mcp._tool_manager._tools["get_fast_review_result"].fn(novel_id)
     assert result["fast_review_score"] is not None
 
 
@@ -358,7 +358,7 @@ async def test_mcp_brainstorm_novel(mock_llm_factory):
         )
         await session.commit()
 
-    result = await mcp.tools["brainstorm_novel"](novel_id)
+    result = await mcp._tool_manager._tools["brainstorm_novel"].fn(novel_id)
     assert result["title"] == "天玄纪元"
     assert result["estimated_volumes"] > 0
 
@@ -393,7 +393,7 @@ async def test_mcp_plan_volume():
         )
         await session.commit()
 
-    result = await mcp.tools["plan_volume"](novel_id)
+    result = await mcp._tool_manager._tools["plan_volume"].fn(novel_id)
     assert result["volume_id"] == "vol_1"
 
 
@@ -413,8 +413,8 @@ async def test_mcp_get_synopsis(mock_llm_factory):
         )
         await session.commit()
 
-    await mcp.tools["brainstorm_novel"](novel_id)
-    result = await mcp.tools["get_synopsis"](novel_id)
+    await mcp._tool_manager._tools["brainstorm_novel"].fn(novel_id)
+    result = await mcp._tool_manager._tools["get_synopsis"].fn(novel_id)
     assert "content" in result
     assert "synopsis_data" in result
 
@@ -449,8 +449,8 @@ async def test_mcp_get_volume_plan():
         )
         await session.commit()
 
-    await mcp.tools["plan_volume"](novel_id)
-    result = await mcp.tools["get_volume_plan"](novel_id)
+    await mcp._tool_manager._tools["plan_volume"].fn(novel_id)
+    result = await mcp._tool_manager._tools["get_volume_plan"].fn(novel_id)
     assert result["volume_id"] == "vol_1"
 
 
@@ -485,7 +485,7 @@ async def test_mcp_run_librarian():
         await session.commit()
 
     with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'):
-        result = await mcp.tools["run_librarian"](novel_id)
+        result = await mcp._tool_manager._tools["run_librarian"].fn(novel_id)
     assert result["current_phase"] == Phase.VOLUME_PLANNING.value
 
 
@@ -507,7 +507,7 @@ async def test_mcp_export_novel():
         await ChapterRepository(session).update_status(chapter_id, "archived")
         await session.commit()
 
-    result = await mcp.tools["export_novel"](novel_id, "md")
+    result = await mcp._tool_manager._tools["export_novel"].fn(novel_id, "md")
     assert "exported_path" in result
     assert result["format"] == "md"
 
@@ -531,7 +531,7 @@ async def test_mcp_get_archive_stats():
         )
         await session.commit()
 
-    result = await mcp.tools["get_archive_stats"](novel_id)
+    result = await mcp._tool_manager._tools["get_archive_stats"].fn(novel_id)
     assert result["total_word_count"] == 42
     assert result["archived_chapter_count"] == 1
     assert result["avg_word_count"] == 0
