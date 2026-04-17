@@ -9,12 +9,13 @@ class EntityRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, entity_id: str, entity_type: str, name: str, created_at_chapter_id: Optional[str] = None) -> Entity:
+    async def create(self, entity_id: str, entity_type: str, name: str, created_at_chapter_id: Optional[str] = None, novel_id: Optional[str] = None) -> Entity:
         entity = Entity(
             id=entity_id,
             type=entity_type,
             name=name,
             created_at_chapter_id=created_at_chapter_id,
+            novel_id=novel_id,
         )
         self.session.add(entity)
         await self.session.flush()
@@ -35,5 +36,11 @@ class EntityRepository:
             return []
         result = await self.session.execute(
             select(Entity).where(Entity.name.in_(names))
+        )
+        return result.scalars().all()
+
+    async def list_by_novel(self, novel_id: str) -> List[Entity]:
+        result = await self.session.execute(
+            select(Entity).where(Entity.novel_id == novel_id)
         )
         return result.scalars().all()
