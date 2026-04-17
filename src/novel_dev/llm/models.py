@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from typing import Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
 
 class ChatMessage(BaseModel):
@@ -44,10 +44,3 @@ class EmbeddingConfig(BaseModel):
     timeout: int = 30
     retries: int = 3
     dimensions: int = Field(default=1536, gt=0)
-
-    @field_validator("dimensions")
-    @classmethod
-    def validate_dimensions(cls, v: int) -> int:
-        if v <= 0:
-            raise ValueError("dimensions must be positive")
-        return v

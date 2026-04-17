@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 
+import httpx
 from openai import AsyncOpenAI
+
+from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
 
 
 class BaseEmbedder(ABC):
@@ -27,18 +30,11 @@ class OpenAIEmbedder(BaseEmbedder):
 
     def _map_exception(self, exc: Exception) -> Exception:
         import openai
-        import httpx
 
         if isinstance(exc, openai.RateLimitError):
-            from novel_dev.llm.exceptions import LLMRateLimitError
-
             return LLMRateLimitError(str(exc))
         if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
-            from novel_dev.llm.exceptions import LLMTimeoutError
-
             return LLMTimeoutError(str(exc))
         if isinstance(exc, httpx.TimeoutException):
-            from novel_dev.llm.exceptions import LLMTimeoutError
-
             return LLMTimeoutError(str(exc))
         return exc
