@@ -96,6 +96,20 @@ class ContextAgent:
             except Exception as exc:
                 logger.warning("semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
 
+        # Semantic chapter retrieval for style consistency
+        similar_chapters: list[SimilarDocument] = []
+        if self.embedding_service:
+            query_text = self._build_search_query(chapter_plan)
+            try:
+                results = await self.embedding_service.search_similar_chapters(
+                    novel_id=novel_id,
+                    query_text=query_text,
+                    limit=2,
+                )
+                similar_chapters = results
+            except Exception as exc:
+                logger.warning("chapter_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+
         context = ChapterContext(
             chapter_plan=chapter_plan,
             style_profile=style_profile,
@@ -107,6 +121,7 @@ class ContextAgent:
             previous_chapter_summary=prev_summary,
             relevant_documents=relevant_docs,
             related_entities=related_entities,
+            similar_chapters=similar_chapters,
         )
 
         checkpoint["chapter_context"] = context.model_dump()
