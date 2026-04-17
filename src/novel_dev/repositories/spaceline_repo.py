@@ -9,13 +9,14 @@ class SpacelineRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def create(self, location_id: str, name: str, parent_id: Optional[str] = None, narrative: Optional[str] = None, meta: Optional[dict] = None) -> Spaceline:
+    async def create(self, location_id: str, name: str, parent_id: Optional[str] = None, narrative: Optional[str] = None, meta: Optional[dict] = None, novel_id: Optional[str] = None) -> Spaceline:
         loc = Spaceline(
             id=location_id,
             name=name,
             parent_id=parent_id,
             narrative=narrative,
             meta=meta,
+            novel_id=novel_id,
         )
         self.session.add(loc)
         await self.session.flush()
@@ -37,3 +38,9 @@ class SpacelineRepository:
             current_id = node.parent_id
         chain.reverse()
         return chain
+
+    async def list_by_novel(self, novel_id: str) -> List[Spaceline]:
+        result = await self.session.execute(
+            select(Spaceline).where(Spaceline.novel_id == novel_id).order_by(Spaceline.name)
+        )
+        return list(result.scalars().all())
