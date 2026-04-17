@@ -81,7 +81,14 @@
 
             <el-card style="margin-top: 16px;">
               <template #header><span>操作</span></template>
-              <el-button type="primary" :loading="loadingAction === 'brainstorm'" :disabled="!canBrainstorm" @click="doAction('brainstorm')">生成大纲</el-button>
+              <div v-if="novelState.current_phase === 'brainstorming'" style="margin-bottom: 12px;">
+                <el-alert type="info" :closable="false">
+                  <div>请在 Claude Code 中粘贴以下 prompt 继续脑暴：</div>
+                  <pre style="margin-top: 8px; white-space: pre-wrap; background: #f5f7fa; padding: 8px; border-radius: 4px;">{{ brainstormPrompt }}</pre>
+                  <el-button size="small" style="margin-top: 8px;" @click="copyBrainstormPrompt">复制 prompt</el-button>
+                </el-alert>
+              </div>
+              <el-button type="primary" :loading="loadingAction === 'brainstorm'" :disabled="!canBrainstorm" @click="doAction('brainstorm')">{{ brainstormButtonText }}</el-button>
               <el-button type="primary" :loading="loadingAction === 'volume_plan'" :disabled="!canVolumePlan" @click="doAction('volume_plan')">卷规划</el-button>
               <el-button type="primary" :loading="loadingAction === 'context'" :disabled="!canContext" @click="doAction('context')">准备上下文</el-button>
               <el-button type="primary" :loading="loadingAction === 'draft'" :disabled="!canDraft" @click="doAction('draft')">生成草稿</el-button>
@@ -122,6 +129,28 @@
                   </el-collapse-item>
                 </el-collapse>
               </div>
+            </el-card>
+
+            <el-card v-if="pendingSynopsis" style="margin-top: 16px;">
+              <template #header><span>脑暴预览</span></template>
+              <div style="margin-bottom: 8px;"><strong>标题：</strong>{{ pendingSynopsis.title }}</div>
+              <div style="margin-bottom: 8px;"><strong>梗概：</strong>{{ pendingSynopsis.logline }}</div>
+              <div style="margin-bottom: 8px;"><strong>核心冲突：</strong>{{ pendingSynopsis.core_conflict }}</div>
+              <div style="margin-bottom: 8px;"><strong>预计卷数/章数/字数：</strong>{{ pendingSynopsis.estimated_volumes }} / {{ pendingSynopsis.estimated_total_chapters }} / {{ pendingSynopsis.estimated_total_words }}</div>
+              <el-collapse style="margin-top: 8px;">
+                <el-collapse-item title="人物弧光" name="arcs">
+                  <div v-for="(arc, idx) in pendingSynopsis.character_arcs" :key="idx" style="margin-bottom: 8px;">
+                    <div><strong>{{ arc.name }}</strong>：{{ arc.arc_summary }}</div>
+                    <ul><li v-for="(tp, tidx) in arc.key_turning_points" :key="tidx">{{ tp }}</li></ul>
+                  </div>
+                </el-collapse-item>
+                <el-collapse-item title="剧情里程碑" name="milestones">
+                  <div v-for="(ms, idx) in pendingSynopsis.milestones" :key="idx" style="margin-bottom: 8px;">
+                    <div><strong>{{ ms.act }}</strong>：{{ ms.summary }}</div>
+                    <div v-if="ms.climax_event">高潮：{{ ms.climax_event }}</div>
+                  </div>
+                </el-collapse-item>
+              </el-collapse>
             </el-card>
           </div>
 
@@ -241,7 +270,7 @@
   <script src="https://unpkg.com/element-plus@2.5.6/dist/index.full.js"></script>
   <script src="https://unpkg.com/axios@1.6.7/dist/axios.min.js"></script>
   <script>
-    const { createApp, ref, computed, onMounted } = Vue;
+    const { createApp, ref, computed, onMounted, watch } = Vue;
     const { ElMessage } = ElementPlus;
 
     const app = createApp({
@@ -273,10 +302,12 @@
         const savingEnv = ref(false);
         const activeConfigPanels = ref(['defaults']);
         const agentNames = ['BrainstormAgent', 'VolumePlannerAgent', 'WriterAgent', 'CriticAgent', 'EditorAgent', 'FastReviewAgent', 'LibrarianAgent', 'ContextAgent'];
+        const brainstormPrompt = ref('');
 
         const phaseMap = {
+          brainstorming: '脑暴中',
           volume_planning: '卷规划',
-          context_preparation: '准备上下文',
+          context_preparation: '上下文准备',
           drafting: '起草中',
           reviewing: '审核中',
           editing: '编辑中',
@@ -292,6 +323,9 @@
           }
           return '-';
         });
+        const brainstormButtonText = computed(() => {
+          return novelState.value.current_phase === 'brainstorming' ? '脑暴中...' : '生成大纲';
+        });
         const canBrainstorm = computed(() => novelState.value.current_phase === 'volume_planning');
         const canVolumePlan = computed(() => novelState.value.current_phase === 'volume_planning');
         const canContext = computed(() => novelState.value.current_phase === 'context_preparation');
@@ -299,6 +333,34 @@
         const canAdvance = computed(() => ['reviewing', 'editing', 'fast_reviewing'].includes(novelState.value.current_phase));
         const canLibrarian = computed(() => novelState.value.current_phase === 'librarian');
         const filteredEntities = computed(() => entities.value.filter(e => e.type === entityTab.value));
+        const pendingSynopsis = computed(() => novelState.value.checkpoint_data?.pending_synopsis);
+        let brainstormPollInterval = null;
+
+        function startBrainstormPolling() {
+          if (brainstormPollInterval) return;
+          brainstormPollInterval = setInterval(async () => {
+            if (novelState.value.current_phase !== 'brainstorming') {
+              stopBrainstormPolling();
+              return;
+            }
+            await refreshDashboard();
+          }, 3000);
+        }
+
+        function stopBrainstormPolling() {
+          if (brainstormPollInterval) {
+            clearInterval(brainstormPollInterval);
+            brainstormPollInterval = null;
+          }
+        }
+
+        watch(() => novelState.value.current_phase, (phase) => {
+          if (phase === 'brainstorming') {
+            startBrainstormPolling();
+          } else {
+            stopBrainstormPolling();
+          }
+        });
 
         async function fetchNovels() {
           try {
@@ -317,6 +379,15 @@
           await fetchEncyclopedia();
           await fetchChapters();
           await fetchConfig();
+        }
+
+        async function copyBrainstormPrompt() {
+          try {
+            await navigator.clipboard.writeText(brainstormPrompt.value);
+            ElMessage.success('已复制到剪贴板');
+          } catch (e) {
+            ElMessage.error('复制失败');
+          }
         }
 
         async function refreshDashboard() {
@@ -344,7 +415,15 @@
           loadingAction.value = action;
           try {
             let url = '';
-            if (action === 'brainstorm') url = `/api/novels/${novelId.value}/brainstorm`;
+            if (action === 'brainstorm') {
+              url = `/api/novels/${novelId.value}/brainstorm/start`;
+              const resp = await axios.post(url);
+              brainstormPrompt.value = resp.data.prompt;
+              ElMessage.success('已生成脑暴 prompt，请复制到 Claude Code');
+              await refreshDashboard();
+              loadingAction.value = '';
+              return;
+            }
             else if (action === 'volume_plan') url = `/api/novels/${novelId.value}/volume_plan`;
             else if (action === 'context') {
               if (!novelState.value.current_chapter_id) throw new Error('当前章节未设置');
@@ -514,10 +593,12 @@
           uploading, chapterDrawerVisible, drawerTitle, drawerContent,
           entityTab, llmConfig, envConfig, savingConfig, savingEnv,
           activeConfigPanels, agentNames, phaseLabel, currentVolumeChapter,
+          brainstormPrompt, brainstormButtonText,
           canBrainstorm, canVolumePlan, canContext, canDraft, canAdvance, canLibrarian,
-          filteredEntities, loadNovel, doAction, fetchDocuments, approvePending,
+          filteredEntities, pendingSynopsis, loadNovel, doAction, fetchDocuments, approvePending,
           handleFileChange, uploadFile, fetchEncyclopedia, fetchChapters,
           openChapterDrawer, fetchConfig, saveLLMConfig, saveEnvConfig, handleMenuSelect,
+          copyBrainstormPrompt,
         };
       },
     });
