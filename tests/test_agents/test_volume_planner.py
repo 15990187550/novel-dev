@@ -4,7 +4,9 @@ import pytest
 
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult, VolumePlan
+from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult, VolumePlan, VolumeBeat
+from novel_dev.schemas.context import BeatPlan
+import uuid
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.llm.models import LLMResponse
@@ -29,6 +31,44 @@ async def test_plan_volume_success(async_session):
         chapter_id=None,
     )
 
+    initial_plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=3,
+        estimated_total_words=9000,
+        chapters=[
+            VolumeBeat(
+                chapter_id=str(uuid.uuid4()),
+                chapter_number=1,
+                title="第一章",
+                summary="第一章剧情",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B1", target_mood="tense")],
+            ),
+            VolumeBeat(
+                chapter_id=str(uuid.uuid4()),
+                chapter_number=2,
+                title="第二章",
+                summary="第二章剧情",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B2", target_mood="tense")],
+            ),
+            VolumeBeat(
+                chapter_id=str(uuid.uuid4()),
+                chapter_number=3,
+                title="第三章",
+                summary="第三章剧情",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B3", target_mood="tense")],
+            ),
+        ],
+    )
+
     score_result = VolumeScoreResult(
         overall=88,
         outline_fidelity=88,
@@ -40,10 +80,15 @@ async def test_plan_volume_success(async_session):
         summary_feedback="good",
     )
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=initial_plan.model_dump_json()),
+        LLMResponse(text=score_result.model_dump_json()),
+    ]
 
-    with patch("novel_dev.agents.volume_planner.llm_factory") as mock_factory:
+    with patch("novel_dev.agents.volume_planner.llm_factory") as mock_factory, \
+         patch("novel_dev.agents._llm_helpers.llm_factory") as mock_helpers_factory:
         mock_factory.get.return_value = mock_client
+        mock_helpers_factory.get.return_value = mock_client
         agent = VolumePlannerAgent(async_session)
         plan = await agent.plan("n_plan", volume_number=1)
 

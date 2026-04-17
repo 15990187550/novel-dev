@@ -20,6 +20,7 @@ from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm import llm_factory
 from novel_dev.llm.models import ChatMessage
+from novel_dev.agents._llm_helpers import call_and_parse
 
 
 class VolumePlannerAgent:
@@ -51,7 +52,7 @@ class VolumePlannerAgent:
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)
 
-        volume_plan = self._generate_volume_plan(synopsis, volume_number)
+        volume_plan = await self._generate_volume_plan(synopsis, volume_number)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         while True:
@@ -101,33 +102,26 @@ class VolumePlannerAgent:
                 pass
         return 1
 
-    def _generate_volume_plan(self, synopsis: SynopsisData, volume_number: int) -> VolumePlan:
-        total_chapters = math.ceil(synopsis.estimated_total_chapters / max(1, synopsis.estimated_volumes))
-        chapters_per_volume = total_chapters
-        chapters = []
-        for i in range(chapters_per_volume):
-            chapters.append(
-                VolumeBeat(
-                    chapter_id=str(uuid.uuid4()),
-                    chapter_number=i + 1,
-                    title=f"第{i + 1}章",
-                    summary=f"第{i + 1}章剧情",
-                    target_word_count=3000,
-                    target_mood="tense",
-                    beats=[
-                        BeatPlan(summary=f"节拍 {j}", target_mood="tense")
-                        for j in range(1, 4)
-                    ],
-                )
-            )
-        return VolumePlan(
-            volume_id=f"vol_{volume_number}",
-            volume_number=volume_number,
-            title=f"第{volume_number}卷",
-            summary=f"第{volume_number}卷总述",
-            total_chapters=len(chapters),
-            estimated_total_words=len(chapters) * 3000,
-            chapters=chapters,
+    async def _generate_volume_plan(
+        self, synopsis: SynopsisData, volume_number: int
+    ) -> VolumePlan:
+        MAX_CHARS = 12000
+        truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
+
+        prompt = (
+            "你是一位小说分卷规划专家。请根据以下大纲数据，"
+            "生成一个完整的分卷规划 VolumePlan，返回严格符合 VolumePlan Schema 的 JSON。\n"
+            "要求：\n"
+            "1. 每章必须有有意义的标题和摘要，不能是'第X章'这种占位符\n"
+            "2. 每章拆分为 2-4 个节拍（beats），每个节拍有明确的情节推进\n"
+            "3. 章节之间要有连贯性，伏笔要合理分布\n"
+            "4. 估算字数要合理\n\n"
+            f"大纲数据：\n{truncated_synopsis}\n\n"
+            f"当前卷号：{volume_number}"
+        )
+        return await call_and_parse(
+            "VolumePlannerAgent", "generate_volume_plan", prompt,
+            VolumePlan.model_validate_json, max_retries=3
         )
 
     async def _generate_score(self, plan: VolumePlan) -> VolumeScoreResult:
