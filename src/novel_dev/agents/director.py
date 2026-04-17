@@ -102,7 +102,11 @@ class NovelDirector:
 
     async def _run_editor(self, state: NovelState) -> NovelState:
         from novel_dev.agents.editor_agent import EditorAgent
-        agent = EditorAgent(self.session)
+        from novel_dev.services.embedding_service import EmbeddingService
+        from novel_dev.llm import llm_factory
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(self.session, embedder)
+        agent = EditorAgent(self.session, embedding_service)
         await agent.polish(state.novel_id, state.current_chapter_id)
         return await self.resume(state.novel_id)
 
