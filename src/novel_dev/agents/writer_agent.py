@@ -5,6 +5,7 @@ from novel_dev.schemas.context import ChapterContext, DraftMetadata, BeatPlan
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.llm.models import ChatMessage
 
 
 class WriterAgent:
@@ -79,10 +80,29 @@ class WriterAgent:
         return metadata
 
     async def _generate_beat(self, beat: BeatPlan, context: ChapterContext, previous_text: str) -> str:
-        text = f"{beat.summary}。气氛{beat.target_mood}。"
-        if context.pending_foreshadowings:
-            text += context.pending_foreshadowings[0]["content"]
-        return text
+        prompt = (
+            "你是一位小说创作助手。请根据以下节拍计划和上下文，生成该节拍的正文。"
+            "要求：只返回正文内容，不添加解释。\n\n"
+            f"### 节拍计划\n{beat.model_dump_json()}\n\n"
+            f"### 章节上下文\n{context.model_dump_json()}\n\n"
+            f"### 已写文本\n{previous_text}\n\n"
+            "请生成正文："
+        )
+        from novel_dev.llm import llm_factory
+        client = llm_factory.get("WriterAgent", task="generate_beat")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return response.text.strip()
 
     async def _rewrite_angle(self, beat: BeatPlan, original_text: str, context: ChapterContext) -> str:
-        return original_text + "（重写后）"
+        prompt = (
+            "你是一位小说创作助手。当前节拍过短，请扩写并保持与上下文的连贯。"
+            "只返回扩写后的正文，不添加解释。\n\n"
+            f"### 节拍计划\n{beat.model_dump_json()}\n\n"
+            f"### 章节上下文\n{context.model_dump_json()}\n\n"
+            f"### 当前过短文本\n{original_text}\n\n"
+            "请扩写："
+        )
+        from novel_dev.llm import llm_factory
+        client = llm_factory.get("WriterAgent", task="rewrite_beat")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return response.text.strip()

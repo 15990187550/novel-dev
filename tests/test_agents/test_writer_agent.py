@@ -1,9 +1,12 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, BeatPlan, EntityState, LocationContext
 from novel_dev.repositories.chapter_repo import ChapterRepository
+from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
@@ -36,8 +39,16 @@ async def test_write_draft_success(async_session):
     )
     await ChapterRepository(async_session).create("ch_1", "vol_1", 1, "Test")
 
-    agent = WriterAgent(async_session)
-    metadata = await agent.write("novel_test", context, "ch_1")
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="开场节拍生成的正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。这是第一段非常详细的描写，包含了丰富的场景和人物心理活动，忽然玉佩发光。"),
+        LLMResponse(text="冲突节拍生成的正文内容，字数足够多，矛盾尖锐，冲突激烈，让读者欲罢不能。这是第二段非常详细的描写，包含了紧张的对话和激烈的动作场面。"),
+    ]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = WriterAgent(async_session)
+        metadata = await agent.write("novel_test", context, "ch_1")
 
     assert metadata.total_words > 0
     assert len(metadata.beat_coverage) == 2
