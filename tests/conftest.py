@@ -68,6 +68,10 @@ def mock_llm_factory(monkeypatch):
                     beats=[BeatPlan(summary="B1", target_mood="tense")],
                 )],
             ).model_dump_json())
+        elif agent == "WriterAgent" and task == "generate_relay":
+            mock_client.acomplete.return_value = LLMResponse(
+                text='{"scene_state":"场景状态","emotional_tone":"紧张","new_info_revealed":"新信息","open_threads":"悬念","next_beat_hook":"钩子"}'
+            )
         elif agent == "WriterAgent":
             mock_client.acomplete.return_value = LLMResponse(
                 text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"

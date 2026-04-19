@@ -25,6 +25,15 @@ class EntityState(BaseModel):
     current_state: str
 
 
+class NarrativeRelay(BaseModel):
+    """Beat 写完后生成的叙事状态快照，传递给后续 beat。"""
+    scene_state: str
+    emotional_tone: str
+    new_info_revealed: str
+    open_threads: str
+    next_beat_hook: str
+
+
 class LocationContext(BaseModel):
     current: str
     parent: Optional[str] = None
