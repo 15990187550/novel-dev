@@ -11,75 +11,8 @@ from novel_dev.llm.models import LLMResponse
 
 
 @pytest.mark.asyncio
-async def test_similar_chapters_block_appears_in_prompt(async_session):
-    director = NovelDirector(session=async_session)
-    chapter_plan = ChapterPlan(
-        chapter_number=1,
-        title="Test",
-        target_word_count=2000,
-        beats=[BeatPlan(summary="开场", target_mood="压抑")],
-    )
-    similar = [
-        SimilarDocument(
-            doc_id="ch_prev_1",
-            doc_type="chapter",
-            title="第一章",
-            content_preview="这是之前的章节内容预览。",
-            similarity_score=0.92,
-        )
-    ]
-    context = ChapterContext(
-        chapter_plan=chapter_plan,
-        style_profile={},
-        worldview_summary="",
-        active_entities=[],
-        location_context=LocationContext(current=""),
-        timeline_events=[],
-        pending_foreshadowings=[],
-        similar_chapters=similar,
-    )
-    await director.save_checkpoint(
-        "novel_test_sim",
-        phase=Phase.DRAFTING,
-        checkpoint_data={"chapter_context": context.model_dump()},
-        volume_id="vol_1",
-        chapter_id="ch_sim",
-    )
-    await ChapterRepository(async_session).create("ch_sim", "vol_1", 1, "Test")
-
-    mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(
-        text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
-    )
-
-    captured_prompts = []
-
-    def capture_prompt(agent, task=None):
-        mock = AsyncMock()
-
-        async def acomplete(messages):
-            captured_prompts.append(messages[0].content)
-            return LLMResponse(
-                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
-            )
-
-        mock.acomplete.side_effect = acomplete
-        return mock
-
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
-        mock_factory.get.side_effect = capture_prompt
-        agent = WriterAgent(async_session)
-        await agent.write("novel_test_sim", context, "ch_sim")
-
-    assert len(captured_prompts) >= 1
-    prompt = captured_prompts[0]
-    assert "参考章节（保持风格一致性）" in prompt
-    assert "[chapter] 第一章" in prompt
-    assert "这是之前的章节内容预览。" in prompt
-
-
-@pytest.mark.asyncio
-async def test_empty_similar_chapters_omits_block(async_session):
+async def test_multi_message_prompt_structure(async_session):
+    """Verify WriterAgent uses system + user messages (not single message dump)."""
     director = NovelDirector(session=async_session)
     chapter_plan = ChapterPlan(
         chapter_number=1,
@@ -89,7 +22,7 @@ async def test_empty_similar_chapters_omits_block(async_session):
     )
     context = ChapterContext(
         chapter_plan=chapter_plan,
-        style_profile={},
+        style_profile={"style_guide": "简洁有力"},
         worldview_summary="",
         active_entities=[],
         location_context=LocationContext(current=""),
@@ -98,21 +31,21 @@ async def test_empty_similar_chapters_omits_block(async_session):
         similar_chapters=[],
     )
     await director.save_checkpoint(
-        "novel_test_empty",
+        "novel_test_multi",
         phase=Phase.DRAFTING,
         checkpoint_data={"chapter_context": context.model_dump()},
         volume_id="vol_1",
-        chapter_id="ch_empty",
+        chapter_id="ch_multi",
     )
-    await ChapterRepository(async_session).create("ch_empty", "vol_1", 1, "Test")
+    await ChapterRepository(async_session).create("ch_multi", "vol_1", 1, "Test")
 
-    captured_prompts = []
+    captured_messages = []
 
     def capture_prompt(agent, task=None):
         mock = AsyncMock()
 
-        async def acomplete(messages):
-            captured_prompts.append(messages[0].content)
+        async def acomplete(messages, config=None):
+            captured_messages.append(messages)
             return LLMResponse(
                 text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
             )
@@ -122,9 +55,77 @@ async def test_empty_similar_chapters_omits_block(async_session):
 
     with patch("novel_dev.llm.llm_factory") as mock_factory:
         mock_factory.get.side_effect = capture_prompt
+        mock_factory._resolve_config.return_value = None
         agent = WriterAgent(async_session)
-        await agent.write("novel_test_empty", context, "ch_empty")
+        await agent.write("novel_test_multi", context, "ch_multi")
 
-    assert len(captured_prompts) >= 1
-    prompt = captured_prompts[0]
-    assert "参考章节（保持风格一致性）" not in prompt
+    # generate_beat call should have system + user messages
+    beat_messages = captured_messages[0]
+    assert len(beat_messages) >= 2
+    assert beat_messages[0].role == "system"
+    assert beat_messages[1].role == "user"
+
+    # System prompt should contain rules, not worldview dump
+    system = beat_messages[0].content
+    assert "禁用词" in system
+    assert "简洁有力" in system
+
+    # User prompt should contain chapter plan and beat info
+    user = beat_messages[1].content
+    assert "当前节拍" in user
+    assert "开场" in user
+
+
+@pytest.mark.asyncio
+async def test_prompt_does_not_contain_full_context_dump(async_session):
+    """Verify the old context.model_dump_json() pattern is gone."""
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=2000,
+        beats=[BeatPlan(summary="开场", target_mood="压抑")],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="这段世界观不应该出现在用户消息中" * 50,
+        active_entities=[],
+        location_context=LocationContext(current=""),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        similar_chapters=[],
+    )
+    await director.save_checkpoint(
+        "novel_test_nodump",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_1",
+        chapter_id="ch_nodump",
+    )
+    await ChapterRepository(async_session).create("ch_nodump", "vol_1", 1, "Test")
+
+    captured_messages = []
+
+    def capture_prompt(agent, task=None):
+        mock = AsyncMock()
+
+        async def acomplete(messages, config=None):
+            captured_messages.append(messages)
+            return LLMResponse(
+                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
+            )
+
+        mock.acomplete.side_effect = acomplete
+        return mock
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.side_effect = capture_prompt
+        mock_factory._resolve_config.return_value = None
+        agent = WriterAgent(async_session)
+        await agent.write("novel_test_nodump", context, "ch_nodump")
+
+    # User message should NOT contain the full worldview dump
+    beat_messages = captured_messages[0]
+    user_content = beat_messages[1].content
+    assert "这段世界观不应该出现在用户消息中" not in user_content

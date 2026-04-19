@@ -45,14 +45,17 @@ class WriterAgent:
         style_violations = []
         total_beats = len(context.chapter_plan.beats)
 
-        is_last_map = {i: (i == total_beats - 1) for i in range(total_beats)}
-        inner_beats: List[str] = []  # 逐 beat 的纯正文,用于滑窗
+        from novel_dev.schemas.context import NarrativeRelay
+        relay_history: List[NarrativeRelay] = []
+        inner_beats: List[str] = []
+
         for idx, beat in enumerate(context.chapter_plan.beats):
-            previous_context = self._build_previous_context(
-                inner_beats, context.chapter_plan.beats, idx
-            )
+            is_last = (idx == total_beats - 1)
+            last_beat_text = inner_beats[-1] if inner_beats else ""
+
             beat_text = await self._generate_beat(
-                beat, context, previous_context, idx, total_beats, is_last_map[idx]
+                beat, context, relay_history, last_beat_text,
+                idx, total_beats, is_last, novel_id,
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
@@ -63,6 +66,19 @@ class WriterAgent:
             raw_draft += beat_text + "\n\n"
             beat_coverage.append({"beat_index": idx, "word_count": len(inner)})
 
+            # Generate narrative relay baton
+            try:
+                relay = await self._generate_relay(inner, beat)
+                relay_history.append(relay)
+            except Exception:
+                relay_history.append(NarrativeRelay(
+                    scene_state=beat.summary,
+                    emotional_tone=beat.target_mood,
+                    new_info_revealed="",
+                    open_threads="",
+                    next_beat_hook="",
+                ))
+
             for fs in context.pending_foreshadowings:
                 if fs["content"] in inner and fs["id"] not in embedded_foreshadowings:
                     embedded_foreshadowings.append(fs["id"])
@@ -72,6 +88,7 @@ class WriterAgent:
                 "total_beats": total_beats,
                 "current_word_count": len(raw_draft),
             }
+            checkpoint["relay_history"] = [r.model_dump() for r in relay_history]
             await self.state_repo.save_checkpoint(
                 novel_id,
                 current_phase=Phase.DRAFTING.value,
@@ -146,15 +163,33 @@ class WriterAgent:
         self,
         beat: BeatPlan,
         context: ChapterContext,
-        previous_text: str,
+        relay_history: list,
+        last_beat_text: str,
         idx: int = 0,
         total: int = 1,
         is_last: bool = False,
+        novel_id: str = "",
     ) -> str:
-        prompt = self._build_beat_prompt(beat, context, previous_text, idx=idx, total=total, is_last=is_last)
+        system_prompt = self._build_system_prompt(context, is_last)
+        context_msg = self._build_context_message(
+            beat, context, relay_history, last_beat_text, idx, total, is_last
+        )
+        retrieval_msg = await self._build_retrieval_message(beat, context, novel_id)
+
+        user_content = context_msg
+        if retrieval_msg:
+            user_content += "\n\n" + retrieval_msg
+        user_content += "\n\n请直接输出本节拍正文："
+
+        messages = [
+            ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_content),
+        ]
+
         from novel_dev.llm import llm_factory
         client = llm_factory.get("WriterAgent", task="generate_beat")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        config = llm_factory._resolve_config("WriterAgent", "generate_beat")
+        response = await client.acomplete(messages, config)
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
