@@ -23,8 +23,14 @@ from novel_dev.schemas.context import ChapterContext
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.schemas.outline import VolumePlan
+import re
+import secrets
 
 router = APIRouter()
+
+
+class CreateNovelRequest(BaseModel):
+    title: str
 settings = Settings()
 
 
@@ -56,6 +62,69 @@ async def list_novels(session: AsyncSession = Depends(get_session)):
             }
             for r in rows
         ]
+    }
+
+
+def _generate_novel_id(title: str) -> str:
+    # Strip non-ASCII first so CJK titles get a clean slug
+    slug = re.sub(r'[^\x00-\x7F]', '', title.lower())
+    slug = re.sub(r'[^\w\s-]', '', slug)
+    slug = re.sub(r'[-\s]+', '-', slug).strip('-')
+    if not slug:
+        slug = 'novel'
+    suffix = secrets.token_hex(2)
+    return f"{slug}-{suffix}"
+
+
+@router.post("/api/novels", status_code=201)
+async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(get_session)):
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="标题不能为空")
+
+    novel_id = None
+    for _ in range(5):
+        candidate = _generate_novel_id(title)
+        existing = await session.execute(select(NovelState.novel_id).where(NovelState.novel_id == candidate))
+        if existing.scalar_one_or_none() is None:
+            novel_id = candidate
+            break
+
+    if novel_id is None:
+        raise HTTPException(status_code=500, detail="无法生成唯一的小说 ID，请重试")
+
+    checkpoint_data = {
+        "synopsis_data": {
+            "title": title,
+            "logline": "",
+            "core_conflict": "",
+            "themes": [],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 1,
+            "estimated_total_chapters": 10,
+            "estimated_total_words": 30000,
+        },
+        "synopsis_doc_id": None,
+    }
+
+    state = NovelState(
+        novel_id=novel_id,
+        current_phase="brainstorming",
+        current_volume_id=None,
+        current_chapter_id=None,
+        checkpoint_data=checkpoint_data,
+    )
+    session.add(state)
+    await session.commit()
+
+    return {
+        "novel_id": state.novel_id,
+        "current_phase": state.current_phase,
+        "current_volume_id": state.current_volume_id,
+        "current_chapter_id": state.current_chapter_id,
+        "checkpoint_data": state.checkpoint_data,
+        "last_updated": state.last_updated.isoformat() if state.last_updated else None,
     }
 
 
@@ -261,6 +330,7 @@ async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSessi
     embedding_service = EmbeddingService(session, embedder)
     svc = ExtractionService(session, embedding_service)
     pe = await svc.process_upload(novel_id, req.filename, req.content)
+    await session.commit()
     return {
         "id": pe.id,
         "extraction_type": pe.extraction_type,
@@ -298,6 +368,7 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
     if not pe or pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
     docs = await svc.approve_pending(req.pending_id)
+    await session.commit()
     return {
         "documents": [
             {
@@ -334,6 +405,7 @@ async def rollback_style_profile(novel_id: str, req: RollbackRequest, session: A
     embedding_service = EmbeddingService(session, embedder)
     svc = ExtractionService(session, embedding_service)
     await svc.rollback_style_profile(novel_id, req.version)
+    await session.commit()
     return {"rolled_back_to_version": req.version}
 
 
@@ -350,6 +422,7 @@ async def prepare_chapter_context(
         context = await agent.assemble(novel_id, chapter_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await session.commit()
     return {
         "chapter_plan_title": context.chapter_plan.title,
         "active_entities_count": len(context.active_entities),
@@ -382,7 +455,7 @@ async def generate_chapter_draft(
         metadata = await agent.write(novel_id, context, chapter_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
+    await session.commit()
     return metadata.model_dump()
 
 
@@ -419,6 +492,7 @@ async def advance_novel(novel_id: str, session: AsyncSession = Depends(get_sessi
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    await session.commit()
     return {
         "novel_id": state.novel_id,
         "current_phase": state.current_phase,
@@ -474,6 +548,7 @@ async def brainstorm_novel(novel_id: str, session: AsyncSession = Depends(get_se
         synopsis_data = await agent.brainstorm(novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    await session.commit()
     return {
         "title": synopsis_data.title,
         "logline": synopsis_data.logline,
@@ -503,6 +578,7 @@ async def start_brainstorm(novel_id: str, session: AsyncSession = Depends(get_se
         volume_id=state.current_volume_id if state else None,
         chapter_id=state.current_chapter_id if state else None,
     )
+    await session.commit()
 
     doc_list = "\n".join(f"- [{d.doc_type}] {d.title} (doc_id={d.id})" for d in docs)
     prompt = (
@@ -524,6 +600,7 @@ async def plan_volume(novel_id: str, req: VolumePlanRequest = VolumePlanRequest(
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    await session.commit()
     return {
         "volume_id": plan.volume_id,
         "volume_number": plan.volume_number,
@@ -593,6 +670,7 @@ async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_sessi
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    await session.commit()
     return {
         "novel_id": state.novel_id,
         "current_phase": state.current_phase,
