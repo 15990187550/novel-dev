@@ -73,7 +73,7 @@ class DocumentRepository:
                     doc_id=row.id,
                     doc_type=row.doc_type,
                     title=row.title,
-                    content_preview=(row.content or "")[:200],
+                    content_preview=(row.content or "")[:600],
                     similarity_score=float(row.similarity),
                 )
                 for row in rows
@@ -104,7 +104,7 @@ class DocumentRepository:
                 doc_id=doc.id,
                 doc_type=doc.doc_type,
                 title=doc.title,
-                content_preview=(doc.content or "")[:200],
+                content_preview=(doc.content or "")[:600],
                 similarity_score=score,
             )
             for score, doc in scored[:limit]

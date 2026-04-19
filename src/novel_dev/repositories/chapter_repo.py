@@ -108,7 +108,7 @@ class ChapterRepository:
                     doc_id=row.id,
                     doc_type="chapter",
                     title=row.title or f"第{row.chapter_number}章",
-                    content_preview=(row.polished_text or row.raw_draft or "")[:200],
+                    content_preview=(row.polished_text or row.raw_draft or "")[:600],
                     similarity_score=float(row.similarity),
                 )
                 for row in rows
@@ -136,7 +136,7 @@ class ChapterRepository:
                 doc_id=ch.id,
                 doc_type="chapter",
                 title=ch.title or f"第{ch.chapter_number}章",
-                content_preview=(ch.polished_text or ch.raw_draft or "")[:200],
+                content_preview=(ch.polished_text or ch.raw_draft or "")[:600],
                 similarity_score=score,
             )
             for score, ch in scored[:limit]
