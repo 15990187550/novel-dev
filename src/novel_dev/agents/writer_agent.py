@@ -59,7 +59,11 @@ class WriterAgent:
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
-                inner = await self._rewrite_angle(beat, inner, context)
+                inner = await self._rewrite_angle(
+                    beat, inner, context,
+                    relay_history, last_beat_text,
+                    idx, total_beats, is_last,
+                )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
             inner_beats.append(inner)
@@ -123,42 +127,6 @@ class WriterAgent:
 
         return metadata
 
-    def _build_relevant_docs_text(self, context: ChapterContext) -> str:
-        if not context.relevant_documents:
-            return ""
-        docs_block = "\n\n".join(
-            f"[{d.doc_type}] {d.title}\n{d.content_preview}"
-            for d in context.relevant_documents
-        )
-        return (
-            f"\n\n### 相关设定补充（与本节拍高度相关，写作时请优先参考）\n"
-            f"{docs_block}\n"
-        )
-
-    def _build_related_entities_text(self, context: ChapterContext) -> str:
-        if not context.related_entities:
-            return ""
-        entities_block = "\n".join(
-            f"- [{e.type}] {e.name}：{e.current_state}"
-            for e in context.related_entities
-        )
-        return (
-            f"\n\n### 相关角色/势力/地点（请注意设定一致性）\n"
-            f"{entities_block}\n"
-        )
-
-    def _build_similar_chapters_text(self, context: ChapterContext) -> str:
-        if not context.similar_chapters:
-            return ""
-        chapters_block = "\n\n".join(
-            f"[{ch.doc_type}] {ch.title}\n{ch.content_preview}"
-            for ch in context.similar_chapters
-        )
-        return (
-            f"\n\n### 参考章节（保持风格一致性）\n"
-            f"{chapters_block}\n"
-        )
-
     async def _generate_beat(
         self,
         beat: BeatPlan,
@@ -192,37 +160,6 @@ class WriterAgent:
         response = await client.acomplete(messages, config)
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
-
-    # 滑窗:当前 beat 的 prompt 只携带最近 N 个 beat 的全文,更早的 beat 只给节拍摘要,
-    # 避免长章节(8-10 beat)prompt 线性膨胀 + 注意力散 + AI 腔累积复利。
-    _RECENT_BEATS_FULL_TEXT = 2
-
-    def _build_previous_context(
-        self,
-        inner_beats: List[str],
-        plan_beats: List[BeatPlan],
-        current_idx: int,
-    ) -> str:
-        if current_idx == 0 or not inner_beats:
-            return ""
-        split_point = max(0, len(inner_beats) - self._RECENT_BEATS_FULL_TEXT)
-        earlier = inner_beats[:split_point]
-        recent = inner_beats[split_point:]
-        parts: list[str] = []
-        if earlier:
-            summary_lines = []
-            for i, _ in enumerate(earlier):
-                plan_summary = plan_beats[i].summary if i < len(plan_beats) else ""
-                summary_lines.append(f"  - 节拍 {i + 1}: {plan_summary}")
-            parts.append("【已完成节拍概要】\n" + "\n".join(summary_lines))
-        if recent:
-            recent_lines = []
-            for off, text in enumerate(recent):
-                abs_idx = split_point + off
-                recent_lines.append(f"[节拍 {abs_idx + 1} 原文]\n{text}")
-            parts.append("【紧邻的 %d 个节拍原文(承接此处风格/情感/钩子)】\n%s" %
-                         (len(recent), "\n\n".join(recent_lines)))
-        return "\n\n".join(parts)
 
     def _build_system_prompt(self, context: ChapterContext, is_last: bool) -> str:
         """Layer 1: Rules. Goes in system message for highest LLM priority."""
@@ -353,14 +290,6 @@ class WriterAgent:
             f"{sp_text}\n"
         )
 
-    def _build_previous_summary_block(self, context: ChapterContext) -> str:
-        if not context.previous_chapter_summary:
-            return ""
-        return (
-            "### 前情回顾(承接人物状态、情感基调、悬念,避免重复交代)\n"
-            f"{context.previous_chapter_summary}\n\n"
-        )
-
     def _build_writing_rules_block(self, is_last: bool) -> str:
         hook_clause = (
             "- **章末钩子**:这是本章最后一个节拍,结尾必须给出明确悬念/反转/赌注升级/情绪爆点,"
@@ -387,60 +316,33 @@ class WriterAgent:
             "请自然嵌入文本(不要点破,不要写成注解)。\n"
         )
 
-    def _build_beat_prompt(
+    async def _rewrite_angle(
         self,
         beat: BeatPlan,
+        original_text: str,
         context: ChapterContext,
-        previous_text: str,
+        relay_history: list = None,
+        last_beat_text: str = "",
         idx: int = 0,
         total: int = 1,
         is_last: bool = False,
     ) -> str:
-        relevant_docs_text = self._build_relevant_docs_text(context)
-        related_entities_text = self._build_related_entities_text(context)
-        similar_chapters_text = self._build_similar_chapters_text(context)
-        style_block = self._build_style_guide_block(context)
-        prev_block = self._build_previous_summary_block(context)
-        rules_block = self._build_writing_rules_block(is_last)
-
-        position_hint = f"(本章第 {idx + 1} / {total} 个节拍{'|章末节拍' if is_last else ''})"
-
-        return (
-            "你是一位追求沉浸感与可读性的中文小说家。"
-            f"请按以下约束,为{position_hint}生成正文。"
-            "只返回正文内容,不添加任何解释、标题或元注释。\n\n"
-            f"{style_block}"
-            f"{rules_block}\n"
-            f"### 本节拍计划\n{beat.model_dump_json()}\n\n"
-            f"{prev_block}"
-            f"### 章节整体上下文\n{context.model_dump_json()}\n\n"
-            f"{relevant_docs_text}"
-            f"{related_entities_text}"
-            f"{similar_chapters_text}"
-            f"### 本章已写部分(承接此段风格与情感)\n{previous_text or '(本章尚未开始)'}\n\n"
-            "请直接输出本节拍正文(不要包含任何 <!--BEAT--> 锚点,系统会自行包裹):"
+        system_prompt = self._build_system_prompt(context, is_last)
+        context_msg = self._build_context_message(
+            beat, context, relay_history or [], last_beat_text,
+            idx, total, is_last,
         )
-
-    async def _rewrite_angle(self, beat: BeatPlan, original_text: str, context: ChapterContext) -> str:
-        relevant_docs_text = self._build_relevant_docs_text(context)
-        related_entities_text = self._build_related_entities_text(context)
-        similar_chapters_text = self._build_similar_chapters_text(context)
-        style_block = self._build_style_guide_block(context)
-        rules_block = self._build_writing_rules_block(False)
-        prompt = (
-            "你是一位中文小说家。当前节拍过短,请在遵守以下约束的前提下扩写,"
-            "并保持与上下文的连贯。只返回扩写后的正文,不添加解释。\n\n"
-            f"{style_block}"
-            f"{rules_block}\n"
-            f"### 节拍计划\n{beat.model_dump_json()}\n\n"
-            f"### 章节上下文\n{context.model_dump_json()}\n\n"
-            f"{relevant_docs_text}"
-            f"{related_entities_text}"
-            f"{similar_chapters_text}"
-            f"### 当前过短文本\n{original_text}\n\n"
-            "请扩写:"
+        user_content = (
+            f"{context_msg}\n\n"
+            f"### 当前过短文本（需扩写）\n{original_text}\n\n"
+            "请在遵守上述约束的前提下扩写，保持与上下文的连贯。只返回扩写后的正文，不添加解释："
         )
+        messages = [
+            ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_content),
+        ]
         from novel_dev.llm import llm_factory
         client = llm_factory.get("WriterAgent", task="rewrite_beat")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return response.text.strip()
+        config = llm_factory._resolve_config("WriterAgent", "rewrite_beat")
+        response = await client.acomplete(messages, config)
+        return _strip_anchors(response.text).strip()

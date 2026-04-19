@@ -8,7 +8,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage, LLMResponse
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
-from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone
+from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone, SynopsisScoreResult
 
 
 @pytest.mark.asyncio
@@ -41,8 +41,20 @@ async def test_brainstorm_success(async_session):
         estimated_total_chapters=90,
         estimated_total_words=270000,
     )
+    mock_score = SynopsisScoreResult(
+        overall=85,
+        logline_specificity=85,
+        conflict_concreteness=85,
+        character_arc_depth=85,
+        structural_turns=85,
+        hook_strength=85,
+        summary_feedback="ok",
+    )
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text=mock_synopsis.model_dump_json())
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=mock_synopsis.model_dump_json()),
+        LLMResponse(text=mock_score.model_dump_json()),
+    ]
 
     with patch("novel_dev.llm.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
@@ -87,8 +99,21 @@ async def test_brainstorm_uses_llm_factory(async_session):
         estimated_total_words=270000,
     ).model_dump_json()
 
+    score_json = SynopsisScoreResult(
+        overall=85,
+        logline_specificity=85,
+        conflict_concreteness=85,
+        character_arc_depth=85,
+        structural_turns=85,
+        hook_strength=85,
+        summary_feedback="ok",
+    ).model_dump_json()
+
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text=synopsis_json)
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=synopsis_json),
+        LLMResponse(text=score_json),
+    ]
 
     with patch("novel_dev.llm.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
@@ -96,6 +121,9 @@ async def test_brainstorm_uses_llm_factory(async_session):
         result = await agent.brainstorm("n_brain2")
 
     assert result.title == "天玄纪元"
-    mock_factory.get.assert_called_once_with("BrainstormAgent", task="generate_synopsis")
-    call_args = mock_client.acomplete.call_args[0][0]
-    assert any(isinstance(m, ChatMessage) and m.role == "system" for m in call_args)
+    # self-review 会触发 generate_synopsis + score_synopsis 两次 get
+    get_tasks = [call.kwargs.get("task") or (call.args[1] if len(call.args) > 1 else None)
+                 for call in mock_factory.get.call_args_list]
+    assert "generate_synopsis" in get_tasks
+    first_call_messages = mock_client.acomplete.call_args_list[0].args[0]
+    assert any(isinstance(m, ChatMessage) and m.role == "system" for m in first_call_messages)

@@ -51,6 +51,17 @@ class VolumePlan(BaseModel):
     chapters: List[VolumeBeat] = Field(default_factory=list)
 
 
+class SynopsisScoreResult(BaseModel):
+    """对 Synopsis 做多维度评分,驱动 Brainstorm 的 self-revise 循环。"""
+    overall: int = Field(ge=0, le=100)
+    logline_specificity: int = Field(ge=0, le=100, description="logline 是否写成『角色+欲望+阻力+赌注』的具体形式")
+    conflict_concreteness: int = Field(ge=0, le=100, description="core_conflict 是否为具体对抗关系而非抽象标签")
+    character_arc_depth: int = Field(ge=0, le=100, description="主要角色弧光是否有内在转变与≥3 个转折点")
+    structural_turns: int = Field(ge=0, le=100, description="milestones 是否含≥4 个能改变主角处境的转折点")
+    hook_strength: int = Field(ge=0, le=100, description="整部结尾是否带明确开放性钩子")
+    summary_feedback: str
+
+
 class VolumeScoreResult(BaseModel):
     overall: int = Field(ge=0, le=100)
     outline_fidelity: int = Field(ge=0, le=100)

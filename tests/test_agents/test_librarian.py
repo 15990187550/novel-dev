@@ -14,7 +14,11 @@ async def test_librarian_calls_llm_factory(async_session):
         new_entities=[{"type": "character", "name": "Lin Feng", "state": {"level": 2}}],
     )
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text=mock_response.model_dump_json())
+    # pass 1: ExtractionResult JSON; pass 2: soft state JSON(空即可)
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=mock_response.model_dump_json()),
+        LLMResponse(text='{"character_updates": [], "new_relationships": []}'),
+    ]
 
     with patch("novel_dev.agents.librarian.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
@@ -22,8 +26,10 @@ async def test_librarian_calls_llm_factory(async_session):
 
     assert len(result.timeline_events) == 1
     assert result.timeline_events[0].tick == 10
-    mock_factory.get.assert_called_once_with("LibrarianAgent", task="extract")
-    mock_client.acomplete.assert_called_once()
+    # 两 pass:硬事实 extract + 软状态 extract_relationships
+    tasks = [call.kwargs.get("task") for call in mock_factory.get.call_args_list]
+    assert "extract" in tasks
+    assert "extract_relationships" in tasks
 
 
 @pytest.mark.asyncio

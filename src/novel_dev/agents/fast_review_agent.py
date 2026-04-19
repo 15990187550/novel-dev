@@ -1,4 +1,6 @@
 import json
+import logging
+import re
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,8 +10,64 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
 
+logger = logging.getLogger(__name__)
+
 FAST_REVIEW_PASS_SCORE = 100
 FAST_REVIEW_FAIL_SCORE = 50
+# Editor ↔ FastReview 最大循环次数,防止极端情况下无限翻译
+MAX_EDIT_ATTEMPTS = 2
+
+# 典型 AI 腔中文书面语词汇,Editor 应该减少其密度
+AI_FLAVOR_KEYWORDS = (
+    "于是", "总之", "综上所述", "综合来看", "总的来说", "这一切", "一切的一切",
+    "仿佛", "似乎", "无疑", "显然", "不可否认", "不得不", "不禁",
+    "深深地", "静静地", "默默地", "悄悄地", "轻轻地", "缓缓地",
+    "然而", "与此同时", "不知不觉", "恍然大悟", "油然而生", "涌上心头",
+    "心头一震", "心中暗暗", "万分", "无比地", "令人难以忘怀",
+)
+
+
+def _count_ai_flavor(text: str) -> int:
+    if not text:
+        return 0
+    return sum(text.count(kw) for kw in AI_FLAVOR_KEYWORDS)
+
+
+_MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
+_FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
+
+
+def _parse_review_json(text: str) -> dict:
+    """容错解析:剥 markdown 代码块 + 抓第一个 JSON 对象,失败回退空白对象让调用方用默认值。"""
+    if not text:
+        return {}
+    cleaned = _MD_FENCE_RE.sub("", text).strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+    m = _FIRST_OBJ_RE.search(cleaned)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except json.JSONDecodeError:
+            pass
+    logger.warning("fast_review_json_parse_failed", extra={"raw_preview": cleaned[:200]})
+    return {}
+
+
+def _check_ai_flavor_reduced(raw: str, polished: str) -> bool:
+    """精修后需满足:AI 腔关键词密度下降 + 内容未被过度删减。"""
+    if not raw:
+        return bool(polished)
+    raw_count = _count_ai_flavor(raw)
+    polished_count = _count_ai_flavor(polished)
+    if raw_count > 0:
+        flavor_ok = polished_count <= raw_count * 0.7
+    else:
+        flavor_ok = polished_count <= max(1, len(polished) // 1000)
+    length_ok = len(polished) >= len(raw) * 0.5
+    return flavor_ok and length_ok
 
 
 class FastReviewAgent:
@@ -23,20 +81,21 @@ class FastReviewAgent:
         self, polished: str, raw: str, chapter_context: dict
     ) -> dict:
         prompt = (
-            "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文，"
-            "检查两点并返回严格 JSON：\n"
+            "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
+            "检查两点并返回严格 JSON:\n"
             "1. consistency_fixed: 精修文本是否修复了与设定/上下文的不一致\n"
             "2. beat_cohesion_ok: 节拍之间是否连贯\n"
-            '3. notes: 问题列表（字符串数组）\n\n'
+            "3. notes: 问题列表(字符串数组)\n"
+            "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
             f"### 章节上下文\n{json.dumps(chapter_context, ensure_ascii=False)}\n\n"
             f"### 原始草稿\n{raw}\n\n"
             f"### 精修文本\n{polished}\n\n"
-            "请返回 JSON："
+            "请返回 JSON:"
         )
         from novel_dev.llm import llm_factory
         client = llm_factory.get("FastReviewAgent", task="fast_review_check")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return json.loads(response.text)
+        return _parse_review_json(response.text)
 
     async def review(self, novel_id: str, chapter_id: str) -> FastReviewReport:
         state = await self.state_repo.get_state(novel_id)
@@ -55,7 +114,7 @@ class FastReviewAgent:
         polished = ch.polished_text or ""
 
         word_count_ok = abs(len(polished) - target) <= target * 0.1 if target > 0 else True
-        ai_flavor_reduced = len(polished) >= len(raw) * 0.5 if raw else len(polished) > 0
+        ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
 
         chapter_context = checkpoint.get("chapter_context", {})
         llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, chapter_context)
@@ -82,7 +141,14 @@ class FastReviewAgent:
             feedback=report.model_dump(),
         )
 
-        if passed:
+        edit_attempts = checkpoint.get("edit_attempt_count", 0)
+        if passed or edit_attempts >= MAX_EDIT_ATTEMPTS:
+            # 通过或已达编辑上限,都放行进 Librarian,避免死循环阻塞连载
+            if not passed:
+                report.notes.append(
+                    f"edit_attempts={edit_attempts} 已达上限 {MAX_EDIT_ATTEMPTS},跳过精修轮转"
+                )
+            checkpoint.pop("edit_attempt_count", None)
             await self.director.save_checkpoint(
                 novel_id,
                 phase=Phase.LIBRARIAN,
