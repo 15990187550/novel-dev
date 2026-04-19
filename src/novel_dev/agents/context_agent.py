@@ -79,7 +79,7 @@ class ContextAgent:
         pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
         style_profile = await self._load_style_profile(novel_id, checkpoint)
         worldview_doc = await self.doc_repo.get_latest_by_type(novel_id, "worldview")
-        worldview_summary = worldview_doc.content if worldview_doc else ""
+        worldview_summary = (worldview_doc.content or "")[:2000] if worldview_doc else ""
         prev_summary = await self._load_previous_chapter_summary(
             state.current_volume_id, chapter_plan
         )
@@ -153,7 +153,7 @@ class ContextAgent:
         result = []
         for entity in entities:
             latest = await self.version_repo.get_latest(entity.id)
-            state_str = str(latest.state) if latest else ""
+            state_str = str(latest.state)[:300] if latest else ""
             result.append(
                 EntityState(
                     entity_id=entity.id,
@@ -315,6 +315,9 @@ class ContextAgent:
         volume_id: Optional[str],
         chapter_plan: ChapterPlan,
     ) -> Optional[str]:
+        """构建结构化前情摘要:章节标题 + 章首铺垫 + 章末状态。
+        纯截尾(原先 text[-200:])会丢失角色目标与情感弧线,导致本章续写断链。
+        """
         if not volume_id or chapter_plan.chapter_number <= 1:
             return None
         prev = await self.chapter_repo.get_previous_chapter(volume_id, chapter_plan.chapter_number)
@@ -323,4 +326,21 @@ class ContextAgent:
         text = prev.polished_text or prev.raw_draft
         if not text:
             return None
-        return text[-200:] if len(text) > 200 else text
+
+        title = getattr(prev, "title", None) or f"第 {chapter_plan.chapter_number - 1} 章"
+        clean = text.strip()
+
+        OPENING_LEN = 400
+        ENDING_LEN = 800
+        if len(clean) <= OPENING_LEN + ENDING_LEN + 40:
+            body = clean
+        else:
+            opening = clean[:OPENING_LEN].rstrip()
+            ending = clean[-ENDING_LEN:].lstrip()
+            body = f"【章首 ~{OPENING_LEN} 字】\n{opening}\n\n...(中段略)...\n\n【章末 ~{ENDING_LEN} 字】\n{ending}"
+
+        return (
+            f"# 上一章「{title}」前情摘要\n"
+            f"(供本章承接人物状态、情感基调与悬念,避免重复交代已发生的事)\n\n"
+            f"{body}"
+        )
