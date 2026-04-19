@@ -240,6 +240,70 @@ class WriterAgent:
         text = "\n".join(f"- [{e.type}] {e.name}: {e.current_state[:300]}" for e in matched)
         return f"### 相关角色\n{text}"
 
+    async def _build_retrieval_message(
+        self, beat: BeatPlan, context: ChapterContext, novel_id: str,
+    ) -> str:
+        """Layer 3: Per-beat semantic retrieval for entities/docs/foreshadowings."""
+        if not self.embedding_service:
+            return self._fallback_retrieval(beat, context)
+
+        query = f"{beat.summary} {' '.join(beat.key_entities)}"
+        parts = []
+
+        try:
+            entities = await self.embedding_service.search_similar_entities(
+                novel_id=novel_id, query_text=query, limit=3
+            )
+            if entities:
+                entity_text = "\n".join(
+                    f"- [{e.doc_type}] {e.title}: {e.content_preview}" for e in entities
+                )
+                parts.append(f"### 相关角色/物品\n{entity_text}")
+        except Exception:
+            pass
+
+        try:
+            docs = await self.embedding_service.search_similar(
+                novel_id=novel_id, query_text=query, limit=2
+            )
+            if docs:
+                doc_text = "\n".join(
+                    f"- [{d.doc_type}] {d.title}: {d.content_preview}" for d in docs
+                )
+                parts.append(f"### 相关设定\n{doc_text}")
+        except Exception:
+            pass
+
+        beat_entities = set(beat.key_entities)
+        relevant_fs = [
+            fs for fs in context.pending_foreshadowings
+            if beat_entities & set(fs.get("related_entity_names", []))
+        ]
+        if relevant_fs:
+            fs_text = "\n".join(
+                f"- {fs['content']}（需自然嵌入，不要点破）" for fs in relevant_fs[:3]
+            )
+            parts.append(f"### 待嵌入伏笔\n{fs_text}")
+
+        return "\n\n".join(parts) if parts else self._fallback_retrieval(beat, context)
+
+    async def _generate_relay(self, beat_text: str, beat: BeatPlan) -> "NarrativeRelay":
+        """Generate narrative state snapshot after a beat is written."""
+        from novel_dev.schemas.context import NarrativeRelay
+        from novel_dev.agents._llm_helpers import call_and_parse
+        prompt = (
+            "你是一位叙事分析师。请阅读以下小说节拍正文，提取当前叙事状态。\n"
+            "返回严格 JSON：\n"
+            '{"scene_state":"...","emotional_tone":"...","new_info_revealed":"...","open_threads":"...","next_beat_hook":"..."}\n\n'
+            f"节拍计划: {beat.summary}\n\n"
+            f"正文:\n{beat_text[:2000]}\n\n"
+            "JSON:"
+        )
+        return await call_and_parse(
+            "WriterAgent", "generate_relay", prompt,
+            NarrativeRelay.model_validate_json, max_retries=2,
+        )
+
     def _build_style_guide_block(self, context: ChapterContext) -> str:
         """把 style_profile 单独置顶,避免 LLM 在长 JSON 中忽略它。"""
         sp = context.style_profile or {}
