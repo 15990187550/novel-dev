@@ -3,3 +3,5 @@
 *.egg-info/
 __pycache__/
 novel_output/
+src/novel_dev/web/node_modules/
+src/novel_dev/web/dist/

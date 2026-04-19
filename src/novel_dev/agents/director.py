@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.db.models import NovelState
+from novel_dev.services.log_service import log_service
 
 
 class Phase(str, Enum):
@@ -69,6 +70,7 @@ class NovelDirector:
             raise ValueError(f"Novel state not found for {novel_id}")
         current = Phase(state.current_phase)
         checkpoint = dict(state.checkpoint_data or {})
+        log_service.add_log(novel_id, "NovelDirector", f"开始推进: {current.value}")
 
         if current == Phase.BRAINSTORMING:
             from novel_dev.repositories.document_repo import DocumentRepository

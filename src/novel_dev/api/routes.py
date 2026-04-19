@@ -1,5 +1,8 @@
+import asyncio
+import json
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -713,3 +716,25 @@ async def get_archive_stats(novel_id: str, session: AsyncSession = Depends(get_s
         "archived_chapter_count": stats.get("archived_chapter_count", 0),
         "avg_word_count": stats.get("avg_word_count", 0),
     }
+
+
+@router.get("/api/novels/{novel_id}/logs/stream")
+async def stream_logs(novel_id: str):
+    from novel_dev.services.log_service import log_service as _log_service
+
+    q = _log_service.subscribe(novel_id)
+
+    async def event_generator():
+        try:
+            while True:
+                entry = await q.get()
+                yield f"data: {json.dumps(entry, ensure_ascii=False)}\n\n"
+        except asyncio.CancelledError:
+            _log_service.unsubscribe(novel_id, q)
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
