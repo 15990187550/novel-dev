@@ -27,6 +27,7 @@
             style="width: 100%;"
           />
           <el-button type="primary" size="small" style="margin-top: 8px; width: 100%;" @click="loadNovel">加载</el-button>
+          <el-button size="small" style="margin-top: 8px; width: 100%;" @click="createDialogVisible = true">新建小说</el-button>
         </div>
         <el-menu :default-active="currentView" @select="handleMenuSelect">
           <el-menu-item index="dashboard">仪表盘</el-menu-item>
@@ -306,6 +307,18 @@
     <el-drawer v-model="chapterDrawerVisible" :title="drawerTitle" size="60%">
       <div class="chapter-drawer-content">{{ drawerContent }}</div>
     </el-drawer>
+
+    <el-dialog v-model="createDialogVisible" title="新建小说" width="400px" :close-on-click-modal="false">
+      <el-form @submit.prevent="doCreateNovel">
+        <el-form-item label="小说标题">
+          <el-input v-model="newNovelTitle" placeholder="请输入小说标题" clearable ref="newNovelTitleRef" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creatingNovel" @click="doCreateNovel">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 
   <script src="https://unpkg.com/vue@3.4.21/dist/vue.global.js"></script>
@@ -346,6 +359,9 @@
         const agentNames = ['BrainstormAgent', 'VolumePlannerAgent', 'WriterAgent', 'CriticAgent', 'EditorAgent', 'FastReviewAgent', 'LibrarianAgent', 'ContextAgent'];
         const brainstormPrompt = ref('');
         const volumePlan = ref(null);
+        const createDialogVisible = ref(false);
+        const newNovelTitle = ref('');
+        const creatingNovel = ref(false);
 
         const phaseMap = {
           brainstorming: '脑暴中',
@@ -450,6 +466,30 @@
           }
         }
 
+        async function doCreateNovel() {
+          const title = newNovelTitle.value.trim();
+          if (!title) {
+            ElMessage.error('请输入小说标题');
+            return;
+          }
+          creatingNovel.value = true;
+          try {
+            const resp = await axios.post('/api/novels', { title });
+            const data = resp.data;
+            ElMessage.success('小说创建成功');
+            createDialogVisible.value = false;
+            newNovelTitle.value = '';
+            await fetchNovels();
+            selectedNovel.value = data.novel_id;
+            await loadNovel();
+          } catch (e) {
+            const msg = e.response?.data?.detail || '创建失败';
+            ElMessage.error(msg);
+          } finally {
+            creatingNovel.value = false;
+          }
+        }
+
         async function refreshDashboard() {
           try {
             const [s, a] = await Promise.all([
@@ -458,16 +498,26 @@
             ]);
             novelState.value = s.data;
             archiveStats.value = a.data;
-            if (novelState.value.current_chapter_id) {
+          } catch (e) {
+            ElMessage.error('加载小说状态失败');
+            return;
+          }
+          if (novelState.value.current_chapter_id) {
+            try {
               const ch = await axios.get(`/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}`);
               currentChapter.value = ch.data;
               const textResp = await axios.get(`/api/novels/${novelId.value}/chapters/${novelState.value.current_chapter_id}/text`);
               currentChapter.value.word_count = textResp.data.word_count;
-            } else {
+            } catch (e) {
               currentChapter.value = null;
+              if (e.response && e.response.status === 404) {
+                ElMessage.warning('当前章节已不存在，请重新选择章节');
+              } else {
+                ElMessage.error('加载章节信息失败');
+              }
             }
-          } catch (e) {
-            ElMessage.error('加载小说状态失败');
+          } else {
+            currentChapter.value = null;
           }
         }
 
@@ -655,12 +705,13 @@
           entityTab, llmConfig, envConfig, savingConfig, savingEnv,
           activeConfigPanels, agentNames, phaseLabel, currentVolumeChapter,
           brainstormPrompt, brainstormButtonText, volumePlan,
+          createDialogVisible, newNovelTitle, creatingNovel,
           statusTagType, buildSpacelineTree,
           canBrainstorm, canVolumePlan, canContext, canDraft, canAdvance, canLibrarian,
           filteredEntities, pendingSynopsis, loadNovel, doAction, fetchDocuments, approvePending,
           handleFileChange, uploadFile, fetchEncyclopedia, fetchChapters,
           openChapterDrawer, fetchConfig, saveLLMConfig, saveEnvConfig, handleMenuSelect,
-          copyBrainstormPrompt,
+          copyBrainstormPrompt, doCreateNovel,
         };
       },
     });
