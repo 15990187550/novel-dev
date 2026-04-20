@@ -46,3 +46,13 @@ export const getLLMConfig = () => api.get('/config/llm').then(r => r.data)
 export const saveLLMConfig = (config) => api.post('/config/llm', { config }).then(r => r.data)
 export const getEnvConfig = () => api.get('/config/env').then(r => r.data)
 export const saveEnvConfig = (env) => api.post('/config/env', env).then(r => r.data)
+export const getDocuments = (id, docType) =>
+  api.get(`/novels/${id}/documents`, { params: docType ? { doc_type: docType } : {} }).then(r => r.data)
+export const getDocumentDetail = (id, documentId) =>
+  api.get(`/novels/${id}/documents/${documentId}`).then(r => r.data)
+export const getDocumentVersions = (id, docType) =>
+  api.get(`/novels/${id}/documents/types/${docType}/versions`).then(r => r.data)
+export const saveDocumentVersion = (id, documentId, payload) =>
+  api.post(`/novels/${id}/documents/${documentId}/versions`, payload).then(r => r.data)
+export const reindexDocument = (id, documentId) =>
+  api.post(`/novels/${id}/documents/${documentId}/reindex`).then(r => r.data)

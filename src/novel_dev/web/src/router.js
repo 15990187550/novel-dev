@@ -13,6 +13,7 @@ const routes = [
   { path: '/foreshadowings', component: () => import('@/views/Foreshadowings.vue') },
   { path: '/config', component: () => import('@/views/Config.vue') },
   { path: '/logs', component: () => import('@/views/RealtimeLog.vue') },
+  { path: '/document-library', component: () => import('@/views/DocumentLibrary.vue') },
 ]
 
 export default createRouter({ history: createWebHistory(), routes })

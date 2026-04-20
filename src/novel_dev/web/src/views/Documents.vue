@@ -21,17 +21,33 @@
         </el-table-column>
       </el-table>
     </div>
+    <div v-if="store.documents.length" class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
+      <h3 class="font-bold mb-3">已生成文档</h3>
+      <el-table :data="store.documents">
+        <el-table-column prop="title" label="标题" />
+        <el-table-column prop="doc_type" label="类型" />
+        <el-table-column prop="version" label="版本" width="90" />
+        <el-table-column prop="word_count" label="字数" width="90" />
+        <el-table-column label="操作" width="120">
+          <template #default="{ row }">
+            <el-button size="small" @click="goLibrary(row.id)">查看详情</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </div>
     </template>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel.js'
 import { uploadDocument, approvePending } from '@/api.js'
 import { ElMessage } from 'element-plus'
 
 const store = useNovelStore()
+const router = useRouter()
 const fileInput = ref(null)
 const selectedFile = ref(null)
 const fileContent = ref('')
@@ -69,6 +85,10 @@ async function approve(id) {
 
 function fetchIfReady() {
   if (store.novelId) store.fetchDocuments()
+}
+
+function goLibrary(documentId) {
+  router.push({ path: '/document-library', query: { documentId } })
 }
 
 onMounted(fetchIfReady)
