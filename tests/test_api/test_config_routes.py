@@ -11,7 +11,7 @@ app.include_router(config_router)
 @pytest.mark.asyncio
 async def test_get_llm_config(tmp_path, monkeypatch):
     config_path = tmp_path / "llm_config.yaml"
-    config_path.write_text("defaults:\n  provider: openai_compatible\n  model: gpt-4\n")
+    config_path.write_text("defaults:\n  timeout: 30\nmodels:\n  gpt-4:\n    provider: openai_compatible\n    model: gpt-4\n")
 
     from novel_dev.config import Settings
     settings = Settings(llm_config_path=str(config_path))
@@ -21,7 +21,7 @@ async def test_get_llm_config(tmp_path, monkeypatch):
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/api/config/llm")
         assert resp.status_code == 200
-        assert resp.json()["defaults"]["model"] == "gpt-4"
+        assert resp.json()["defaults"]["timeout"] == 30
 
 
 @pytest.mark.asyncio
@@ -33,11 +33,11 @@ async def test_save_llm_config(tmp_path, monkeypatch):
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
-        resp = await client.post("/api/config/llm", json={"config": {"defaults": {"provider": "anthropic", "model": "claude-3"}}})
+        resp = await client.post("/api/config/llm", json={"config": {"defaults": {"timeout": 30}, "models": {"gpt-4": {"provider": "openai_compatible", "model": "gpt-4"}}}})
         assert resp.status_code == 200
         assert resp.json()["saved"] is True
         content = config_path.read_text()
-        assert "anthropic" in content
+        assert "openai_compatible" in content
 
 
 @pytest.mark.asyncio
