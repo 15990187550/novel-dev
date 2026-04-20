@@ -21,8 +21,11 @@ class TimelineRepository:
         await self.session.flush()
         return entry
 
-    async def get_current_tick(self) -> Optional[int]:
-        result = await self.session.execute(select(Timeline.tick).order_by(Timeline.tick.desc()))
+    async def get_current_tick(self, novel_id: Optional[str] = None) -> Optional[int]:
+        stmt = select(Timeline.tick).order_by(Timeline.tick.desc())
+        if novel_id is not None:
+            stmt = stmt.where(Timeline.novel_id == novel_id)
+        result = await self.session.execute(stmt)
         row = result.scalar_one_or_none()
         return row
 

@@ -40,7 +40,6 @@ class WriterAgent:
         if not checkpoint.get("chapter_context"):
             raise ValueError("chapter_context missing in checkpoint_data")
 
-        checkpoint = dict(state.checkpoint_data or {})
         progress = checkpoint.get("drafting_progress", {})
         start_idx = progress.get("beat_index", 0)
 
@@ -127,6 +126,8 @@ class WriterAgent:
                 current_volume_id=state.current_volume_id,
                 current_chapter_id=state.current_chapter_id,
             )
+            # Save incremental draft so resume can restore from chapter.raw_draft
+            await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
 
         clean_text = _strip_anchors(raw_draft)
         metadata = DraftMetadata(
@@ -136,7 +137,6 @@ class WriterAgent:
             embedded_foreshadowings=embedded_foreshadowings,
         )
 
-        await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
         if self.embedding_service:
             try:
                 asyncio.create_task(self.embedding_service.index_chapter(chapter_id))

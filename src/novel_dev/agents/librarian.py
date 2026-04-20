@@ -14,6 +14,7 @@ from novel_dev.schemas.librarian import (
     NewForeshadowing,
     NewRelationship,
 )
+from novel_dev.llm.models import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,8 @@ class LibrarianAgent:
         spaceline_repo = SpacelineRepository(self.session)
         timeline_repo = TimelineRepository(self.session)
 
-        active_fs = await foreshadowing_repo.list_active()
-        current_tick = await timeline_repo.get_current_tick() or 0
+        active_fs = await foreshadowing_repo.list_active(novel_id=novel_id)
+        current_tick = await timeline_repo.get_current_tick(novel_id=novel_id) or 0
 
         return {
             "novel_id": novel_id,
@@ -84,7 +85,7 @@ class LibrarianAgent:
 
     async def _call_llm(self, prompt: str) -> str:
         client = llm_factory.get("LibrarianAgent", task="extract")
-        response = await client.acomplete(prompt)
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
         return response.text
 
     def _build_soft_state_prompt(self, polished_text: str, primary: ExtractionResult) -> str:

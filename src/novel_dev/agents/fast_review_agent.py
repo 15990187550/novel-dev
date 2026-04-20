@@ -33,6 +33,13 @@ def _count_ai_flavor(text: str) -> int:
     return sum(text.count(kw) for kw in AI_FLAVOR_KEYWORDS)
 
 
+def _word_count(text: str) -> int:
+    """CJK word count: strip whitespace and count characters."""
+    if not text:
+        return 0
+    return len(text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+
+
 _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 
@@ -113,11 +120,23 @@ class FastReviewAgent:
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
 
-        word_count_ok = abs(len(polished) - target) <= target * 0.1 if target > 0 else True
+        word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
 
+        # Trim context to only what FastReview needs, avoiding retrieval bloat
         chapter_context = checkpoint.get("chapter_context", {})
-        llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, chapter_context)
+        trimmed_context = {
+            "chapter_plan": chapter_context.get("chapter_plan", {}),
+            "style_profile": chapter_context.get("style_profile", {}),
+            "worldview_summary": chapter_context.get("worldview_summary", ""),
+            "previous_chapter_summary": chapter_context.get("previous_chapter_summary", ""),
+            "active_entities": [
+                {"name": e.get("name"), "type": e.get("type"), "current_state": e.get("current_state", "")[:200]}
+                for e in chapter_context.get("active_entities", [])
+            ],
+            "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
+        }
+        llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context)
         consistency_fixed = llm_result.get("consistency_fixed", True)
         beat_cohesion_ok = llm_result.get("beat_cohesion_ok", True)
         notes = llm_result.get("notes", [])
