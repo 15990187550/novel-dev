@@ -1,52 +1,47 @@
 defaults:
-  provider: openai_compatible
   timeout: 30
   retries: 2
   temperature: 0.7
-  # 温度分层原则:
-  # - 创意型任务(Writer.generate_beat/rewrite_beat, Brainstorm.generate_synopsis): 0.85-1.0
-  # - 规划型任务(VolumePlanner.generate/revise, 中间改写): 0.6-0.75
-  # - 判断/评分型任务(Critic, FastReview, VolumePlanner.score): 0.2-0.3
-  # - 结构化抽取(Librarian, Extractor, Classifier): 0.1-0.3
+
+models:
+  kimi-for-coding:
+    provider: anthropic
+    model: kimi-for-coding
+    base_url: https://api.kimi.com/coding
+  minimax-2-7:
+    provider: minimax
+    model: Minimax-2.7
+    base_url: https://api.minimaxi.com/v1
 
 embedding:
   provider: openai_compatible
-  model: text-embedding-3-small
-  base_url: https://api.openai.com/v1
+  model: bge-m3
+  base_url: http://127.0.0.1:9997/v1
   timeout: 30
   retries: 3
-  dimensions: 1536
+  dimensions: 1024
 
 agents:
   brainstorm_agent:
-    provider: anthropic
-    model: claude-opus-4-6
+    model: kimi-for-coding
     timeout: 120
     retries: 3
     temperature: 0.9
     fallback:
-      provider: openai_compatible
-      model: gpt-4.1
-      base_url: https://api.openai.com/v1
+      model: minimax-2-7
       timeout: 60
-      retries: 2
+      temperature: 0.9
     tasks:
       generate_synopsis:
         temperature: 0.9
       score_synopsis:
         temperature: 0.2
-      revise_synopsis:
-        temperature: 0.7
 
   volume_planner_agent:
-    provider: openai_compatible
-    model: kimi-k2.5
-    base_url: https://api.moonshot.cn/v1
+    model: kimi-for-coding
     timeout: 60
-    temperature: 0.7
     fallback:
-      provider: anthropic
-      model: claude-sonnet-4-6
+      model: minimax-2-7
       timeout: 120
     tasks:
       generate_volume_plan:
@@ -59,77 +54,51 @@ agents:
         temperature: 0.65
 
   setting_extractor_agent:
-    provider: openai_compatible
-    model: kimi-k2.5
-    base_url: https://api.moonshot.cn/v1
+    model: minimax-2-7
     timeout: 60
     fallback:
-      provider: anthropic
-      model: claude-sonnet-4-6
-      timeout: 60
+      model: kimi-for-coding
 
   style_profiler_agent:
-    provider: openai_compatible
-    model: kimi-k2.5
-    base_url: https://api.moonshot.cn/v1
+    model: minimax-2-7
     timeout: 60
     fallback:
-      provider: anthropic
-      model: claude-sonnet-4-6
-      timeout: 60
+      model: kimi-for-coding
 
   file_classifier:
-    provider: openai_compatible
-    model: kimi-k2.5
-    base_url: https://api.moonshot.cn/v1
+    model: minimax-2-7
     timeout: 30
     fallback:
-      provider: anthropic
-      model: claude-haiku-4-5-20251001
-      timeout: 30
+      model: kimi-for-coding
 
   context_agent:
-    provider: openai_compatible
-    model: kimi-k2.5
-    base_url: https://api.moonshot.cn/v1
+    model: minimax-2-7
     timeout: 30
     fallback:
-      provider: anthropic
-      model: claude-haiku-4-5-20251001
-      timeout: 30
+      model: kimi-for-coding
 
   writer_agent:
-    provider: minimax
-    model: MiniMax-Text-01
-    base_url: https://api.minimax.chat/v1
+    model: minimax-2-7
     timeout: 60
     temperature: 0.9
     fallback:
-      provider: openai_compatible
-      model: gpt-4.1
-      base_url: https://api.openai.com/v1
-      timeout: 60
+      model: kimi-for-coding
     tasks:
       generate_beat:
         temperature: 0.95
       rewrite_beat:
         temperature: 0.8
       generate_relay:
-        temperature: 0.2
-        provider: anthropic
-        model: claude-haiku-4-5-20251001
+        model: kimi-for-coding
         timeout: 15
+        temperature: 0.2
 
   critic_agent:
-    provider: anthropic
-    model: claude-sonnet-4-6
+    model: kimi-for-coding
     timeout: 60
     temperature: 0.3
     fallback:
-      provider: openai_compatible
-      model: kimi-k2.5
-      base_url: https://api.moonshot.cn/v1
-      timeout: 60
+      model: minimax-2-7
     tasks:
       score_chapter:
         temperature: 0.2
@@ -137,43 +106,31 @@ agents:
         temperature: 0.2
 
   editor_agent:
-    provider: anthropic
-    model: claude-sonnet-4-6
+    model: kimi-for-coding
     timeout: 60
     temperature: 0.6
     fallback:
-      provider: openai_compatible
-      model: kimi-k2.5
-      base_url: https://api.moonshot.cn/v1
-      timeout: 60
+      model: minimax-2-7
     tasks:
       polish_beat:
         temperature: 0.6
 
   fast_review_agent:
-    provider: anthropic
-    model: claude-haiku-4-5-20251001
+    model: kimi-for-coding
     timeout: 30
     temperature: 0.2
     fallback:
-      provider: openai_compatible
-      model: kimi-k2.5
-      base_url: https://api.moonshot.cn/v1
-      timeout: 30
+      model: minimax-2-7
     tasks:
       fast_review_check:
         temperature: 0.2
 
   librarian_agent:
-    provider: anthropic
-    model: claude-sonnet-4-6
+    model: kimi-for-coding
     timeout: 60
     temperature: 0.2
     fallback:
-      provider: openai_compatible
-      model: gpt-4.1
-      base_url: https://api.openai.com/v1
-      timeout: 60
+      model: minimax-2-7
     tasks:
       extract:
         temperature: 0.15
