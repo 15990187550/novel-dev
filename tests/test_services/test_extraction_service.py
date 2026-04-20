@@ -98,3 +98,81 @@ async def test_approve_nonexistent_pending(async_session):
     svc = ExtractionService(async_session)
     docs = await svc.approve_pending("pe_does_not_exist")
     assert docs == []
+
+
+@pytest.mark.asyncio
+async def test_list_approved_documents_returns_novel_scoped_documents(async_session):
+    svc = ExtractionService(async_session)
+    await svc.doc_repo.create("d1", "n1", "worldview", "World", "world")
+    await svc.doc_repo.create("d2", "n1", "concept", "People", "people")
+    await svc.doc_repo.create("d3", "n2", "worldview", "Other", "other")
+
+    docs = await svc.list_approved_documents("n1")
+
+    assert [doc.id for doc in docs] == ["d2", "d1"]
+
+
+@pytest.mark.asyncio
+async def test_get_approved_document_returns_none_for_other_novel(async_session):
+    svc = ExtractionService(async_session)
+    await svc.doc_repo.create("d1", "n1", "worldview", "World", "world")
+    await svc.doc_repo.create("d2", "n2", "worldview", "Other", "other")
+
+    doc = await svc.get_approved_document("n1", "d1")
+    missing = await svc.get_approved_document("n1", "d2")
+
+    assert doc is not None
+    assert doc.id == "d1"
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_list_document_versions_returns_versions_for_doc_type(async_session):
+    svc = ExtractionService(async_session)
+    await svc.doc_repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)
+    await svc.doc_repo.create("d2", "n1", "style_profile", "v2", "content2", version=2)
+
+    versions = await svc.list_document_versions("n1", "d1")
+
+    assert [doc.id for doc in versions] == ["d2", "d1"]
+
+
+@pytest.mark.asyncio
+async def test_save_document_version_indexes_embedding_when_service_available(async_session):
+    embedding_service = AsyncMock()
+    svc = ExtractionService(async_session, embedding_service=embedding_service)
+    original = await svc.doc_repo.create("d1", "n1", "worldview", "v1", "content1", version=1)
+
+    saved = await svc.save_document_version("n1", original.id, title="v2", content="content2")
+
+    assert saved.version == 2
+    embedding_service.index_document.assert_awaited_once_with(saved.id)
+
+
+@pytest.mark.asyncio
+async def test_reindex_document_indexes_existing_document(async_session):
+    embedding_service = AsyncMock()
+    svc = ExtractionService(async_session, embedding_service=embedding_service)
+    doc = await svc.doc_repo.create("d1", "n1", "worldview", "v1", "content1", version=1)
+
+    result = await svc.reindex_document("n1", doc.id)
+
+    assert result is doc
+    embedding_service.index_document.assert_awaited_once_with(doc.id)
+
+
+@pytest.mark.asyncio
+async def test_approve_pending_indexes_created_documents(async_session, mock_llm):
+    embedding_service = AsyncMock()
+    svc = ExtractionService(async_session, embedding_service=embedding_service)
+    pe = await svc.process_upload(
+        novel_id="n1",
+        filename="setting.txt",
+        content="世界观：天玄大陆。主角林风，外门弟子。",
+    )
+
+    docs = await svc.approve_pending(pe.id)
+
+    assert len(docs) > 0
+    assert embedding_service.index_document.await_count == len(docs)
+    embedding_service.index_document.assert_any_await(docs[0].id)

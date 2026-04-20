@@ -35,3 +35,72 @@ async def test_get_by_type_and_version(async_session):
     doc = await repo.get_by_type_and_version("n1", "style_profile", 1)
     assert doc is not None
     assert doc.id == "d1"
+
+
+@pytest.mark.asyncio
+async def test_list_by_novel_returns_all_documents_in_updated_order(async_session):
+    repo = DocumentRepository(async_session)
+    first = await repo.create("d1", "n1", "worldview", "World", "world")
+    second = await repo.create("d2", "n1", "concept", "People", "people")
+    await repo.create("d3", "n2", "worldview", "Other", "other")
+
+    docs = await repo.list_by_novel("n1")
+
+    assert [doc.id for doc in docs] == [second.id, first.id]
+
+
+@pytest.mark.asyncio
+async def test_get_by_id_scopes_document_to_novel(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "worldview", "World", "world")
+    await repo.create("d2", "n2", "worldview", "Other", "other")
+
+    doc = await repo.get_by_id_for_novel("n1", "d1")
+    missing = await repo.get_by_id_for_novel("n1", "d2")
+
+    assert doc is not None
+    assert doc.id == "d1"
+    assert missing is None
+
+
+@pytest.mark.asyncio
+async def test_list_versions_returns_matching_type_versions_descending(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)
+    await repo.create("d2", "n1", "style_profile", "v2", "content2", version=2)
+    await repo.create("d3", "n1", "worldview", "world", "content3", version=5)
+
+    versions = await repo.list_versions("n1", "style_profile")
+
+    assert [doc.id for doc in versions] == ["d2", "d1"]
+
+
+@pytest.mark.asyncio
+async def test_save_new_version_increments_version_from_latest(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)
+
+    saved = await repo.save_new_version(
+        doc_id="d2",
+        novel_id="n1",
+        doc_type="style_profile",
+        title="v2",
+        content="content2",
+    )
+
+    assert saved.version == 2
+
+
+@pytest.mark.asyncio
+async def test_save_new_version_starts_at_one_when_type_has_no_documents(async_session):
+    repo = DocumentRepository(async_session)
+
+    saved = await repo.save_new_version(
+        doc_id="d1",
+        novel_id="n1",
+        doc_type="style_profile",
+        title="v1",
+        content="content1",
+    )
+
+    assert saved.version == 1

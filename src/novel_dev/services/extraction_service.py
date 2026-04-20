@@ -138,28 +138,65 @@ class ExtractionService:
                         pass
                 old = StyleProfile(style_guide=latest.content, style_config=old_config)
                 merged = self.merger.merge(old, new_profile)
-                version = latest.version + 1
-                doc = await self.doc_repo.create(
+                doc = await self.doc_repo.save_new_version(
                     doc_id=f"doc_{uuid.uuid4().hex[:8]}",
                     novel_id=pe.novel_id,
                     doc_type="style_profile",
                     title=merged.merged_profile.style_config.model_dump_json(),
                     content=merged.merged_profile.style_guide,
-                    version=version,
                 )
             else:
-                doc = await self.doc_repo.create(
+                doc = await self.doc_repo.save_new_version(
                     doc_id=f"doc_{uuid.uuid4().hex[:8]}",
                     novel_id=pe.novel_id,
                     doc_type="style_profile",
                     title=new_profile.style_config.model_dump_json(),
                     content=new_profile.style_guide,
-                    version=1,
                 )
             docs.append(doc)
 
         await self.pending_repo.update_status(pe_id, "approved")
+        await self._index_documents(docs)
         return docs
+
+    async def list_approved_documents(self, novel_id: str) -> List[NovelDocument]:
+        return await self.doc_repo.list_by_novel(novel_id)
+
+    async def get_approved_document(self, novel_id: str, doc_id: str) -> Optional[NovelDocument]:
+        return await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+
+    async def list_document_versions(self, novel_id: str, doc_id: str) -> List[NovelDocument]:
+        doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+        if doc is None:
+            return []
+        return await self.doc_repo.list_versions(novel_id, doc.doc_type)
+
+    async def save_document_version(self, novel_id: str, doc_id: str, title: str, content: str) -> Optional[NovelDocument]:
+        doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+        if doc is None:
+            return None
+        saved = await self.doc_repo.save_new_version(
+            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type=doc.doc_type,
+            title=title,
+            content=content,
+        )
+        await self._index_documents([saved])
+        return saved
+
+    async def reindex_document(self, novel_id: str, doc_id: str) -> Optional[NovelDocument]:
+        doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+        if doc is None:
+            return None
+        await self._index_documents([doc])
+        return doc
+
+    async def _index_documents(self, docs: List[NovelDocument]) -> None:
+        if self.embedding_service is None:
+            return
+        for doc in docs:
+            await self.embedding_service.index_document(doc.id)
 
     async def get_active_style_profile(self, novel_id: str) -> Optional[NovelDocument]:
         state = await self.state_repo.get_state(novel_id)
