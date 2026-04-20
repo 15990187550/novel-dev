@@ -409,6 +409,98 @@ async def rollback_style_profile(novel_id: str, req: RollbackRequest, session: A
     return {"rolled_back_to_version": req.version}
 
 
+class SaveDocumentVersionRequest(BaseModel):
+    title: str
+    content: str
+
+
+@router.get("/api/novels/{novel_id}/documents")
+async def list_approved_documents(novel_id: str, doc_type: Optional[str] = None, session: AsyncSession = Depends(get_session)):
+    repo = DocumentRepository(session)
+    docs = await repo.list_by_novel(novel_id, doc_type=doc_type)
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "doc_type": d.doc_type,
+                "title": d.title,
+                "version": d.version,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+                "content_preview": (d.content or "")[:200],
+                "word_count": _word_count(d.content),
+                "has_embedding": d.vector_embedding is not None,
+            }
+            for d in docs
+        ]
+    }
+
+
+@router.get("/api/novels/{novel_id}/documents/{document_id}")
+async def get_document_detail(novel_id: str, document_id: str, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    doc = await svc.get_approved_document(novel_id, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return {
+        "id": doc.id,
+        "doc_type": doc.doc_type,
+        "title": doc.title,
+        "content": doc.content,
+        "version": doc.version,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+        "has_embedding": doc.vector_embedding is not None,
+    }
+
+
+@router.get("/api/novels/{novel_id}/documents/types/{doc_type}/versions")
+async def list_document_versions(novel_id: str, doc_type: str, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    docs = await svc.list_document_versions(novel_id, doc_type)
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "title": d.title,
+                "version": d.version,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            }
+            for d in docs
+        ]
+    }
+
+
+@router.post("/api/novels/{novel_id}/documents/{document_id}/versions")
+async def save_document_version(novel_id: str, document_id: str, req: SaveDocumentVersionRequest, session: AsyncSession = Depends(get_session)):
+    if not req.title.strip() or not req.content.strip():
+        raise HTTPException(status_code=422, detail="title and content are required")
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    doc = await svc.save_document_version(novel_id, document_id, req.title, req.content)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await session.commit()
+    return {
+        "id": doc.id,
+        "doc_type": doc.doc_type,
+        "title": doc.title,
+        "version": doc.version,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+    }
+
+
+@router.post("/api/novels/{novel_id}/documents/{document_id}/reindex")
+async def reindex_document(novel_id: str, document_id: str, session: AsyncSession = Depends(get_session)):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    doc = await svc.reindex_document(novel_id, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await session.commit()
+    return {"id": doc.id, "reindexed": True}
+
+
 @router.post("/api/novels/{novel_id}/chapters/{chapter_id}/context")
 async def prepare_chapter_context(
     novel_id: str,

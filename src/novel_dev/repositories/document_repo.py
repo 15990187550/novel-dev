@@ -123,12 +123,12 @@ class DocumentRepository:
         )
         return result.scalar_one_or_none()
 
-    async def list_by_novel(self, novel_id: str) -> List[NovelDocument]:
-        result = await self.session.execute(
-            select(NovelDocument)
-            .where(NovelDocument.novel_id == novel_id)
-            .order_by(NovelDocument.updated_at.desc())
-        )
+    async def list_by_novel(self, novel_id: str, doc_type: Optional[str] = None) -> List[NovelDocument]:
+        stmt = select(NovelDocument).where(NovelDocument.novel_id == novel_id)
+        if doc_type:
+            stmt = stmt.where(NovelDocument.doc_type == doc_type)
+        stmt = stmt.order_by(NovelDocument.updated_at.desc())
+        result = await self.session.execute(stmt)
         return result.scalars().all()
 
     async def get_by_type(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
