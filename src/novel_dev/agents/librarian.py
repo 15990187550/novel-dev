@@ -27,8 +27,9 @@ from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.services.entity_service import EntityService
-from novel_dev.llm import llm_factory
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.log_service import log_service
+from novel_dev.agents._llm_helpers import call_and_parse, call_and_parse_model
 
 
 def _parse_soft_state_json(text: str) -> dict:
@@ -110,14 +111,19 @@ class LibrarianAgent:
         )
 
     async def _extract_soft_state(
-        self, polished_text: str, primary: ExtractionResult
+        self, polished_text: str, primary: ExtractionResult, novel_id: str = ""
     ) -> tuple[list, list]:
         """返回 (character_updates, new_relationships) 补充列表。失败时返回空以不影响硬事实抽取。"""
         prompt = self._build_soft_state_prompt(polished_text, primary)
+
+        def parser(text: str) -> dict:
+            return _parse_soft_state_json(text)
+
         try:
-            client = llm_factory.get("LibrarianAgent", task="extract_relationships")
-            response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-            payload = _parse_soft_state_json(response.text)
+            payload = await call_and_parse(
+                "LibrarianAgent", "extract_relationships", prompt,
+                parser, max_retries=2, novel_id=novel_id
+            )
             updates_raw = payload.get("character_updates", []) or []
             rels_raw = payload.get("new_relationships", []) or []
             updates = []
@@ -128,7 +134,8 @@ class LibrarianAgent:
                         state=u.get("state", {}) or {},
                         diff_summary=u.get("diff_summary", {}) or {"source": "soft_state_pass"},
                     ))
-                except Exception:
+                except Exception as exc:
+                    log_service.add_log(novel_id, "LibrarianAgent", f"软状态更新解析失败: {exc}", level="warning")
                     continue
             rels = []
             for r in rels_raw:
@@ -139,24 +146,30 @@ class LibrarianAgent:
                         relation_type=r.get("relation_type") or r.get("type", "unspecified"),
                         meta=r.get("meta") or {},
                     ))
-                except Exception:
+                except Exception as exc:
+                    log_service.add_log(novel_id, "LibrarianAgent", f"软状态关系解析失败: {exc}", level="warning")
                     continue
             return updates, rels
         except Exception as exc:
             logger.warning("librarian_soft_state_pass_failed", extra={"error": str(exc)})
+            log_service.add_log(novel_id, "LibrarianAgent", f"软状态提取失败: {exc}", level="warning")
             return [], []
 
     async def extract(self, novel_id: str, chapter_id: str, polished_text: str) -> ExtractionResult:
+        log_service.add_log(novel_id, "LibrarianAgent", f"开始提取世界状态: {chapter_id}")
         context = await self._load_context(novel_id, chapter_id)
         prompt = self._build_prompt(polished_text, context)
-        response = await self._call_llm(prompt)
-        extraction = ExtractionResult.model_validate_json(response)
+        extraction = await call_and_parse_model(
+            "LibrarianAgent", "extract", prompt, ExtractionResult, novel_id=novel_id
+        )
 
         # 第二 pass:补抽隐性的情感/关系变化(硬事实常挤掉软状态)
-        soft_updates, soft_rels = await self._extract_soft_state(polished_text, extraction)
+        log_service.add_log(novel_id, "LibrarianAgent", "开始第二 pass (软状态/关系) 提取")
+        soft_updates, soft_rels = await self._extract_soft_state(polished_text, extraction, novel_id=novel_id)
         if soft_updates:
             existing_ids = {u.entity_id for u in extraction.character_updates}
             extraction.character_updates.extend(u for u in soft_updates if u.entity_id not in existing_ids)
+            log_service.add_log(novel_id, "LibrarianAgent", f"补充软状态更新: {len(soft_updates)} 条")
         if soft_rels:
             existing_pairs = {
                 (r.source_entity_id, r.target_entity_id, r.relation_type)
@@ -166,6 +179,13 @@ class LibrarianAgent:
                 r for r in soft_rels
                 if (r.source_entity_id, r.target_entity_id, r.relation_type) not in existing_pairs
             )
+            log_service.add_log(novel_id, "LibrarianAgent", f"补充关系更新: {len(soft_rels)} 条")
+        log_service.add_log(
+            novel_id, "LibrarianAgent",
+            f"提取完成: 时间线 {len(extraction.timeline_events)} 条, 新实体 {len(extraction.new_entities)} 个, "
+            f"角色更新 {len(extraction.character_updates)} 条, 回收伏笔 {len(extraction.foreshadowings_recovered)} 条, "
+            f"新伏笔 {len(extraction.new_foreshadowings)} 条, 新关系 {len(extraction.new_relationships)} 条"
+        )
         return extraction
 
     def fallback_extract(self, polished_text: str, checkpoint_data: dict) -> ExtractionResult:
@@ -221,6 +241,7 @@ class LibrarianAgent:
         )
 
     async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
+        log_service.add_log(novel_id, "LibrarianAgent", f"开始持久化提取结果: {chapter_id}")
         timeline_repo = TimelineRepository(self.session)
         spaceline_repo = SpacelineRepository(self.session)
         entity_svc = EntityService(self.session, self.embedding_service)
@@ -280,3 +301,4 @@ class LibrarianAgent:
                 chapter_id=chapter_id,
                 novel_id=novel_id,
             )
+        log_service.add_log(novel_id, "LibrarianAgent", "持久化完成")

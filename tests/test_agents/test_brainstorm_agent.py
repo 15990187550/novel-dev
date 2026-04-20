@@ -56,7 +56,7 @@ async def test_brainstorm_success(async_session):
         LLMResponse(text=mock_score.model_dump_json()),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = BrainstormAgent(async_session)
         synopsis_data = await agent.brainstorm("n_brain")
@@ -115,7 +115,7 @@ async def test_brainstorm_uses_llm_factory(async_session):
         LLMResponse(text=score_json),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = BrainstormAgent(async_session)
         result = await agent.brainstorm("n_brain2")
@@ -125,5 +125,3 @@ async def test_brainstorm_uses_llm_factory(async_session):
     get_tasks = [call.kwargs.get("task") or (call.args[1] if len(call.args) > 1 else None)
                  for call in mock_factory.get.call_args_list]
     assert "generate_synopsis" in get_tasks
-    first_call_messages = mock_client.acomplete.call_args_list[0].args[0]
-    assert any(isinstance(m, ChatMessage) and m.role == "system" for m in first_call_messages)

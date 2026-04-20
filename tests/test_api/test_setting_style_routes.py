@@ -3,6 +3,7 @@ from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 
 from novel_dev.api.routes import router, get_session
+from novel_dev.llm.exceptions import LLMTimeoutError
 
 app = FastAPI()
 app.include_router(router)
@@ -33,6 +34,29 @@ async def test_upload_setting_and_approve(async_session):
             resp3 = await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe_id})
             assert resp3.status_code == 200
             assert len(resp3.json()["documents"]) > 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_upload_returns_504_when_setting_extraction_times_out(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    async def mock_extract(self, text: str, novel_id: str = ""):
+        raise LLMTimeoutError("Request timed out")
+
+    monkeypatch.setattr("novel_dev.agents.setting_extractor.SettingExtractorAgent.extract", mock_extract)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "setting.txt", "content": "世界观：天玄大陆。主角林风。"},
+            )
+            assert resp.status_code == 504
+            assert "超时" in resp.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 

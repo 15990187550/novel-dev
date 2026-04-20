@@ -20,7 +20,7 @@ async def test_librarian_calls_llm_factory(async_session):
         LLMResponse(text='{"character_updates": [], "new_relationships": []}'),
     ]
 
-    with patch("novel_dev.agents.librarian.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         result = await agent.extract("n1", "c1", "Lin Feng leveled up after the battle.")
 
@@ -39,7 +39,14 @@ async def test_librarian_llm_extraction_success(async_session):
         timeline_events=[{"tick": 10, "narrative": "战斗结束"}],
         new_entities=[{"type": "character", "name": "Lin Feng", "state": {"level": 2}}],
     )
-    with patch.object(agent, "_call_llm", new_callable=AsyncMock, return_value=mock_result.model_dump_json()):
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=mock_result.model_dump_json()),
+        LLMResponse(text='{"character_updates": [], "new_relationships": []}'),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
         result = await agent.extract("n1", "c1", "Lin Feng leveled up after the battle.")
     assert len(result.timeline_events) == 1
     assert result.timeline_events[0].tick == 10

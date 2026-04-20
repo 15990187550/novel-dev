@@ -13,6 +13,7 @@ from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepo
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.log_service import log_service
 from novel_dev.db.models import NovelDocument, PendingExtraction
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,11 @@ class ExtractionService:
         self.entity_svc = EntityService(session, embedding_service)
 
     async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
-        classification = await self.classifier.classify(filename, content)
+        log_service.add_log(novel_id, "ExtractionService", f"处理上传文件: {filename}")
+        classification = await self.classifier.classify(filename, content, novel_id)
 
         if classification.file_type == "setting":
-            extracted = await self.setting_agent.extract(content)
+            extracted = await self.setting_agent.extract(content, novel_id)
             raw_result = extracted.model_dump()
             proposed_entities = []
             for c in extracted.character_profiles:
@@ -45,6 +47,7 @@ class ExtractionService:
             if extracted.factions:
                 proposed_entities.append({"type": "faction", "name": "extracted_factions", "data": {"factions": extracted.factions}})
 
+            log_service.add_log(novel_id, "ExtractionService", f"设定提取完成，待审核: {len(proposed_entities)} 个实体")
             return await self.pending_repo.create(
                 pe_id=f"pe_{uuid.uuid4().hex[:8]}",
                 novel_id=novel_id,
@@ -53,8 +56,9 @@ class ExtractionService:
                 proposed_entities=proposed_entities,
             )
         else:
-            profile = await self.style_agent.profile(content)
+            profile = await self.style_agent.profile(content, novel_id)
             raw_result = profile.model_dump()
+            log_service.add_log(novel_id, "ExtractionService", "风格样本提取完成，待审核")
             return await self.pending_repo.create(
                 pe_id=f"pe_{uuid.uuid4().hex[:8]}",
                 novel_id=novel_id,
@@ -101,10 +105,13 @@ class ExtractionService:
                 )
                 docs.append(doc)
                 for c in chars:
+                    char_data = c if isinstance(c, dict) else c.model_dump()
                     await self.entity_svc.create_entity(
                         entity_id=f"ent_{uuid.uuid4().hex[:8]}",
                         entity_type="character",
-                        name=c.get("name", "unknown"),
+                        name=char_data.get("name", "unknown"),
+                        novel_id=pe.novel_id,
+                        initial_state=char_data,
                     )
 
             items = raw.get("important_items", [])
@@ -119,10 +126,13 @@ class ExtractionService:
                 )
                 docs.append(doc)
                 for i in items:
+                    item_data = i if isinstance(i, dict) else i.model_dump()
                     await self.entity_svc.create_entity(
                         entity_id=f"ent_{uuid.uuid4().hex[:8]}",
                         entity_type="item",
-                        name=i.get("name", "unknown"),
+                        name=item_data.get("name", "unknown"),
+                        novel_id=pe.novel_id,
+                        initial_state=item_data,
                     )
 
         else:
@@ -134,8 +144,8 @@ class ExtractionService:
                 if latest.title:
                     try:
                         old_config = StyleConfig(**json.loads(latest.title))
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log_service.add_log(pe.novel_id, "ExtractionService", f"旧风格配置解析失败: {exc}", level="warning")
                 old = StyleProfile(style_guide=latest.content, style_config=old_config)
                 merged = self.merger.merge(old, new_profile)
                 version = latest.version + 1
@@ -159,6 +169,7 @@ class ExtractionService:
             docs.append(doc)
 
         await self.pending_repo.update_status(pe_id, "approved")
+        log_service.add_log(pe.novel_id, "ExtractionService", f"审核通过，生成 {len(docs)} 份文档")
         return docs
 
     async def get_active_style_profile(self, novel_id: str) -> Optional[NovelDocument]:

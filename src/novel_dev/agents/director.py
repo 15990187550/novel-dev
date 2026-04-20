@@ -67,6 +67,7 @@ class NovelDirector:
     async def advance(self, novel_id: str) -> NovelState:
         state = await self.resume(novel_id)
         if not state:
+            log_service.add_log(novel_id, "NovelDirector", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         current = Phase(state.current_phase)
         checkpoint = dict(state.checkpoint_data or {})
@@ -76,17 +77,22 @@ class NovelDirector:
             from novel_dev.repositories.document_repo import DocumentRepository
             docs = await DocumentRepository(self.session).get_by_type(novel_id, "synopsis")
             if not docs:
+                log_service.add_log(novel_id, "NovelDirector", "synopsis 未生成", level="error")
                 raise ValueError("Synopsis not generated yet. Call POST /brainstorm first.")
+            log_service.add_log(novel_id, "NovelDirector", "brainstorming → volume_planning")
             return await self.save_checkpoint(
                 novel_id, Phase.VOLUME_PLANNING, checkpoint,
                 volume_id=state.current_volume_id,
                 chapter_id=state.current_chapter_id,
             )
         elif current == Phase.VOLUME_PLANNING:
+            log_service.add_log(novel_id, "NovelDirector", "运行 VolumePlannerAgent")
             return await self._run_volume_planner(state)
         elif current == Phase.CONTEXT_PREPARATION:
             if not checkpoint.get("chapter_context"):
+                log_service.add_log(novel_id, "NovelDirector", "章节上下文未准备", level="error")
                 raise ValueError("Chapter context not prepared. Call POST /chapters/{cid}/context first.")
+            log_service.add_log(novel_id, "NovelDirector", "context_preparation → drafting")
             return await self.save_checkpoint(
                 novel_id, Phase.DRAFTING, checkpoint,
                 volume_id=state.current_volume_id,
@@ -95,32 +101,42 @@ class NovelDirector:
         elif current == Phase.DRAFTING:
             chapter_id = state.current_chapter_id
             if not chapter_id:
+                log_service.add_log(novel_id, "NovelDirector", "drafting 阶段未设置当前章节", level="error")
                 raise ValueError("No current chapter set for DRAFTING phase")
             from novel_dev.repositories.chapter_repo import ChapterRepository
             ch = await ChapterRepository(self.session).get_by_id(chapter_id)
             if not ch or not ch.raw_draft:
+                log_service.add_log(novel_id, "NovelDirector", "章节草稿未生成", level="error")
                 raise ValueError("Chapter draft not generated. Call POST /chapters/{cid}/draft first.")
+            log_service.add_log(novel_id, "NovelDirector", "drafting → reviewing")
             return await self.save_checkpoint(
                 novel_id, Phase.REVIEWING, checkpoint,
                 volume_id=state.current_volume_id,
                 chapter_id=chapter_id,
             )
         elif current == Phase.REVIEWING:
+            log_service.add_log(novel_id, "NovelDirector", "运行 CriticAgent")
             return await self._run_critic(state)
         elif current == Phase.EDITING:
+            log_service.add_log(novel_id, "NovelDirector", "运行 EditorAgent")
             return await self._run_editor(state)
         elif current == Phase.FAST_REVIEWING:
+            log_service.add_log(novel_id, "NovelDirector", "运行 FastReviewAgent")
             return await self._run_fast_review(state)
         elif current == Phase.LIBRARIAN:
+            log_service.add_log(novel_id, "NovelDirector", "运行 LibrarianAgent")
             return await self._run_librarian(state)
         elif current == Phase.COMPLETED:
+            log_service.add_log(novel_id, "NovelDirector", "completed → 继续下一章/卷")
             return await self._continue_to_next_chapter(novel_id)
         else:
+            log_service.add_log(novel_id, "NovelDirector", f"无法从 {current.value} 自动推进", level="error")
             raise ValueError(f"Cannot auto-advance from {current}")
 
     async def run_librarian(self, novel_id: str) -> NovelState:
         state = await self.resume(novel_id)
         if not state:
+            log_service.add_log(novel_id, "NovelDirector", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         return await self._run_librarian(state)
 
@@ -160,10 +176,12 @@ class NovelDirector:
 
         chapter_id = state.current_chapter_id
         if not chapter_id:
+            log_service.add_log(state.novel_id, "NovelDirector", "librarian 阶段未设置当前章节", level="error")
             raise ValueError("No current chapter set for LIBRARIAN phase")
 
         ch = await ChapterRepository(self.session).get_by_id(chapter_id)
         if not ch or not ch.polished_text:
+            log_service.add_log(state.novel_id, "NovelDirector", "章节精修文本缺失", level="error")
             raise ValueError("Chapter polished text missing")
 
         from novel_dev.services.embedding_service import EmbeddingService
@@ -174,8 +192,10 @@ class NovelDirector:
         try:
             extraction = await agent.extract(state.novel_id, chapter_id, ch.polished_text)
         except Exception as llm_error:
+            log_service.add_log(state.novel_id, "NovelDirector", f"Librarian 提取失败: {llm_error}", level="warning")
             try:
                 extraction = agent.fallback_extract(ch.polished_text, state.checkpoint_data)
+                log_service.add_log(state.novel_id, "NovelDirector", "Librarian 使用 fallback 提取")
             except Exception as fallback_error:
                 checkpoint = dict(state.checkpoint_data)
                 checkpoint["librarian_error"] = str(llm_error)
@@ -186,6 +206,7 @@ class NovelDirector:
                     volume_id=state.current_volume_id,
                     chapter_id=chapter_id,
                 )
+                log_service.add_log(state.novel_id, "NovelDirector", f"Librarian fallback 也失败: {fallback_error}", level="error")
                 raise RuntimeError(
                     f"Librarian extraction failed: LLM={llm_error}, fallback={fallback_error}"
                 )
@@ -195,6 +216,7 @@ class NovelDirector:
         settings = Settings()
         archive_svc = ArchiveService(self.session, settings.markdown_output_dir)
         await archive_svc.archive(state.novel_id, chapter_id)
+        log_service.add_log(state.novel_id, "NovelDirector", f"章节归档完成: {chapter_id}")
 
         checkpoint = dict(state.checkpoint_data)
         checkpoint["last_archived_chapter_id"] = chapter_id
@@ -205,6 +227,7 @@ class NovelDirector:
             volume_id=state.current_volume_id,
             chapter_id=chapter_id,
         )
+        log_service.add_log(state.novel_id, "NovelDirector", "进入 completed 阶段")
 
         return await self._continue_to_next_chapter(state.novel_id)
 
@@ -220,6 +243,7 @@ class NovelDirector:
             if ch_plan.get("chapter_id") == current_chapter_id and idx + 1 < len(chapters):
                 next_plan = chapters[idx + 1]
                 checkpoint["current_chapter_plan"] = next_plan
+                log_service.add_log(novel_id, "NovelDirector", f"进入下一章: {next_plan.get('title')}")
                 return await self.save_checkpoint(
                     novel_id,
                     Phase.CONTEXT_PREPARATION,
@@ -251,6 +275,7 @@ class NovelDirector:
         checkpoint["pending_volume_plans"] = checkpoint.get("pending_volume_plans", []) + [placeholder_volume]
         checkpoint["volume_completed"] = True
         checkpoint.pop("current_chapter_plan", None)
+        log_service.add_log(novel_id, "NovelDirector", f"当前卷完成，进入第 {current_volume_number + 1} 卷规划")
 
         return await self.save_checkpoint(
             novel_id,

@@ -18,7 +18,7 @@ def test_factory_get_embedder_returns_embedder():
     embedder = factory.get_embedder()
     assert embedder is not None
     assert embedder.model == "text-embedding-3-small"
-    assert embedder.dimensions == 1536
+    assert embedder.dimensions == 1024
 
 
 def test_factory_get_embedder_missing_config_raises():

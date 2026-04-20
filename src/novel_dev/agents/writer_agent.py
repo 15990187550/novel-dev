@@ -9,6 +9,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
+from novel_dev.services.log_service import log_service
 from novel_dev.services.embedding_service import EmbeddingService
 
 
@@ -29,8 +30,10 @@ class WriterAgent:
         self.embedding_service = embedding_service
 
     async def write(self, novel_id: str, context: ChapterContext, chapter_id: str) -> DraftMetadata:
+        log_service.add_log(novel_id, "WriterAgent", f"开始写章节草稿: {context.chapter_plan.title}")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "WriterAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
 
         if state.current_phase != Phase.DRAFTING.value:
@@ -52,6 +55,8 @@ class WriterAgent:
         relay_history: List[NarrativeRelay] = []
         inner_beats: List[str] = []
 
+        if start_idx > 0:
+            log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
         # Resume from checkpoint if previous run was interrupted
         if start_idx > 0:
             if checkpoint.get("relay_history"):
@@ -78,6 +83,7 @@ class WriterAgent:
                 continue
             is_last = (idx == total_beats - 1)
             last_beat_text = inner_beats[-1] if inner_beats else ""
+            log_service.add_log(novel_id, "WriterAgent", f"生成第 {idx + 1}/{total_beats} 个节拍: {beat.summary[:50]}...")
 
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
@@ -85,6 +91,7 @@ class WriterAgent:
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
+                log_service.add_log(novel_id, "WriterAgent", f"第 {idx + 1} 个节拍过短({len(inner)}字)，重写")
                 inner = await self._rewrite_angle(
                     beat, inner, context,
                     relay_history, last_beat_text,
@@ -98,9 +105,10 @@ class WriterAgent:
 
             # Generate narrative relay baton
             try:
-                relay = await self._generate_relay(inner, beat)
+                relay = await self._generate_relay(inner, beat, novel_id)
                 relay_history.append(relay)
-            except Exception:
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"叙事接力生成失败: {exc}", level="warning")
                 relay_history.append(NarrativeRelay(
                     scene_state=beat.summary,
                     emotional_tone=beat.target_mood,
@@ -113,6 +121,7 @@ class WriterAgent:
                 if fs["content"] in inner and fs["id"] not in embedded_foreshadowings:
                     embedded_foreshadowings.append(fs["id"])
 
+            log_service.add_log(novel_id, "WriterAgent", f"第 {idx + 1}/{total_beats} 个节拍完成，{len(inner)} 字")
             checkpoint["drafting_progress"] = {
                 "beat_index": idx + 1,
                 "total_beats": total_beats,
@@ -130,8 +139,10 @@ class WriterAgent:
             await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
 
         clean_text = _strip_anchors(raw_draft)
+        total_words = len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+        log_service.add_log(novel_id, "WriterAgent", f"草稿完成，总字数: {total_words}，嵌入伏笔: {len(embedded_foreshadowings)} 条")
         metadata = DraftMetadata(
-            total_words=len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", "")),
+            total_words=total_words,
             beat_coverage=beat_coverage,
             style_violations=[],
             embedded_foreshadowings=embedded_foreshadowings,
@@ -140,8 +151,8 @@ class WriterAgent:
         if self.embedding_service:
             try:
                 asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
-            except Exception:
-                pass
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "drafted")
 
         checkpoint["draft_metadata"] = metadata.model_dump()
@@ -152,6 +163,7 @@ class WriterAgent:
             volume_id=state.current_volume_id,
             chapter_id=state.current_chapter_id,
         )
+        log_service.add_log(novel_id, "WriterAgent", "进入 reviewing 阶段")
 
         return metadata
 
@@ -259,8 +271,8 @@ class WriterAgent:
                     f"- [{e.doc_type}] {e.title}: {e.content_preview}" for e in entities
                 )
                 parts.append(f"### 相关角色/物品\n{entity_text}")
-        except Exception:
-            pass
+        except Exception as exc:
+            log_service.add_log(novel_id, "WriterAgent", f"实体检索失败: {exc}", level="warning")
 
         try:
             docs = await self.embedding_service.search_similar(
@@ -271,8 +283,8 @@ class WriterAgent:
                     f"- [{d.doc_type}] {d.title}: {d.content_preview}" for d in docs
                 )
                 parts.append(f"### 相关设定\n{doc_text}")
-        except Exception:
-            pass
+        except Exception as exc:
+            log_service.add_log(novel_id, "WriterAgent", f"文档检索失败: {exc}", level="warning")
 
         beat_entities = set(beat.key_entities)
         relevant_fs = [
@@ -287,7 +299,7 @@ class WriterAgent:
 
         return "\n\n".join(parts) if parts else self._fallback_retrieval(beat, context)
 
-    async def _generate_relay(self, beat_text: str, beat: BeatPlan) -> "NarrativeRelay":
+    async def _generate_relay(self, beat_text: str, beat: BeatPlan, novel_id: str = "") -> "NarrativeRelay":
         """Generate narrative state snapshot after a beat is written."""
         from novel_dev.schemas.context import NarrativeRelay
         from novel_dev.agents._llm_helpers import call_and_parse
@@ -301,7 +313,7 @@ class WriterAgent:
         )
         return await call_and_parse(
             "WriterAgent", "generate_relay", prompt,
-            NarrativeRelay.model_validate_json, max_retries=2,
+            NarrativeRelay.model_validate_json, max_retries=2, novel_id=novel_id,
         )
 
     def _build_style_guide_block(self, context: ChapterContext) -> str:

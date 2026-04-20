@@ -26,6 +26,7 @@ async def test_brainstorm_and_volume_plan_flow(async_session, test_client, mock_
     await DocumentRepository(async_session).create(
         "d1", "n_outline", "worldview", "WV", "天玄大陆"
     )
+    await async_session.commit()
 
     async with test_client as client:
         resp = await client.post("/api/novels/n_outline/brainstorm")
@@ -51,6 +52,7 @@ async def test_get_synopsis(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_syn", "worldview", "WV", "大陆"
     )
+    await async_session.commit()
     async with test_client as client:
         await client.post("/api/novels/n_syn/brainstorm")
         resp = await client.get("/api/novels/n_syn/synopsis")
@@ -63,6 +65,7 @@ async def test_get_volume_plan(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_vp", "worldview", "WV", "大陆"
     )
+    await async_session.commit()
     async with test_client as client:
         await client.post("/api/novels/n_vp/brainstorm")
         await client.post("/api/novels/n_vp/volume_plan", json={})

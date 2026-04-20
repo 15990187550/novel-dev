@@ -18,7 +18,8 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.agents._llm_helpers import call_and_parse
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.services.log_service import log_service
 
 
 class VolumePlannerAgent:
@@ -34,10 +35,13 @@ class VolumePlannerAgent:
         self.director = NovelDirector(session)
 
     async def plan(self, novel_id: str, volume_number: Optional[int] = None) -> VolumePlan:
+        log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成分卷规划")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "VolumePlannerAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         if state.current_phase != Phase.VOLUME_PLANNING.value:
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"当前阶段 {state.current_phase} 不允许规划分卷", level="error")
             raise ValueError(f"Cannot plan volume from phase {state.current_phase}")
 
         checkpoint = dict(state.checkpoint_data or {})
@@ -49,18 +53,23 @@ class VolumePlannerAgent:
 
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)
+        log_service.add_log(novel_id, "VolumePlannerAgent", f"规划第 {volume_number} 卷")
 
         world_snapshot = await self._load_world_snapshot(novel_id) if volume_number > 1 else None
-        volume_plan = await self._generate_volume_plan(synopsis, volume_number, world_snapshot)
+        volume_plan = await self._generate_volume_plan(synopsis, volume_number, world_snapshot, novel_id)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         while True:
-            score = await self._generate_score(volume_plan)
+            score = await self._generate_score(volume_plan, novel_id)
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"第 {attempt + 1} 次评分: overall={score.overall}")
             if self._is_acceptable(score):
+                log_service.add_log(novel_id, "VolumePlannerAgent", f"评分通过，overall={score.overall}")
                 break
             attempt += 1
             checkpoint["volume_plan_attempt_count"] = attempt
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"评分未通过，开始第 {attempt} 次修订")
             if attempt >= 3:
+                log_service.add_log(novel_id, "VolumePlannerAgent", "已达最大修订次数", level="error")
                 await self.director.save_checkpoint(
                     novel_id,
                     phase=Phase.VOLUME_PLANNING,
@@ -69,11 +78,12 @@ class VolumePlannerAgent:
                     chapter_id=state.current_chapter_id,
                 )
                 raise RuntimeError("Max volume plan attempts exceeded")
-            volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score))
+            volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), novel_id)
 
         checkpoint["current_volume_plan"] = volume_plan.model_dump()
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
         checkpoint["volume_plan_attempt_count"] = 0
+        log_service.add_log(novel_id, "VolumePlannerAgent", f"分卷规划完成: {volume_plan.title}，共 {len(volume_plan.chapters)} 章")
 
         await self.doc_repo.create(
             doc_id=f"doc_{uuid.uuid4().hex[:8]}",
@@ -90,6 +100,7 @@ class VolumePlannerAgent:
             volume_id=volume_plan.volume_id,
             chapter_id=volume_plan.chapters[0].chapter_id,
         )
+        log_service.add_log(novel_id, "VolumePlannerAgent", "进入 context_preparation 阶段")
 
         return volume_plan
 
@@ -137,8 +148,9 @@ class VolumePlannerAgent:
         return 1
 
     async def _generate_volume_plan(
-        self, synopsis: SynopsisData, volume_number: int, world_snapshot: Optional[dict] = None
+        self, synopsis: SynopsisData, volume_number: int, world_snapshot: Optional[dict] = None, novel_id: str = ""
     ) -> VolumePlan:
+        log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成卷纲")
         MAX_CHARS = 12000
         truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
 
@@ -169,10 +181,11 @@ class VolumePlannerAgent:
             f"当前卷号:{volume_number}"
             f"{world_block}"
         )
-        return await call_and_parse(
-            "VolumePlannerAgent", "generate_volume_plan", prompt,
-            VolumePlan.model_validate_json, max_retries=3
+        result = await call_and_parse_model(
+            "VolumePlannerAgent", "generate_volume_plan", prompt, VolumePlan, max_retries=3, novel_id=novel_id
         )
+        log_service.add_log(novel_id, "VolumePlannerAgent", f"卷纲生成完成: {result.title}")
+        return result
 
     async def _load_world_snapshot(self, novel_id: str) -> dict:
         """为跨卷延续加载世界状态快照:活跃实体、未回收伏笔、近期时间线。"""
@@ -195,31 +208,36 @@ class VolumePlannerAgent:
             tl_text = "\n".join(tl_lines) if tl_lines else "无"
 
             return {"entities": entities_text, "foreshadowings": fs_text, "timeline": tl_text}
-        except Exception:
+        except Exception as exc:
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"世界快照加载失败: {exc}", level="warning")
             return {}
 
-    async def _generate_score(self, plan: VolumePlan) -> VolumeScoreResult:
+    async def _generate_score(self, plan: VolumePlan, novel_id: str = "") -> VolumeScoreResult:
+        log_service.add_log(novel_id, "VolumePlannerAgent", "开始评分卷纲")
         prompt = (
             "你是一个小说分卷规划评审专家。请根据以下 VolumePlan JSON 进行多维度评分，"
             "返回严格符合 VolumeScoreResult Schema 的 JSON。"
             f"\n\n{plan.model_dump_json()}"
         )
-        return await call_and_parse(
-            "VolumePlannerAgent", "score_volume_plan", prompt,
-            VolumeScoreResult.model_validate_json, max_retries=3
+        result = await call_and_parse_model(
+            "VolumePlannerAgent", "score_volume_plan", prompt, VolumeScoreResult, max_retries=3, novel_id=novel_id
         )
+        log_service.add_log(novel_id, "VolumePlannerAgent", f"评分完成: overall={result.overall}")
+        return result
 
-    async def _revise_volume_plan(self, plan: VolumePlan, feedback: str) -> VolumePlan:
+    async def _revise_volume_plan(self, plan: VolumePlan, feedback: str, novel_id: str = "") -> VolumePlan:
+        log_service.add_log(novel_id, "VolumePlannerAgent", "开始修订卷纲")
         prompt = (
             "你是一个小说分卷规划专家。请根据以下 VolumePlan 和评审反馈进行修正，"
             "返回严格符合 VolumePlan Schema 的 JSON。"
             f"\n\nVolumePlan:\n{plan.model_dump_json()}"
             f"\n\n反馈：{feedback}"
         )
-        return await call_and_parse(
-            "VolumePlannerAgent", "revise_volume_plan", prompt,
-            VolumePlan.model_validate_json, max_retries=3
+        result = await call_and_parse_model(
+            "VolumePlannerAgent", "revise_volume_plan", prompt, VolumePlan, max_retries=3, novel_id=novel_id
         )
+        log_service.add_log(novel_id, "VolumePlannerAgent", "卷纲修订完成")
+        return result
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
         """Extract chapter plan from VolumeBeat without mutating input."""

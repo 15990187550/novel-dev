@@ -27,7 +27,9 @@ class FallbackDriver(BaseDriver):
         self.agent = agent
         self.task = task
 
-    async def acomplete(self, messages: Union[str, List[ChatMessage]], config: TaskConfig) -> LLMResponse:
+    async def acomplete(self, messages: Union[str, List[ChatMessage]], config: Optional[TaskConfig] = None) -> LLMResponse:
+        if config is None:
+            config = getattr(self.primary, 'config', None)
         try:
             return await self.primary.acomplete(messages, config)
         except LLMConfigError:

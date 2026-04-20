@@ -16,6 +16,7 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.services.log_service import log_service
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,10 @@ class ContextAgent:
         self.embedding_service = embedding_service
 
     async def assemble(self, novel_id: str, chapter_id: str) -> ChapterContext:
+        log_service.add_log(novel_id, "ContextAgent", f"开始组装章节上下文: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "ContextAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
 
         if not self.director.can_transition(Phase(state.current_phase), Phase.DRAFTING):
@@ -48,9 +51,11 @@ class ContextAgent:
             raise ValueError("current_chapter_plan missing in checkpoint_data")
 
         chapter_plan = ChapterPlan.model_validate(chapter_plan_data)
+        log_service.add_log(novel_id, "ContextAgent", f"章节计划: {chapter_plan.title}，共 {len(chapter_plan.beats)} 个节拍")
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
+        log_service.add_log(novel_id, "ContextAgent", f"加载 {len(active_entities)} 个活跃实体")
 
         # Semantic entity retrieval
         related_entities: list[EntityState] = []
@@ -73,10 +78,14 @@ class ContextAgent:
                         ))
             except Exception as exc:
                 logger.warning("entity_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+                log_service.add_log(novel_id, "ContextAgent", f"实体语义检索失败: {exc}", level="warning")
 
         location_context = await self._load_location_context(chapter_plan, novel_id)
+        log_service.add_log(novel_id, "ContextAgent", f"地点上下文: {location_context.current}")
         timeline_events = await self._load_timeline_events(checkpoint, novel_id)
+        log_service.add_log(novel_id, "ContextAgent", f"加载 {len(timeline_events)} 条时间线事件")
         pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
+        log_service.add_log(novel_id, "ContextAgent", f"待回收伏笔: {len(pending_foreshadowings)} 条")
         style_profile = await self._load_style_profile(novel_id, checkpoint)
         worldview_doc = await self.doc_repo.get_latest_by_type(novel_id, "worldview")
         worldview_summary = (worldview_doc.content or "")[:2000] if worldview_doc else ""
@@ -95,6 +104,7 @@ class ContextAgent:
                 relevant_docs = [r for r in results if r.doc_id != exclude_id]
             except Exception as exc:
                 logger.warning("semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+                log_service.add_log(novel_id, "ContextAgent", f"语义检索失败: {exc}", level="warning")
 
         # Semantic chapter retrieval for style consistency
         similar_chapters: list[SimilarDocument] = []
@@ -109,6 +119,7 @@ class ContextAgent:
                 similar_chapters = results
             except Exception as exc:
                 logger.warning("chapter_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
+                log_service.add_log(novel_id, "ContextAgent", f"章节语义检索失败: {exc}", level="warning")
 
         context = ChapterContext(
             chapter_plan=chapter_plan,
@@ -130,6 +141,7 @@ class ContextAgent:
             "total_beats": len(chapter_plan.beats),
             "current_word_count": 0,
         }
+        log_service.add_log(novel_id, "ContextAgent", "章节上下文组装完成，进入 drafting 阶段")
         await self.director.save_checkpoint(
             novel_id,
             phase=Phase.DRAFTING,
@@ -164,7 +176,7 @@ class ContextAgent:
             )
         return result
 
-    async def _analyze_context_needs(self, chapter_plan: ChapterPlan, novel_id: str) -> dict:
+    async def _analyze_context_needs(self, chapter_plan: ChapterPlan, novel_id: str = "") -> dict:
         prompt = (
             "你是一位小说场景分析师。请根据以下章节计划，分析写这一章需要哪些上下文信息。\n"
             "返回严格 JSON：\n"
@@ -183,7 +195,7 @@ class ContextAgent:
         )
         return await call_and_parse(
             "ContextAgent", "analyze_context_needs", prompt,
-            json.loads, max_retries=3
+            json.loads, max_retries=3, novel_id=novel_id
         )
 
     async def _load_location_context(
@@ -252,7 +264,7 @@ class ContextAgent:
         )
         return await call_and_parse(
             "ContextAgent", "build_scene_context", prompt,
-            LocationContext.model_validate_json, max_retries=3
+            LocationContext.model_validate_json, max_retries=3, novel_id=novel_id
         )
 
     async def _load_timeline_events(self, checkpoint: dict, novel_id: str) -> List[dict]:

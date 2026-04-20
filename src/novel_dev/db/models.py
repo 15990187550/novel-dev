@@ -19,7 +19,7 @@ class VectorCompat(TypeDecorator):
     impl = JSON
     cache_ok = True
 
-    def __init__(self, dimensions: int = 1536):
+    def __init__(self, dimensions: int = 1024):
         super().__init__()
         self.dimensions = dimensions
 
@@ -43,7 +43,7 @@ class Entity(Base):
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
-    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
 
@@ -145,7 +145,7 @@ class Chapter(Base):
     fast_review_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     fast_review_feedback: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
 
 
 class NovelDocument(Base):
@@ -156,7 +156,7 @@ class NovelDocument(Base):
     doc_type: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
-    vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1536), nullable=True)
+    vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1024), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
 

@@ -52,6 +52,13 @@ def mock_llm_factory(monkeypatch):
 
         if agent == "BrainstormAgent" and task == "generate_synopsis":
             mock_client.acomplete.return_value = LLMResponse(text=default_synopsis.model_dump_json())
+        elif agent == "BrainstormAgent" and task == "score_synopsis":
+            from novel_dev.schemas.outline import SynopsisScoreResult
+            mock_client.acomplete.return_value = LLMResponse(text=SynopsisScoreResult(
+                overall=85, logline_specificity=85, conflict_concreteness=85,
+                character_arc_depth=85, structural_turns=80, hook_strength=85,
+                summary_feedback="good",
+            ).model_dump_json())
         elif agent == "VolumePlannerAgent" and task == "score_volume_plan":
             mock_client.acomplete.return_value = LLMResponse(text=VolumeScoreResult(
                 overall=88, outline_fidelity=88, character_plot_alignment=88,

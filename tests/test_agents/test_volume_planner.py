@@ -139,7 +139,7 @@ async def test_plan_volume_max_attempts(async_session):
 
     agent = VolumePlannerAgent(async_session)
 
-    async def _mock_generate_score(plan):
+    async def _mock_generate_score(plan, novel_id=""):
         return VolumeScoreResult(
             overall=50,
             outline_fidelity=50,
@@ -151,7 +151,7 @@ async def test_plan_volume_max_attempts(async_session):
             summary_feedback="too weak",
         )
 
-    async def _mock_revise_volume_plan(plan, feedback):
+    async def _mock_revise_volume_plan(plan, feedback, novel_id=""):
         return plan
 
     agent._generate_score = _mock_generate_score

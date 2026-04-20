@@ -34,6 +34,34 @@ async def test_extract_success():
 
 
 @pytest.mark.asyncio
+async def test_extract_coerces_dict_power_system_to_string():
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text='''{
+  "worldview": "天玄大陆",
+  "power_system": {
+    "体系名称": "一世法",
+    "阶段": ["凡境", "神通境"],
+    "说明": "以道果为核心"
+  },
+  "factions": "青云宗",
+  "character_profiles": [],
+  "important_items": [],
+  "plot_synopsis": "林风拜入青云宗"
+}'''
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = SettingExtractorAgent()
+        result = await agent.extract("任意文本")
+
+    assert "体系名称: 一世法" in result.power_system
+    assert "阶段: ['凡境', '神通境']" in result.power_system
+    assert "说明: 以道果为核心" in result.power_system
+
+
+@pytest.mark.asyncio
 async def test_extract_retry_then_success():
     extracted = ExtractedSetting(worldview="大陆")
     mock_client = AsyncMock()

@@ -1,7 +1,8 @@
-from typing import List
-from pydantic import BaseModel
+from typing import List, Union
+from pydantic import BaseModel, field_validator
 
-from novel_dev.agents._llm_helpers import call_and_parse
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.services.log_service import log_service
 
 
 class CharacterProfile(BaseModel):
@@ -17,17 +18,69 @@ class ImportantItem(BaseModel):
     significance: str = ""
 
 
+class FactionInfo(BaseModel):
+    name: str = ""
+    description: str = ""
+    relationship_with_protagonist: str = ""
+
+
+def _stringify_structured_value(value):
+    if isinstance(value, dict):
+        parts = []
+        for key, val in value.items():
+            if isinstance(val, dict):
+                sub = ", ".join(f"{k}={sub_v}" for k, sub_v in val.items())
+                parts.append(f"{key}: {sub}")
+            else:
+                parts.append(f"{key}: {val}")
+        return "\n".join(parts)
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, dict):
+                parts.append(_stringify_structured_value(item))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return value
+
+
 class ExtractedSetting(BaseModel):
-    worldview: str = ""
-    power_system: str = ""
-    factions: str = ""
+    worldview: Union[str, dict, list] = ""
+    power_system: Union[str, dict, list] = ""
+    factions: Union[str, List[FactionInfo], dict] = ""
     character_profiles: List[CharacterProfile] = []
     important_items: List[ImportantItem] = []
-    plot_synopsis: str = ""
+    plot_synopsis: Union[str, dict, list] = ""
+
+    @field_validator("worldview", "power_system", "plot_synopsis", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, v):
+        return _stringify_structured_value(v)
+
+    @field_validator("factions", mode="before")
+    @classmethod
+    def _coerce_factions(cls, v):
+        if isinstance(v, dict):
+            return _stringify_structured_value(v)
+        if isinstance(v, list):
+            parts = []
+            for item in v:
+                if isinstance(item, dict):
+                    name = item.get("name", "")
+                    desc = item.get("description", "")
+                    rel = item.get("relationship_with_protagonist", "")
+                    parts.append(f"{name}: {desc}" + (f" (与主角关系: {rel})" if rel else ""))
+                else:
+                    parts.append(str(item))
+            return "\n".join(parts)
+        return v
 
 
 class SettingExtractorAgent:
-    async def extract(self, text: str) -> ExtractedSetting:
+    async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
+        if novel_id:
+            log_service.add_log(novel_id, "SettingExtractorAgent", f"开始提取设定，文本长度: {len(text)} 字")
         MAX_CHARS = 24000
         truncated = text[:MAX_CHARS]
         prompt = (
@@ -41,7 +94,12 @@ class SettingExtractorAgent:
             "6. plot_synopsis: 剧情梗概\n\n"
             f"文档内容：\n\n{truncated}"
         )
-        return await call_and_parse(
-            "SettingExtractorAgent", "extract_setting", prompt,
-            ExtractedSetting.model_validate_json, max_retries=3
+        result = await call_and_parse_model(
+            "SettingExtractorAgent", "extract_setting", prompt, ExtractedSetting, max_retries=3, novel_id=novel_id,
         )
+        if novel_id:
+            log_service.add_log(
+                novel_id, "SettingExtractorAgent",
+                f"设定提取完成: 人物 {len(result.character_profiles)} 个, 物品 {len(result.important_items)} 个"
+            )
+        return result

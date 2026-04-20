@@ -32,6 +32,8 @@ export const uploadDocument = (id, filename, content) =>
 export const approvePending = (id, pendingId) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId }).then(r => r.data)
 export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`).then(r => r.data)
+export const importSynopsis = (id, content) =>
+  api.post(`/novels/${id}/brainstorm/import`, { content }).then(r => r.data)
 export const planVolume = (id, volNum) =>
   api.post(`/novels/${id}/volume_plan`, { volume_number: volNum }).then(r => r.data)
 export const prepareContext = (id, cid) =>

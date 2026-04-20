@@ -2,17 +2,17 @@ defaults:
   timeout: 30
   retries: 2
   temperature: 0.7
-
 models:
   kimi-for-coding:
     provider: anthropic
     model: kimi-for-coding
     base_url: https://api.kimi.com/coding
+    api_key: sk-kimi-EXbF6ISoRPj9ZHHxbxQ0awuTGyF4nkYrGyy6MF3mbIyd6IUzA8ulPrUqz2Skl7Bt
   minimax-2-7:
     provider: anthropic
     model: Minimax-2.7
-    base_url: https://api.minimaxi.com/v1
-
+    base_url: https://api.minimaxi.com/anthropic
+    api_key: sk-cp-gOseCfRIMr1ln7jbl3Eou9Gq08GE-UHW7rtVXfIVKLqrpWgwsCqMMc5rAUwSKSQ1MTEk1qrOBRFKFrrycPmRYDzeYpq-pET8PDOYubBzVBug7XzOVE-hiSE
 embedding:
   provider: openai_compatible
   model: bge-m3
@@ -20,7 +20,6 @@ embedding:
   timeout: 30
   retries: 3
   dimensions: 1024
-
 agents:
   brainstorm_agent:
     model: kimi-for-coding
@@ -29,20 +28,22 @@ agents:
     temperature: 0.9
     fallback:
       model: minimax-2-7
-      timeout: 60
+      timeout: 120
       temperature: 0.9
+      retries: 1
     tasks:
       generate_synopsis:
         temperature: 0.9
       score_synopsis:
         temperature: 0.2
-
   volume_planner_agent:
     model: kimi-for-coding
-    timeout: 60
+    timeout: 120
     fallback:
       model: minimax-2-7
       timeout: 120
+      temperature: 0.7
+      retries: 1
     tasks:
       generate_volume_plan:
         timeout: 120
@@ -52,37 +53,52 @@ agents:
         temperature: 0.2
       revise_volume_plan:
         temperature: 0.65
-
+    retries: 2
   setting_extractor_agent:
-    model: minimax-2-7
+    model: kimi-for-coding
     timeout: 60
     fallback:
-      model: kimi-for-coding
-
+      model: minimax-2-7
+      temperature: 0.7
+      timeout: 60
+      retries: 2
+    retries: 1
   style_profiler_agent:
-    model: minimax-2-7
+    model: kimi-for-coding
     timeout: 60
     fallback:
-      model: kimi-for-coding
-
+      model: minimax-2-7
+      temperature: 0.7
+      timeout: 60
+      retries: 1
+    retries: 2
   file_classifier:
     model: minimax-2-7
-    timeout: 30
+    timeout: 60
     fallback:
       model: kimi-for-coding
-
+      temperature: 0.7
+      timeout: 60
+      retries: 1
+    retries: 2
   context_agent:
     model: minimax-2-7
-    timeout: 30
+    timeout: 60
     fallback:
       model: kimi-for-coding
-
+      temperature: 0.7
+      retries: 1
+      timeout: 60
+    retries: 2
   writer_agent:
-    model: minimax-2-7
-    timeout: 60
+    model: kimi-for-coding
+    timeout: 120
     temperature: 0.9
     fallback:
-      model: kimi-for-coding
+      model: minimax-2-7
+      temperature: 0.9
+      timeout: 120
+      retries: 1
     tasks:
       generate_beat:
         temperature: 0.95
@@ -92,45 +108,58 @@ agents:
         model: kimi-for-coding
         timeout: 15
         temperature: 0.2
-
+    retries: 2
   critic_agent:
     model: kimi-for-coding
     timeout: 60
     temperature: 0.3
     fallback:
       model: minimax-2-7
+      temperature: 0.3
+      timeout: 60
+      retries: 1
     tasks:
       score_chapter:
         temperature: 0.2
       score_beats:
         temperature: 0.2
-
+    retries: 2
   editor_agent:
     model: kimi-for-coding
     timeout: 60
     temperature: 0.6
     fallback:
       model: minimax-2-7
+      temperature: 0.6
+      timeout: 60
+      retries: 1
     tasks:
       polish_beat:
         temperature: 0.6
-
+    retries: 2
   fast_review_agent:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 30
     temperature: 0.2
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
+      temperature: 0.2
+      timeout: 30
+      retries: 1
     tasks:
       fast_review_check:
         temperature: 0.2
-
+    retries: 2
   librarian_agent:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 60
     temperature: 0.2
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
+      temperature: 0.2
+      timeout: 60
+      retries: 1
     tasks:
       extract:
         temperature: 0.15
+    retries: 2

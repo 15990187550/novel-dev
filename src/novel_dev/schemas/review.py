@@ -1,11 +1,19 @@
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import Any, List, Optional
+
+from pydantic import BaseModel, Field, field_validator
+
+from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
 
 
 class DimensionScore(BaseModel):
     name: str
     score: int
     comment: str
+
+    @field_validator("name", "comment", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
 
 
 class DimensionIssue(BaseModel):
@@ -15,12 +23,22 @@ class DimensionIssue(BaseModel):
     problem: str  # 具体问题描述(不要抽象标签)
     suggestion: str  # 具体修改建议
 
+    @field_validator("dim", "problem", "suggestion", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
 
 class ScoreResult(BaseModel):
     overall: int
     dimensions: List[DimensionScore]
     summary_feedback: str
     per_dim_issues: List[DimensionIssue] = Field(default_factory=list)
+
+    @field_validator("summary_feedback", mode="before")
+    @classmethod
+    def _coerce_summary_feedback(cls, value: Any) -> str:
+        return coerce_to_text(value)
 
 
 class FastReviewReport(BaseModel):
@@ -29,3 +47,8 @@ class FastReviewReport(BaseModel):
     ai_flavor_reduced: bool
     beat_cohesion_ok: bool
     notes: List[str] = Field(default_factory=list)
+
+    @field_validator("notes", mode="before")
+    @classmethod
+    def _coerce_notes(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)

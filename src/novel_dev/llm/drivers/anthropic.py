@@ -43,7 +43,9 @@ class AnthropicDriver(BaseDriver):
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
-        content = resp.content[0].text if resp.content else ""
+        # Filter for TextBlock only (skip ThinkingBlock)
+        text_blocks = [c for c in resp.content if hasattr(c, "text")]
+        content = text_blocks[0].text if text_blocks else ""
         usage = None
         if resp.usage:
             usage = TokenUsage(
@@ -58,6 +60,8 @@ class AnthropicDriver(BaseDriver):
         import httpx
 
         if isinstance(exc, anthropic.RateLimitError):
+            return LLMRateLimitError(str(exc))
+        if isinstance(exc, anthropic.OverloadedError):
             return LLMRateLimitError(str(exc))
         if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
             return LLMTimeoutError(str(exc))

@@ -7,4 +7,4 @@ embedding:
   base_url: https://api.openai.com/v1
   timeout: 30
   retries: 3
-  dimensions: 1536
+  dimensions: 1024

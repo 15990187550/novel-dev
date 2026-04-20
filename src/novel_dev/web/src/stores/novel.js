@@ -30,6 +30,7 @@ export const useNovelStore = defineStore('novel', {
   }),
 
   getters: {
+    novelTitle: (s) => s.novelState.checkpoint_data?.synopsis_data?.title || s.novelId || '未选择小说',
     currentPhaseLabel: (s) => PHASE_LABELS[s.novelState.current_phase] || s.novelState.current_phase || '-',
     currentVolumeChapter: (s) => {
       const v = s.novelState.current_volume_id || '-'

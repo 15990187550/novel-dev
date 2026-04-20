@@ -28,17 +28,20 @@ class RetryableDriver(BaseDriver):
         self,
         inner: BaseDriver,
         retry_config: RetryConfig,
+        config: TaskConfig,
         usage_tracker: Optional[UsageTracker] = None,
         agent: Optional[str] = None,
         task: Optional[str] = None,
     ):
         self.inner = inner
         self.retry_config = retry_config
+        self.config = config
         self.usage_tracker = usage_tracker
         self.agent = agent
         self.task = task
 
-    async def acomplete(self, messages, config: TaskConfig):
+    async def acomplete(self, messages, config: Optional[TaskConfig] = None):
+        cfg = config or self.config
         retryer = tenacity.AsyncRetrying(
             stop=tenacity.stop_after_attempt(self.retry_config.retries),
             retry=tenacity.retry_if_exception_type((LLMRateLimitError, LLMTimeoutError)),
@@ -47,7 +50,7 @@ class RetryableDriver(BaseDriver):
         )
         try:
             response = await asyncio.wait_for(
-                retryer(self.inner.acomplete, messages, config),
+                retryer(self.inner.acomplete, messages, cfg),
                 timeout=self.retry_config.timeout,
             )
         except asyncio.TimeoutError as exc:
@@ -142,36 +145,37 @@ class LLMFactory:
 
         return self._build_task_config({**raw, "fallback": fallback})
 
-    def _resolve_api_key(self, provider: str, base_url: Optional[str]) -> str:
+    def _resolve_api_key(self, provider: str, base_url: Optional[str], config: Optional[dict] = None) -> Optional[str]:
+        # API key can be overridden per-profile
+        if config and config.get("api_key"):
+            return config["api_key"]
+
         if provider == "anthropic":
-            key = self.settings.anthropic_api_key
-            key_name = "anthropic_api_key"
+            return self.settings.anthropic_api_key
         elif provider == "minimax":
-            key = self.settings.minimax_api_key
-            key_name = "minimax_api_key"
+            return self.settings.minimax_api_key
         elif provider == "openai_compatible":
-            key, key_name = self._resolve_openai_compatible_key(base_url)
+            return self._resolve_openai_compatible_key(base_url)
         else:
             raise LLMConfigError(f"Unknown provider: {provider}")
 
-        if not key:
-            raise LLMConfigError(f"Missing API key: {key_name}")
-        return key
-
-    def _resolve_openai_compatible_key(self, base_url: Optional[str]) -> Tuple[Optional[str], str]:
+    def _resolve_openai_compatible_key(self, base_url: Optional[str]) -> Optional[str]:
         if not base_url:
-            return self.settings.openai_api_key, "openai_api_key"
+            return self.settings.openai_api_key
         host = urlparse(base_url).hostname or ""
+        # Localhost/127.0.0.1 servers don't need API key
+        if host in ("localhost", "127.0.0.1", "::1"):
+            return None
         if "moonshot" in host:
-            return self.settings.moonshot_api_key, "moonshot_api_key"
+            return self.settings.moonshot_api_key
         if "bigmodel" in host:
-            return self.settings.zhipu_api_key, "zhipu_api_key"
+            return self.settings.zhipu_api_key
         if "openai" in host:
-            return self.settings.openai_api_key, "openai_api_key"
-        return self.settings.openai_api_key, "openai_api_key"
+            return self.settings.openai_api_key
+        return self.settings.openai_api_key
 
     def _create_driver(self, config: TaskConfig) -> BaseDriver:
-        key = self._resolve_api_key(config.provider, config.base_url)
+        key = self._resolve_api_key(config.provider, config.base_url, config.model_dump())
         if config.provider == "anthropic":
             from anthropic import AsyncAnthropic
             kwargs = {"api_key": key, "http_client": self._get_http_client()}
@@ -185,13 +189,13 @@ class LLMFactory:
             return MinimaxDriver(client=client)
         if config.provider == "openai_compatible":
             from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=key, base_url=config.base_url, http_client=self._get_http_client())
+            client = AsyncOpenAI(api_key=key or "not-needed", base_url=config.base_url, http_client=self._get_http_client())
             return OpenAICompatibleDriver(client=client)
         raise LLMConfigError(f"Unsupported provider: {config.provider}")
 
     def _get_cached_driver(self, config: TaskConfig) -> BaseDriver:
-        key = self._resolve_api_key(config.provider, config.base_url)
-        key_hash = hashlib.sha256(key.encode()).hexdigest()[:16]
+        key = self._resolve_api_key(config.provider, config.base_url, config.model_dump())
+        key_hash = hashlib.sha256((key or "").encode()).hexdigest()[:16]
         cache_key = (config.provider, config.model, config.base_url, key_hash)
         if cache_key not in self._cache:
             self._cache[cache_key] = self._create_driver(config)
@@ -203,6 +207,7 @@ class LLMFactory:
         return RetryableDriver(
             inner=inner,
             retry_config=retry_cfg,
+            config=config,
             usage_tracker=self.usage_tracker,
             agent=agent_name,
             task=task,
@@ -238,7 +243,7 @@ class LLMFactory:
         config = EmbeddingConfig(**raw)
         key = self._resolve_api_key(config.provider, config.base_url)
         client = AsyncOpenAI(
-            api_key=key,
+            api_key=key or "not-needed",
             base_url=config.base_url,
             http_client=self._get_http_client(),
         )

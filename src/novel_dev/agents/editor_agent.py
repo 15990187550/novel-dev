@@ -8,6 +8,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.log_service import log_service
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
@@ -33,18 +34,23 @@ class EditorAgent:
         self.embedding_service = embedding_service
 
     async def polish(self, novel_id: str, chapter_id: str):
+        log_service.add_log(novel_id, "EditorAgent", f"开始精修章节: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "EditorAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         if state.current_phase != Phase.EDITING.value:
+            log_service.add_log(novel_id, "EditorAgent", f"当前阶段 {state.current_phase} 不允许编辑", level="error")
             raise ValueError(f"Cannot edit from phase {state.current_phase}")
 
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch:
+            log_service.add_log(novel_id, "EditorAgent", f"章节未找到: {chapter_id}", level="error")
             raise ValueError(f"Chapter not found: {chapter_id}")
 
         checkpoint = dict(state.checkpoint_data or {})
         checkpoint["edit_attempt_count"] = checkpoint.get("edit_attempt_count", 0) + 1
+        log_service.add_log(novel_id, "EditorAgent", f"第 {checkpoint['edit_attempt_count']} 次精修尝试")
         beat_scores = checkpoint.get("beat_scores", [])
         per_dim_issues = checkpoint.get("per_dim_issues", [])
         critique = checkpoint.get("critique_feedback", {}) or {}
@@ -97,20 +103,24 @@ class EditorAgent:
 
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
             if needs_rewrite:
+                log_service.add_log(novel_id, "EditorAgent", f"改写第 {idx + 1} 个节拍 ({len(beat_text)} 字)")
                 polished = await self._rewrite_beat(
                     beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                 )
+                log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍改写完成 ({len(polished)} 字)")
             else:
+                log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍无需改写")
                 polished = beat_text
             polished_beats.append(polished)
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
+        log_service.add_log(novel_id, "EditorAgent", f"精修完成，总字数: {len(polished_text)}")
         if self.embedding_service:
             try:
                 asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
-            except Exception:
-                pass
+            except Exception as exc:
+                log_service.add_log(novel_id, "EditorAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
 
         await self.director.save_checkpoint(
@@ -120,6 +130,7 @@ class EditorAgent:
             volume_id=state.current_volume_id,
             chapter_id=state.current_chapter_id,
         )
+        log_service.add_log(novel_id, "EditorAgent", "进入 fast_reviewing 阶段")
 
     async def _rewrite_beat(
         self,

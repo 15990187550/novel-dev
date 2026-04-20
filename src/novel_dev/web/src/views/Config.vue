@@ -75,6 +75,9 @@
                 <el-form-item label="Base URL">
                   <el-input v-model="profile.base_url" placeholder="留空则使用 Provider 默认值" style="width: 400px" />
                 </el-form-item>
+                <el-form-item label="API Key">
+                  <el-input v-model="profile.api_key" show-password placeholder="留空使用环境变量" style="width: 350px" />
+                </el-form-item>
               </el-form>
             </div>
 
@@ -107,16 +110,6 @@
             </el-form>
           </template>
 
-          <template v-else-if="currentKey === 'api_keys'">
-            <h3 class="font-bold mb-4">API Key 配置</h3>
-            <el-form label-width="140px" size="small">
-              <el-form-item v-for="key in envKeys" :key="key" :label="keyLabels[key]">
-                <el-input v-model="envConfig[key]" show-password placeholder="输入 API Key" style="width: 400px" />
-              </el-form-item>
-            </el-form>
-            <el-button type="primary" :loading="savingEnv" @click="saveEnv" class="mt-2">保存 API Key</el-button>
-          </template>
-
           <template v-else-if="isAgentKey(currentKey)">
             <div class="flex items-center justify-between mb-4">
               <h3 class="font-bold">{{ agentLabel(currentKey) }} 模型配置</h3>
@@ -128,7 +121,7 @@
                 <el-tag type="primary" size="small">主用</el-tag>
                 <span class="font-medium text-sm">主用模型</span>
               </div>
-              <AgentModelForm :agent="config.agents[currentKey]" :models="config.models" />
+              <AgentModelForm :agent="config.agents[currentKey]" :models="config.models" :defaultsTemp="config.defaults.temperature" />
             </div>
 
             <div class="mb-6">
@@ -139,7 +132,7 @@
                 </div>
                 <el-switch v-model="fallbackEnabled[currentKey]" active-text="启用" @change="toggleFallback(currentKey)" />
               </div>
-              <AgentModelForm v-if="fallbackEnabled[currentKey]" :agent="config.agents[currentKey].fallback" :models="config.models" />
+              <AgentModelForm v-if="fallbackEnabled[currentKey]" :agent="config.agents[currentKey].fallback" :models="config.models" :defaultsTemp="config.defaults.temperature" />
               <el-text v-else type="info" size="small">未启用备用模型</el-text>
             </div>
 
@@ -190,42 +183,26 @@
     </template>
 
     <template v-else>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h3 class="font-bold mb-3">LLM 配置 (JSON)</h3>
-          <el-input v-model="configText" type="textarea" :rows="20" />
-          <el-button type="primary" class="mt-4" :loading="savingConfig" @click="saveConfigJson">保存配置</el-button>
-        </div>
-        <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-          <h3 class="font-bold mb-3">API Key</h3>
-          <el-form label-width="120px">
-            <el-form-item v-for="key in envKeys" :key="key" :label="keyLabels[key]">
-              <el-input v-model="envConfig[key]" />
-            </el-form-item>
-          </el-form>
-          <el-button type="primary" :loading="savingEnv" @click="saveEnv">保存 Key</el-button>
-        </div>
+      <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
+        <h3 class="font-bold mb-3">LLM 配置 (JSON)</h3>
+        <el-input v-model="configText" type="textarea" :rows="20" />
+        <el-button type="primary" class="mt-4" :loading="savingConfig" @click="saveConfigJson">保存配置</el-button>
       </div>
     </template>
   </div>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getLLMConfig, saveLLMConfig, getEnvConfig, saveEnvConfig } from '@/api.js'
+import { ref, computed, onMounted, watch } from 'vue'
+import { getLLMConfig, saveLLMConfig } from '@/api.js'
 import { ElMessage } from 'element-plus'
 import AgentModelForm from '@/components/AgentModelForm.vue'
 
 const viewMode = ref('visual')
 const configText = ref('')
-const envConfig = ref({})
 const savingConfig = ref(false)
-const savingEnv = ref(false)
 const currentKey = ref('defaults')
 const modelNames = ref({})
-
-const envKeys = ['anthropic_api_key', 'openai_api_key', 'moonshot_api_key', 'minimax_api_key', 'zhipu_api_key']
-const keyLabels = { anthropic_api_key: 'Anthropic', openai_api_key: 'OpenAI', moonshot_api_key: 'Moonshot', minimax_api_key: 'MiniMax', zhipu_api_key: 'Zhipu' }
 
 const config = ref({
   defaults: { timeout: 30, retries: 2, temperature: 0.7 },
@@ -261,7 +238,6 @@ const navItems = computed(() => {
   for (const key of agentOrder) {
     if (agents[key]) items.push({ key, label: agentLabels[key] || key })
   }
-  items.push({ key: 'api_keys', label: 'API Keys' })
   return items
 })
 
@@ -324,7 +300,8 @@ function renameModel(oldName, newName) {
 function toggleFallback(key) {
   const agent = config.value.agents[key]
   if (fallbackEnabled.value[key]) {
-    if (!agent.fallback) agent.fallback = { model: '', timeout: 30, retries: 2, temperature: 0.7 }
+    if (!agent.fallback) agent.fallback = { model: '', timeout: 30, retries: 2 }
+    agent.fallback.temperature = agent.temperature ?? config.value.defaults.temperature
   } else {
     delete agent.fallback
   }
@@ -345,6 +322,18 @@ function buildFallbackState() {
     state[key] = !!(agent && agent.fallback)
   }
   return state
+}
+
+function syncFallbackTemps() {
+  for (const key of agentOrder) {
+    const agent = config.value.agents?.[key]
+    if (agent?.fallback && agent.fallback.model) {
+      // 只有当主模型温度存在时，才同步到备用模型
+      if (agent.temperature !== undefined) {
+        agent.fallback.temperature = agent.temperature
+      }
+    }
+  }
 }
 
 function initModelNames() {
@@ -369,10 +358,20 @@ onMounted(async () => {
     for (const key of agentOrder) {
       if (!config.value.agents[key]) config.value.agents[key] = {}
     }
+    syncFallbackTemps()
     fallbackEnabled.value = buildFallbackState()
   } catch {}
-  try { envConfig.value = await getEnvConfig() } catch {}
 })
+
+// 同步主模型温度到备用模型（仅当主模型温度已定义且模型相同时）
+watch(() => config.value.agents, (agents) => {
+  for (const key of agentOrder) {
+    const agent = agents?.[key]
+    if (agent?.fallback && agent.fallback.model === agent.model && agent.temperature !== undefined) {
+      agent.fallback.temperature = agent.temperature
+    }
+  }
+}, { deep: true })
 
 function cleanPayload(payload) {
   // Remove empty agents
@@ -418,15 +417,11 @@ async function saveConfigJson() {
     }
     initModelNames()
     for (const key of agentOrder) { if (!config.value.agents[key]) config.value.agents[key] = {} }
+    syncFallbackTemps()
     fallbackEnabled.value = buildFallbackState()
     ElMessage.success('配置已保存')
   } catch { ElMessage.error('JSON 格式错误') }
   finally { savingConfig.value = false }
 }
 
-async function saveEnv() {
-  savingEnv.value = true
-  try { await saveEnvConfig(envConfig.value); ElMessage.success('API Key 已保存') }
-  finally { savingEnv.value = false }
-}
 </script>

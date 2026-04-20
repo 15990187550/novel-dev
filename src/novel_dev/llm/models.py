@@ -29,6 +29,7 @@ class TaskConfig(BaseModel):
     retries: int = 2
     temperature: float = 0.7
     max_tokens: Optional[int] = None
+    api_key: Optional[str] = None
     fallback: Optional["TaskConfig"] = None
 
 
@@ -43,4 +44,4 @@ class EmbeddingConfig(BaseModel):
     base_url: Optional[str] = None
     timeout: int = 30
     retries: int = 3
-    dimensions: int = Field(default=1536, gt=0)
+    dimensions: int = Field(default=1024, gt=0)

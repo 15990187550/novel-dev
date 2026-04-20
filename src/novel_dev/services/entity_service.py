@@ -18,9 +18,22 @@ class EntityService:
         self.version_repo = EntityVersionRepository(session)
         self.embedding_service = embedding_service
 
-    async def create_entity(self, entity_id: str, entity_type: str, name: str, chapter_id: Optional[str] = None, novel_id: Optional[str] = None) -> Entity:
+    async def create_entity(
+        self,
+        entity_id: str,
+        entity_type: str,
+        name: str,
+        chapter_id: Optional[str] = None,
+        novel_id: Optional[str] = None,
+        initial_state: Optional[dict] = None,
+    ) -> Entity:
         entity = await self.entity_repo.create(entity_id, entity_type, name, chapter_id, novel_id)
-        await self.version_repo.create(entity_id, 1, {"name": name}, chapter_id=chapter_id, diff_summary={"created": True})
+        state = initial_state.copy() if initial_state else {}
+        if name not in state:
+            state["name"] = name
+        elif state.get("name") != name:
+            state["name"] = name
+        await self.version_repo.create(entity_id, 1, state, chapter_id=chapter_id, diff_summary={"created": True})
         await self.entity_repo.update_version(entity_id, 1)
         if self.embedding_service:
             try:

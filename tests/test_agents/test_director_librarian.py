@@ -5,6 +5,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.schemas.context import ChapterPlan, BeatPlan
+from novel_dev.schemas.librarian import ExtractionResult
 
 
 @pytest.mark.asyncio
@@ -26,7 +27,7 @@ async def test_director_librarian_to_completed(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
-    with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'):
+    with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, return_value=ExtractionResult()):
         state = await director._run_librarian(await director.resume("n_dir"))
 
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value
@@ -86,7 +87,7 @@ async def test_director_librarian_both_extractions_fail(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
-    with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, side_effect=Exception("LLM down")):
+    with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, side_effect=Exception("LLM down")):
         with patch("novel_dev.agents.librarian.LibrarianAgent.fallback_extract", side_effect=Exception("fallback also fails")):
             with pytest.raises(RuntimeError):
                 await director._run_librarian(await director.resume("n_fail"))
@@ -115,7 +116,7 @@ async def test_director_librarian_fallback_success(async_session):
     await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
-    with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, side_effect=Exception("LLM down")):
+    with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, side_effect=Exception("LLM down")):
         state = await director._run_librarian(await director.resume("n_fallback"))
 
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value

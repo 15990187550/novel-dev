@@ -12,7 +12,7 @@ def test_embedding_config_defaults():
     assert cfg.base_url is None
     assert cfg.timeout == 30
     assert cfg.retries == 3
-    assert cfg.dimensions == 1536
+    assert cfg.dimensions == 1024
 
 
 def test_embedding_config_custom():
@@ -34,7 +34,7 @@ def test_embedding_config_custom():
 async def test_openai_embedder_empty_input():
     mock_client = AsyncMock()
     embedder = OpenAIEmbedder(
-        client=mock_client, model="text-embedding-3-small", dimensions=1536
+        client=mock_client, model="text-embedding-3-small", dimensions=1024
     )
     result = await embedder.aembed([])
     assert result == []

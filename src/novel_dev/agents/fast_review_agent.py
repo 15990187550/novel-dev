@@ -9,6 +9,7 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
+from novel_dev.services.log_service import log_service
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class FastReviewAgent:
         self.director = NovelDirector(session)
 
     async def _llm_check_consistency_and_cohesion(
-        self, polished: str, raw: str, chapter_context: dict
+        self, polished: str, raw: str, chapter_context: dict, novel_id: str = ""
     ) -> dict:
         prompt = (
             "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
@@ -102,17 +103,24 @@ class FastReviewAgent:
         from novel_dev.llm import llm_factory
         client = llm_factory.get("FastReviewAgent", task="fast_review_check")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return _parse_review_json(response.text)
+        result = _parse_review_json(response.text)
+        if novel_id:
+            log_service.add_log(novel_id, "FastReviewAgent", f"LLM 一致性检查: consistency={result.get('consistency_fixed')}, cohesion={result.get('beat_cohesion_ok')}")
+        return result
 
     async def review(self, novel_id: str, chapter_id: str) -> FastReviewReport:
+        log_service.add_log(novel_id, "FastReviewAgent", f"开始快速评审: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "FastReviewAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         if state.current_phase != Phase.FAST_REVIEWING.value:
+            log_service.add_log(novel_id, "FastReviewAgent", f"当前阶段 {state.current_phase} 不允许快速评审", level="error")
             raise ValueError(f"Cannot fast-review from phase {state.current_phase}")
 
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch:
+            log_service.add_log(novel_id, "FastReviewAgent", f"章节未找到: {chapter_id}", level="error")
             raise ValueError(f"Chapter not found: {chapter_id}")
 
         checkpoint = dict(state.checkpoint_data or {})
@@ -136,7 +144,7 @@ class FastReviewAgent:
             ],
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
         }
-        llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context)
+        llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
         consistency_fixed = llm_result.get("consistency_fixed", True)
         beat_cohesion_ok = llm_result.get("beat_cohesion_ok", True)
         notes = llm_result.get("notes", [])
@@ -153,6 +161,7 @@ class FastReviewAgent:
         )
 
         passed = all([word_count_ok, consistency_fixed, ai_flavor_reduced, beat_cohesion_ok])
+        log_service.add_log(novel_id, "FastReviewAgent", f"快速评审结果: {'通过' if passed else '未通过'} (字数={word_count_ok}, 一致性={consistency_fixed}, AI腔={ai_flavor_reduced}, 连贯={beat_cohesion_ok})")
 
         await self.chapter_repo.update_fast_review(
             chapter_id,
@@ -167,6 +176,9 @@ class FastReviewAgent:
                 report.notes.append(
                     f"edit_attempts={edit_attempts} 已达上限 {MAX_EDIT_ATTEMPTS},跳过精修轮转"
                 )
+                log_service.add_log(novel_id, "FastReviewAgent", f"未通过但已达编辑上限({edit_attempts}/{MAX_EDIT_ATTEMPTS})，放行进入 librarian")
+            else:
+                log_service.add_log(novel_id, "FastReviewAgent", "快速评审通过，进入 librarian 阶段")
             checkpoint.pop("edit_attempt_count", None)
             await self.director.save_checkpoint(
                 novel_id,
@@ -176,6 +188,7 @@ class FastReviewAgent:
                 chapter_id=state.current_chapter_id,
             )
         else:
+            log_service.add_log(novel_id, "FastReviewAgent", "快速评审未通过，退回 editing 阶段")
             await self.director.save_checkpoint(
                 novel_id,
                 phase=Phase.EDITING,

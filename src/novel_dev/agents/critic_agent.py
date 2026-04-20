@@ -6,7 +6,8 @@ from novel_dev.schemas.review import ScoreResult, DimensionScore
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.llm.models import ChatMessage
+from novel_dev.agents._llm_helpers import call_and_parse_model, call_and_parse
+from novel_dev.services.log_service import log_service
 
 
 class CriticAgent:
@@ -17,10 +18,13 @@ class CriticAgent:
         self.director = NovelDirector(session)
 
     async def review(self, novel_id: str, chapter_id: str) -> ScoreResult:
+        log_service.add_log(novel_id, "CriticAgent", f"开始评审章节: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
         if not state:
+            log_service.add_log(novel_id, "CriticAgent", "小说状态未找到", level="error")
             raise ValueError(f"Novel state not found for {novel_id}")
         if state.current_phase != Phase.REVIEWING.value:
+            log_service.add_log(novel_id, "CriticAgent", f"当前阶段 {state.current_phase} 不允许评审", level="error")
             raise ValueError(f"Cannot review from phase {state.current_phase}")
 
         ch = await self.chapter_repo.get_by_id(chapter_id)
@@ -32,8 +36,10 @@ class CriticAgent:
         if not context_data:
             raise ValueError("chapter_context missing in checkpoint_data")
 
-        score_result = await self._generate_score(ch.raw_draft or "", context_data)
-        beat_scores = await self._generate_beat_scores(context_data)
+        score_result = await self._generate_score(ch.raw_draft or "", context_data, novel_id)
+        log_service.add_log(novel_id, "CriticAgent", f"章节评分: overall={score_result.overall}")
+        beat_scores = await self._generate_beat_scores(context_data, novel_id)
+        log_service.add_log(novel_id, "CriticAgent", f"节拍评分完成，共 {len(beat_scores)} 个节拍")
 
         await self.chapter_repo.update_scores(
             chapter_id,
@@ -60,7 +66,9 @@ class CriticAgent:
 
         if overall < 70 or red_line_failed:
             attempt = checkpoint.get("draft_attempt_count", 0) + 1
+            log_service.add_log(novel_id, "CriticAgent", f"评分不达标(overall={overall})，退回 drafting，尝试 {attempt}/3")
             if attempt >= 3:
+                log_service.add_log(novel_id, "CriticAgent", "已达最大重写次数", level="error")
                 raise RuntimeError("Max draft attempts exceeded")
             checkpoint["draft_attempt_count"] = attempt
             await self.director.save_checkpoint(
@@ -74,6 +82,7 @@ class CriticAgent:
             checkpoint.pop("draft_attempt_count", None)
             # 进入新一轮编辑时重置 editor 尝试计数,确保本章 polish 循环独立
             checkpoint.pop("edit_attempt_count", None)
+            log_service.add_log(novel_id, "CriticAgent", "评分通过，进入 editing 阶段")
             await self.director.save_checkpoint(
                 novel_id,
                 phase=Phase.EDITING,
@@ -84,8 +93,9 @@ class CriticAgent:
 
         return score_result
 
-    async def _generate_score(self, raw_draft: str, context_data: dict) -> ScoreResult:
+    async def _generate_score(self, raw_draft: str, context_data: dict, novel_id: str = "") -> ScoreResult:
         from novel_dev.llm import llm_factory
+        log_service.add_log(novel_id, "CriticAgent", "开始生成章节评分")
         # Trim context to only what Critic needs, avoiding retrieval bloat
         trimmed_context = {
             "chapter_plan": context_data.get("chapter_plan", {}),
@@ -147,11 +157,13 @@ class CriticAgent:
             f"### 草稿\n{raw_draft}\n\n"
             "请评分:"
         )
-        client = llm_factory.get("CriticAgent", task="score_chapter")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return ScoreResult.model_validate_json(response.text)
+        return await call_and_parse_model(
+            "CriticAgent", "score_chapter", prompt, ScoreResult, novel_id=novel_id
+        )
 
-    async def _generate_beat_scores(self, context_data: dict) -> List[dict]:
+    async def _generate_beat_scores(self, context_data: dict, novel_id: str = "") -> List[dict]:
+        from novel_dev.llm import llm_factory
+        log_service.add_log(novel_id, "CriticAgent", "开始生成节拍评分")
         from novel_dev.llm import llm_factory
         beats = context_data.get("chapter_plan", {}).get("beats", [])
         if not beats:
@@ -190,6 +202,6 @@ class CriticAgent:
             f"\n章节上下文:\n{json.dumps(trimmed, ensure_ascii=False)}\n\n"
             "请评分:"
         )
-        client = llm_factory.get("CriticAgent", task="score_beats")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        return json.loads(response.text)
+        return await call_and_parse(
+            "CriticAgent", "score_beats", prompt, json.loads, novel_id=novel_id
+        )

@@ -30,7 +30,7 @@
 
     <el-form-item label="温度">
       <el-slider v-model="agent.temperature" :min="0" :max="2" :step="0.05" style="width: 200px" />
-      <span class="ml-2 text-sm text-gray-500">{{ agent.temperature }}</span>
+      <span class="ml-2 text-sm text-gray-500">{{ agent.temperature ?? defaultsTemp }}</span>
     </el-form-item>
   </el-form>
 </template>
@@ -41,6 +41,7 @@ import { computed } from 'vue'
 const props = defineProps({
   agent: { type: Object, required: true },
   models: { type: Object, default: () => ({}) },
+  defaultsTemp: { type: Number, default: 0.7 },
 })
 
 const modelNames = computed(() => Object.keys(props.models || {}))

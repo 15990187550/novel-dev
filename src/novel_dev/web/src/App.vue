@@ -24,7 +24,7 @@
     <main class="flex-1 flex flex-col overflow-hidden">
       <header class="h-14 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex items-center justify-between px-4">
         <div class="flex items-center gap-3">
-          <span class="font-medium text-gray-900 dark:text-gray-100">{{ novelStore.novelId || '未选择小说' }}</span>
+          <span class="font-medium text-gray-900 dark:text-gray-100">{{ novelStore.novelTitle }}</span>
           <el-tag v-if="novelStore.novelState.current_phase" size="small" type="info">
             {{ novelStore.currentPhaseLabel }}
           </el-tag>

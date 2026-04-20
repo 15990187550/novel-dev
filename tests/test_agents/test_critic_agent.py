@@ -54,7 +54,7 @@ async def test_review_pass_high_score(async_session):
         LLMResponse(text='[{"beat_index": 0, "scores": {"plot_tension": 80, "humanity": 80}}]'),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = CriticAgent(async_session)
         result = await agent.review("novel_crit_pass", "c1")
@@ -100,7 +100,7 @@ async def test_review_fail_low_score(async_session):
         LLMResponse(text='[{"beat_index": 0, "scores": {"plot_tension": 50, "humanity": 50}}]'),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = CriticAgent(async_session)
         result = await agent.review("novel_crit_fail", "c1")
@@ -142,7 +142,7 @@ async def test_review_red_line_rollback(async_session):
         LLMResponse(text='[{"beat_index": 0, "scores": {"plot_tension": 80, "humanity": 80}}]'),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = CriticAgent(async_session)
         result = await agent.review("novel_crit_red", "c1")
@@ -177,7 +177,7 @@ async def test_review_max_attempts_exceeded(async_session):
         LLMResponse(text='[]'),
     ]
 
-    with patch("novel_dev.llm.llm_factory") as mock_factory:
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = CriticAgent(async_session)
         with pytest.raises(RuntimeError, match="Max draft attempts exceeded"):
