@@ -1,0 +1,225 @@
+import pytest
+from httpx import AsyncClient, ASGITransport
+from fastapi import FastAPI
+
+from novel_dev.api.routes import router, get_session
+
+app = FastAPI()
+app.include_router(router)
+
+
+@pytest.mark.asyncio
+async def test_list_approved_documents(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Upload and approve docs for n1
+            r1 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "setting.txt", "content": "世界观：天玄大陆。"},
+            )
+            pe1 = r1.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe1})
+
+            # Upload and approve another doc for n1
+            r2 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "style.txt", "content": "a" * 1000},
+            )
+            pe2 = r2.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe2})
+
+            # Upload and approve docs for n2
+            r3 = await client.post(
+                "/api/novels/n2/documents/upload",
+                json={"filename": "setting.txt", "content": "世界观：另一个大陆。"},
+            )
+            pe3 = r3.json()["id"]
+            await client.post("/api/novels/n2/documents/pending/approve", json={"pending_id": pe3})
+
+            # List docs for n1 - should only get n1's docs
+            resp = await client.get("/api/novels/n1/documents")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "items" in data
+            # Verify content_preview is present, content not exposed in list
+            for item in data["items"]:
+                assert "content_preview" in item
+                assert "content" not in item or item.get("content") is None
+                assert "id" in item
+                assert "doc_type" in item
+                assert "title" in item
+                assert "version" in item
+                assert "updated_at" in item
+                assert "word_count" in item
+                assert "has_embedding" in item
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_approved_documents_with_doc_type_filter(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Upload and approve doc for n1 with setting type
+            r1 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "setting.txt", "content": "世界观：天玄大陆。"},
+            )
+            pe1 = r1.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe1})
+
+            # Filter by doc_type
+            resp = await client.get("/api/novels/n1/documents?doc_type=worldview")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "items" in data
+            for item in data["items"]:
+                assert item["doc_type"] == "worldview"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_document_detail_and_versions(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Upload and approve v1
+            r1 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "style.txt", "content": "v1 content here"},
+            )
+            pe1 = r1.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe1})
+
+            # Get doc id from approved docs
+            list_resp = await client.get("/api/novels/n1/documents")
+            assert list_resp.status_code == 200
+            items = list_resp.json()["items"]
+            style_docs = [d for d in items if d["doc_type"] == "style_profile"]
+            assert len(style_docs) >= 1
+            doc_id = style_docs[0]["id"]
+
+            # Get document detail - should return full content
+            detail_resp = await client.get(f"/api/novels/n1/documents/{doc_id}")
+            assert detail_resp.status_code == 200
+            detail = detail_resp.json()
+            assert detail["id"] == doc_id
+            assert "content" in detail
+            # Style profile content is generated by LLM mock
+            assert "version" in detail
+            assert "updated_at" in detail
+            assert "has_embedding" in detail
+
+            # Get versions - should return version list
+            versions_resp = await client.get(f"/api/novels/n1/documents/{doc_id}/versions")
+            assert versions_resp.status_code == 200
+            versions = versions_resp.json()["items"]
+            assert len(versions) >= 1
+            assert versions[0]["version"] == 1
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_save_new_version_and_reindex(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Upload and approve v1
+            r1 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "style.txt", "content": "v1 content here"},
+            )
+            pe1 = r1.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe1})
+
+            # Get doc id
+            list_resp = await client.get("/api/novels/n1/documents")
+            items = list_resp.json()["items"]
+            style_docs = [d for d in items if d["doc_type"] == "style_profile"]
+            doc_id = style_docs[0]["id"]
+
+            # Save new version
+            save_resp = await client.post(
+                f"/api/novels/n1/documents/{doc_id}/versions",
+                json={"title": "v2 title", "content": "v2 content here"},
+            )
+            assert save_resp.status_code == 200
+            saved = save_resp.json()
+            assert saved["version"] == 2
+            assert saved["title"] == "v2 title"
+
+            # Verify reindex works
+            reindex_resp = await client.post(f"/api/novels/n1/documents/{doc_id}/reindex")
+            assert reindex_resp.status_code == 200
+            assert reindex_resp.json()["id"] == doc_id
+            assert reindex_resp.json()["reindexed"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_cross_novel_document_returns_404(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Upload and approve doc under n1
+            r1 = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={"filename": "setting.txt", "content": "世界观：天玄大陆。"},
+            )
+            pe1 = r1.json()["id"]
+            await client.post("/api/novels/n1/documents/pending/approve", json={"pending_id": pe1})
+
+            # Get doc id
+            list_resp = await client.get("/api/novels/n1/documents")
+            doc_id = list_resp.json()["items"][0]["id"]
+
+            # Try to access via n2 - should return 404
+            detail_resp = await client.get(f"/api/novels/n2/documents/{doc_id}")
+            assert detail_resp.status_code == 404
+
+            # Try to get versions via n2 - should return 404
+            versions_resp = await client.get(f"/api/novels/n2/documents/{doc_id}/versions")
+            assert versions_resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_document_not_found(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Non-existent doc
+            resp = await client.get("/api/novels/n1/documents/non_existent_doc_id")
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
