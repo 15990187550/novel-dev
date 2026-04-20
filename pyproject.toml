@@ -22,6 +22,8 @@ dependencies = [
     "tenacity>=8.3.0",
     "pyyaml>=6.0",
     "mcp>=1.0.0",
+    "sentence-transformers>=2.2.0",
+    "torch>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -30,6 +32,9 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "httpx>=0.26.0",
 ]
+
+[project.scripts]
+novel-dev = "novel_dev.api.routes:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
