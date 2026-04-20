@@ -132,7 +132,7 @@ async def test_list_document_versions_returns_versions_for_doc_type(async_sessio
     await svc.doc_repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)
     await svc.doc_repo.create("d2", "n1", "style_profile", "v2", "content2", version=2)
 
-    versions = await svc.list_document_versions("n1", "d1")
+    versions = await svc.list_document_versions("n1", "style_profile")
 
     assert [doc.id for doc in versions] == ["d2", "d1"]
 
