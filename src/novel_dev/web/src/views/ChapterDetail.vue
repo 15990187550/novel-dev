@@ -1,5 +1,6 @@
 <template>
-  <div v-if="loading" class="text-center py-10">加载中...</div>
+  <div v-if="!store.novelId" class="text-center py-20 text-gray-400">请从侧边栏选择或输入一个小说ID</div>
+  <div v-else-if="loading" class="text-center py-10">加载中...</div>
   <div v-else-if="!chapter" class="text-center py-10 text-gray-400">章节未找到</div>
   <div v-else class="space-y-4">
     <div class="flex items-center justify-between">
@@ -27,7 +28,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { getChapterText } from '@/api.js'
@@ -38,10 +39,15 @@ const store = useNovelStore()
 const chapter = ref(null)
 const loading = ref(true)
 
-onMounted(async () => {
+async function fetchIfReady() {
+  if (!store.novelId) return
+  loading.value = true
   try { chapter.value = await getChapterText(store.novelId, route.params.chapterId) } catch { chapter.value = null }
   finally { loading.value = false }
-})
+}
+
+onMounted(fetchIfReady)
+watch(() => store.novelId, fetchIfReady)
 
 function wc(t) { return t ? t.replace(/\s/g, '').length : 0 }
 function statusType(s) { return { pending: 'info', drafted: 'primary', edited: 'success', archived: 'danger' }[s] || 'info' }

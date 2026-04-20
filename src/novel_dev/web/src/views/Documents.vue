@@ -1,6 +1,8 @@
 <template>
   <div class="space-y-4">
     <h2 class="text-xl font-bold">设定资料</h2>
+    <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
+    <template v-else>
     <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
       <h3 class="font-bold mb-3">上传设定文件</h3>
       <div class="flex items-center gap-2">
@@ -19,11 +21,12 @@
         </el-table-column>
       </el-table>
     </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
 import { uploadDocument, approvePending } from '@/api.js'
 import { ElMessage } from 'element-plus'
@@ -64,5 +67,10 @@ async function approve(id) {
   await store.fetchDocuments()
 }
 
-onMounted(() => store.fetchDocuments())
+function fetchIfReady() {
+  if (store.novelId) store.fetchDocuments()
+}
+
+onMounted(fetchIfReady)
+watch(() => store.novelId, fetchIfReady)
 </script>

@@ -50,7 +50,7 @@ const createForm = ref({ title: '' })
 async function fetchNovels() {
   try {
     const res = await listNovels()
-    options.value = (res.items || []).map(n => ({ value: n.novel_id, label: n.novel_id }))
+    options.value = (res.items || []).map(n => ({ value: n.novel_id, label: n.title || n.novel_id }))
   } catch {
     options.value = []
   }

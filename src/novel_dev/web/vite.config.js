@@ -13,10 +13,12 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'https://sharp-jobs-flow.loca.lt',
         changeOrigin: true,
+        secure: false,
       },
     },
+    allowedHosts: ['.loca.lt', '.lhr.life'],
   },
   build: {
     outDir: 'dist',
