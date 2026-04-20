@@ -86,11 +86,16 @@ class LLMFactory:
             return {}
 
     def _build_task_config(self, raw: dict) -> TaskConfig:
+        if isinstance(raw, TaskConfig):
+            return raw
         raw = raw.copy()
         fallback_raw = raw.pop("fallback", None)
         fallback = None
         if fallback_raw:
-            fallback = self._build_task_config(fallback_raw)
+            if isinstance(fallback_raw, TaskConfig):
+                fallback = fallback_raw
+            else:
+                fallback = self._build_task_config(fallback_raw)
         return TaskConfig(fallback=fallback, **raw)
 
     def _normalize_agent_name(self, name: str) -> str:
@@ -103,13 +108,39 @@ class LLMFactory:
         agent_cfg = self._config.get("agents", {}).get(normalized_name, {})
         task_cfg = agent_cfg.get("tasks", {}).get(task, {}) if task else {}
 
+        # agent base config (without tasks/fallback) — inherited by fallback
+        agent_base = {k: v for k, v in agent_cfg.items() if k not in ("tasks", "fallback")}
+
+        # Merge main config: defaults → agent → task
         merged = {**defaults, **agent_cfg, **task_cfg}
         merged.pop("tasks", None)
 
-        if not merged.get("provider") or not merged.get("model"):
-            raise LLMConfigError(f"Missing provider or model for agent={agent_name} task={task}")
+        # Resolve fallback: inherit agent_base, then fallback self overrides
+        fallback = None
+        fallback_raw = merged.pop("fallback", None)
+        if fallback_raw:
+            fallback_merged = {**defaults, **agent_base, **fallback_raw}
+            fallback = self._resolve_model_profile(fallback_merged)
 
-        return self._build_task_config(merged)
+        return self._resolve_model_profile(merged, fallback=fallback)
+
+    def _resolve_model_profile(
+        self, raw: dict, fallback: Optional[TaskConfig] = None
+    ) -> TaskConfig:
+        raw = raw.copy()
+        model_ref = raw.pop("model", None)
+        if model_ref:
+            profile = self._config.get("models", {}).get(model_ref, {})
+            if not profile:
+                raise LLMConfigError(f"Unknown model profile: {model_ref}")
+            raw = {**profile, **raw}
+        else:
+            raise LLMConfigError("Missing model reference")
+
+        if not raw.get("provider") or not raw.get("model"):
+            raise LLMConfigError("Missing provider or model after resolving profile")
+
+        return self._build_task_config({**raw, "fallback": fallback})
 
     def _resolve_api_key(self, provider: str, base_url: Optional[str]) -> str:
         if provider == "anthropic":
