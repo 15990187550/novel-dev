@@ -1,5 +1,5 @@
 defaults:
-  provider: openai_compatible
+  timeout: 30
 
 embedding:
   provider: openai_compatible
