@@ -156,6 +156,18 @@ class CriticAgent:
         beats = context_data.get("chapter_plan", {}).get("beats", [])
         if not beats:
             return []
+        # Only pass what beat-level scoring needs (avoid retrieval bloat)
+        trimmed = {
+            "chapter_plan": context_data.get("chapter_plan", {}),
+            "style_profile": context_data.get("style_profile", {}),
+            "worldview_summary": context_data.get("worldview_summary", ""),
+            "previous_chapter_summary": context_data.get("previous_chapter_summary", ""),
+            "active_entities": [
+                {"name": e.get("name"), "type": e.get("type"), "current_state": e.get("current_state", "")[:200]}
+                for e in context_data.get("active_entities", [])
+            ],
+            "pending_foreshadowings": context_data.get("pending_foreshadowings", []),
+        }
         prompt = (
             "你是一位小说评审专家。请根据以下节拍列表和章节上下文,"
             "为**每一个节拍**给出 plot_tension 和 humanity 评分(0-100)及具体问题清单。\n\n"
@@ -175,7 +187,7 @@ class CriticAgent:
             "- scores 低于 75 的维度必须在 issues 中至少给 1 条具体问题(problem 写具体,不要抽象标签)\n"
             "- suggestion 必须可直接执行(具体动作/替换方向)\n"
             "- 节拍全部达标时 issues 可为空数组\n"
-            f"\n章节上下文:\n{json.dumps(context_data, ensure_ascii=False)}\n\n"
+            f"\n章节上下文:\n{json.dumps(trimmed, ensure_ascii=False)}\n\n"
             "请评分:"
         )
         client = llm_factory.get("CriticAgent", task="score_beats")

@@ -245,10 +245,10 @@ class ContextAgent:
             '  "parent": "上级地点/区域（如有）",\n'
             '  "narrative": "完整的场景镜头描述（200-300字）"\n'
             "}\n\n"
-            f"地点：{[{'name': loc.name, 'narrative': loc.narrative, 'meta': loc.meta} for loc in locations]}\n"
-            f"实体状态：{entity_states}\n"
-            f"近期时间线：{timeline_events}\n"
-            f"待回收伏笔：{pending_fs}\n"
+            f"地点：{json.dumps([{'name': loc.name, 'narrative': loc.narrative, 'meta': loc.meta} for loc in locations], ensure_ascii=False)}\n"
+            f"实体状态：{json.dumps(entity_states, ensure_ascii=False)}\n"
+            f"近期时间线：{json.dumps(timeline_events, ensure_ascii=False)}\n"
+            f"待回收伏笔：{json.dumps(pending_fs, ensure_ascii=False)}\n"
         )
         return await call_and_parse(
             "ContextAgent", "build_scene_context", prompt,

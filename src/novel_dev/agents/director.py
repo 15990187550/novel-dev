@@ -166,7 +166,11 @@ class NovelDirector:
         if not ch or not ch.polished_text:
             raise ValueError("Chapter polished text missing")
 
-        agent = LibrarianAgent(self.session)
+        from novel_dev.services.embedding_service import EmbeddingService
+        from novel_dev.llm import llm_factory
+        embedder = llm_factory.get_embedder()
+        embedding_service = EmbeddingService(self.session, embedder)
+        agent = LibrarianAgent(self.session, embedding_service)
         try:
             extraction = await agent.extract(state.novel_id, chapter_id, ch.polished_text)
         except Exception as llm_error:

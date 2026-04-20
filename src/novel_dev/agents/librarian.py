@@ -22,6 +22,15 @@ _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTIL
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 
 
+from novel_dev.repositories.timeline_repo import TimelineRepository
+from novel_dev.repositories.spaceline_repo import SpacelineRepository
+from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
+from novel_dev.repositories.relationship_repo import RelationshipRepository
+from novel_dev.services.entity_service import EntityService
+from novel_dev.llm import llm_factory
+from novel_dev.services.embedding_service import EmbeddingService
+
+
 def _parse_soft_state_json(text: str) -> dict:
     if not text:
         return {}
@@ -37,13 +46,6 @@ def _parse_soft_state_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {}
-from novel_dev.repositories.timeline_repo import TimelineRepository
-from novel_dev.repositories.spaceline_repo import SpacelineRepository
-from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
-from novel_dev.repositories.relationship_repo import RelationshipRepository
-from novel_dev.services.entity_service import EntityService
-from novel_dev.llm import llm_factory
-from novel_dev.services.embedding_service import EmbeddingService
 
 
 class LibrarianAgent:
@@ -114,7 +116,7 @@ class LibrarianAgent:
         prompt = self._build_soft_state_prompt(polished_text, primary)
         try:
             client = llm_factory.get("LibrarianAgent", task="extract_relationships")
-            response = await client.acomplete(prompt)
+            response = await client.acomplete([ChatMessage(role="user", content=prompt)])
             payload = _parse_soft_state_json(response.text)
             updates_raw = payload.get("character_updates", []) or []
             rels_raw = payload.get("new_relationships", []) or []

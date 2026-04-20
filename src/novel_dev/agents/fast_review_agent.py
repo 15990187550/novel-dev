@@ -73,7 +73,7 @@ def _check_ai_flavor_reduced(raw: str, polished: str) -> bool:
         flavor_ok = polished_count <= raw_count * 0.7
     else:
         flavor_ok = polished_count <= max(1, len(polished) // 1000)
-    length_ok = len(polished) >= len(raw) * 0.5
+    length_ok = _word_count(polished) >= _word_count(raw) * 0.5
     return flavor_ok and length_ok
 
 
