@@ -53,6 +53,7 @@ const novelStore = useNovelStore()
 const menuItems = [
   { path: '/dashboard', label: '仪表盘' },
   { path: '/documents', label: '设定资料' },
+  { path: '/document-library', label: '文档库' },
   { path: '/volume-plan', label: '卷规划' },
   { path: '/chapters', label: '章节列表' },
   { path: '/entities', label: '实体百科' },

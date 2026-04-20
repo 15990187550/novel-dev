@@ -27,6 +27,16 @@ export const getVolumePlan = (id) => api.get(`/novels/${id}/volume_plan`).then(r
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
+export const getDocuments = (id, docType) =>
+  api.get(`/novels/${id}/documents`, { params: docType ? { doc_type: docType } : {} }).then(r => r.data)
+export const getDocumentDetail = (id, documentId) =>
+  api.get(`/novels/${id}/documents/${documentId}`).then(r => r.data)
+export const getDocumentVersions = (id, docType) =>
+  api.get(`/novels/${id}/documents/types/${docType}/versions`).then(r => r.data)
+export const saveDocumentVersion = (id, documentId, payload) =>
+  api.post(`/novels/${id}/documents/${documentId}/versions`, payload).then(r => r.data)
+export const reindexDocument = (id, documentId) =>
+  api.post(`/novels/${id}/documents/${documentId}/reindex`).then(r => r.data)
 export const uploadDocument = (id, filename, content) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content }).then(r => r.data)
 export const approvePending = (id, pendingId) =>
