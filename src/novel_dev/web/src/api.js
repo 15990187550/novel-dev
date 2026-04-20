@@ -13,6 +13,7 @@ api.interceptors.response.use(
 )
 
 export const listNovels = () => api.get('/novels').then(r => r.data)
+export const createNovel = (title) => api.post('/novels', { title }).then(r => r.data)
 export const getNovelState = (id) => api.get(`/novels/${id}/state`).then(r => r.data)
 export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).then(r => r.data)
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
