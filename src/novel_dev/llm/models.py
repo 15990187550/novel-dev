@@ -22,8 +22,8 @@ class LLMResponse(BaseModel):
 
 
 class TaskConfig(BaseModel):
-    provider: str
-    model: str
+    provider: Optional[str] = None
+    model: Optional[str] = None
     base_url: Optional[str] = None
     timeout: int = 30
     retries: int = 2
