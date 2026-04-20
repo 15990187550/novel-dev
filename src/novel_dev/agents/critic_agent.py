@@ -86,6 +86,18 @@ class CriticAgent:
 
     async def _generate_score(self, raw_draft: str, context_data: dict) -> ScoreResult:
         from novel_dev.llm import llm_factory
+        # Trim context to only what Critic needs, avoiding retrieval bloat
+        trimmed_context = {
+            "chapter_plan": context_data.get("chapter_plan", {}),
+            "style_profile": context_data.get("style_profile", {}),
+            "worldview_summary": context_data.get("worldview_summary", ""),
+            "previous_chapter_summary": context_data.get("previous_chapter_summary", ""),
+            "active_entities": [
+                {"name": e.get("name"), "type": e.get("type"), "current_state": e.get("current_state", "")[:200]}
+                for e in context_data.get("active_entities", [])
+            ],
+            "pending_foreshadowings": context_data.get("pending_foreshadowings", []),
+        }
         prompt = (
             "你是一位严格的小说评审编辑。请根据以下章节草稿和章节上下文,"
             "按 rubric 给 6 个维度打分(0-100),并输出**可操作的具体问题**,"
@@ -131,7 +143,7 @@ class CriticAgent:
             "3. beat_idx 指向 chapter_plan.beats 的索引,跨 beat 的整章问题填 null。\n"
             "4. suggestion 要给可直接执行的改写方向(例:『改为 A 用一个动作代替解释』)。\n"
             "5. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
-            f"### 章节上下文\n{json.dumps(context_data, ensure_ascii=False)}\n\n"
+            f"### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
             f"### 草稿\n{raw_draft}\n\n"
             "请评分:"
         )

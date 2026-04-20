@@ -13,6 +13,7 @@ from novel_dev.services.embedding_service import EmbeddingService
 
 
 _BEAT_ANCHOR_STRIP_RE = re.compile(r"<!--/?BEAT:\d+-->")
+_BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->\n(.*?)\n<!--/BEAT:\1-->", re.DOTALL)
 
 
 def _strip_anchors(text: str) -> str:
@@ -39,17 +40,43 @@ class WriterAgent:
         if not checkpoint.get("chapter_context"):
             raise ValueError("chapter_context missing in checkpoint_data")
 
+        checkpoint = dict(state.checkpoint_data or {})
+        progress = checkpoint.get("drafting_progress", {})
+        start_idx = progress.get("beat_index", 0)
+
         raw_draft = ""
         beat_coverage = []
         embedded_foreshadowings = []
-        style_violations = []
         total_beats = len(context.chapter_plan.beats)
 
         from novel_dev.schemas.context import NarrativeRelay
         relay_history: List[NarrativeRelay] = []
         inner_beats: List[str] = []
 
+        # Resume from checkpoint if previous run was interrupted
+        if start_idx > 0:
+            if checkpoint.get("relay_history"):
+                relay_history = [
+                    NarrativeRelay(**r) for r in checkpoint["relay_history"]
+                ]
+            ch = await self.chapter_repo.get_by_id(chapter_id)
+            if ch and ch.raw_draft:
+                raw_draft = ch.raw_draft
+                for m in _BEAT_ANCHOR_RE.finditer(raw_draft):
+                    bi = int(m.group(1))
+                    inner = m.group(2).strip()
+                    while len(inner_beats) <= bi:
+                        inner_beats.append("")
+                    inner_beats[bi] = inner
+                for i, inner in enumerate(inner_beats):
+                    beat_coverage.append({"beat_index": i, "word_count": len(inner)})
+                    for fs in context.pending_foreshadowings:
+                        if fs["content"] in inner and fs["id"] not in embedded_foreshadowings:
+                            embedded_foreshadowings.append(fs["id"])
+
         for idx, beat in enumerate(context.chapter_plan.beats):
+            if idx < start_idx:
+                continue
             is_last = (idx == total_beats - 1)
             last_beat_text = inner_beats[-1] if inner_beats else ""
 
@@ -101,10 +128,11 @@ class WriterAgent:
                 current_chapter_id=state.current_chapter_id,
             )
 
+        clean_text = _strip_anchors(raw_draft)
         metadata = DraftMetadata(
-            total_words=len(raw_draft),
+            total_words=len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", "")),
             beat_coverage=beat_coverage,
-            style_violations=style_violations,
+            style_violations=[],
             embedded_foreshadowings=embedded_foreshadowings,
         )
 
@@ -268,7 +296,7 @@ class WriterAgent:
             "返回严格 JSON：\n"
             '{"scene_state":"...","emotional_tone":"...","new_info_revealed":"...","open_threads":"...","next_beat_hook":"..."}\n\n'
             f"节拍计划: {beat.summary}\n\n"
-            f"正文:\n{beat_text[:2000]}\n\n"
+            f"正文:\n{beat_text[:3000]}\n\n"
             "JSON:"
         )
         return await call_and_parse(

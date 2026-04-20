@@ -270,6 +270,7 @@ class ContextAgent:
         novel_id: str,
     ) -> List[dict]:
         active_ids = {e.entity_id for e in active_entities}
+        entity_name_map = {e.entity_id: e.name for e in active_entities}
         all_active = await self.foreshadowing_repo.list_active(novel_id=novel_id)
         result = []
         for fs in all_active:
@@ -280,11 +281,17 @@ class ContextAgent:
             if fs.埋下_time_tick == checkpoint.get("current_time_tick"):
                 match = True
             if match:
+                related_names = [
+                    entity_name_map[eid]
+                    for eid in (fs.相关人物_ids or [])
+                    if eid in entity_name_map
+                ]
                 result.append(
                     {
                         "id": fs.id,
                         "content": fs.content,
                         "role_in_chapter": "embed",
+                        "related_entity_names": related_names,
                     }
                 )
         return result

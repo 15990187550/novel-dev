@@ -48,6 +48,7 @@ class EditorAgent:
         beat_scores = checkpoint.get("beat_scores", [])
         per_dim_issues = checkpoint.get("per_dim_issues", [])
         critique = checkpoint.get("critique_feedback", {}) or {}
+        chapter_context = checkpoint.get("chapter_context", {})
         raw_draft = ch.raw_draft or ""
         beats, _ = split_beats(raw_draft)
 
@@ -96,7 +97,9 @@ class EditorAgent:
 
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
             if needs_rewrite:
-                polished = await self._rewrite_beat(beat_text, scores, all_issues, whole_chapter_issues)
+                polished = await self._rewrite_beat(
+                    beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                )
             else:
                 polished = beat_text
             polished_beats.append(polished)
@@ -124,6 +127,7 @@ class EditorAgent:
         scores: dict,
         issues: list,
         whole_chapter_issues: list,
+        chapter_context: dict,
     ) -> str:
         low_dims = [k for k, v in scores.items() if v < 70]
         issue_lines = []
@@ -137,6 +141,18 @@ class EditorAgent:
                 f"- [{it.get('dim')}] 整章共性: {it.get('problem')} -> {it.get('suggestion')}"
             )
 
+        style_profile = chapter_context.get("style_profile", {})
+        style_block = ""
+        if style_profile:
+            import json
+            style_block = f"### 作品风格约束\n{json.dumps(style_profile, ensure_ascii=False, indent=2)}\n\n"
+
+        chapter_plan = chapter_context.get("chapter_plan", {})
+        plan_block = ""
+        if chapter_plan:
+            import json
+            plan_block = f"### 章节计划\n{json.dumps(chapter_plan, ensure_ascii=False)}\n\n"
+
         prompt_parts = [
             "你是一位小说编辑。请在『保留原情节与原对话意图』的前提下,针对以下问题定点改写本段,"
             "只返回改写后的正文,不要添加任何解释、标签或编号。\n",
@@ -145,6 +161,8 @@ class EditorAgent:
             "2. 显示不说(show don't tell):用动作/对话/细节替代『他感到 X』『她想到 Y』这类直述。\n"
             "3. 删除冗余总结段,避免复读前文已交代的信息。\n"
             "4. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
+            style_block,
+            plan_block,
         ]
         if low_dims:
             prompt_parts.append(f"## 低分维度\n{', '.join(low_dims)}\n")
@@ -154,7 +172,7 @@ class EditorAgent:
             prompt_parts.append("## 整章通病(写本段时顺带注意)\n" + "\n".join(whole_lines) + "\n")
         prompt_parts.append(f"## 原文\n{text}\n\n改写:")
 
-        prompt = "\n".join(prompt_parts)
+        prompt = "\n".join(p for p in prompt_parts if p)
         from novel_dev.llm import llm_factory
         client = llm_factory.get("EditorAgent", task="polish_beat")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
