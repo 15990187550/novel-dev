@@ -143,7 +143,10 @@ class LLMFactory:
         key = self._resolve_api_key(config.provider, config.base_url)
         if config.provider == "anthropic":
             from anthropic import AsyncAnthropic
-            client = AsyncAnthropic(api_key=key, http_client=self._get_http_client())
+            kwargs = {"api_key": key, "http_client": self._get_http_client()}
+            if config.base_url:
+                kwargs["base_url"] = config.base_url
+            client = AsyncAnthropic(**kwargs)
             return AnthropicDriver(client=client)
         if config.provider == "minimax":
             from openai import AsyncOpenAI
