@@ -9,7 +9,7 @@ models:
     model: kimi-for-coding
     base_url: https://api.kimi.com/coding
   minimax-2-7:
-    provider: minimax
+    provider: anthropic
     model: Minimax-2.7
     base_url: https://api.minimaxi.com/v1
 
