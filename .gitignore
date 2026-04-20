@@ -2,6 +2,13 @@
 *.db
 *.egg-info/
 __pycache__/
+.pytest_cache/
 novel_output/
+output/
+.env
+.env.local
+.server.pid
+.vite.pid
+server.log
 src/novel_dev/web/node_modules/
 src/novel_dev/web/dist/
