@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import * as api from '@/api.js'
+import { buildOutlineWorkbenchItems, resolveOutlineWorkbenchSelection } from '@/views/outline/outlineWorkbench.js'
 
 const PHASE_LABELS = {
   brainstorming: '脑暴中',
@@ -39,6 +40,17 @@ const createDashboardPanels = () => ({
   timelines: createDashboardPanelState(),
   foreshadowings: createDashboardPanelState(),
   pendingDocs: createDashboardPanelState(),
+})
+
+const createOutlineWorkbenchState = () => ({
+  state: 'idle',
+  error: '',
+  items: [],
+  selection: null,
+  messages: [],
+  sessionId: '',
+  conversationSummary: '',
+  lastResultSnapshot: null,
 })
 
 const clearSupplementalForPanel = (store, panel) => {
@@ -246,6 +258,7 @@ export const useNovelStore = defineStore('novel', {
     spacelines: [],
     foreshadowings: [],
     pendingDocs: [],
+    outlineWorkbench: createOutlineWorkbenchState(),
     loadingActions: {},
     dashboardPanels: createDashboardPanels(),
     dashboardLastUpdated: '',
@@ -479,6 +492,59 @@ export const useNovelStore = defineStore('novel', {
       if (!this.novelId) return
       await api.importSynopsis(this.novelId, content)
       await this.loadNovel(this.novelId)
+    },
+
+    async refreshOutlineWorkbench(selection = null) {
+      if (!this.novelId) return
+      this.outlineWorkbench.state = 'loading'
+      this.outlineWorkbench.error = ''
+
+      const requestedSelection = selection || this.outlineWorkbench.selection || {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+      }
+
+      try {
+        const workbench = await api.getOutlineWorkbench(this.novelId, requestedSelection)
+        const resolvedSelection = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], requestedSelection)
+        const normalizedItems = buildOutlineWorkbenchItems({
+          items: workbench?.outline_items || [],
+          currentSelection: resolvedSelection,
+        })
+        const messages = resolvedSelection
+          ? await api.getOutlineWorkbenchMessages(this.novelId, resolvedSelection)
+          : {
+            recent_messages: [],
+            conversation_summary: '',
+            last_result_snapshot: null,
+            session_id: workbench?.session_id || '',
+          }
+
+        this.outlineWorkbench.items = normalizedItems
+        this.outlineWorkbench.selection = resolvedSelection
+        this.outlineWorkbench.messages = messages?.recent_messages || []
+        this.outlineWorkbench.sessionId = messages?.session_id || workbench?.session_id || ''
+        this.outlineWorkbench.conversationSummary = messages?.conversation_summary || ''
+        this.outlineWorkbench.lastResultSnapshot = messages?.last_result_snapshot || null
+        this.outlineWorkbench.state = 'ready'
+      } catch (error) {
+        this.outlineWorkbench.state = 'error'
+        this.outlineWorkbench.error = error?.message || '请求失败'
+      }
+    },
+
+    async submitOutlineFeedback(payload) {
+      if (!this.novelId) return
+      const selection = this.outlineWorkbench.selection || {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+      }
+      await api.submitOutlineFeedback(this.novelId, {
+        outline_type: selection.outline_type,
+        outline_ref: selection.outline_ref,
+        ...payload,
+      })
+      await this.refreshOutlineWorkbench(selection)
     },
   },
 })

@@ -14,6 +14,9 @@ vi.mock('@/api.js', () => ({
   getTimelines: vi.fn(),
   getForeshadowings: vi.fn(),
   getPendingDocs: vi.fn(),
+  getOutlineWorkbench: vi.fn(),
+  getOutlineWorkbenchMessages: vi.fn(),
+  submitOutlineFeedback: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -254,5 +257,115 @@ describe('novel store dashboard loading', () => {
       summary: '刷新后的计划摘要',
     })
     expect(store.dashboardLastUpdated).toBeTruthy()
+  })
+
+  it('refreshOutlineWorkbench stores normalized items, selection and messages', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+      context_window: {
+        recent_messages: [{ id: 'msg-inline', content: 'inline' }],
+      },
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-1', content: 'message-1' }],
+      conversation_summary: 'summary-1',
+      last_result_snapshot: { title: '快照 1' },
+    })
+
+    await store.refreshOutlineWorkbench({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+
+    expect(api.getOutlineWorkbench).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.items.map((item) => item.itemId)).toEqual([
+      'synopsis:synopsis',
+      'volume:vol_2',
+    ])
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-1', content: 'message-1' }])
+    expect(store.outlineWorkbench.conversationSummary).toBe('summary-1')
+    expect(store.outlineWorkbench.lastResultSnapshot).toEqual({ title: '快照 1' })
+  })
+
+  it('submitOutlineFeedback keeps selection and refreshes the current item', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+
+    vi.mocked(api.submitOutlineFeedback).mockResolvedValue({
+      assistant_message: { id: 'assistant-1', content: '已处理' },
+    })
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+      context_window: {
+        recent_messages: [],
+      },
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-2', content: 'message-2' }],
+      conversation_summary: 'summary-2',
+      last_result_snapshot: { title: '快照 2' },
+    })
+
+    await store.submitOutlineFeedback({ content: '补充第二卷的反派动机' })
+
+    expect(api.submitOutlineFeedback).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      content: '补充第二卷的反派动机',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(true)
+    expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-2', content: 'message-2' }])
   })
 })
