@@ -104,6 +104,7 @@
 为了避免人工自定义二级分组演变成自由文本脏数据，二级分组不能只靠字符串裸写。第一版需要引入分组注册表，至少包含：
 
 - `group_id`
+- `novel_id`
 - `category`
 - `group_name`
 - `group_slug`
@@ -116,10 +117,17 @@
 约束规则：
 
 - 系统推荐分组在注册表中预置
+- 分组作用域按小说隔离，不能全局共享
 - 人工新建分组时，必须挂在某个固定一级分类下
-- 同一一级分类下，`group_slug` 唯一
+- 同一小说、同一一级分类下，`group_slug` 唯一
 - 前端自由输入新分组名时，后端先做规范化，再落注册表，不能直接把原始字符串写进实体
 - 分组重命名、停用、排序都作用于注册表，避免后续出现重复节点
+
+建议唯一约束：
+
+- `unique(novel_id, category, group_slug)`
+
+系统推荐分组可以在每本小说初始化时预置到本小说作用域下，也可以通过“系统模板 + 小说级实例化”实现，但对实体查询和编辑接口来说，最终都表现为小说内隔离的分组集合。
 
 ### 派生展示字段
 
@@ -128,6 +136,7 @@
 - `effective_category = manual_category || system_category`
 - `effective_group = manual_group || system_group`
 - `classification_status`
+- `system_needs_review`
 
 `classification_status` 取值：
 
@@ -137,9 +146,21 @@
 
 ### 状态规则
 
-- 只存在系统建议时，状态为 `auto`
-- 只要人工改过一级分类或二级分组，状态为 `manual_override`
-- 命中低置信度、落入“其他”、二级分组为空、依据不足或冲突明显时，状态为 `needs_review`
+展示状态采用单值互斥模型，并固定优先级：
+
+- `manual_override > needs_review > auto`
+
+规则如下：
+
+- 只存在系统建议，且系统不要求人工复核时，状态为 `auto`
+- 只要人工改过一级分类或二级分组，展示状态为 `manual_override`
+- 未被人工覆盖，且命中低置信度、落入“其他”、二级分组为空、依据不足或冲突明显时，状态为 `needs_review`
+
+同时保留 `system_needs_review` 作为系统侧信号：
+
+- 即使实体已经被人工覆盖，若系统判断仍然低置信度，`system_needs_review` 仍可为 `true`
+- 页面主状态展示仍以 `classification_status` 为准
+- 需要时可在详情面板中提示“系统建议仍不稳定”，但第一版不把它提升为第二套主状态体系
 
 ## 自动归类规则
 
@@ -175,6 +196,23 @@
 系统可反复更新 `system_category/system_group`，但不得覆盖 `manual_category/manual_group`。前端展示、树状目录组织、搜索聚合均以 `effective_*` 为准。
 
 同时提供“清除人工覆盖”操作。清除后，实体重新回到系统建议结果。
+
+### 分类与分组一致性约束
+
+人工修改分类和分组时必须满足强一致性，避免写入非法组合。
+
+约束规则：
+
+- `system_group` 必须属于 `system_category`
+- `manual_group` 必须属于 `manual_category`；若 `manual_category` 为空，则不得单独保留 `manual_group`
+- `effective_group` 必须属于 `effective_category`
+- 接口层禁止返回或持久化不合法的分类-分组组合
+
+交互规则：
+
+- 人工仅修改二级分组时，使用当前人工一级分类；若人工一级分类为空，则先基于当前 `effective_category` 写入对应的 `manual_category`
+- 人工修改一级分类时，如果原有 `manual_group` 不属于新的一级分类，必须自动清空并要求用户重选
+- 清除人工覆盖时，同时清除与该覆盖关联的非法或失效分组引用
 
 ## 搜索设计
 
