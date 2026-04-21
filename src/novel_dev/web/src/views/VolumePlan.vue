@@ -47,7 +47,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import OutlineConversation from '@/components/outline/OutlineConversation.vue'
 import OutlineDetailPanel from '@/components/outline/OutlineDetailPanel.vue'
 import OutlineSidebar from '@/components/outline/OutlineSidebar.vue'
@@ -104,6 +104,15 @@ const detailPanel = computed(() => {
 
   return buildVolumeDetail(item, snapshot)
 })
+
+watch(
+  () => store.novelId,
+  async (novelId) => {
+    if (!novelId) return
+    await store.refreshOutlineWorkbench()
+  },
+  { immediate: true }
+)
 
 function resolveFallbackSnapshot(selection) {
   if (selection.outline_type === 'synopsis') {
