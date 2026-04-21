@@ -17,21 +17,27 @@ describe('dashboard summary helpers', () => {
       ],
       volumePlan: {
         chapters: [
-          { chapter_id: 'ch-1' },
-          { chapter_id: 'ch-2' },
+          { chapter_id: 'ch-1', title: '第一章（计划）' },
+          { chapter_id: 'ch-2', title: '第二章（计划）' },
+          { chapter_id: 'ch-4', title: '第四章（计划）', summary: '计划内但尚未落库' },
         ],
       },
       currentChapterId: 'ch-2',
     })
 
-    expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-2'])
+    expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-2', 'ch-4', 'ch-3'])
     expect(summary.chapters.find((chapter) => chapter.chapter_id === 'ch-2')?.isCurrent).toBe(true)
+    expect(summary.chapters.find((chapter) => chapter.chapter_id === 'ch-4')).toMatchObject({
+      chapter_id: 'ch-4',
+      title: '第四章（计划）',
+      summary: '计划内但尚未落库',
+    })
     expect(summary.stats).toEqual({
-      total: 2,
+      total: 4,
       drafted: 1,
       edited: 1,
       inProgress: 2,
-      pending: 0,
+      pending: 2,
       archived: 0,
     })
   })
@@ -70,45 +76,43 @@ describe('dashboard summary helpers', () => {
   it('buildRecentUpdates sorts by each source timestamp and truncates to four items', () => {
     const updates = buildRecentUpdates({
       entities: [
-        { entity_id: 'e-old', name: '旧实体', updated_at: '2026-04-20T07:00:00Z' },
         { entity_id: 'e-new', name: '新实体', updated_at: '2026-04-21T10:00:00Z' },
       ],
+      pendingDocs: [
+        { id: 'd-2', extraction_type: 'setting', created_at: '2026-04-21T09:30:00Z' },
+      ],
       timelines: [
-        { id: 't-1', tick: 9999999999999, narrative: '事件 1' },
-        { id: 't-2', tick: 1000, narrative: '事件 2' },
+        { id: 't-1', tick: 12, narrative: '事件 1' },
+        { id: 't-2', tick: 3, narrative: '事件 2' },
       ],
       foreshadowings: [
-        { id: 'f-1', content: '伏笔 1', 埋下_time_tick: 9999999999998 },
-        { id: 'f-2', content: '伏笔 2', 埋下_time_tick: 2 },
-      ],
-      pendingDocs: [
-        { id: 'd-1', extraction_type: 'style', created_at: '2026-04-20T08:00:00Z' },
-        { id: 'd-2', extraction_type: 'setting', created_at: '2026-04-21T09:30:00Z' },
+        { id: 'f-1', content: '伏笔 1', 埋下_time_tick: 9 },
+        { id: 'f-2', content: '伏笔 2', 埋下_time_tick: 1 },
       ],
     })
 
     expect(updates).toHaveLength(4)
     expect(updates.map((item) => item.route)).toEqual([
-      '/timeline',
-      '/foreshadowings',
       '/entities',
       '/documents',
+      '/timeline',
+      '/foreshadowings',
     ])
     expect(updates[0]).toMatchObject({
-      label: '时间线',
-      detail: '事件 1',
-    })
-    expect(updates[1]).toMatchObject({
-      label: '伏笔',
-      detail: '伏笔 1',
-    })
-    expect(updates[2]).toMatchObject({
       label: '实体',
       detail: '新实体',
     })
-    expect(updates[3]).toMatchObject({
+    expect(updates[1]).toMatchObject({
       label: '资料',
       detail: 'setting',
+    })
+    expect(updates[2]).toMatchObject({
+      label: '时间线',
+      detail: '事件 1',
+    })
+    expect(updates[3]).toMatchObject({
+      label: '伏笔',
+      detail: '伏笔 1',
     })
   })
 
@@ -151,13 +155,14 @@ describe('dashboard summary helpers', () => {
     }
   })
 
-  it('buildRiskItems merges panel errors, current chapter missing and the latest warning/error logs', () => {
-    const risks = buildRiskItems({
+  it('buildRiskItems reports missing current chapter only in phases that need it', () => {
+    const riskyPhase = buildRiskItems({
       panels: [
         { id: 'data', label: '数据状态', state: 'error', route: '/dashboard' },
         { id: 'flow', label: '流程状态', state: 'ok', route: '/dashboard' },
       ],
       currentChapter: null,
+      currentPhase: 'drafting',
       logs: [
         { timestamp: '2026-04-21T10:00:00Z', level: 'info', agent: 'NovelDirector', message: '正常日志' },
         { timestamp: '2026-04-21T10:01:00Z', level: 'warning', agent: 'ContextAgent', message: '上下文警告' },
@@ -165,9 +170,18 @@ describe('dashboard summary helpers', () => {
       ],
     })
 
-    expect(risks.some((item) => item.type === 'panel_error' && item.label === '数据状态')).toBe(true)
-    expect(risks.some((item) => item.type === 'current_chapter_missing')).toBe(true)
-    expect(risks.some((item) => item.type === 'log_error' && item.detail.includes('写作错误'))).toBe(true)
-    expect(risks.some((item) => item.type === 'log_warning' && item.detail.includes('上下文警告'))).toBe(true)
+    expect(riskyPhase.some((item) => item.type === 'panel_error' && item.label === '数据状态')).toBe(true)
+    expect(riskyPhase.some((item) => item.type === 'current_chapter_missing')).toBe(true)
+    expect(riskyPhase.some((item) => item.type === 'log_error' && item.detail.includes('写作错误'))).toBe(true)
+    expect(riskyPhase.some((item) => item.type === 'log_warning' && item.detail.includes('上下文警告'))).toBe(true)
+
+    const safePhase = buildRiskItems({
+      currentChapter: null,
+      currentPhase: 'brainstorming',
+      logs: [],
+    })
+
+    expect(safePhase.some((item) => item.type === 'current_chapter_missing')).toBe(false)
+    expect(buildRiskItems({ currentChapter: null, currentPhase: 'completed', logs: [] }).some((item) => item.type === 'current_chapter_missing')).toBe(false)
   })
 })

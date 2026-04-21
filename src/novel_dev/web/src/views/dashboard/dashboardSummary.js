@@ -17,6 +17,15 @@ const PHASE_ACTIONS = {
   completed: { key: 'export', label: '导出', route: '/dashboard' },
 }
 
+const PHASES_REQUIRING_CURRENT_CHAPTER = new Set([
+  'context_preparation',
+  'drafting',
+  'reviewing',
+  'editing',
+  'fast_reviewing',
+  'librarian',
+])
+
 function toArray(value) {
   return Array.isArray(value) ? value : []
 }
@@ -30,6 +39,10 @@ function parseTime(value) {
 function normalizeNumber(value) {
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : 0
+}
+
+function hasRealTime(value) {
+  return parseTime(value) > 0
 }
 
 function chapterRoute(chapter) {
@@ -52,14 +65,17 @@ function statusLabel(status) {
 
 function buildChapterSummary({ chapters = [], volumePlan = null, currentChapterId = null, currentChapter = null } = {}) {
   const sourceChapters = toArray(chapters)
-  const plannedIds = toArray(volumePlan?.chapters)
-    .map((chapter) => chapter?.chapter_id)
-    .filter(Boolean)
+  const plannedChapters = toArray(volumePlan?.chapters)
+  const chapterById = new Map(sourceChapters.map((chapter) => [chapter?.chapter_id, chapter]))
 
-  const scopedChapters = plannedIds.length
-    ? plannedIds
-      .map((chapterId) => sourceChapters.find((chapter) => chapter?.chapter_id === chapterId))
-      .filter(Boolean)
+  const scopedChapters = plannedChapters.length
+    ? [
+      ...plannedChapters.map((planChapter) => {
+        const chapter = chapterById.get(planChapter?.chapter_id)
+        return chapter ? { ...planChapter, ...chapter } : { ...planChapter }
+      }),
+      ...sourceChapters.filter((chapter) => !plannedChapters.some((planChapter) => planChapter?.chapter_id === chapter?.chapter_id)),
+    ]
     : sourceChapters
 
   const activeChapterId = currentChapterId || currentChapter?.chapter_id || currentChapter?.id || null
@@ -99,24 +115,32 @@ function buildRecentUpdates({ entities = [], timelines = [], foreshadowings = []
   const updates = [
     ...toArray(entities).map((entity) => ({
       sort: parseTime(entity?.updated_at || entity?.created_at),
+      layer: hasRealTime(entity?.updated_at || entity?.created_at) ? 0 : 2,
+      layerSort: parseTime(entity?.updated_at || entity?.created_at),
       label: '实体',
       detail: entity?.name || entity?.entity_id || entity?.id || '未命名实体',
       route: '/entities',
     })),
     ...toArray(pendingDocs).map((doc) => ({
       sort: parseTime(doc?.created_at),
+      layer: hasRealTime(doc?.created_at) ? 0 : 2,
+      layerSort: parseTime(doc?.created_at),
       label: '资料',
       detail: doc?.extraction_type || doc?.title || doc?.id || '待处理资料',
       route: '/documents',
     })),
     ...toArray(timelines).map((timeline) => ({
       sort: normalizeNumber(timeline?.tick),
+      layer: 1,
+      layerSort: normalizeNumber(timeline?.tick),
       label: '时间线',
       detail: timeline?.narrative || `Tick ${timeline?.tick ?? 0}`,
       route: '/timeline',
     })),
     ...toArray(foreshadowings).map((foreshadowing) => ({
       sort: normalizeNumber(foreshadowing?.埋下_time_tick),
+      layer: 1,
+      layerSort: normalizeNumber(foreshadowing?.埋下_time_tick),
       label: '伏笔',
       detail: foreshadowing?.content || foreshadowing?.id || '未命名伏笔',
       route: '/foreshadowings',
@@ -124,8 +148,13 @@ function buildRecentUpdates({ entities = [], timelines = [], foreshadowings = []
   ]
 
   return updates
-    .sort((left, right) => right.sort - left.sort)
+    .sort((left, right) => {
+      if (left.layer !== right.layer) return left.layer - right.layer
+      if (right.layerSort !== left.layerSort) return right.layerSort - left.layerSort
+      return 0
+    })
     .slice(0, 4)
+    .map(({ sort, label, detail, route }) => ({ sort, label, detail, route }))
 }
 
 function buildRecommendedActions({ currentPhase = '', currentChapter = null, volumePlan = null } = {}) {
@@ -179,7 +208,7 @@ function buildRecommendedActions({ currentPhase = '', currentChapter = null, vol
   return [action]
 }
 
-function buildRiskItems({ panels = [], currentChapter = null, logs = [] } = {}) {
+function buildRiskItems({ panels = [], currentChapter = null, currentPhase = '', logs = [] } = {}) {
   const risks = []
 
   for (const panel of toArray(panels)) {
@@ -193,7 +222,7 @@ function buildRiskItems({ panels = [], currentChapter = null, logs = [] } = {}) 
     }
   }
 
-  if (!currentChapter) {
+  if (!currentChapter && PHASES_REQUIRING_CURRENT_CHAPTER.has(currentPhase)) {
     risks.push({
       type: 'current_chapter_missing',
       label: '当前章节缺失',
