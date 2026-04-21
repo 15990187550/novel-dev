@@ -1,3 +1,5 @@
+import { beforeEach } from 'vitest'
+
 class ResizeObserverMock {
   observe() {}
   unobserve() {}
@@ -6,6 +8,10 @@ class ResizeObserverMock {
 
 class EventSourceMock {
   static instances = []
+
+  static resetInstances() {
+    EventSourceMock.instances = []
+  }
 
   constructor(url) {
     this.url = url
@@ -46,5 +52,14 @@ if (!globalThis.matchMedia) {
 
 if (!globalThis.EventSource) {
   globalThis.EventSource = EventSourceMock
+}
+
+globalThis.EventSource.instances = EventSourceMock.instances
+globalThis.EventSource.reset = () => {
+  EventSourceMock.resetInstances()
   globalThis.EventSource.instances = EventSourceMock.instances
 }
+
+beforeEach(() => {
+  globalThis.EventSource.reset()
+})
