@@ -2,7 +2,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from sqlalchemy import (
-    ForeignKey, Text, Integer, Boolean, Float, JSON, TIMESTAMP, UniqueConstraint
+    ForeignKey, Text, Integer, Boolean, Float, JSON, TIMESTAMP, UniqueConstraint, Index
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -184,6 +184,41 @@ class NovelDocument(Base):
     vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1024), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OutlineSession(Base):
+    __tablename__ = "outline_sessions"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "outline_type", "outline_ref", name="uix_outline_session_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    outline_type: Mapped[str] = mapped_column(Text, nullable=False)
+    outline_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    conversation_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    last_result_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    messages: Mapped[List["OutlineMessage"]] = relationship(back_populates="session", cascade="all, delete-orphan")
+
+
+class OutlineMessage(Base):
+    __tablename__ = "outline_messages"
+    __table_args__ = (
+        Index("ix_outline_messages_session_id", "session_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("outline_sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    message_type: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+
+    session: Mapped["OutlineSession"] = relationship(back_populates="messages")
 
 
 class PendingExtraction(Base):
