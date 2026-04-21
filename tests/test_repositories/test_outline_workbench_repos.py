@@ -1,7 +1,9 @@
 from datetime import datetime
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
+from novel_dev.db.engine import async_session_maker
 from novel_dev.repositories.outline_message_repo import OutlineMessageRepository
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 
@@ -15,6 +17,7 @@ async def test_outline_session_get_or_create_reuses_existing_session(async_sessi
         outline_type="volume",
         outline_ref="vol_1",
     )
+    await async_session.commit()
     second = await repo.get_or_create(
         novel_id="novel_1",
         outline_type="volume",
@@ -25,6 +28,44 @@ async def test_outline_session_get_or_create_reuses_existing_session(async_sessi
     assert first.novel_id == "novel_1"
     assert first.outline_type == "volume"
     assert first.outline_ref == "vol_1"
+
+
+@pytest.mark.asyncio
+async def test_outline_session_get_or_create_recovers_from_unique_conflict(async_session, monkeypatch):
+    repo = OutlineSessionRepository(async_session)
+    conflict_key = {
+        "novel_id": "novel_2",
+        "outline_type": "volume",
+        "outline_ref": "vol_2",
+    }
+    inserted_session = None
+    original_flush = async_session.flush
+    conflict_injected = False
+
+    async def flush_with_conflict(*args, **kwargs):
+        nonlocal conflict_injected, inserted_session
+        if not conflict_injected:
+            conflict_injected = True
+            async with async_session_maker() as competing_session:
+                competing_repo = OutlineSessionRepository(competing_session)
+                inserted_session = await competing_repo.get_or_create(**conflict_key)
+                await competing_session.commit()
+            raise IntegrityError(
+                "INSERT INTO outline_sessions",
+                None,
+                Exception("simulated unique constraint conflict"),
+            )
+        return await original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(async_session, "flush", flush_with_conflict)
+
+    session = await repo.get_or_create(**conflict_key)
+
+    assert inserted_session is not None
+    assert session.id == inserted_session.id
+    assert session.novel_id == conflict_key["novel_id"]
+    assert session.outline_type == conflict_key["outline_type"]
+    assert session.outline_ref == conflict_key["outline_ref"]
 
 
 @pytest.mark.asyncio

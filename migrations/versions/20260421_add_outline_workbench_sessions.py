@@ -29,12 +29,7 @@ def upgrade() -> None:
         sa.Column("last_result_snapshot", sa.JSON(), nullable=True),
         sa.Column("updated_at", sa.TIMESTAMP(), nullable=False),
         sa.PrimaryKeyConstraint("id"),
-    )
-    op.create_index(
-        "ux_outline_sessions_novel_outline_type_ref",
-        "outline_sessions",
-        ["novel_id", "outline_type", "outline_ref"],
-        unique=True,
+        sa.UniqueConstraint("novel_id", "outline_type", "outline_ref", name="uix_outline_session_scope"),
     )
 
     op.create_table(
@@ -55,5 +50,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("ix_outline_messages_session_id", table_name="outline_messages")
     op.drop_table("outline_messages")
-    op.drop_index("ux_outline_sessions_novel_outline_type_ref", table_name="outline_sessions")
     op.drop_table("outline_sessions")
