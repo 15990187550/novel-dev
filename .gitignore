@@ -1,4 +1,6 @@
 .worktrees/
+.claude/worktrees/
+.DS_Store
 *.db
 *.egg-info/
 __pycache__/
