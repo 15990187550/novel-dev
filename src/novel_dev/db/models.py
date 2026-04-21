@@ -2,7 +2,7 @@ from typing import List, Optional
 from datetime import datetime
 
 from sqlalchemy import (
-    ForeignKey, Text, Integer, Boolean, JSON, TIMESTAMP, UniqueConstraint
+    ForeignKey, Text, Integer, Boolean, Float, JSON, TIMESTAMP, UniqueConstraint
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
@@ -43,9 +43,34 @@ class Entity(Base):
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
-    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
+    system_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    system_group_id: Mapped[Optional[str]] = mapped_column(ForeignKey("entity_groups.id"), nullable=True)
+    manual_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    manual_group_id: Mapped[Optional[str]] = mapped_column(ForeignKey("entity_groups.id"), nullable=True)
+    classification_reason: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    classification_confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    system_needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    search_document: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    search_vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
+
+
+class EntityGroup(Base):
+    __tablename__ = "entity_groups"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "category", "group_slug", name="uix_entity_group_scope"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(Text, nullable=False)
+    group_name: Mapped[str] = mapped_column(Text, nullable=False)
+    group_slug: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="system")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
 class EntityVersion(Base):
@@ -166,6 +191,7 @@ class PendingExtraction(Base):
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)
     novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_filename: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     extraction_type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     raw_result: Mapped[dict] = mapped_column(JSON, nullable=False)

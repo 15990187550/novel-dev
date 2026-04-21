@@ -31,6 +31,22 @@ async def test_create_entity_with_novel_id(async_session):
 
 
 @pytest.mark.asyncio
+async def test_create_entity_initializes_classification_fields(async_session):
+    repo = EntityRepository(async_session)
+    entity = await repo.create("char_100", "character", "陆照", novel_id="novel_x")
+
+    assert entity.system_category is None
+    assert entity.system_group_id is None
+    assert entity.manual_category is None
+    assert entity.manual_group_id is None
+    assert entity.classification_reason is None
+    assert entity.classification_confidence is None
+    assert entity.search_document is None
+    assert entity.search_vector_embedding is None
+    assert entity.system_needs_review is False
+
+
+@pytest.mark.asyncio
 async def test_list_entities_by_novel(async_session):
     repo = EntityRepository(async_session)
     await repo.create("e1", "character", "A", novel_id="n1")
