@@ -503,9 +503,9 @@ describe('novel store dashboard loading', () => {
     vi.mocked(api.getOutlineWorkbench)
       .mockReturnValueOnce(firstWorkbench.promise)
       .mockReturnValueOnce(secondWorkbench.promise)
-    vi.mocked(api.getOutlineWorkbenchMessages)
-      .mockReturnValueOnce(firstMessages.promise)
-      .mockReturnValueOnce(secondMessages.promise)
+    vi.mocked(api.getOutlineWorkbenchMessages).mockImplementation((_novelId, selection) => {
+      return selection?.outline_ref === 'vol_1' ? firstMessages.promise : secondMessages.promise
+    })
 
     const firstRefresh = store.refreshOutlineWorkbench({
       outline_type: 'volume',
