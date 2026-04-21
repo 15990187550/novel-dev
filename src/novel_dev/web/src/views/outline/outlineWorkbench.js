@@ -48,10 +48,10 @@ export function resolveOutlineWorkbenchSelection(items = [], selection = null) {
   }
 }
 
-export function buildOutlineWorkbenchItems({ items = [], currentSelection = null } = {}) {
-  const resolvedSelection = resolveOutlineWorkbenchSelection(items, currentSelection)
-  const currentItemId = resolvedSelection
-    ? createItemId(resolvedSelection.outline_type, resolvedSelection.outline_ref)
+export function buildOutlineWorkbenchItems({ items = [], currentItem = null } = {}) {
+  const resolvedCurrentItem = resolveOutlineWorkbenchSelection(items, currentItem)
+  const currentItemId = resolvedCurrentItem
+    ? createItemId(resolvedCurrentItem.outline_type, resolvedCurrentItem.outline_ref)
     : ''
 
   return (Array.isArray(items) ? items : []).map((item) => {

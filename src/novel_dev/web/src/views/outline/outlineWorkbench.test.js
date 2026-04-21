@@ -18,33 +18,33 @@ describe('outline workbench helpers', () => {
           status: 'missing',
         },
       ],
-      currentSelection: {
+      currentItem: {
         outline_type: 'volume',
         outline_ref: 'vol_1',
       },
     })
 
-    expect(items).toEqual([
-      expect.objectContaining({
+    expect(items).toMatchObject([
+      {
         key: 'synopsis:synopsis',
         outlineType: 'synopsis',
         outlineRef: 'synopsis',
         itemId: 'synopsis:synopsis',
         isCurrent: false,
         statusLabel: '可编辑',
-      }),
-      expect.objectContaining({
+      },
+      {
         key: 'volume:vol_1',
         outlineType: 'volume',
         outlineRef: 'vol_1',
         itemId: 'volume:vol_1',
         isCurrent: true,
         statusLabel: '待创建',
-      }),
+      },
     ])
   })
 
-  it('falls back to synopsis as current item when there is no explicit selection', () => {
+  it('uses an independent current item instead of selection to mark isCurrent', () => {
     const items = buildOutlineWorkbenchItems({
       items: [
         {
@@ -60,9 +60,13 @@ describe('outline workbench helpers', () => {
           status: 'ready',
         },
       ],
+      currentItem: {
+        outline_type: 'volume',
+        outline_ref: 'vol_2',
+      },
     })
 
-    expect(items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(true)
-    expect(items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(false)
+    expect(items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(false)
+    expect(items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(true)
   })
 })

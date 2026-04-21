@@ -47,6 +47,7 @@ const createOutlineWorkbenchState = () => ({
   error: '',
   items: [],
   selection: null,
+  currentItem: null,
   messages: [],
   sessionId: '',
   conversationSummary: '',
@@ -512,14 +513,15 @@ export const useNovelStore = defineStore('novel', {
             outline_ref: workbench.outline_ref,
           }
           : null
-        const nextSelection = selection || this.outlineWorkbench.selection || serviceSelection || {
+        const nextSelection = selection || this.outlineWorkbench.selection || {
           outline_type: 'synopsis',
           outline_ref: 'synopsis',
         }
         const resolvedSelection = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], nextSelection)
+        const resolvedCurrentItem = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], serviceSelection)
         const normalizedItems = buildOutlineWorkbenchItems({
           items: workbench?.outline_items || [],
-          currentSelection: resolvedSelection,
+          currentItem: resolvedCurrentItem,
         })
         const messages = resolvedSelection
           ? await api.getOutlineWorkbenchMessages(this.novelId, resolvedSelection)
@@ -532,6 +534,7 @@ export const useNovelStore = defineStore('novel', {
 
         this.outlineWorkbench.items = normalizedItems
         this.outlineWorkbench.selection = resolvedSelection
+        this.outlineWorkbench.currentItem = resolvedCurrentItem
         this.outlineWorkbench.messages = messages?.recent_messages || []
         this.outlineWorkbench.sessionId = messages?.session_id || workbench?.session_id || ''
         this.outlineWorkbench.conversationSummary = messages?.conversation_summary || ''
