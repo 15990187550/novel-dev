@@ -12,6 +12,16 @@ class OutlineSessionRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
+    def _find_cached_session(self, novel_id: str, outline_type: str, outline_ref: str) -> Optional[OutlineSession]:
+        for candidate in list(self.session.new) + list(self.session.identity_map.values()):
+            if isinstance(candidate, OutlineSession) and (
+                candidate.novel_id == novel_id
+                and candidate.outline_type == outline_type
+                and candidate.outline_ref == outline_ref
+            ):
+                return candidate
+        return None
+
     async def get_or_create(
         self,
         novel_id: str,
@@ -19,20 +29,11 @@ class OutlineSessionRepository:
         outline_ref: str,
         status: str = "pending",
     ) -> OutlineSession:
-        outline_session = OutlineSession(
-            id=uuid.uuid4().hex,
-            novel_id=novel_id,
-            outline_type=outline_type,
-            outline_ref=outline_ref,
-            status=status,
-        )
-        self.session.add(outline_session)
+        cached_session = self._find_cached_session(novel_id, outline_type, outline_ref)
+        if cached_session is not None:
+            return cached_session
 
-        try:
-            await self.session.flush()
-            return outline_session
-        except IntegrityError:
-            await self.session.rollback()
+        with self.session.no_autoflush:
             result = await self.session.execute(
                 select(OutlineSession).where(
                     OutlineSession.novel_id == novel_id,
@@ -40,6 +41,32 @@ class OutlineSessionRepository:
                     OutlineSession.outline_ref == outline_ref,
                 )
             )
+        existing_session = result.scalar_one_or_none()
+        if existing_session is not None:
+            return existing_session
+
+        outline_session = OutlineSession(
+            id=uuid.uuid4().hex,
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            status=status,
+        )
+
+        try:
+            async with self.session.begin_nested():
+                self.session.add(outline_session)
+                await self.session.flush()
+            return outline_session
+        except IntegrityError:
+            with self.session.no_autoflush:
+                result = await self.session.execute(
+                    select(OutlineSession).where(
+                        OutlineSession.novel_id == novel_id,
+                        OutlineSession.outline_type == outline_type,
+                        OutlineSession.outline_ref == outline_ref,
+                    )
+                )
             existing_session = result.scalar_one()
             return existing_session
 
