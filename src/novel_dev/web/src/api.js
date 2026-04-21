@@ -28,6 +28,12 @@ export const getSpacelines = (id) => api.get(`/novels/${id}/spacelines`).then(r 
 export const getForeshadowings = (id) => api.get(`/novels/${id}/foreshadowings`).then(r => r.data)
 export const getSynopsis = (id) => api.get(`/novels/${id}/synopsis`).then(r => r.data)
 export const getVolumePlan = (id) => api.get(`/novels/${id}/volume_plan`).then(r => r.data)
+export const getOutlineWorkbench = (id, params) =>
+  api.get(`/novels/${id}/outline_workbench`, { params }).then(r => r.data)
+export const getOutlineWorkbenchMessages = (id, params) =>
+  api.get(`/novels/${id}/outline_workbench/messages`, { params }).then(r => r.data)
+export const submitOutlineFeedback = (id, payload) =>
+  api.post(`/novels/${id}/outline_workbench/submit`, payload).then(r => r.data)
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)

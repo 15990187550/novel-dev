@@ -26,6 +26,8 @@ from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
+from novel_dev.schemas.outline_workbench import OutlineMessagesResponse
+from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 import re
@@ -44,6 +46,12 @@ class EntityClassificationUpdateRequest(BaseModel):
     manual_group_name: Optional[str] = None
     clear_manual_override: bool = False
     reclassify: bool = False
+
+
+class OutlineWorkbenchSubmitRequest(BaseModel):
+    outline_type: str
+    outline_ref: str
+    content: str = Field(min_length=1)
 
 
 settings = Settings()
@@ -1321,6 +1329,60 @@ async def get_volume_plan(novel_id: str, session: AsyncSession = Depends(get_ses
             for ch in plan.chapters
         ],
     }
+
+
+@router.get("/api/novels/{novel_id}/outline_workbench")
+async def get_outline_workbench(
+    novel_id: str,
+    outline_type: str,
+    outline_ref: str,
+    session: AsyncSession = Depends(get_session),
+):
+    service = OutlineWorkbenchService(session)
+    try:
+        return await service.build_workbench(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/api/novels/{novel_id}/outline_workbench/messages", response_model=OutlineMessagesResponse)
+async def get_outline_workbench_messages(
+    novel_id: str,
+    outline_type: str,
+    outline_ref: str,
+    session: AsyncSession = Depends(get_session),
+):
+    service = OutlineWorkbenchService(session)
+    try:
+        return await service.get_messages(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/api/novels/{novel_id}/outline_workbench/submit")
+async def submit_outline_workbench(
+    novel_id: str,
+    req: OutlineWorkbenchSubmitRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = OutlineWorkbenchService(session)
+    try:
+        return await service.submit_feedback(
+            novel_id=novel_id,
+            outline_type=req.outline_type,
+            outline_ref=req.outline_ref,
+            feedback=req.content,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/api/novels/{novel_id}/librarian")

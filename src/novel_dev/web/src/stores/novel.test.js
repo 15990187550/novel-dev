@@ -3,6 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/api.js'
 import { useNovelStore } from './novel.js'
 
+function createDeferred() {
+  let resolve
+  let reject
+  const promise = new Promise((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
+}
+
 vi.mock('@/api.js', () => ({
   getNovelState: vi.fn(),
   getArchiveStats: vi.fn(),
@@ -14,6 +24,9 @@ vi.mock('@/api.js', () => ({
   getTimelines: vi.fn(),
   getForeshadowings: vi.fn(),
   getPendingDocs: vi.fn(),
+  getOutlineWorkbench: vi.fn(),
+  getOutlineWorkbenchMessages: vi.fn(),
+  submitOutlineFeedback: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -254,5 +267,346 @@ describe('novel store dashboard loading', () => {
       summary: '刷新后的计划摘要',
     })
     expect(store.dashboardLastUpdated).toBeTruthy()
+  })
+
+  it('refreshOutlineWorkbench stores normalized items, selection and messages', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+      context_window: {
+        recent_messages: [{ id: 'msg-inline', content: 'inline' }],
+      },
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-1', content: 'message-1' }],
+      conversation_summary: 'summary-1',
+      last_result_snapshot: { title: '快照 1' },
+    })
+
+    await store.refreshOutlineWorkbench({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+
+    expect(api.getOutlineWorkbench).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.items.map((item) => item.itemId)).toEqual([
+      'synopsis:synopsis',
+      'volume:vol_2',
+    ])
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-1', content: 'message-1' }])
+    expect(store.outlineWorkbench.conversationSummary).toBe('summary-1')
+    expect(store.outlineWorkbench.lastResultSnapshot).toEqual({ title: '快照 1' })
+  })
+
+  it('refreshOutlineWorkbench keeps selection and current item separate', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-current', content: 'message-current' }],
+      conversation_summary: 'summary-current',
+      last_result_snapshot: { title: '快照 current' },
+    })
+
+    await store.refreshOutlineWorkbench()
+
+    expect(api.getOutlineWorkbench).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(true)
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(false)
+  })
+
+  it('refreshOutlineWorkbench defaults selection to service current item when synopsis is absent', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+      outline_items: [
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_3',
+          title: '第三卷',
+          status: 'active',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-vol-3', content: 'message-vol-3' }],
+      conversation_summary: 'summary-vol-3',
+      last_result_snapshot: { title: '快照 vol-3' },
+    })
+
+    await store.refreshOutlineWorkbench()
+
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+  })
+
+  it('submitOutlineFeedback keeps selection but updates current item from service', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+    store.outlineWorkbench.currentItem = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+
+    vi.mocked(api.submitOutlineFeedback).mockResolvedValue({
+      assistant_message: { id: 'assistant-1', content: '已处理' },
+    })
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+      context_window: {
+        recent_messages: [],
+      },
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-2', content: 'message-2' }],
+      conversation_summary: 'summary-2',
+      last_result_snapshot: { title: '快照 2' },
+    })
+
+    await store.submitOutlineFeedback({ content: '补充第二卷的反派动机' })
+
+    expect(api.submitOutlineFeedback).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      content: '补充第二卷的反派动机',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(true)
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(false)
+    expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-2', content: 'message-2' }])
+  })
+
+  it('refreshOutlineWorkbench ignores stale responses that return after a newer request', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const firstWorkbench = createDeferred()
+    const secondWorkbench = createDeferred()
+    const firstMessages = createDeferred()
+    const secondMessages = createDeferred()
+
+    vi.mocked(api.getOutlineWorkbench)
+      .mockReturnValueOnce(firstWorkbench.promise)
+      .mockReturnValueOnce(secondWorkbench.promise)
+    vi.mocked(api.getOutlineWorkbenchMessages).mockImplementation((_novelId, selection) => {
+      return selection?.outline_ref === 'vol_1' ? firstMessages.promise : secondMessages.promise
+    })
+
+    const firstRefresh = store.refreshOutlineWorkbench({
+      outline_type: 'volume',
+      outline_ref: 'vol_1',
+    })
+    const secondRefresh = store.refreshOutlineWorkbench({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+
+    secondWorkbench.resolve({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      outline_items: [
+        { outline_type: 'volume', outline_ref: 'vol_1', title: '第一卷', status: 'ready' },
+        { outline_type: 'volume', outline_ref: 'vol_2', title: '第二卷', status: 'active' },
+      ],
+    })
+    await Promise.resolve()
+    secondMessages.resolve({
+      recent_messages: [{ id: 'msg-2', content: 'message-2' }],
+      conversation_summary: 'summary-2',
+      last_result_snapshot: { title: '快照 2' },
+    })
+    await secondRefresh
+
+    firstWorkbench.resolve({
+      outline_type: 'volume',
+      outline_ref: 'vol_1',
+      outline_items: [
+        { outline_type: 'volume', outline_ref: 'vol_1', title: '第一卷', status: 'active' },
+      ],
+    })
+    await Promise.resolve()
+    firstMessages.resolve({
+      recent_messages: [{ id: 'msg-1', content: 'message-1' }],
+      conversation_summary: 'summary-1',
+      last_result_snapshot: { title: '快照 1' },
+    })
+    await firstRefresh
+
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-2', content: 'message-2' }])
+    expect(store.outlineWorkbench.lastResultSnapshot).toEqual({ title: '快照 2' })
+  })
+
+  it('submitOutlineFeedback does not pull selection back after the user switches items', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+
+    const submitDeferred = createDeferred()
+    vi.mocked(api.submitOutlineFeedback).mockReturnValueOnce(submitDeferred.promise)
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+      outline_items: [
+        { outline_type: 'volume', outline_ref: 'vol_2', title: '第二卷', status: 'ready' },
+        { outline_type: 'volume', outline_ref: 'vol_3', title: '第三卷', status: 'active' },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-3', content: 'message-3' }],
+      conversation_summary: 'summary-3',
+      last_result_snapshot: { title: '快照 3' },
+    })
+
+    const submitPromise = store.submitOutlineFeedback({ content: '补充第二卷' })
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    }
+    submitDeferred.resolve({ assistant_message: { id: 'assistant-3', content: 'done' } })
+    await submitPromise
+
+    expect(api.submitOutlineFeedback).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      content: '补充第二卷',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
   })
 })
