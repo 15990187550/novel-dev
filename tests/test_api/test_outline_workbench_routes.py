@@ -6,6 +6,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.api.routes import OutlineWorkbenchService, get_session, router
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat, VolumePlan
 from novel_dev.schemas.context import BeatPlan
+from novel_dev.schemas.outline_workbench import OutlineMessagesResponse
 
 app = FastAPI()
 app.include_router(router)
@@ -175,13 +176,13 @@ async def test_get_outline_workbench_messages_uses_service_public_method(test_cl
         assert novel_id == "n_service_only"
         assert outline_type == "volume"
         assert outline_ref == "vol_9"
-        return {
-            "session_id": "sess_123",
-            "outline_type": outline_type,
-            "outline_ref": outline_ref,
-            "last_result_snapshot": {"title": "第九卷"},
-            "conversation_summary": "摘要",
-            "recent_messages": [
+        return OutlineMessagesResponse(
+            session_id="sess_123",
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            last_result_snapshot={"title": "第九卷"},
+            conversation_summary="摘要",
+            recent_messages=[
                 {
                     "id": "msg_1",
                     "role": "assistant",
@@ -191,7 +192,7 @@ async def test_get_outline_workbench_messages_uses_service_public_method(test_cl
                     "created_at": None,
                 }
             ],
-        }
+        )
 
     monkeypatch.setattr(OutlineWorkbenchService, "get_messages", fake_get_messages, raising=False)
 
@@ -219,3 +220,20 @@ async def test_get_outline_workbench_messages_uses_service_public_method(test_cl
             }
         ],
     }
+
+
+@pytest.mark.asyncio
+async def test_get_outline_workbench_messages_returns_404_when_service_raises_value_error(test_client, monkeypatch):
+    async def fake_get_messages(self, novel_id, outline_type, outline_ref):
+        raise ValueError(f"Novel state not found: {novel_id}")
+
+    monkeypatch.setattr(OutlineWorkbenchService, "get_messages", fake_get_messages, raising=False)
+
+    async with test_client as client:
+        resp = await client.get(
+            "/api/novels/n_missing/outline_workbench/messages",
+            params={"outline_type": "volume", "outline_ref": "vol_1"},
+        )
+
+    assert resp.status_code == 404
+    assert resp.json() == {"detail": "Novel state not found: n_missing"}

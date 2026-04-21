@@ -7,6 +7,7 @@ from novel_dev.repositories.outline_message_repo import OutlineMessageRepository
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 from novel_dev.schemas.outline_workbench import (
     OutlineContextWindow,
+    OutlineMessagesResponse,
     OutlineItemSummary,
     OutlineMessagePayload,
     OutlineSubmitResponse,
@@ -151,7 +152,7 @@ class OutlineWorkbenchService:
         novel_id: str,
         outline_type: str,
         outline_ref: str,
-    ) -> dict[str, Any]:
+    ) -> OutlineMessagesResponse:
         state = await self.novel_state_repo.get_state(novel_id)
         if state is None:
             raise ValueError(f"Novel state not found: {novel_id}")
@@ -163,14 +164,14 @@ class OutlineWorkbenchService:
             status="active",
         )
         context_window = await self._build_context_window(outline_session.id)
-        return {
-            "session_id": outline_session.id,
-            "outline_type": outline_type,
-            "outline_ref": outline_ref,
-            "last_result_snapshot": context_window.last_result_snapshot,
-            "conversation_summary": context_window.conversation_summary,
-            "recent_messages": [message.model_dump() for message in context_window.recent_messages],
-        }
+        return OutlineMessagesResponse(
+            session_id=outline_session.id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            last_result_snapshot=context_window.last_result_snapshot,
+            conversation_summary=context_window.conversation_summary,
+            recent_messages=context_window.recent_messages,
+        )
 
     async def _build_context_window(self, session_id: str, recent_limit: int = 6) -> OutlineContextWindow:
         outline_session = await self.outline_session_repo.get_by_id(session_id)

@@ -35,6 +35,15 @@ class OutlineWorkbenchPayload(BaseModel):
     context_window: OutlineContextWindow = Field(default_factory=OutlineContextWindow)
 
 
+class OutlineMessagesResponse(BaseModel):
+    session_id: str
+    outline_type: str
+    outline_ref: str
+    last_result_snapshot: Optional[dict[str, Any]] = None
+    conversation_summary: Optional[str] = None
+    recent_messages: List[OutlineMessagePayload] = Field(default_factory=list)
+
+
 class OutlineSubmitResponse(BaseModel):
     session_id: str
     assistant_message: OutlineMessagePayload

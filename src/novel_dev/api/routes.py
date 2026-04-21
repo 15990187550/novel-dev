@@ -26,6 +26,7 @@ from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
+from novel_dev.schemas.outline_workbench import OutlineMessagesResponse
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
@@ -1348,7 +1349,7 @@ async def get_outline_workbench(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/api/novels/{novel_id}/outline_workbench/messages")
+@router.get("/api/novels/{novel_id}/outline_workbench/messages", response_model=OutlineMessagesResponse)
 async def get_outline_workbench_messages(
     novel_id: str,
     outline_type: str,
