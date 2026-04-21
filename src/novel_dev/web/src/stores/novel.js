@@ -506,7 +506,17 @@ export const useNovelStore = defineStore('novel', {
 
       try {
         const workbench = await api.getOutlineWorkbench(this.novelId, requestedSelection)
-        const resolvedSelection = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], requestedSelection)
+        const serviceSelection = workbench?.outline_type && workbench?.outline_ref
+          ? {
+            outline_type: workbench.outline_type,
+            outline_ref: workbench.outline_ref,
+          }
+          : null
+        const nextSelection = selection || this.outlineWorkbench.selection || serviceSelection || {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+        }
+        const resolvedSelection = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], nextSelection)
         const normalizedItems = buildOutlineWorkbenchItems({
           items: workbench?.outline_items || [],
           currentSelection: resolvedSelection,

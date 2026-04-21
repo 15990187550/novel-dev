@@ -314,6 +314,51 @@ describe('novel store dashboard loading', () => {
     expect(store.outlineWorkbench.lastResultSnapshot).toEqual({ title: '快照 1' })
   })
 
+  it('refreshOutlineWorkbench prefers the service-provided current item when there is no explicit selection', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-current', content: 'message-current' }],
+      conversation_summary: 'summary-current',
+      last_result_snapshot: { title: '快照 current' },
+    })
+
+    await store.refreshOutlineWorkbench()
+
+    expect(api.getOutlineWorkbench).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    expect(store.outlineWorkbench.items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(true)
+  })
+
   it('submitOutlineFeedback keeps selection and refreshes the current item', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
