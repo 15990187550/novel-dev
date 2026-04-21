@@ -1,7 +1,7 @@
 import pytest
 
+from novel_dev.repositories.entity_group_repo import EntityGroupRepository
 from novel_dev.repositories.entity_repo import EntityRepository
-from novel_dev.db.models import Entity
 
 
 @pytest.mark.asyncio
@@ -55,3 +55,103 @@ async def test_list_entities_by_novel(async_session):
     results = await repo.list_by_novel("n1")
     assert len(results) == 2
     assert {r.name for r in results} == {"A", "B"}
+
+
+@pytest.mark.asyncio
+async def test_entity_repo_rejects_manual_group_outside_manual_category(async_session):
+    group_repo = EntityGroupRepository(async_session)
+    entity_repo = EntityRepository(async_session)
+
+    group = await group_repo.upsert(
+        novel_id="novel_x",
+        category="人物",
+        group_name="人物",
+        group_slug="people",
+    )
+    entity = await entity_repo.create("char_200", "character", "陆照", novel_id="novel_x")
+
+    with pytest.raises(ValueError, match="manual_group must belong to manual_category"):
+        await entity_repo.update_classification(
+            entity.id,
+            manual_category="势力",
+            manual_group_id=group.id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_classification_clears_manual_group_when_category_changes(async_session):
+    group_repo = EntityGroupRepository(async_session)
+    entity_repo = EntityRepository(async_session)
+
+    people_group = await group_repo.upsert(
+        novel_id="novel_x",
+        category="人物",
+        group_name="人物",
+        group_slug="people",
+    )
+    entity = await entity_repo.create("char_201", "character", "陆照", novel_id="novel_x")
+
+    await entity_repo.update_classification(
+        entity.id,
+        manual_category="人物",
+        manual_group_id=people_group.id,
+    )
+
+    updated = await entity_repo.update_classification(
+        entity.id,
+        manual_category="势力",
+    )
+    assert updated.manual_category == "势力"
+    assert updated.manual_group_id is None
+
+    await entity_repo.update_classification(
+        entity.id,
+        manual_category="人物",
+        manual_group_id=people_group.id,
+    )
+    cleared = await entity_repo.update_classification(
+        entity.id,
+        manual_category=None,
+    )
+    assert cleared.manual_category is None
+    assert cleared.manual_group_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_classification_clears_system_group_when_category_changes(async_session):
+    group_repo = EntityGroupRepository(async_session)
+    entity_repo = EntityRepository(async_session)
+
+    people_group = await group_repo.upsert(
+        novel_id="novel_x",
+        category="人物",
+        group_name="人物",
+        group_slug="people",
+    )
+    faction_group = await group_repo.upsert(
+        novel_id="novel_x",
+        category="势力",
+        group_name="势力",
+        group_slug="factions",
+    )
+    entity = await entity_repo.create("char_202", "character", "陆照", novel_id="novel_x")
+
+    await entity_repo.update_classification(
+        entity.id,
+        system_category="人物",
+        system_group_id=people_group.id,
+    )
+
+    updated = await entity_repo.update_classification(
+        entity.id,
+        system_category="势力",
+    )
+    assert updated.system_category == "势力"
+    assert updated.system_group_id is None
+
+    with pytest.raises(ValueError, match="system_group must belong to system_category"):
+        await entity_repo.update_classification(
+            entity.id,
+            system_category="人物",
+            system_group_id=faction_group.id,
+        )

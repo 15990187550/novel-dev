@@ -1,10 +1,17 @@
 import math
+import re
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
-from novel_dev.db.models import Entity
+from novel_dev.db.models import Entity, EntityGroup
 from novel_dev.schemas.similar_document import SimilarDocument
+
+ROLE_PREFIXES = (
+    "主角", "男主", "女主", "反派", "配角", "角色",
+    "主要角色", "次要角色", "反派角色",
+)
+_UNSET = object()
 
 
 class EntityRepository:
@@ -27,6 +34,99 @@ class EntityRepository:
         result = await self.session.execute(select(Entity).where(Entity.id == entity_id))
         return result.scalar_one_or_none()
 
+    async def update_classification(
+        self,
+        entity_id: str,
+        *,
+        system_category=_UNSET,
+        system_group_id=_UNSET,
+        manual_category=_UNSET,
+        manual_group_id=_UNSET,
+        classification_reason=_UNSET,
+        classification_confidence=_UNSET,
+        system_needs_review=_UNSET,
+    ) -> Entity:
+        entity = await self.get_by_id(entity_id)
+        if entity is None:
+            raise ValueError("entity not found")
+
+        target_system_category = entity.system_category if system_category is _UNSET else system_category
+        target_manual_category = entity.manual_category if manual_category is _UNSET else manual_category
+
+        async def load_group(group_id: str) -> Optional[EntityGroup]:
+            result = await self.session.execute(
+                select(EntityGroup).where(EntityGroup.id == group_id)
+            )
+            return result.scalar_one_or_none()
+
+        effective_system_group_id = entity.system_group_id if system_group_id is _UNSET else system_group_id
+        if effective_system_group_id is not None:
+            system_group = await load_group(effective_system_group_id)
+            if (
+                system_group is None
+                or system_group.category != target_system_category
+                or (
+                    entity.novel_id is not None
+                    and system_group.novel_id != entity.novel_id
+                )
+            ):
+                if system_group_id is _UNSET:
+                    effective_system_group_id = None
+                else:
+                    raise ValueError("system_group must belong to system_category")
+
+        effective_manual_group_id = entity.manual_group_id if manual_group_id is _UNSET else manual_group_id
+        if effective_manual_group_id is not None:
+            manual_group = await load_group(effective_manual_group_id)
+            if (
+                manual_group is None
+                or manual_group.category != target_manual_category
+                or (
+                    entity.novel_id is not None
+                    and manual_group.novel_id != entity.novel_id
+                )
+            ):
+                if manual_group_id is _UNSET:
+                    effective_manual_group_id = None
+                else:
+                    raise ValueError("manual_group must belong to manual_category")
+
+        if system_category is not _UNSET:
+            entity.system_category = system_category
+        entity.system_group_id = effective_system_group_id
+        if manual_category is not _UNSET:
+            entity.manual_category = manual_category
+        entity.manual_group_id = effective_manual_group_id
+        if classification_reason is not _UNSET:
+            entity.classification_reason = classification_reason
+        if classification_confidence is not _UNSET:
+            entity.classification_confidence = classification_confidence
+        if system_needs_review is not _UNSET:
+            entity.system_needs_review = system_needs_review
+
+        await self.session.flush()
+        return entity
+
+    @staticmethod
+    def normalize_name(name: str) -> str:
+        normalized = (name or "").strip()
+        normalized = re.sub(r"（.*?）|\(.*?\)|【.*?】|\[.*?\]", "", normalized)
+        normalized = re.sub(r"[\s·•,，。:：/\\_\-—]+", "", normalized)
+        for prefix in ROLE_PREFIXES:
+            if normalized.startswith(prefix) and len(normalized) - len(prefix) >= 2:
+                normalized = normalized[len(prefix):]
+                break
+        return normalized
+
+    @classmethod
+    def _is_close_name_match(cls, candidate: str, target: str) -> bool:
+        if not candidate or not target:
+            return False
+        if candidate == target:
+            return True
+        shorter, longer = sorted((candidate, target), key=len)
+        return len(shorter) >= 2 and shorter in longer and len(longer) - len(shorter) <= 2
+
     async def find_by_name(self, name: str, entity_type: Optional[str] = None, novel_id: Optional[str] = None) -> Optional[Entity]:
         stmt = select(Entity).where(Entity.name == name)
         if entity_type is not None:
@@ -34,7 +134,36 @@ class EntityRepository:
         if novel_id is not None:
             stmt = stmt.where(Entity.novel_id == novel_id)
         result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        exact = result.scalar_one_or_none()
+        if exact is not None:
+            return exact
+
+        normalized = self.normalize_name(name)
+        if not normalized:
+            return None
+
+        stmt = select(Entity)
+        if entity_type is not None:
+            stmt = stmt.where(Entity.type == entity_type)
+        if novel_id is not None:
+            stmt = stmt.where(Entity.novel_id == novel_id)
+        result = await self.session.execute(stmt)
+        candidates = result.scalars().all()
+
+        normalized_matches = [
+            entity for entity in candidates
+            if self.normalize_name(entity.name) == normalized
+        ]
+        if len(normalized_matches) == 1:
+            return normalized_matches[0]
+
+        close_matches = [
+            entity for entity in candidates
+            if self._is_close_name_match(self.normalize_name(entity.name), normalized)
+        ]
+        if len(close_matches) == 1:
+            return close_matches[0]
+        return None
 
     async def update_version(self, entity_id: str, new_version: int) -> None:
         entity = await self.get_by_id(entity_id)
