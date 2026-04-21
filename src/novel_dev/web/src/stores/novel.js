@@ -25,6 +25,24 @@ const createDashboardPanels = () => ({
   pendingDocs: createDashboardPanelState(),
 })
 
+const clearSupplementalForPanel = (store, panel) => {
+  switch (panel) {
+    case 'entities':
+      store.entities = []
+      store.entityRelationships = []
+      break
+    case 'timelines':
+      store.timelines = []
+      break
+    case 'foreshadowings':
+      store.foreshadowings = []
+      break
+    case 'pendingDocs':
+      store.pendingDocs = []
+      break
+  }
+}
+
 export const useNovelStore = defineStore('novel', {
   state: () => ({
     novelId: '',
@@ -61,6 +79,16 @@ export const useNovelStore = defineStore('novel', {
   },
 
   actions: {
+    resetDashboardSupplemental() {
+      this.entities = []
+      this.entityRelationships = []
+      this.timelines = []
+      this.foreshadowings = []
+      this.pendingDocs = []
+      this.dashboardPanels = createDashboardPanels()
+      this.dashboardLastUpdated = ''
+    },
+
     syncCurrentChapter() {
       const chapterId = this.novelState.current_chapter_id
       const plan = this.volumePlan?.chapters?.find(c => c.chapter_id === chapterId)
@@ -76,10 +104,16 @@ export const useNovelStore = defineStore('novel', {
 
     async loadNovel(novelId) {
       this.novelId = novelId
+      this.resetDashboardSupplemental()
+      await this.refreshState()
+    },
+
+    async refreshState() {
+      if (!this.novelId) return
       const [state, stats, chapters] = await Promise.all([
-        api.getNovelState(novelId),
-        api.getArchiveStats(novelId).catch(() => ({})),
-        api.getChapters(novelId).catch(() => ({ items: [] })),
+        api.getNovelState(this.novelId),
+        api.getArchiveStats(this.novelId).catch(() => ({})),
+        api.getChapters(this.novelId).catch(() => ({ items: [] })),
       ])
       this.novelState = state
       this.archiveStats = stats
@@ -88,26 +122,35 @@ export const useNovelStore = defineStore('novel', {
       this.syncCurrentChapter()
     },
 
-    async refreshState() {
-      if (!this.novelId) return
-      const state = await api.getNovelState(this.novelId)
-      this.novelState = state
-      this.volumePlan = state.checkpoint_data?.current_volume_plan || null
-      this.syncCurrentChapter()
-    },
-
     async loadDashboardSupplemental() {
       if (!this.novelId) return
 
       const panelTasks = {
-        entities: () => this.fetchEntities(),
-        timelines: () => this.fetchTimelines(),
-        foreshadowings: () => this.fetchForeshadowings(),
-        pendingDocs: () => this.fetchDocuments(),
+        entities: async () => {
+          const [entities, relationships] = await Promise.all([
+            api.getEntities(this.novelId),
+            api.getEntityRelationships(this.novelId).catch(() => ({ items: [] })),
+          ])
+          this.entities = entities.items || []
+          this.entityRelationships = relationships.items || []
+        },
+        timelines: async () => {
+          const res = await api.getTimelines(this.novelId)
+          this.timelines = res.items || []
+        },
+        foreshadowings: async () => {
+          const res = await api.getForeshadowings(this.novelId)
+          this.foreshadowings = res.items || []
+        },
+        pendingDocs: async () => {
+          const pending = await api.getPendingDocs(this.novelId)
+          this.pendingDocs = pending.items || []
+        },
       }
 
       for (const panel of Object.keys(panelTasks)) {
         this.setDashboardPanelState(panel, 'loading')
+        clearSupplementalForPanel(this, panel)
       }
 
       try {
@@ -116,6 +159,7 @@ export const useNovelStore = defineStore('novel', {
             await task()
             this.setDashboardPanelState(panel, 'ready')
           } catch (error) {
+            clearSupplementalForPanel(this, panel)
             this.setDashboardPanelState(panel, 'error', error?.message || '请求失败')
           }
         }))
