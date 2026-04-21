@@ -15,22 +15,32 @@
     <div class="dashboard-insights__grid">
       <section class="dashboard-insights__panel">
         <h3 class="dashboard-insights__panel-title">最近更新</h3>
-        <ul class="dashboard-insights__list">
-          <li v-for="(item, index) in recentUpdates" :key="`${item.label}-${index}`" class="dashboard-insights__item">
-            <span class="dashboard-insights__item-label">{{ item.label }}</span>
-            <span class="dashboard-insights__item-detail">{{ item.detail }}</span>
-          </li>
-        </ul>
+        <div class="dashboard-insights__links">
+          <RouterLink
+            v-for="(item, index) in recentUpdates"
+            :key="`${item.label}-${index}`"
+            class="dashboard-insights__link"
+            :to="item.route || '/dashboard'"
+          >
+            <span class="dashboard-insights__link-label">{{ item.label }}</span>
+            <span class="dashboard-insights__link-detail">{{ item.detail }}</span>
+          </RouterLink>
+        </div>
       </section>
 
       <section class="dashboard-insights__panel">
         <h3 class="dashboard-insights__panel-title">风险提醒</h3>
-        <ul class="dashboard-insights__list">
-          <li v-for="(item, index) in risks" :key="`${item.type || item.label}-${index}`" class="dashboard-insights__item">
-            <span class="dashboard-insights__item-label">{{ item.label }}</span>
-            <span class="dashboard-insights__item-detail">{{ item.detail }}</span>
-          </li>
-        </ul>
+        <div class="dashboard-insights__links">
+          <RouterLink
+            v-for="(item, index) in risks"
+            :key="`${item.type || item.label}-${index}`"
+            class="dashboard-insights__link"
+            :to="item.route || '/dashboard'"
+          >
+            <span class="dashboard-insights__link-label">{{ item.label }}</span>
+            <span class="dashboard-insights__link-detail">{{ item.detail }}</span>
+          </RouterLink>
+        </div>
       </section>
 
       <section class="dashboard-insights__panel">
@@ -71,4 +81,3 @@ defineProps({
   links: { type: Array, default: () => [] },
 })
 </script>
-

@@ -176,6 +176,12 @@ html.dark body {
   border-color: rgba(148, 163, 184, 0.28);
 }
 
+.dashboard-action-card__detail {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+}
+
 .dashboard-insights__connected {
   display: inline-flex;
   align-items: center;
