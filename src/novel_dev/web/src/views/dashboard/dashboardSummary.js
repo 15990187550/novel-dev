@@ -74,7 +74,6 @@ function buildChapterSummary({ chapters = [], volumePlan = null, currentChapterI
         const chapter = chapterById.get(planChapter?.chapter_id)
         return chapter ? { ...planChapter, ...chapter } : { ...planChapter }
       }),
-      ...sourceChapters.filter((chapter) => !plannedChapters.some((planChapter) => planChapter?.chapter_id === chapter?.chapter_id)),
     ]
     : sourceChapters
 

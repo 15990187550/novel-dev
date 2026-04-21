@@ -25,7 +25,7 @@ describe('dashboard summary helpers', () => {
       currentChapterId: 'ch-2',
     })
 
-    expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-2', 'ch-4', 'ch-3'])
+    expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-2', 'ch-4'])
     expect(summary.chapters.find((chapter) => chapter.chapter_id === 'ch-2')?.isCurrent).toBe(true)
     expect(summary.chapters.find((chapter) => chapter.chapter_id === 'ch-4')).toMatchObject({
       chapter_id: 'ch-4',
@@ -33,11 +33,11 @@ describe('dashboard summary helpers', () => {
       summary: '计划内但尚未落库',
     })
     expect(summary.stats).toEqual({
-      total: 4,
+      total: 3,
       drafted: 1,
       edited: 1,
       inProgress: 2,
-      pending: 2,
+      pending: 1,
       archived: 0,
     })
   })
