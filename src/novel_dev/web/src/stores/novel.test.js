@@ -372,6 +372,50 @@ describe('novel store dashboard loading', () => {
     expect(store.outlineWorkbench.items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(false)
   })
 
+  it('refreshOutlineWorkbench defaults selection to service current item when synopsis is absent', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+      outline_items: [
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_3',
+          title: '第三卷',
+          status: 'active',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-vol-3', content: 'message-vol-3' }],
+      conversation_summary: 'summary-vol-3',
+      last_result_snapshot: { title: '快照 vol-3' },
+    })
+
+    await store.refreshOutlineWorkbench()
+
+    expect(api.getOutlineWorkbenchMessages).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.selection).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+    expect(store.outlineWorkbench.currentItem).toEqual({
+      outline_type: 'volume',
+      outline_ref: 'vol_3',
+    })
+  })
+
   it('submitOutlineFeedback keeps selection but updates current item from service', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

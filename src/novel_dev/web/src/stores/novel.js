@@ -507,20 +507,27 @@ export const useNovelStore = defineStore('novel', {
 
       try {
         const workbench = await api.getOutlineWorkbench(this.novelId, requestedSelection)
+        const outlineItems = workbench?.outline_items || []
         const serviceSelection = workbench?.outline_type && workbench?.outline_ref
           ? {
             outline_type: workbench.outline_type,
             outline_ref: workbench.outline_ref,
           }
           : null
-        const nextSelection = selection || this.outlineWorkbench.selection || {
-          outline_type: 'synopsis',
-          outline_ref: 'synopsis',
-        }
-        const resolvedSelection = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], nextSelection)
-        const resolvedCurrentItem = resolveOutlineWorkbenchSelection(workbench?.outline_items || [], serviceSelection)
+        const synopsisItem = outlineItems.find(
+          (item) => item?.outline_type === 'synopsis' && item?.outline_ref === 'synopsis'
+        )
+        const defaultSelection = synopsisItem
+          ? {
+            outline_type: synopsisItem.outline_type,
+            outline_ref: synopsisItem.outline_ref,
+          }
+          : serviceSelection
+        const nextSelection = selection || this.outlineWorkbench.selection || defaultSelection
+        const resolvedSelection = resolveOutlineWorkbenchSelection(outlineItems, nextSelection)
+        const resolvedCurrentItem = resolveOutlineWorkbenchSelection(outlineItems, serviceSelection)
         const normalizedItems = buildOutlineWorkbenchItems({
-          items: workbench?.outline_items || [],
+          items: outlineItems,
           currentItem: resolvedCurrentItem,
         })
         const messages = resolvedSelection
