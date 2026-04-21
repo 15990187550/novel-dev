@@ -57,6 +57,7 @@ class VolumePlannerAgent:
 
         world_snapshot = await self._load_world_snapshot(novel_id) if volume_number > 1 else None
         volume_plan = await self._generate_volume_plan(synopsis, volume_number, world_snapshot, novel_id)
+        plan_context = self._build_plan_context(synopsis, world_snapshot)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         while True:
@@ -78,7 +79,7 @@ class VolumePlannerAgent:
                     chapter_id=state.current_chapter_id,
                 )
                 raise RuntimeError("Max volume plan attempts exceeded")
-            volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), novel_id)
+            volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), plan_context, novel_id)
 
         checkpoint["current_volume_plan"] = volume_plan.model_dump()
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
@@ -146,6 +147,18 @@ class VolumePlannerAgent:
             except ValueError:
                 pass
         return 1
+
+    def _build_plan_context(self, synopsis: SynopsisData, world_snapshot: Optional[dict]) -> str:
+        synopsis_text = synopsis.model_dump_json()[:12000]
+        if not world_snapshot:
+            return f"### 大纲数据\n{synopsis_text}"
+        return (
+            f"### 大纲数据\n{synopsis_text}\n\n"
+            "### 前卷世界状态快照\n"
+            f"活跃人物:\n{world_snapshot.get('entities', '无')}\n"
+            f"未回收伏笔:\n{world_snapshot.get('foreshadowings', '无')}\n"
+            f"已推进时间线:\n{world_snapshot.get('timeline', '无')}"
+        )
 
     async def _generate_volume_plan(
         self, synopsis: SynopsisData, volume_number: int, world_snapshot: Optional[dict] = None, novel_id: str = ""
@@ -216,8 +229,17 @@ class VolumePlannerAgent:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始评分卷纲")
         prompt = (
             "你是一个小说分卷规划评审专家。请根据以下 VolumePlan JSON 进行多维度评分，"
-            "返回严格符合 VolumeScoreResult Schema 的 JSON。"
-            f"\n\n{plan.model_dump_json()}"
+            "返回严格符合 VolumeScoreResult Schema 的 JSON。\n\n"
+            "## Rubric\n"
+            "- outline_fidelity >=75: 与 synopsis 主线、卷目标、章节推进一致，不偏题。\n"
+            "- character_plot_alignment >=75: 角色目标、动机、行动与章节冲突推进一致。\n"
+            "- hook_distribution >=75: 平均每 2-3 章有小高潮/悬念点，卷内有卷级高潮。\n"
+            "- foreshadowing_management >=75: 埋设与回收有呼应，不是孤立点缀。\n"
+            "- chapter_hooks >=75: 多数章节结尾有明确钩子。\n"
+            "- page_turning >=70: 读者会自然想继续读下一章。\n"
+            "## 输出\n"
+            "严格 JSON，summary_feedback 控制在 300 字内，指出最需要改的 2-3 点。"
+            f"\n\n### VolumePlan\n{plan.model_dump_json()}"
         )
         result = await call_and_parse_model(
             "VolumePlannerAgent", "score_volume_plan", prompt, VolumeScoreResult, max_retries=3, novel_id=novel_id
@@ -225,13 +247,14 @@ class VolumePlannerAgent:
         log_service.add_log(novel_id, "VolumePlannerAgent", f"评分完成: overall={result.overall}")
         return result
 
-    async def _revise_volume_plan(self, plan: VolumePlan, feedback: str, novel_id: str = "") -> VolumePlan:
+    async def _revise_volume_plan(self, plan: VolumePlan, feedback: str, plan_context: str = "", novel_id: str = "") -> VolumePlan:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始修订卷纲")
         prompt = (
-            "你是一个小说分卷规划专家。请根据以下 VolumePlan 和评审反馈进行修正，"
+            "你是一个小说分卷规划专家。请根据以下 VolumePlan、原始规划上下文与评审反馈进行修正，"
             "返回严格符合 VolumePlan Schema 的 JSON。"
-            f"\n\nVolumePlan:\n{plan.model_dump_json()}"
-            f"\n\n反馈：{feedback}"
+            f"\n\n### 当前 VolumePlan\n{plan.model_dump_json()}"
+            f"\n\n### 原始规划上下文\n{plan_context}"
+            f"\n\n### 反馈\n{feedback}"
         )
         result = await call_and_parse_model(
             "VolumePlannerAgent", "revise_volume_plan", prompt, VolumePlan, max_retries=3, novel_id=novel_id

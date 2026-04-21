@@ -170,4 +170,6 @@ class PendingExtraction(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     raw_result: Mapped[dict] = mapped_column(JSON, nullable=False)
     proposed_entities: Mapped[Optional[List[dict]]] = mapped_column(JSON, nullable=True)
+    diff_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    resolution_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)

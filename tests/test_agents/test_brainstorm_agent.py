@@ -71,7 +71,8 @@ async def test_brainstorm_success(async_session):
 
     docs = await DocumentRepository(async_session).get_by_type("n_brain", "synopsis")
     assert len(docs) == 1
-    assert "天玄大陆" in docs[0].content
+    assert "天玄大陆" not in docs[0].content
+    assert "天玄纪元" in docs[0].content
 
 
 @pytest.mark.asyncio

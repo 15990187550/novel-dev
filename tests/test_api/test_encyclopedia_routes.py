@@ -7,6 +7,7 @@ from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
+from novel_dev.repositories.version_repo import EntityVersionRepository
 
 app = FastAPI()
 app.include_router(router)
@@ -21,7 +22,14 @@ async def test_list_entities(async_session):
     transport = ASGITransport(app=app)
 
     repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
     await repo.create("e1", "character", "Lin Feng", novel_id="n1")
+    await version_repo.create(
+        "e1",
+        1,
+        {"name": "Lin Feng", "identity": "弟子", "personality": "坚韧", "goal": "报仇"},
+    )
+    await repo.update_version("e1", 1)
     await async_session.commit()
 
     try:
@@ -31,6 +39,39 @@ async def test_list_entities(async_session):
             data = resp.json()
             assert len(data["items"]) == 1
             assert data["items"][0]["name"] == "Lin Feng"
+            assert data["items"][0]["latest_state"]["identity"] == "弟子"
+            assert data["items"][0]["latest_state"]["personality"] == "坚韧"
+            assert data["items"][0]["latest_state"]["goal"] == "报仇"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_entity(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("e1", "character", "Lin Feng", novel_id="n1")
+    await version_repo.create(
+        "e1",
+        1,
+        {"name": "Lin Feng", "identity": "弟子", "personality": "坚韧", "goal": "报仇"},
+    )
+    await repo.update_version("e1", 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n1/entities/e1")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["entity_id"] == "e1"
+            assert data["latest_state"]["identity"] == "弟子"
     finally:
         app.dependency_overrides.clear()
 

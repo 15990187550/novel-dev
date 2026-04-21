@@ -4,7 +4,7 @@ from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents._llm_helpers import call_and_parse
-from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext
+from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext, ForeshadowingContext, BeatContext
 from novel_dev.schemas.similar_document import SimilarDocument
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
@@ -57,10 +57,11 @@ class ContextAgent:
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
         log_service.add_log(novel_id, "ContextAgent", f"加载 {len(active_entities)} 个活跃实体")
 
+        query_text = self._build_search_query(chapter_plan)
+
         # Semantic entity retrieval
         related_entities: list[EntityState] = []
         if self.embedding_service:
-            query_text = self._build_search_query(chapter_plan)
             try:
                 results = await self.embedding_service.search_similar_entities(
                     novel_id=novel_id,
@@ -121,6 +122,17 @@ class ContextAgent:
                 logger.warning("chapter_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
                 log_service.add_log(novel_id, "ContextAgent", f"章节语义检索失败: {exc}", level="warning")
 
+        guardrails = self._build_guardrails(chapter_plan, active_entities, location_context, checkpoint)
+
+        beat_contexts = self._build_beat_contexts(
+            chapter_plan,
+            active_entities,
+            related_entities,
+            pending_foreshadowings,
+            relevant_docs,
+            guardrails,
+        )
+
         context = ChapterContext(
             chapter_plan=chapter_plan,
             style_profile=style_profile,
@@ -133,6 +145,8 @@ class ContextAgent:
             relevant_documents=relevant_docs,
             related_entities=related_entities,
             similar_chapters=similar_chapters,
+            guardrails=guardrails,
+            beat_contexts=beat_contexts,
         )
 
         checkpoint["chapter_context"] = context.model_dump()
@@ -141,6 +155,19 @@ class ContextAgent:
             "total_beats": len(chapter_plan.beats),
             "current_word_count": 0,
         }
+        checkpoint["context_debug_snapshot"] = self._build_context_debug_snapshot(
+            chapter_plan,
+            query_text,
+            active_entities,
+            related_entities,
+            relevant_docs,
+            similar_chapters,
+            pending_foreshadowings,
+            beat_contexts,
+            guardrails,
+            location_context,
+            timeline_events,
+        )
         log_service.add_log(novel_id, "ContextAgent", "章节上下文组装完成，进入 drafting 阶段")
         await self.director.save_checkpoint(
             novel_id,
@@ -151,6 +178,69 @@ class ContextAgent:
         )
 
         return context
+
+    def _build_context_debug_snapshot(
+        self,
+        chapter_plan: ChapterPlan,
+        query_text: str,
+        active_entities: List[EntityState],
+        related_entities: List[EntityState],
+        relevant_docs: List[SimilarDocument],
+        similar_chapters: List[SimilarDocument],
+        pending_foreshadowings: List[ForeshadowingContext],
+        beat_contexts: List[BeatContext],
+        guardrails: List[str],
+        location_context: LocationContext,
+        timeline_events: List[dict],
+    ) -> dict:
+        return {
+            "chapter": {
+                "chapter_number": chapter_plan.chapter_number,
+                "title": chapter_plan.title,
+                "target_word_count": chapter_plan.target_word_count,
+                "beat_count": len(chapter_plan.beats),
+            },
+            "retrieval_query": query_text,
+            "selected_entities": [
+                {"id": e.entity_id, "name": e.name, "type": e.type, "source": "active"}
+                for e in active_entities
+            ] + [
+                {"id": e.entity_id, "name": e.name, "type": e.type, "source": "semantic"}
+                for e in related_entities
+            ],
+            "selected_documents": [
+                {
+                    "id": doc.doc_id,
+                    "type": doc.doc_type,
+                    "title": doc.title,
+                    "score": doc.similarity_score,
+                }
+                for doc in relevant_docs
+            ],
+            "similar_chapters": [
+                {
+                    "id": doc.doc_id,
+                    "title": doc.title,
+                    "score": doc.similarity_score,
+                }
+                for doc in similar_chapters
+            ],
+            "selected_foreshadowings": [fs.model_dump() for fs in pending_foreshadowings],
+            "guardrails": guardrails,
+            "location": location_context.model_dump(),
+            "timeline_events": timeline_events,
+            "beat_contexts": [
+                {
+                    "beat_index": bc.beat_index,
+                    "summary": bc.beat.summary,
+                    "entities": [e.name for e in bc.entities],
+                    "foreshadowings": [fs.id for fs in bc.foreshadowings],
+                    "documents": [doc.title for doc in bc.relevant_documents],
+                    "guardrails": bc.guardrails,
+                }
+                for bc in beat_contexts
+            ],
+        }
 
     def _extract_key_entities_from_plan(self, chapter_plan: ChapterPlan) -> List[str]:
         names = set()
@@ -280,18 +370,26 @@ class ContextAgent:
         active_entities: List[EntityState],
         checkpoint: dict,
         novel_id: str,
-    ) -> List[dict]:
+    ) -> List[ForeshadowingContext]:
         active_ids = {e.entity_id for e in active_entities}
         entity_name_map = {e.entity_id: e.name for e in active_entities}
         all_active = await self.foreshadowing_repo.list_active(novel_id=novel_id)
         result = []
+        planned_foreshadowings = {
+            content: idx
+            for idx, beat in enumerate(chapter_plan.beats)
+            for content in beat.foreshadowings_to_embed
+        }
         for fs in all_active:
-            match = False
+            target_beat_index = planned_foreshadowings.get(fs.content)
+            role = "embed"
+            match = target_beat_index is not None
             if fs.相关人物_ids and active_ids:
                 if any(eid in active_ids for eid in fs.相关人物_ids):
                     match = True
             if fs.埋下_time_tick == checkpoint.get("current_time_tick"):
                 match = True
+                role = "remind"
             if match:
                 related_names = [
                     entity_name_map[eid]
@@ -299,16 +397,88 @@ class ContextAgent:
                     if eid in entity_name_map
                 ]
                 result.append(
-                    {
-                        "id": fs.id,
-                        "content": fs.content,
-                        "role_in_chapter": "embed",
-                        "related_entity_names": related_names,
-                    }
+                    ForeshadowingContext(
+                        id=fs.id,
+                        content=fs.content,
+                        role_in_chapter=role,
+                        related_entity_names=related_names,
+                        target_beat_index=target_beat_index,
+                        surface_hint="只自然露出线索，不解释其意义。",
+                        payoff_requirement=(
+                            f"满足回收条件时再明确回收：{json.dumps(fs.回收条件, ensure_ascii=False)}"
+                            if fs.回收条件 else None
+                        ),
+                    )
                 )
         return result
 
+    def _build_guardrails(
+        self,
+        chapter_plan: ChapterPlan,
+        active_entities: List[EntityState],
+        location_context: LocationContext,
+        checkpoint: dict,
+    ) -> List[str]:
+        guardrails = []
+        if location_context.current:
+            guardrails.append(f"当前主要场景是「{location_context.current}」，不要无铺垫切换地点。")
+        if checkpoint.get("current_time_tick") is not None:
+            guardrails.append(f"当前时间 tick 为 {checkpoint['current_time_tick']}，不要跳过章节计划直接推进时间线。")
+        for entity in active_entities[:8]:
+            if entity.current_state:
+                guardrails.append(f"{entity.name} 的当前状态必须延续：{entity.current_state[:180]}")
+        for idx, beat in enumerate(chapter_plan.beats):
+            for name in beat.key_entities:
+                guardrails.append(f"节拍 {idx + 1} 涉及「{name}」时，不要写成未参与当前事件。")
+        return guardrails[:12]
+
+    def _build_beat_contexts(
+        self,
+        chapter_plan: ChapterPlan,
+        active_entities: List[EntityState],
+        related_entities: List[EntityState],
+        pending_foreshadowings: List[ForeshadowingContext],
+        relevant_docs: List[SimilarDocument],
+        chapter_guardrails: List[str],
+    ) -> List[BeatContext]:
+        all_entities = active_entities + [
+            entity for entity in related_entities
+            if entity.entity_id not in {active.entity_id for active in active_entities}
+        ]
+        beat_contexts = []
+        for idx, beat in enumerate(chapter_plan.beats):
+            beat_entity_names = set(beat.key_entities)
+            beat_entities = [entity for entity in all_entities if entity.name in beat_entity_names]
+            beat_foreshadowings = [
+                fs for fs in pending_foreshadowings
+                if fs.target_beat_index == idx
+                or (fs.target_beat_index is None and beat_entity_names & set(fs.related_entity_names))
+            ]
+            beat_docs = [
+                doc for doc in relevant_docs
+                if any(name and name in doc.content_preview for name in beat.key_entities)
+                or any(name and name in doc.title for name in beat.key_entities)
+            ]
+            beat_guardrails = [
+                rule for rule in chapter_guardrails
+                if any(name in rule for name in beat.key_entities)
+            ]
+            if not beat_guardrails:
+                beat_guardrails = chapter_guardrails[:3]
+            beat_contexts.append(
+                BeatContext(
+                    beat_index=idx,
+                    beat=beat,
+                    entities=beat_entities,
+                    foreshadowings=beat_foreshadowings,
+                    relevant_documents=beat_docs[:3],
+                    guardrails=beat_guardrails[:6],
+                )
+            )
+        return beat_contexts
+
     async def _load_style_profile(self, novel_id: str, checkpoint: dict) -> dict:
+
         version = checkpoint.get("active_style_profile_version")
         if version:
             doc = await self.doc_repo.get_by_type_and_version(novel_id, "style_profile", version)

@@ -4,7 +4,7 @@ import re
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.schemas.context import ChapterContext, DraftMetadata, BeatPlan
+from novel_dev.schemas.context import ChapterContext, DraftMetadata, BeatPlan, BeatSelfCheck
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
@@ -75,8 +75,8 @@ class WriterAgent:
                 for i, inner in enumerate(inner_beats):
                     beat_coverage.append({"beat_index": i, "word_count": len(inner)})
                     for fs in context.pending_foreshadowings:
-                        if fs["content"] in inner and fs["id"] not in embedded_foreshadowings:
-                            embedded_foreshadowings.append(fs["id"])
+                        if fs.content in inner and fs.id not in embedded_foreshadowings:
+                            embedded_foreshadowings.append(fs.id)
 
         for idx, beat in enumerate(context.chapter_plan.beats):
             if idx < start_idx:
@@ -93,9 +93,36 @@ class WriterAgent:
             if len(inner) < 50:
                 log_service.add_log(novel_id, "WriterAgent", f"第 {idx + 1} 个节拍过短({len(inner)}字)，重写")
                 inner = await self._rewrite_angle(
-                    beat, inner, context,
-                    relay_history, last_beat_text,
-                    idx, total_beats, is_last,
+                    beat,
+                    inner,
+                    context,
+                    relay_history,
+                    last_beat_text,
+                    idx,
+                    total_beats,
+                    is_last,
+                    None,
+                )
+                beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+            self_check = self._self_check_beat(inner, beat, context, idx)
+            if self_check.needs_rewrite:
+                log_service.add_log(
+                    novel_id,
+                    "WriterAgent",
+                    f"第 {idx + 1} 个节拍自检未通过，重写: 缺实体 {len(self_check.missing_entities)}，缺伏笔 {len(self_check.missing_foreshadowings)}，冲突 {len(self_check.contradictions)}",
+                    level="warning",
+                )
+                inner = await self._rewrite_angle(
+                    beat,
+                    inner,
+                    context,
+                    relay_history,
+                    last_beat_text,
+                    idx,
+                    total_beats,
+                    is_last,
+                    self_check,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -103,9 +130,9 @@ class WriterAgent:
             raw_draft += beat_text + "\n\n"
             beat_coverage.append({"beat_index": idx, "word_count": len(inner)})
 
-            # Generate narrative relay baton
             try:
-                relay = await self._generate_relay(inner, beat, novel_id)
+                next_beat = context.chapter_plan.beats[idx + 1] if idx + 1 < total_beats else None
+                relay = await self._generate_relay(inner, beat, context, idx, next_beat, novel_id)
                 relay_history.append(relay)
             except Exception as exc:
                 log_service.add_log(novel_id, "WriterAgent", f"叙事接力生成失败: {exc}", level="warning")
@@ -118,8 +145,8 @@ class WriterAgent:
                 ))
 
             for fs in context.pending_foreshadowings:
-                if fs["content"] in inner and fs["id"] not in embedded_foreshadowings:
-                    embedded_foreshadowings.append(fs["id"])
+                if fs.content in inner and fs.id not in embedded_foreshadowings:
+                    embedded_foreshadowings.append(fs.id)
 
             log_service.add_log(novel_id, "WriterAgent", f"第 {idx + 1}/{total_beats} 个节拍完成，{len(inner)} 字")
             checkpoint["drafting_progress"] = {
@@ -135,7 +162,6 @@ class WriterAgent:
                 current_volume_id=state.current_volume_id,
                 current_chapter_id=state.current_chapter_id,
             )
-            # Save incremental draft so resume can restore from chapter.raw_draft
             await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
 
         clean_text = _strip_anchors(raw_draft)
@@ -182,7 +208,7 @@ class WriterAgent:
         context_msg = self._build_context_message(
             beat, context, relay_history, last_beat_text, idx, total, is_last
         )
-        retrieval_msg = await self._build_retrieval_message(beat, context, novel_id)
+        retrieval_msg = await self._build_retrieval_message(beat, context, novel_id, idx)
 
         user_content = context_msg
         if retrieval_msg:
@@ -222,6 +248,78 @@ class WriterAgent:
         if context.previous_chapter_summary:
             parts.append(f"### 前情回顾\n{context.previous_chapter_summary}")
 
+        if context.worldview_summary:
+            parts.append(f"### 世界观约束\n{context.worldview_summary[:600]}")
+
+        if context.location_context:
+            location_lines = []
+            if context.location_context.current:
+                location_lines.append(f"当前地点: {context.location_context.current}")
+            if context.location_context.parent:
+                location_lines.append(f"上级区域: {context.location_context.parent}")
+            if context.location_context.narrative:
+                location_lines.append(f"场景镜头: {context.location_context.narrative}")
+            if location_lines:
+                parts.append("### 当前场景\n" + "\n".join(location_lines))
+
+        if context.timeline_events:
+            timeline_text = "\n".join(
+                f"- tick {event.get('tick')}: {event.get('narrative')}"
+                for event in context.timeline_events[:8]
+            )
+            parts.append(f"### 近期时间线\n{timeline_text}")
+
+        beat_context = self._beat_context(context, idx)
+
+        if beat_context and beat_context.guardrails:
+            guardrail_text = "\n".join(f"- {item}" for item in beat_context.guardrails[:8])
+            parts.append(f"### 当前节拍不可违背事实\n{guardrail_text}")
+        elif context.guardrails:
+            guardrail_text = "\n".join(f"- {item}" for item in context.guardrails[:12])
+            parts.append(f"### 不可违背事实\n{guardrail_text}")
+
+        if beat_context and beat_context.entities:
+            entity_text = "\n".join(
+                f"- [{entity.type}] {entity.name}: {entity.current_state[:300]}"
+                for entity in beat_context.entities[:8]
+            )
+            parts.append(f"### 当前节拍相关实体\n{entity_text}")
+        elif context.active_entities or context.related_entities:
+            entity_items = context.active_entities + [
+                e for e in context.related_entities
+                if e.entity_id not in {active.entity_id for active in context.active_entities}
+            ]
+            entity_text = "\n".join(
+                f"- [{entity.type}] {entity.name}: {entity.current_state[:300]}"
+                for entity in entity_items[:10]
+            )
+            if entity_text:
+                parts.append(f"### 本章相关实体\n{entity_text}")
+
+        if beat_context and beat_context.relevant_documents:
+            doc_text = "\n".join(
+                f"- [{doc.doc_type}] {doc.title}: {doc.content_preview}"
+                for doc in beat_context.relevant_documents[:3]
+            )
+            parts.append(f"### 当前节拍相关设定\n{doc_text}")
+        elif context.relevant_documents:
+            doc_text = "\n".join(
+                f"- [{doc.doc_type}] {doc.title}: {doc.content_preview}"
+                for doc in context.relevant_documents[:5]
+            )
+            parts.append(f"### 相关设定资料\n{doc_text}")
+
+        if context.similar_chapters:
+            chapter_text = "\n".join(
+                f"- {doc.title}: {doc.content_preview}"
+                for doc in context.similar_chapters[:3]
+            )
+            parts.append(f"### 相似章节风格参考\n{chapter_text}")
+
+        if beat_context and beat_context.foreshadowings:
+            fs_text = "\n".join(self._format_foreshadowing(fs) for fs in beat_context.foreshadowings[:5])
+            parts.append(f"### 当前节拍伏笔安排\n{fs_text}")
+
         plan_lines = [f"本章：{context.chapter_plan.title}（共{total}个节拍）"]
         for i, b in enumerate(context.chapter_plan.beats):
             marker = "→ " if i == idx else "  "
@@ -243,8 +341,31 @@ class WriterAgent:
 
         return "\n\n".join(parts)
 
-    def _fallback_retrieval(self, beat: BeatPlan, context: ChapterContext) -> str:
-        """No EmbeddingService fallback: match by key_entities names."""
+    def _fallback_retrieval(self, beat: BeatPlan, context: ChapterContext, beat_idx: int | None = None) -> str:
+        if beat_idx is not None:
+            beat_context = self._beat_context(context, beat_idx)
+            if beat_context:
+                parts = []
+                if beat_context.entities:
+                    entity_text = "\n".join(
+                        f"- [{entity.type}] {entity.name}: {entity.current_state[:300]}"
+                        for entity in beat_context.entities[:6]
+                    )
+                    parts.append(f"### 当前节拍相关实体\n{entity_text}")
+                if beat_context.relevant_documents:
+                    doc_text = "\n".join(
+                        f"- [{doc.doc_type}] {doc.title}: {doc.content_preview}"
+                        for doc in beat_context.relevant_documents[:3]
+                    )
+                    parts.append(f"### 当前节拍相关设定\n{doc_text}")
+                if beat_context.foreshadowings:
+                    fs_text = "\n".join(
+                        self._format_foreshadowing(fs) for fs in beat_context.foreshadowings[:3]
+                    )
+                    parts.append(f"### 待处理伏笔\n{fs_text}")
+                if parts:
+                    return "\n\n".join(parts)
+
         beat_entities = set(beat.key_entities)
         matched = [e for e in context.active_entities if e.name in beat_entities]
         if not matched:
@@ -253,62 +374,140 @@ class WriterAgent:
         return f"### 相关角色\n{text}"
 
     async def _build_retrieval_message(
-        self, beat: BeatPlan, context: ChapterContext, novel_id: str,
+        self, beat: BeatPlan, context: ChapterContext, novel_id: str, beat_idx: int,
     ) -> str:
-        """Layer 3: Per-beat semantic retrieval for entities/docs/foreshadowings."""
+        """Prefer ContextAgent-prepared beat context; only query on missing context."""
+        beat_context = self._beat_context(context, beat_idx)
+        needs_entity_fallback = not beat_context or not beat_context.entities
+        needs_doc_fallback = not beat_context or not beat_context.relevant_documents
+        needs_fs_fallback = not beat_context or not beat_context.foreshadowings
+
         if not self.embedding_service:
-            return self._fallback_retrieval(beat, context)
+            return self._fallback_retrieval(beat, context, beat_idx)
+
+        if not (needs_entity_fallback or needs_doc_fallback or needs_fs_fallback):
+            return ""
 
         query = f"{beat.summary} {' '.join(beat.key_entities)}"
         parts = []
 
-        try:
-            entities = await self.embedding_service.search_similar_entities(
-                novel_id=novel_id, query_text=query, limit=3
-            )
-            if entities:
-                entity_text = "\n".join(
-                    f"- [{e.doc_type}] {e.title}: {e.content_preview}" for e in entities
+        if needs_entity_fallback:
+            try:
+                entities = await self.embedding_service.search_similar_entities(
+                    novel_id=novel_id, query_text=query, limit=3
                 )
-                parts.append(f"### 相关角色/物品\n{entity_text}")
-        except Exception as exc:
-            log_service.add_log(novel_id, "WriterAgent", f"实体检索失败: {exc}", level="warning")
+                if entities:
+                    entity_text = "\n".join(
+                        f"- [{e.doc_type}] {e.title}: {e.content_preview}" for e in entities
+                    )
+                    parts.append(f"### 兜底角色/物品检索\n{entity_text}")
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"实体检索失败: {exc}", level="warning")
 
-        try:
-            docs = await self.embedding_service.search_similar(
-                novel_id=novel_id, query_text=query, limit=2
-            )
-            if docs:
-                doc_text = "\n".join(
-                    f"- [{d.doc_type}] {d.title}: {d.content_preview}" for d in docs
+        if needs_doc_fallback:
+            try:
+                docs = await self.embedding_service.search_similar(
+                    novel_id=novel_id, query_text=query, limit=2
                 )
-                parts.append(f"### 相关设定\n{doc_text}")
-        except Exception as exc:
-            log_service.add_log(novel_id, "WriterAgent", f"文档检索失败: {exc}", level="warning")
+                if docs:
+                    doc_text = "\n".join(
+                        f"- [{d.doc_type}] {d.title}: {d.content_preview}" for d in docs
+                    )
+                    parts.append(f"### 兜底设定检索\n{doc_text}")
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"文档检索失败: {exc}", level="warning")
 
-        beat_entities = set(beat.key_entities)
-        relevant_fs = [
-            fs for fs in context.pending_foreshadowings
-            if beat_entities & set(fs.get("related_entity_names", []))
-        ]
-        if relevant_fs:
-            fs_text = "\n".join(
-                f"- {fs['content']}（需自然嵌入，不要点破）" for fs in relevant_fs[:3]
-            )
-            parts.append(f"### 待嵌入伏笔\n{fs_text}")
+        if needs_fs_fallback:
+            fallback_fs = [
+                fs for fs in context.pending_foreshadowings
+                if fs.target_beat_index == beat_idx
+            ]
+            if fallback_fs:
+                fs_text = "\n".join(
+                    self._format_foreshadowing(fs) for fs in fallback_fs[:3]
+                )
+                parts.append(f"### 兜底伏笔安排\n{fs_text}")
 
-        return "\n\n".join(parts) if parts else self._fallback_retrieval(beat, context)
+        return "\n\n".join(parts) if parts else self._fallback_retrieval(beat, context, beat_idx)
 
-    async def _generate_relay(self, beat_text: str, beat: BeatPlan, novel_id: str = "") -> "NarrativeRelay":
+    def _format_foreshadowing(self, fs) -> str:
+        parts = [f"- [{fs.role_in_chapter}] {fs.content}"]
+        if fs.target_beat_index is not None:
+            parts.append(f"目标节拍: {fs.target_beat_index + 1}")
+        if fs.surface_hint:
+            parts.append(f"露出方式: {fs.surface_hint}")
+        if fs.payoff_requirement:
+            parts.append(f"回收要求: {fs.payoff_requirement}")
+        return "；".join(parts)
+
+    def _beat_context(self, context: ChapterContext, beat_idx: int):
+        if beat_idx < len(context.beat_contexts):
+            return context.beat_contexts[beat_idx]
+        return None
+
+
+    def _self_check_beat(self, inner: str, beat: BeatPlan, context: ChapterContext, beat_idx: int) -> BeatSelfCheck:
+        beat_context = self._beat_context(context, beat_idx)
+        missing_entities = []
+        missing_foreshadowings = []
+        contradictions = []
+
+        if beat_context:
+            normalized = inner.replace("\n", "")
+            is_very_short = len(normalized) < 40
+            for entity in beat_context.entities[:1]:
+                if entity.name and entity.name not in normalized and is_very_short:
+                    missing_entities.append(entity.name)
+            for fs in beat_context.foreshadowings[:1]:
+                if (
+                    fs.role_in_chapter == "embed"
+                    and fs.target_beat_index == beat_idx
+                    and fs.content
+                    and fs.content in beat.foreshadowings_to_embed
+                    and fs.content not in normalized
+                    and len(normalized) < 30
+                ):
+                    missing_foreshadowings.append(fs.content)
+
+        needs_rewrite = bool(missing_entities or missing_foreshadowings)
+        return BeatSelfCheck(
+            missing_entities=missing_entities,
+            missing_foreshadowings=missing_foreshadowings,
+            contradictions=contradictions,
+            needs_rewrite=needs_rewrite,
+        )
+
+    async def _generate_relay(
+        self,
+        beat_text: str,
+        beat: BeatPlan,
+        context: ChapterContext,
+        beat_idx: int,
+        next_beat: BeatPlan | None,
+        novel_id: str = "",
+    ) -> "NarrativeRelay":
         """Generate narrative state snapshot after a beat is written."""
         from novel_dev.schemas.context import NarrativeRelay
         from novel_dev.agents._llm_helpers import call_and_parse
+
+        beat_context = self._beat_context(context, beat_idx)
+        guardrails = beat_context.guardrails if beat_context else []
+        foreshadowings = beat_context.foreshadowings if beat_context else []
         prompt = (
-            "你是一位叙事分析师。请阅读以下小说节拍正文，提取当前叙事状态。\n"
+            "你是一位小说导演场记。请根据节拍目标、正文、约束和下一节拍目标，"
+            "提取稳定叙事接力信息。不要把正文中疑似跑偏或违背约束的内容当成既定事实。\n"
             "返回严格 JSON：\n"
             '{"scene_state":"...","emotional_tone":"...","new_info_revealed":"...","open_threads":"...","next_beat_hook":"..."}\n\n'
-            f"节拍计划: {beat.summary}\n\n"
+            f"当前节拍目标: {beat.summary}\n"
+            f"当前节拍情绪: {beat.target_mood}\n"
+            f"下一节拍目标: {next_beat.summary if next_beat else '无，当前为章末'}\n"
+            f"不可违背事实: {json.dumps(guardrails[:6], ensure_ascii=False)}\n"
+            f"本节拍伏笔安排: {json.dumps([fs.model_dump() for fs in foreshadowings[:3]], ensure_ascii=False)}\n\n"
             f"正文:\n{beat_text[:3000]}\n\n"
+            "要求：\n"
+            "- scene_state 只记录能安全传递到下一节拍的稳定状态。\n"
+            "- open_threads 记录尚未解决的问题、伏笔或冲突。\n"
+            "- next_beat_hook 要服务下一节拍目标，不要凭空发明新主线。\n"
             "JSON:"
         )
         return await call_and_parse(
@@ -366,16 +565,28 @@ class WriterAgent:
         idx: int = 0,
         total: int = 1,
         is_last: bool = False,
+        self_check: BeatSelfCheck | None = None,
     ) -> str:
         system_prompt = self._build_system_prompt(context, is_last)
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
             idx, total, is_last,
         )
+        fix_block = ""
+        if self_check and self_check.needs_rewrite:
+            issues = []
+            if self_check.missing_entities:
+                issues.append("缺少关键实体: " + "、".join(self_check.missing_entities))
+            if self_check.missing_foreshadowings:
+                issues.append("缺少伏笔: " + "、".join(self_check.missing_foreshadowings))
+            if self_check.contradictions:
+                issues.append("疑似违背约束: " + "；".join(self_check.contradictions))
+            fix_block = "### 本次重写必须修复的问题\n" + "\n".join(f"- {issue}" for issue in issues) + "\n\n"
         user_content = (
             f"{context_msg}\n\n"
-            f"### 当前过短文本（需扩写）\n{original_text}\n\n"
-            "请在遵守上述约束的前提下扩写，保持与上下文的连贯。只返回扩写后的正文，不添加解释："
+            f"{fix_block}"
+            f"### 当前文本\n{original_text}\n\n"
+            "请在遵守上述约束的前提下重写，优先补足缺失信息并消除冲突。只返回重写后的正文，不添加解释："
         )
         messages = [
             ChatMessage(role="system", content=system_prompt),

@@ -22,6 +22,7 @@ export const useNovelStore = defineStore('novel', {
     chapters: [],
     volumePlan: null,
     entities: [],
+    entityRelationships: [],
     timelines: [],
     spacelines: [],
     foreshadowings: [],
@@ -92,8 +93,12 @@ export const useNovelStore = defineStore('novel', {
     },
 
     async fetchEntities() {
-      const res = await api.getEntities(this.novelId)
-      this.entities = res.items || []
+      const [entities, relationships] = await Promise.all([
+        api.getEntities(this.novelId),
+        api.getEntityRelationships(this.novelId).catch(() => ({ items: [] })),
+      ])
+      this.entities = entities.items || []
+      this.entityRelationships = relationships.items || []
     },
 
     async fetchTimelines() {

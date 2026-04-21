@@ -1,7 +1,7 @@
 import uuid
 import json
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents.file_classifier import FileClassifier
@@ -18,6 +18,34 @@ from novel_dev.db.models import NovelDocument, PendingExtraction
 
 logger = logging.getLogger(__name__)
 
+AUTO_APPLY_FIELDS = {
+    "appearance",
+    "background",
+    "ability",
+    "resources",
+    "notes",
+    "description",
+    "significance",
+}
+
+FIELD_LABELS = {
+    "identity": "身份",
+    "personality": "性格",
+    "goal": "目标",
+    "appearance": "外貌",
+    "background": "背景",
+    "ability": "能力",
+    "realm": "境界",
+    "relationships": "关系",
+    "resources": "资源",
+    "secrets": "秘密",
+    "conflict": "冲突",
+    "arc": "人物弧光",
+    "notes": "备注",
+    "description": "描述",
+    "significance": "重要性",
+}
+
 
 class ExtractionService:
     def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
@@ -31,6 +59,176 @@ class ExtractionService:
         self.pending_repo = PendingExtractionRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.entity_svc = EntityService(session, embedding_service)
+
+    def _stringify_value(self, value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+    async def _build_entity_diff(self, novel_id: str, entity_type: str, incoming_state: dict) -> dict:
+        entity_name = incoming_state.get("name", "unknown")
+        existing = await self.entity_svc.entity_repo.find_by_name(entity_name, entity_type=entity_type, novel_id=novel_id)
+        if existing is None:
+            field_changes = []
+            for field, value in incoming_state.items():
+                if self._stringify_value(value):
+                    field_changes.append({
+                        "field": field,
+                        "label": FIELD_LABELS.get(field, field),
+                        "old_value": "",
+                        "new_value": value,
+                        "change_type": "add",
+                        "auto_applicable": True,
+                        "reason": "新实体字段",
+                    })
+            return {
+                "entity_type": entity_type,
+                "entity_name": entity_name,
+                "existing_entity_id": None,
+                "operation": "create",
+                "field_changes": field_changes,
+            }
+
+        latest_state = await self.entity_svc.get_latest_state(existing.id) or {}
+        field_changes = []
+        operation = "update"
+        for field, new_value in incoming_state.items():
+            if field == "name":
+                continue
+            new_text = self._stringify_value(new_value)
+            if not new_text:
+                continue
+            old_value = latest_state.get(field)
+            old_text = self._stringify_value(old_value)
+            if not old_text:
+                field_changes.append({
+                    "field": field,
+                    "label": FIELD_LABELS.get(field, field),
+                    "old_value": old_value,
+                    "new_value": new_value,
+                    "change_type": "add",
+                    "auto_applicable": True,
+                    "reason": "旧值为空，可自动补充",
+                })
+                continue
+            if old_text == new_text:
+                continue
+            is_auto = field in AUTO_APPLY_FIELDS
+            change_type = "update" if is_auto else "conflict"
+            if change_type == "conflict":
+                operation = "conflict"
+            field_changes.append({
+                "field": field,
+                "label": FIELD_LABELS.get(field, field),
+                "old_value": old_value,
+                "new_value": new_value,
+                "change_type": change_type,
+                "auto_applicable": is_auto,
+                "reason": "字段值不一致" if not is_auto else "补充型字段，自动采用新值",
+            })
+
+        return {
+            "entity_type": entity_type,
+            "entity_name": entity_name,
+            "existing_entity_id": existing.id,
+            "operation": operation if field_changes else "noop",
+            "field_changes": field_changes,
+        }
+
+    async def _build_setting_diff(self, novel_id: str, raw_result: dict) -> dict:
+        entity_diffs = []
+        summary_parts = []
+
+        for char in raw_result.get("character_profiles", []):
+            entity_diff = await self._build_entity_diff(novel_id, "character", char)
+            if entity_diff["operation"] != "noop":
+                entity_diffs.append(entity_diff)
+
+        for item in raw_result.get("important_items", []):
+            entity_diff = await self._build_entity_diff(novel_id, "item", item)
+            if entity_diff["operation"] != "noop":
+                entity_diffs.append(entity_diff)
+
+        create_count = sum(1 for d in entity_diffs if d["operation"] == "create")
+        update_count = sum(1 for d in entity_diffs if d["operation"] == "update")
+        conflict_count = sum(1 for d in entity_diffs if d["operation"] == "conflict")
+        if create_count:
+            summary_parts.append(f"{create_count} 个新增实体")
+        if update_count:
+            summary_parts.append(f"{update_count} 个可自动补充实体")
+        if conflict_count:
+            summary_parts.append(f"{conflict_count} 个冲突实体")
+
+        return {
+            "entity_diffs": entity_diffs,
+            "document_changes": [],
+            "summary": "，".join(summary_parts) if summary_parts else "无实体变更",
+        }
+
+    async def _apply_entity_diff(self, novel_id: str, entity_diff: dict, field_resolutions: Optional[List[dict]] = None) -> list[dict]:
+        entity_name = entity_diff.get("entity_name", "unknown")
+        entity_type = entity_diff.get("entity_type", "other")
+        resolution_log: list[dict] = []
+        if entity_diff.get("operation") == "create":
+            initial_state = {change["field"]: change.get("new_value") for change in entity_diff.get("field_changes", [])}
+            initial_state["name"] = entity_name
+            await self.entity_svc.create_entity(
+                entity_id=f"ent_{uuid.uuid4().hex[:8]}",
+                entity_type=entity_type,
+                name=entity_name,
+                novel_id=novel_id,
+                initial_state=initial_state,
+            )
+            for change in entity_diff.get("field_changes", []):
+                resolution_log.append({
+                    "entity_type": entity_type,
+                    "entity_name": entity_name,
+                    "field": change["field"],
+                    "action": "created",
+                    "applied": True,
+                })
+            return resolution_log
+
+        entity_id = entity_diff.get("existing_entity_id")
+        if not entity_id:
+            return resolution_log
+        latest_state = await self.entity_svc.get_latest_state(entity_id) or {"name": entity_name}
+        merged_state = dict(latest_state)
+        applied = False
+        resolutions_by_field = {
+            item.get("field"): item
+            for item in (field_resolutions or [])
+            if item.get("entity_type") == entity_type and item.get("entity_name") == entity_name
+        }
+        for change in entity_diff.get("field_changes", []):
+            field = change["field"]
+            resolution = resolutions_by_field.get(field)
+            if resolution:
+                action = resolution.get("action")
+                if action == "use_new":
+                    merged_state[field] = change.get("new_value")
+                    applied = True
+                    resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "use_new", "applied": True})
+                elif action == "merge":
+                    merged_state[field] = resolution.get("merged_value", "")
+                    applied = True
+                    resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "merge", "applied": True})
+                elif action == "skip":
+                    resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "skip", "applied": False})
+                else:
+                    resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "keep_old", "applied": False})
+                continue
+            if not change.get("auto_applicable"):
+                resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "keep_old", "applied": False})
+                continue
+            merged_state[field] = change.get("new_value")
+            applied = True
+            resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "auto_apply", "applied": True})
+        if applied:
+            await self.entity_svc.update_state(entity_id, merged_state, diff_summary={"merged_from_pending": True})
+        return resolution_log
 
     async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
         log_service.add_log(novel_id, "ExtractionService", f"处理上传文件: {filename}")
@@ -46,6 +244,7 @@ class ExtractionService:
                 proposed_entities.append({"type": "item", "name": i.name, "data": i.model_dump()})
             if extracted.factions:
                 proposed_entities.append({"type": "faction", "name": "extracted_factions", "data": {"factions": extracted.factions}})
+            diff_result = await self._build_setting_diff(novel_id, raw_result)
 
             log_service.add_log(novel_id, "ExtractionService", f"设定提取完成，待审核: {len(proposed_entities)} 个实体")
             return await self.pending_repo.create(
@@ -54,6 +253,7 @@ class ExtractionService:
                 extraction_type="setting",
                 raw_result=raw_result,
                 proposed_entities=proposed_entities,
+                diff_result=diff_result,
             )
         else:
             profile = await self.style_agent.profile(content, novel_id)
@@ -66,12 +266,13 @@ class ExtractionService:
                 raw_result=raw_result,
             )
 
-    async def approve_pending(self, pe_id: str) -> List[NovelDocument]:
+    async def approve_pending(self, pe_id: str, field_resolutions: Optional[List[dict]] = None) -> List[NovelDocument]:
         pe = await self.pending_repo.get_by_id(pe_id)
         if not pe or pe.status != "pending":
             return []
 
         docs: List[NovelDocument] = []
+        resolution_result = {"field_resolutions": []}
         if pe.extraction_type == "setting":
             raw = pe.raw_result
             mappings = [
@@ -104,15 +305,6 @@ class ExtractionService:
                     content=text,
                 )
                 docs.append(doc)
-                for c in chars:
-                    char_data = c if isinstance(c, dict) else c.model_dump()
-                    await self.entity_svc.create_entity(
-                        entity_id=f"ent_{uuid.uuid4().hex[:8]}",
-                        entity_type="character",
-                        name=char_data.get("name", "unknown"),
-                        novel_id=pe.novel_id,
-                        initial_state=char_data,
-                    )
 
             items = raw.get("important_items", [])
             if items:
@@ -125,18 +317,16 @@ class ExtractionService:
                     content=text,
                 )
                 docs.append(doc)
-                for i in items:
-                    item_data = i if isinstance(i, dict) else i.model_dump()
-                    await self.entity_svc.create_entity(
-                        entity_id=f"ent_{uuid.uuid4().hex[:8]}",
-                        entity_type="item",
-                        name=item_data.get("name", "unknown"),
-                        novel_id=pe.novel_id,
-                        initial_state=item_data,
-                    )
+
+            diff_result = pe.diff_result
+            if not diff_result:
+                diff_result = await self._build_setting_diff(pe.novel_id, raw)
+            for entity_diff in diff_result.get("entity_diffs", []):
+                resolution_result["field_resolutions"].extend(
+                    await self._apply_entity_diff(pe.novel_id, entity_diff, field_resolutions=field_resolutions)
+                )
 
         else:
-            # style_profile
             latest = await self.doc_repo.get_latest_by_type(pe.novel_id, "style_profile")
             new_profile = StyleProfile(**pe.raw_result)
             if latest:
@@ -168,7 +358,7 @@ class ExtractionService:
                 )
             docs.append(doc)
 
-        await self.pending_repo.update_status(pe_id, "approved")
+        await self.pending_repo.update_status(pe_id, "approved", resolution_result=resolution_result)
         log_service.add_log(pe.novel_id, "ExtractionService", f"审核通过，生成 {len(docs)} 份文档")
         return docs
 

@@ -67,6 +67,40 @@ class LocationContext(BaseModel):
         return coerce_to_text(value)
 
 
+class ForeshadowingContext(BaseModel):
+    id: str
+    content: str
+    role_in_chapter: str = "embed"
+    related_entity_names: List[str] = Field(default_factory=list)
+    target_beat_index: Optional[int] = None
+    surface_hint: Optional[str] = None
+    payoff_requirement: Optional[str] = None
+
+    @field_validator("content", "role_in_chapter", "surface_hint", "payoff_requirement", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
+    @field_validator("related_entity_names", mode="before")
+    @classmethod
+    def _coerce_related_entity_names(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
+
+
+class BeatContext(BaseModel):
+    beat_index: int
+    beat: BeatPlan
+    entities: List[EntityState] = Field(default_factory=list)
+    foreshadowings: List[ForeshadowingContext] = Field(default_factory=list)
+    relevant_documents: list[SimilarDocument] = Field(default_factory=list)
+    guardrails: List[str] = Field(default_factory=list)
+
+    @field_validator("guardrails", mode="before")
+    @classmethod
+    def _coerce_guardrails(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
+
+
 class ChapterContext(BaseModel):
     chapter_plan: ChapterPlan
     style_profile: dict
@@ -74,16 +108,35 @@ class ChapterContext(BaseModel):
     active_entities: List[EntityState]
     location_context: LocationContext
     timeline_events: List[dict]
-    pending_foreshadowings: List[dict]
+    pending_foreshadowings: List[ForeshadowingContext]
     previous_chapter_summary: Optional[str] = None
     relevant_documents: list[SimilarDocument] = Field(default_factory=list)
     related_entities: list[EntityState] = Field(default_factory=list)
     similar_chapters: list[SimilarDocument] = Field(default_factory=list)
+    guardrails: List[str] = Field(default_factory=list)
+    beat_contexts: List[BeatContext] = Field(default_factory=list)
 
     @field_validator("worldview_summary", "previous_chapter_summary", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)
+
+    @field_validator("guardrails", mode="before")
+    @classmethod
+    def _coerce_guardrails(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
+
+
+class BeatSelfCheck(BaseModel):
+    missing_entities: List[str] = Field(default_factory=list)
+    missing_foreshadowings: List[str] = Field(default_factory=list)
+    contradictions: List[str] = Field(default_factory=list)
+    needs_rewrite: bool = False
+
+    @field_validator("missing_entities", "missing_foreshadowings", "contradictions", mode="before")
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
 
 
 class DraftMetadata(BaseModel):

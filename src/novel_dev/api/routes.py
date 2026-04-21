@@ -5,10 +5,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
-from novel_dev.db.models import NovelState, Entity, Timeline, Spaceline, Foreshadowing, Chapter
+from novel_dev.db.models import NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
@@ -170,6 +170,8 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
     return {"items": items}
 
 
+
+
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
 async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depends(get_session)):
     svc = EntityService(session)
@@ -177,6 +179,28 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"entity_id": entity_id, "latest_state": state}
+
+
+@router.get("/api/novels/{novel_id}/entity_relationships")
+async def list_entity_relationships(novel_id: str, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(
+        select(EntityRelationship)
+        .where(EntityRelationship.novel_id == novel_id, EntityRelationship.is_active.is_(True))
+        .order_by(EntityRelationship.id)
+    )
+    items = [
+        {
+            "id": rel.id,
+            "source_id": rel.source_id,
+            "target_id": rel.target_id,
+            "relation_type": rel.relation_type,
+            "meta": rel.meta,
+            "created_at_chapter_id": rel.created_at_chapter_id,
+            "is_active": rel.is_active,
+        }
+        for rel in result.scalars().all()
+    ]
+    return {"items": items}
 
 
 @router.get("/api/novels/{novel_id}/timelines")
@@ -317,8 +341,17 @@ class UploadRequest(BaseModel):
     content: str
 
 
+class FieldResolution(BaseModel):
+    entity_type: str
+    entity_name: str
+    field: str
+    action: str
+    merged_value: str | None = None
+
+
 class ApproveRequest(BaseModel):
     pending_id: str
+    field_resolutions: list[FieldResolution] = Field(default_factory=list)
 
 
 class RollbackRequest(BaseModel):
@@ -355,6 +388,8 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
                 "status": i.status,
                 "raw_result": i.raw_result,
                 "proposed_entities": i.proposed_entities,
+                "diff_result": i.diff_result,
+                "resolution_result": i.resolution_result,
                 "created_at": i.created_at.isoformat(),
             }
             for i in items
@@ -371,7 +406,7 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
     pe = await repo.get_by_id(req.pending_id)
     if not pe or pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
-    docs = await svc.approve_pending(req.pending_id)
+    docs = await svc.approve_pending(req.pending_id, field_resolutions=[r.model_dump() for r in req.field_resolutions])
     await session.commit()
     return {
         "documents": [

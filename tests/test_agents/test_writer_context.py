@@ -2,7 +2,7 @@ import pytest
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.schemas.context import (
     ChapterContext, ChapterPlan, BeatPlan, LocationContext,
-    EntityState, NarrativeRelay,
+    EntityState, NarrativeRelay, ForeshadowingContext, BeatContext,
 )
 
 
@@ -18,6 +18,7 @@ def _make_context(**overrides):
         location_context=LocationContext(current="默认"),
         timeline_events=[],
         pending_foreshadowings=[],
+        beat_contexts=[],
     )
     defaults.update(overrides)
     return ChapterContext(**defaults)
@@ -86,8 +87,8 @@ class TestBuildContextMessage:
         result = agent._build_context_message(
             ctx.chapter_plan.beats[0], ctx, [], "", 0, 1, False
         )
-        assert "很长的世界观" not in result
         assert len(result) < 5000
+        assert "### 世界观约束" in result
 
 
 class TestFallbackRetrieval:
@@ -110,3 +111,102 @@ class TestFallbackRetrieval:
         agent = WriterAgent.__new__(WriterAgent)
         result = agent._fallback_retrieval(beat, ctx)
         assert result == ""
+
+    def test_uses_beat_context_when_index_provided(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑", key_entities=["秦风"])
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤但清醒")],
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._fallback_retrieval(beat, ctx, 0)
+        assert "当前节拍相关实体" in result
+        assert "秦风" in result
+
+
+class TestSchemaCompatibility:
+    def test_chapter_context_roundtrip_with_beat_contexts(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑", key_entities=["秦风"], foreshadowings_to_embed=["玉佩发热"])
+        context = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            pending_foreshadowings=[
+                ForeshadowingContext(
+                    id="fs1",
+                    content="玉佩发热",
+                    role_in_chapter="embed",
+                    related_entity_names=["秦风"],
+                    target_beat_index=0,
+                )
+            ],
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤")],
+                    foreshadowings=[
+                        ForeshadowingContext(
+                            id="fs1",
+                            content="玉佩发热",
+                            role_in_chapter="embed",
+                            related_entity_names=["秦风"],
+                            target_beat_index=0,
+                        )
+                    ],
+                    guardrails=["不要无铺垫切换地点。"],
+                )
+            ],
+        )
+        roundtrip = ChapterContext(**context.model_dump())
+        assert roundtrip.beat_contexts[0].entities[0].name == "秦风"
+        assert roundtrip.pending_foreshadowings[0].id == "fs1"
+
+
+class TestSelfCheck:
+    def test_self_check_does_not_misfire_on_normal_length_text(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑", key_entities=["秦风"], foreshadowings_to_embed=["玉佩发热"])
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤")],
+                    foreshadowings=[
+                        ForeshadowingContext(
+                            id="fs1",
+                            content="玉佩发热",
+                            role_in_chapter="embed",
+                            related_entity_names=["秦风"],
+                            target_beat_index=0,
+                        )
+                    ],
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        text = "他扶着石壁慢慢往前走，胸口还在发闷，耳边只有风声和滴水声。这样的静默持续了很久，直到他停在洞口前，抬头看向外面的天色。"
+        result = agent._self_check_beat(text, beat, ctx, 0)
+        assert result.needs_rewrite is False
+
+    def test_self_check_marks_short_missing_entity_text(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑", key_entities=["秦风"])
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤")],
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._self_check_beat("风很冷。", beat, ctx, 0)
+        assert result.needs_rewrite is True
+        assert "秦风" in result.missing_entities

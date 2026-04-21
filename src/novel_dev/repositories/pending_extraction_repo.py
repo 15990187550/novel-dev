@@ -16,6 +16,7 @@ class PendingExtractionRepository:
         extraction_type: str,
         raw_result: dict,
         proposed_entities: Optional[List[dict]] = None,
+        diff_result: Optional[dict] = None,
     ) -> PendingExtraction:
         pe = PendingExtraction(
             id=pe_id,
@@ -23,6 +24,7 @@ class PendingExtractionRepository:
             extraction_type=extraction_type,
             raw_result=raw_result,
             proposed_entities=proposed_entities,
+            diff_result=diff_result,
         )
         self.session.add(pe)
         await self.session.flush()
@@ -40,8 +42,10 @@ class PendingExtractionRepository:
         )
         return result.scalars().all()
 
-    async def update_status(self, pe_id: str, status: str) -> None:
+    async def update_status(self, pe_id: str, status: str, resolution_result: Optional[dict] = None) -> None:
         pe = await self.get_by_id(pe_id)
         if pe:
             pe.status = status
+            if resolution_result is not None:
+                pe.resolution_result = resolution_result
             await self.session.flush()

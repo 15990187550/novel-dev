@@ -42,6 +42,27 @@ class EntityService:
                 logger.warning("entity_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
         return entity
 
+    async def create_or_update_entity(
+        self,
+        entity_id: str,
+        entity_type: str,
+        name: str,
+        chapter_id: Optional[str] = None,
+        novel_id: Optional[str] = None,
+        initial_state: Optional[dict] = None,
+    ) -> Entity:
+        existing = await self.entity_repo.find_by_name(name, entity_type=entity_type, novel_id=novel_id)
+        if existing is None:
+            return await self.create_entity(entity_id, entity_type, name, chapter_id, novel_id, initial_state)
+
+        latest_state = await self.get_latest_state(existing.id)
+        merged_state = dict(latest_state or {})
+        if initial_state:
+            merged_state.update(initial_state)
+        merged_state["name"] = name
+        await self.update_state(existing.id, merged_state, chapter_id=chapter_id, diff_summary={"merged": True})
+        return existing
+
     async def update_state(self, entity_id: str, new_state: dict, chapter_id: Optional[str] = None, diff_summary: Optional[dict] = None):
         latest = await self.version_repo.get_latest(entity_id)
         new_version = (latest.version + 1) if latest else 1

@@ -38,7 +38,7 @@ class BrainstormAgent:
         combined = "\n\n".join(f"[{d.doc_type}]\n{d.content}" for d in docs)
         log_service.add_log(novel_id, "BrainstormAgent", f"读取 {len(docs)} 份设定文档，开始生成 synopsis")
         synopsis_data = await self._generate_and_refine(combined, novel_id)
-        synopsis_text = self._format_synopsis_text(synopsis_data, combined)
+        synopsis_text = self._format_synopsis_text(synopsis_data)
 
         doc = await self.doc_repo.create(
             doc_id=f"doc_{uuid.uuid4().hex[:8]}",
@@ -131,7 +131,7 @@ class BrainstormAgent:
         prompt = (
             "你是一位小说大纲修订专家。请根据以下评审反馈对 SynopsisData 进行定点修订,"
             "返回严格符合 SynopsisData Schema 的 JSON。保留原设定的核心方向,只针对"
-            "未达标维度做结构/写法层面的改进(不要改变故事题材或情节走向)。\n\n"
+            "未达标维度做结构/写法层面的改进,但不要偏离核心设定、人物基础关系与主要矛盾。\n\n"
             "## 修订重点映射\n"
             "- logline_specificity 低:把 logline 改写为『角色+欲望+阻力+赌注』一句话\n"
             "- conflict_concreteness 低:把 core_conflict 写成具体对抗关系,指名对手\n"
@@ -148,6 +148,7 @@ class BrainstormAgent:
         )
 
     async def _generate_synopsis(self, combined_text: str, novel_id: str) -> SynopsisData:
+        source_text = combined_text[:12000]
         prompt = (
             "你是一位资深商业小说大纲生成专家,面向网文连载读者。"
             "根据用户提供的设定文档,生成一份可供后续分卷、分章、分节拍继续展开的大纲。"
@@ -166,7 +167,7 @@ class BrainstormAgent:
             "- core_conflict:写具体的对抗关系(例『主角 vs 宗门长老会关于传承之争』),"
             "避免抽象标签(如『正邪对立』『人性与命运』)。\n"
             "- milestones.climax_event:写一个可被后续章节直接展开的具体事件,不要只写情绪。\n\n"
-            f"{combined_text}"
+            f"{source_text}"
         )
         result = await call_and_parse_model(
             "BrainstormAgent", "generate_synopsis", prompt, SynopsisData, novel_id=novel_id

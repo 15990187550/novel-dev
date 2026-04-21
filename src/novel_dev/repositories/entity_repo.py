@@ -27,6 +27,15 @@ class EntityRepository:
         result = await self.session.execute(select(Entity).where(Entity.id == entity_id))
         return result.scalar_one_or_none()
 
+    async def find_by_name(self, name: str, entity_type: Optional[str] = None, novel_id: Optional[str] = None) -> Optional[Entity]:
+        stmt = select(Entity).where(Entity.name == name)
+        if entity_type is not None:
+            stmt = stmt.where(Entity.type == entity_type)
+        if novel_id is not None:
+            stmt = stmt.where(Entity.novel_id == novel_id)
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
+
     async def update_version(self, entity_id: str, new_version: int) -> None:
         entity = await self.get_by_id(entity_id)
         if entity:

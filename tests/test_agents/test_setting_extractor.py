@@ -13,7 +13,22 @@ async def test_extract_success():
         power_system="炼气筑基金丹",
         factions="青云宗",
         character_profiles=[
-            {"name": "林风", "identity": "弟子", "personality": "坚韧", "goal": "报仇"}
+            {
+                "name": "林风",
+                "identity": "弟子",
+                "personality": "坚韧",
+                "goal": "报仇",
+                "appearance": "黑衣瘦削",
+                "background": "寒门出身",
+                "ability": "剑术",
+                "realm": "筑基",
+                "relationships": "与苏雪为盟友",
+                "resources": "祖传玉佩",
+                "secrets": "体内藏有残魂",
+                "conflict": "与长老一脉对立",
+                "arc": "从隐忍走向担当",
+                "notes": "逢险更冷静",
+            }
         ],
         important_items=[
             {"name": "玉佩", "description": "信物", "significance": "身世"}
@@ -31,6 +46,28 @@ async def test_extract_success():
     assert result.worldview == "天玄大陆"
     assert len(result.character_profiles) == 1
     assert result.character_profiles[0].name == "林风"
+    assert result.character_profiles[0].appearance == "黑衣瘦削"
+    assert result.character_profiles[0].realm == "筑基"
+    assert result.character_profiles[0].relationships == "与苏雪为盟友"
+
+
+@pytest.mark.asyncio
+async def test_extract_prompt_requests_richer_character_fields():
+    extracted = ExtractedSetting(worldview="大陆")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=extracted.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = SettingExtractorAgent()
+        await agent.extract("任意文本")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "appearance" in prompt
+    assert "background" in prompt
+    assert "relationships" in prompt
+    assert "resources" in prompt
+    assert "不要编造" in prompt
 
 
 @pytest.mark.asyncio

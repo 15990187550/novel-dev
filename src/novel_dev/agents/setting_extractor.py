@@ -10,6 +10,16 @@ class CharacterProfile(BaseModel):
     identity: str = ""
     personality: str = ""
     goal: str = ""
+    appearance: str = ""
+    background: str = ""
+    ability: str = ""
+    realm: str = ""
+    relationships: str = ""
+    resources: str = ""
+    secrets: str = ""
+    conflict: str = ""
+    arc: str = ""
+    notes: str = ""
 
 
 class ImportantItem(BaseModel):
@@ -81,17 +91,36 @@ class SettingExtractorAgent:
     async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
         if novel_id:
             log_service.add_log(novel_id, "SettingExtractorAgent", f"开始提取设定，文本长度: {len(text)} 字")
-        MAX_CHARS = 24000
-        truncated = text[:MAX_CHARS]
+        max_chars = 24000
+        truncated = text[:max_chars]
         prompt = (
             "你是一位小说设定提取专家。请从以下设定文档中提取结构化信息，"
-            "返回严格符合 ExtractedSetting Schema 的 JSON：\n"
+            "返回严格符合 ExtractedSetting Schema 的 JSON。只提取文档明确写出或强烈暗示的信息，不要自行补完剧情。\n"
             "1. worldview: 世界观概述\n"
             "2. power_system: 修炼/力量体系\n"
             "3. factions: 势力/宗门分布\n"
-            "4. character_profiles: 人物列表（每人含 name, identity, personality, goal）\n"
+            "4. character_profiles: 人物列表，每个人物尽量完整填写：\n"
+            "   - name: 姓名/称号\n"
+            "   - identity: 身份、定位、阵营、叙事功能\n"
+            "   - personality: 性格、行为方式、价值观、情绪底色\n"
+            "   - goal: 显性目标、长期追求、当前动机\n"
+            "   - appearance: 外貌、气质、辨识特征\n"
+            "   - background: 出身、前史、重要经历\n"
+            "   - ability: 能力、功法、权柄、特长\n"
+            "   - realm: 境界、实力层级、修为状态\n"
+            "   - relationships: 与主角/其他人物/势力的关系\n"
+            "   - resources: 拥有的资源、传承、法宝、身份优势\n"
+            "   - secrets: 隐秘身份、未公开目的、伏笔信息\n"
+            "   - conflict: 核心矛盾、阻碍、敌对关系\n"
+            "   - arc: 人物成长/转变方向\n"
+            "   - notes: 其他无法归类但对正文写作有用的信息\n"
             "5. important_items: 重要物品列表（每件含 name, description, significance）\n"
             "6. plot_synopsis: 剧情梗概\n\n"
+            "要求：\n"
+            "- 人物字段不要只写一句泛泛概括；同一人物在文档中出现多次时要整合信息。\n"
+            "- 没有依据的字段留空字符串，不要编造。\n"
+            "- relationships 要优先记录人物之间的具体关系和立场。\n"
+            "- ability/realm/resources/secrets/conflict/arc 只要文档有线索就提取。\n\n"
             f"文档内容：\n\n{truncated}"
         )
         result = await call_and_parse_model(
