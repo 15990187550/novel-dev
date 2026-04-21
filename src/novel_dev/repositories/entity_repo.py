@@ -186,6 +186,75 @@ class EntityRepository:
         )
         return result.scalars().all()
 
+    async def search_entities(
+        self,
+        novel_id: str,
+        *,
+        query: str,
+        query_vector: Optional[List[float]],
+        limit: int = 20,
+    ) -> list[dict]:
+        normalized_query = self.normalize_name(query)
+        query_lower = (query or "").strip().lower()
+
+        result = await self.session.execute(
+            select(Entity).where(Entity.novel_id == novel_id)
+        )
+        entities = result.scalars().all()
+
+        scored: list[tuple[float, dict]] = []
+        for entity in entities:
+            name = entity.name or ""
+            search_document = entity.search_document or ""
+            lexical_hit = False
+            relationship_hit = False
+            semantic_score = 0.0
+
+            if query:
+                normalized_name = self.normalize_name(name)
+                lexical_hit = (
+                    query_lower in name.lower()
+                    or (normalized_query and normalized_query == normalized_name)
+                    or (normalized_query and normalized_query in normalized_name)
+                )
+                relationship_hit = not lexical_hit and query_lower in search_document.lower()
+
+            if query_vector and entity.search_vector_embedding:
+                semantic_score = self._cosine_similarity(query_vector, entity.search_vector_embedding)
+
+            score = semantic_score
+            match_reason = "语义相关"
+            if relationship_hit:
+                score += 0.4
+                match_reason = "关系命中"
+            if lexical_hit:
+                score += 1.0
+                match_reason = "名称命中"
+            elif semantic_score <= 0 and relationship_hit:
+                match_reason = "关系命中"
+
+            if score <= 0 and not lexical_hit and not relationship_hit:
+                continue
+
+            scored.append((
+                score,
+                {
+                    "entity_id": entity.id,
+                    "type": entity.type,
+                    "name": entity.name,
+                    "system_category": entity.system_category,
+                    "manual_category": entity.manual_category,
+                    "system_group_id": entity.system_group_id,
+                    "manual_group_id": entity.manual_group_id,
+                    "search_document": entity.search_document,
+                    "score": score,
+                    "match_reason": match_reason,
+                },
+            ))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [item for _, item in scored[:limit]]
+
     @staticmethod
     def _cosine_similarity(a: List[float], b: List[float]) -> float:
         dot = sum(x * y for x, y in zip(a, b))

@@ -6,13 +6,31 @@
       <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
         <h3 class="font-bold mb-3">上传设定文件</h3>
         <div class="flex items-center gap-2">
-          <input ref="fileInput" type="file" accept=".txt,.md" @change="onFileChange" class="text-sm" />
+          <input ref="fileInput" type="file" accept=".txt,.md" multiple @change="onFileChange" class="text-sm" />
           <el-button type="primary" :loading="uploading" @click="upload">上传</el-button>
+        </div>
+        <div v-if="selectedFiles.length" class="mt-3 text-sm text-gray-500 dark:text-gray-400">
+          已选择 {{ selectedFiles.length }} 个文件
+        </div>
+        <div v-if="uploadSummary" class="mt-3 space-y-2 text-sm">
+          <div class="text-gray-700 dark:text-gray-300">
+            本次导入完成：成功 {{ uploadSummary.succeeded }}，失败 {{ uploadSummary.failed }}，共 {{ uploadSummary.total }} 个文件
+          </div>
+          <div v-if="uploadSummary.failed" class="text-red-600 dark:text-red-400 space-y-1">
+            <div
+              v-for="item in uploadSummary.items.filter(item => item.error)"
+              :key="item.filename"
+              class="whitespace-pre-wrap"
+            >
+              {{ item.filename }}：{{ item.error }}
+            </div>
+          </div>
         </div>
       </div>
       <div v-if="store.pendingDocs.length" class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
         <h3 class="font-bold mb-3">设定提取记录</h3>
         <el-table :data="store.pendingDocs">
+          <el-table-column prop="source_filename" label="来源文件" min-width="180" />
           <el-table-column prop="extraction_type" label="类型" />
           <el-table-column prop="status" label="状态" />
           <el-table-column label="变更摘要" min-width="220">
@@ -147,17 +165,17 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
-import { uploadDocument, approvePending } from '@/api.js'
+import { uploadDocumentsBatch, approvePending } from '@/api.js'
 import { ElMessage } from 'element-plus'
 
 const store = useNovelStore()
 const fileInput = ref(null)
-const selectedFile = ref(null)
-const fileContent = ref('')
+const selectedFiles = ref([])
 const uploading = ref(false)
 const detailVisible = ref(false)
 const selectedDoc = ref(null)
 const conflictSelections = reactive({})
+const uploadSummary = ref(null)
 
 const diffGroups = computed(() => {
   const groups = { create: [], update: [], conflict: [] }
@@ -205,13 +223,22 @@ function resolutionActionLabel(action) {
   return labels[action] || action
 }
 
-function onFileChange(e) {
-  const file = e.target.files[0]
-  if (!file) return
-  selectedFile.value = file
-  const reader = new FileReader()
-  reader.onload = (ev) => { fileContent.value = ev.target.result }
-  reader.readAsText(file)
+function readFile(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (ev) => resolve({ filename: file.name, content: ev.target.result || '' })
+    reader.onerror = () => reject(new Error(`读取文件失败: ${file.name}`))
+    reader.readAsText(file)
+  })
+}
+
+async function onFileChange(e) {
+  const files = Array.from(e.target.files || [])
+  if (!files.length) {
+    selectedFiles.value = []
+    return
+  }
+  selectedFiles.value = await Promise.all(files.map(readFile))
 }
 
 function conflictKey(entity, change) {
@@ -272,16 +299,15 @@ function buildFieldResolutions() {
 }
 
 async function upload() {
-  if (!selectedFile.value || !fileContent.value) return
+  if (!selectedFiles.value.length) return
   uploading.value = true
   try {
-    await uploadDocument(store.novelId, selectedFile.value.name, fileContent.value)
-    ElMessage.success('上传成功')
+    uploadSummary.value = await uploadDocumentsBatch(store.novelId, selectedFiles.value, 3)
+    ElMessage.success(`上传完成：成功 ${uploadSummary.value.succeeded} 个`)
     await store.fetchDocuments()
   } finally {
     uploading.value = false
-    selectedFile.value = null
-    fileContent.value = ''
+    selectedFiles.value = []
     if (fileInput.value) fileInput.value.value = ''
   }
 }

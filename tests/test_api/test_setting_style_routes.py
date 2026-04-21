@@ -1,9 +1,9 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
+from novel_dev.llm.exceptions import LLMTimeoutError
 
 from novel_dev.api.routes import router, get_session
-from novel_dev.llm.exceptions import LLMTimeoutError
 
 app = FastAPI()
 app.include_router(router)
@@ -31,6 +31,7 @@ async def test_upload_setting_and_approve(async_session):
             assert resp2.status_code == 200
             pending_items = resp2.json()["items"]
             matched = next(item for item in pending_items if item["id"] == pe_id)
+            assert matched["source_filename"] == "setting.txt"
             assert matched["diff_result"] is not None
             assert any(item["id"] == pe_id for item in pending_items)
 
@@ -42,6 +43,81 @@ async def test_upload_setting_and_approve(async_session):
             matched_after = next(item for item in resp4.json()["items"] if item["id"] == pe_id)
             assert matched_after["resolution_result"] is not None
             assert matched_after["resolution_result"]["field_resolutions"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_setting_returns_per_file_results_and_pending_source_filename(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload/batch",
+                json={
+                    "items": [
+                        {"filename": "setting-1.txt", "content": "世界观：天玄大陆。主角林风。"},
+                        {"filename": "setting-2.txt", "content": "世界观：沧澜界。主角陆照。"},
+                    ]
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 2
+            assert data["succeeded"] == 2
+            assert data["failed"] == 0
+            assert all(item["pending_id"] for item in data["items"])
+
+            resp2 = await client.get("/api/novels/n1/documents/pending")
+            pending_items = resp2.json()["items"]
+            filenames = {item["source_filename"] for item in pending_items}
+            assert {"setting-1.txt", "setting-2.txt"} <= filenames
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_continues_when_one_item_times_out(async_session, monkeypatch):
+    from novel_dev.services.extraction_service import ExtractionService
+
+    async def override():
+        yield async_session
+
+    original = ExtractionService.process_upload
+
+    async def fake_process_upload(self, novel_id: str, filename: str, content: str):
+        if filename == "bad.txt":
+            raise LLMTimeoutError("Request timed out")
+        return await original(self, novel_id, filename, content)
+
+    monkeypatch.setattr(ExtractionService, "process_upload", fake_process_upload)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload/batch",
+                json={
+                    "items": [
+                        {"filename": "good.txt", "content": "世界观：天玄大陆。主角林风。"},
+                        {"filename": "bad.txt", "content": "boom"},
+                    ]
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 2
+            assert data["succeeded"] == 1
+            assert data["failed"] == 1
+            failed = next(item for item in data["items"] if item["filename"] == "bad.txt")
+            succeeded = next(item for item in data["items"] if item["filename"] == "good.txt")
+            assert failed["pending_id"] is None
+            assert "超时" in failed["error"]
+            assert succeeded["pending_id"] is not None
     finally:
         app.dependency_overrides.clear()
 

@@ -26,6 +26,7 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.spaceline_repo import SpacelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
+from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import log_service
@@ -247,6 +248,7 @@ class LibrarianAgent:
         entity_svc = EntityService(self.session, self.embedding_service)
         foreshadowing_repo = ForeshadowingRepository(self.session)
         relationship_repo = RelationshipRepository(self.session)
+        entity_repo = EntityRepository(self.session)
 
         # Track name -> entity_id for relationship resolution
         name_to_id: dict[str, str] = {}
@@ -271,9 +273,13 @@ class LibrarianAgent:
             name_to_id[entity.name] = eid
 
         for update in extraction.concept_updates + extraction.character_updates:
-            await entity_svc.update_state(update.entity_id, update.state, chapter_id=chapter_id, diff_summary=update.diff_summary)
+            resolved = await self._resolve_entity_id(update.entity_id, novel_id, name_to_id, entity_repo)
+            if not resolved:
+                log_service.add_log(novel_id, "LibrarianAgent", f"角色更新跳过，实体未找到: {update.entity_id}", level="warning")
+                continue
+            await entity_svc.update_state(resolved, update.state, chapter_id=chapter_id, diff_summary=update.diff_summary)
             if update.entity_id:
-                name_to_id[update.entity_id] = update.entity_id
+                name_to_id[update.entity_id] = resolved
 
         for fs_id in extraction.foreshadowings_recovered:
             await foreshadowing_repo.mark_recovered(fs_id, chapter_id=chapter_id)
@@ -291,9 +297,17 @@ class LibrarianAgent:
             )
 
         for rel in extraction.new_relationships:
-            source_id = name_to_id.get(rel.source_entity_id, rel.source_entity_id)
-            target_id = name_to_id.get(rel.target_entity_id, rel.target_entity_id)
-            await relationship_repo.create(
+            source_id = await self._resolve_entity_id(rel.source_entity_id, novel_id, name_to_id, entity_repo)
+            target_id = await self._resolve_entity_id(rel.target_entity_id, novel_id, name_to_id, entity_repo)
+            if not source_id or not target_id:
+                log_service.add_log(
+                    novel_id,
+                    "LibrarianAgent",
+                    f"关系跳过，实体未找到: {rel.source_entity_id} -> {rel.target_entity_id}",
+                    level="warning",
+                )
+                continue
+            await relationship_repo.upsert(
                 source_id=source_id,
                 target_id=target_id,
                 relation_type=rel.relation_type,
@@ -302,3 +316,28 @@ class LibrarianAgent:
                 novel_id=novel_id,
             )
         log_service.add_log(novel_id, "LibrarianAgent", "持久化完成")
+
+    async def _resolve_entity_id(
+        self,
+        raw_ref: str,
+        novel_id: str,
+        name_to_id: dict[str, str],
+        entity_repo: EntityRepository,
+    ) -> Optional[str]:
+        if not raw_ref:
+            return None
+        if raw_ref in name_to_id:
+            return name_to_id[raw_ref]
+
+        entity = await entity_repo.get_by_id(raw_ref)
+        if entity and entity.novel_id == novel_id:
+            name_to_id[raw_ref] = entity.id
+            name_to_id[entity.name] = entity.id
+            return entity.id
+
+        entity = await entity_repo.find_by_name(raw_ref, novel_id=novel_id)
+        if entity is None:
+            return None
+        name_to_id[raw_ref] = entity.id
+        name_to_id[entity.name] = entity.id
+        return entity.id

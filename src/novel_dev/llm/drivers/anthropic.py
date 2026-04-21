@@ -58,10 +58,11 @@ class AnthropicDriver(BaseDriver):
     def _map_exception(self, exc: Exception) -> Exception:
         import anthropic
         import httpx
+        overloaded_error = getattr(anthropic, "OverloadedError", None)
 
         if isinstance(exc, anthropic.RateLimitError):
             return LLMRateLimitError(str(exc))
-        if isinstance(exc, anthropic.OverloadedError):
+        if overloaded_error is not None and isinstance(exc, overloaded_error):
             return LLMRateLimitError(str(exc))
         if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
             return LLMTimeoutError(str(exc))

@@ -250,6 +250,7 @@ class ExtractionService:
             return await self.pending_repo.create(
                 pe_id=f"pe_{uuid.uuid4().hex[:8]}",
                 novel_id=novel_id,
+                source_filename=filename,
                 extraction_type="setting",
                 raw_result=raw_result,
                 proposed_entities=proposed_entities,
@@ -262,6 +263,7 @@ class ExtractionService:
             return await self.pending_repo.create(
                 pe_id=f"pe_{uuid.uuid4().hex[:8]}",
                 novel_id=novel_id,
+                source_filename=filename,
                 extraction_type="style_profile",
                 raw_result=raw_result,
             )

@@ -17,10 +17,12 @@ class PendingExtractionRepository:
         raw_result: dict,
         proposed_entities: Optional[List[dict]] = None,
         diff_result: Optional[dict] = None,
+        source_filename: Optional[str] = None,
     ) -> PendingExtraction:
         pe = PendingExtraction(
             id=pe_id,
             novel_id=novel_id,
+            source_filename=source_filename,
             extraction_type=extraction_type,
             raw_result=raw_result,
             proposed_entities=proposed_entities,

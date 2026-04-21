@@ -13,6 +13,14 @@
           <el-table-column prop="name" label="名称" width="160" />
           <el-table-column prop="type" label="类型" width="100" />
           <el-table-column prop="current_version" label="版本" width="80" />
+          <el-table-column label="别名" width="220">
+            <template #default="{ row }">
+              <div v-if="row.aliases?.length" class="flex flex-wrap gap-1">
+                <el-tag v-for="alias in row.aliases" :key="alias" size="small" type="info">{{ alias }}</el-tag>
+              </div>
+              <span v-else class="text-gray-400">-</span>
+            </template>
+          </el-table-column>
           <el-table-column label="实体信息" min-width="520">
             <template #default="{ row }">
               <div v-if="row.type === 'character'" class="space-y-2 text-sm">
@@ -36,7 +44,27 @@
           </el-table-column>
         </el-table>
       </div>
-      <EntityGraph :entities="store.entities" :relationships="store.entityRelationships" />
+      <EntityGraph
+        :entities="store.entities"
+        :relationships="store.entityRelationships"
+        height="20rem"
+        show-fullscreen-action
+        @fullscreen="graphFullscreenVisible = true"
+      />
+      <el-dialog
+        v-model="graphFullscreenVisible"
+        title="关系图谱"
+        fullscreen
+        :close-on-click-modal="false"
+        append-to-body
+      >
+        <EntityGraph
+          v-if="graphFullscreenVisible"
+          :entities="store.entities"
+          :relationships="store.entityRelationships"
+          height="calc(100vh - 10rem)"
+        />
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -48,6 +76,7 @@ import EntityGraph from '@/components/EntityGraph.vue'
 
 const store = useNovelStore()
 const activeTab = ref('character')
+const graphFullscreenVisible = ref(false)
 const filtered = computed(() => store.entities.filter(e => activeTab.value === 'other' ? !['character', 'item'].includes(e.type) : e.type === activeTab.value))
 
 const characterFieldLabels = {

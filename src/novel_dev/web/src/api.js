@@ -30,6 +30,8 @@ export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
 export const uploadDocument = (id, filename, content) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content }).then(r => r.data)
+export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
+  api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
 export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
 export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`).then(r => r.data)

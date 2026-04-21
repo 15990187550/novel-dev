@@ -21,6 +21,8 @@ export const useNovelStore = defineStore('novel', {
     currentChapter: null,
     chapters: [],
     volumePlan: null,
+    synopsisContent: '',
+    synopsisData: null,
     entities: [],
     entityRelationships: [],
     timelines: [],
@@ -49,15 +51,19 @@ export const useNovelStore = defineStore('novel', {
   actions: {
     async loadNovel(novelId) {
       this.novelId = novelId
-      const [state, stats, chapters] = await Promise.all([
+      const [state, stats, chapters, synopsis, volumePlan] = await Promise.all([
         api.getNovelState(novelId),
         api.getArchiveStats(novelId).catch(() => ({})),
         api.getChapters(novelId).catch(() => ({ items: [] })),
+        api.getSynopsis(novelId).catch(() => null),
+        api.getVolumePlan(novelId).catch(() => null),
       ])
       this.novelState = state
       this.archiveStats = stats
       this.chapters = chapters.items || []
-      this.volumePlan = state.checkpoint_data?.current_volume_plan || null
+      this.synopsisContent = synopsis?.content || ''
+      this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || null
+      this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
       const plan = this.volumePlan?.chapters?.find(c => c.chapter_id === state.current_chapter_id)
       const ch = this.chapters.find(c => c.chapter_id === state.current_chapter_id)
       this.currentChapter = ch ? { ...ch, ...plan } : plan || null
@@ -65,9 +71,15 @@ export const useNovelStore = defineStore('novel', {
 
     async refreshState() {
       if (!this.novelId) return
-      const state = await api.getNovelState(this.novelId)
+      const [state, synopsis, volumePlan] = await Promise.all([
+        api.getNovelState(this.novelId),
+        api.getSynopsis(this.novelId).catch(() => null),
+        api.getVolumePlan(this.novelId).catch(() => null),
+      ])
       this.novelState = state
-      this.volumePlan = state.checkpoint_data?.current_volume_plan || null
+      this.synopsisContent = synopsis?.content || this.synopsisContent
+      this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || this.synopsisData
+      this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
     },
 
     async executeAction(actionType) {
@@ -119,6 +131,12 @@ export const useNovelStore = defineStore('novel', {
     async fetchDocuments() {
       const pending = await api.getPendingDocs(this.novelId).catch(() => ({ items: [] }))
       this.pendingDocs = pending.items || []
+    },
+
+    async saveSynopsis(content) {
+      if (!this.novelId) return
+      await api.importSynopsis(this.novelId, content)
+      await this.loadNovel(this.novelId)
     },
   },
 })

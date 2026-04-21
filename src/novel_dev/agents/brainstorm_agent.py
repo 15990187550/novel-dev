@@ -167,6 +167,21 @@ class BrainstormAgent:
             "- core_conflict:写具体的对抗关系(例『主角 vs 宗门长老会关于传承之争』),"
             "避免抽象标签(如『正邪对立』『人性与命运』)。\n"
             "- milestones.climax_event:写一个可被后续章节直接展开的具体事件,不要只写情绪。\n\n"
+            "## 输出字段约束(必须严格遵守)\n"
+            "只允许以下顶层字段,禁止输出任何额外字段:\n"
+            '{"title","logline","core_conflict","themes","character_arcs","milestones",'
+            '"estimated_volumes","estimated_total_chapters","estimated_total_words"}\n'
+            "- title: 字符串\n"
+            "- logline: 字符串\n"
+            "- core_conflict: 字符串\n"
+            "- themes: 字符串数组,控制在 3-6 个\n"
+            "- character_arcs: 数组,每项只包含 name / arc_summary / key_turning_points 三个字段\n"
+            "- milestones: 数组,每项只包含 act / summary / climax_event 三个字段\n"
+            "- estimated_volumes: 整数\n"
+            "- estimated_total_chapters: 整数\n"
+            "- estimated_total_words: 整数\n"
+            "不要输出 worldview_summary、three_act_structure、volume_hooks、suspense_plants 等任何额外结构。\n"
+            "不要输出 Markdown、代码块、解释文字或字段注释,只返回单个 JSON 对象。\n\n"
             f"{source_text}"
         )
         result = await call_and_parse_model(

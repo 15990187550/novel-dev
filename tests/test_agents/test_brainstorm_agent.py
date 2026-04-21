@@ -126,3 +126,37 @@ async def test_brainstorm_uses_llm_factory(async_session):
     get_tasks = [call.kwargs.get("task") or (call.args[1] if len(call.args) > 1 else None)
                  for call in mock_factory.get.call_args_list]
     assert "generate_synopsis" in get_tasks
+
+
+@pytest.mark.asyncio
+async def test_generate_synopsis_prompt_explicitly_constrains_schema(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=SynopsisData(
+        title="天玄纪元",
+        logline="主角崛起",
+        core_conflict="复仇",
+        themes=["成长"],
+        character_arcs=[],
+        milestones=[],
+        estimated_volumes=3,
+        estimated_total_chapters=90,
+        estimated_total_words=270000,
+    ).model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = BrainstormAgent(async_session)
+        await agent._generate_synopsis("世界观设定", "n_prompt")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "只允许以下顶层字段" in prompt
+    assert '"title"' in prompt
+    assert '"logline"' in prompt
+    assert '"core_conflict"' in prompt
+    assert '"themes"' in prompt
+    assert '"character_arcs"' in prompt
+    assert '"milestones"' in prompt
+    assert '"estimated_volumes"' in prompt
+    assert '"estimated_total_chapters"' in prompt
+    assert '"estimated_total_words"' in prompt
+    assert "禁止输出任何额外字段" in prompt

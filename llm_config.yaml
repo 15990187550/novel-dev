@@ -56,11 +56,11 @@ agents:
     retries: 2
   setting_extractor_agent:
     model: kimi-for-coding
-    timeout: 60
+    timeout: 180
     fallback:
       model: minimax-2-7
       temperature: 0.7
-      timeout: 60
+      timeout: 180
       retries: 2
     retries: 1
   style_profiler_agent:

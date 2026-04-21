@@ -63,6 +63,41 @@ def _stringify_structured_value(value: Any) -> str:
     return str(value)
 
 
+def _build_json_repair_prompt(original_prompt: str, bad_output: str, error: Exception) -> str:
+    return (
+        "你上一次返回的内容不是合法 JSON。请在不改变原始语义的前提下，"
+        "把它修复成一个可被 json.loads 解析的 JSON 值。\n\n"
+        "要求:\n"
+        "1. 只返回 JSON，本体之外不要有任何解释、Markdown 或代码块。\n"
+        "2. 保留原有字段与内容语义，不要新增需求中未要求的字段。\n"
+        "3. 修复所有未转义双引号、缺失逗号、缺失括号、尾部截断等 JSON 语法问题。\n\n"
+        f"原始任务:\n{original_prompt}\n\n"
+        f"JSON 解析失败:\n{error}\n\n"
+        f"待修复内容:\n{bad_output}"
+    )
+
+
+def _build_json_regenerate_prompt(original_prompt: str, bad_output: str, error: Exception) -> str:
+    return (
+        "你上一次返回为空，或返回的内容根本不是 JSON。"
+        "请重新完成原始任务，并且只返回一个合法 JSON 值。\n\n"
+        "要求:\n"
+        "1. 只返回 JSON，本体之外不要有任何解释、Markdown 或代码块。\n"
+        "2. 必须完整返回，不能留空，不能只写省略内容。\n"
+        "3. 字段必须严格符合原始任务要求。\n\n"
+        f"原始任务:\n{original_prompt}\n\n"
+        f"上次错误:\n{error}\n\n"
+        f"上次返回:\n{bad_output or '[EMPTY]'}"
+    )
+
+
+def _should_regenerate_json(bad_output: str) -> bool:
+    stripped = (bad_output or "").strip()
+    if not stripped:
+        return True
+    return "{" not in stripped and "[" not in stripped
+
+
 def coerce_to_text(value: Any) -> str:
     if value is None:
         return ""
@@ -94,9 +129,10 @@ async def call_and_parse(
 ) -> T:
     client = llm_factory.get(agent_name, task=task)
     last_error = None
+    current_prompt = prompt
     for attempt in range(max_retries):
         try:
-            response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+            response = await client.acomplete([ChatMessage(role="user", content=current_prompt)])
             cleaned = _strip_markdown(response.text)
             result = parser(cleaned)
             if novel_id:
@@ -104,6 +140,10 @@ async def call_and_parse(
             return result
         except (ValidationError, json.JSONDecodeError) as exc:
             last_error = exc
+            if _should_regenerate_json(response.text):
+                current_prompt = _build_json_regenerate_prompt(prompt, response.text, exc)
+            else:
+                current_prompt = _build_json_repair_prompt(prompt, response.text, exc)
             if novel_id:
                 log_service.add_log(novel_id, agent_name, f"{task} 解析失败(第 {attempt + 1}/{max_retries} 次): {exc}", level="warning")
             if attempt < max_retries - 1:

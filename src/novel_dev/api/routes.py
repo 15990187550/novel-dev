@@ -8,8 +8,9 @@ from sqlalchemy import select
 from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
-from novel_dev.db.models import NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
+from novel_dev.db.models import EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
 from novel_dev.services.entity_service import EntityService
+from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
@@ -35,6 +36,13 @@ router = APIRouter()
 
 class CreateNovelRequest(BaseModel):
     title: str
+
+
+class EntityClassificationUpdateRequest(BaseModel):
+    manual_category: str
+    manual_group_slug: str
+
+
 settings = Settings()
 
 
@@ -43,6 +51,99 @@ def _word_count(text: Optional[str]) -> int:
         return 0
     # For CJK novels, word count is approximately the character count excluding whitespace.
     return len(text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+
+
+def _stringify_relationship_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _infer_relationship_type(text: str) -> str:
+    if any(keyword in text for keyword in ("同盟", "盟友", "伙伴", "战友", "同伴")):
+        return "同盟"
+    if any(keyword in text for keyword in ("师父", "师徒", "弟子", "传人", "传承")):
+        return "师承"
+    if any(keyword in text for keyword in ("敌", "仇", "杀", "对立")):
+        return "敌对"
+    if any(keyword in text for keyword in ("爱", "情", "喜欢", "道侣", "暧昧")):
+        return "情感"
+    return "关联"
+
+
+def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
+    inferred = []
+    seen = set()
+    sorted_rows = sorted(entity_rows, key=lambda item: len(item["name"]), reverse=True)
+    for source in sorted_rows:
+        latest_state = source.get("latest_state") or {}
+        relation_text = _stringify_relationship_value(
+            latest_state.get("relationships") or latest_state.get("relationship")
+        )
+        if not relation_text:
+            continue
+        for target in sorted_rows:
+            if source["entity_id"] == target["entity_id"]:
+                continue
+            if target["name"] not in relation_text:
+                continue
+            relation_type = _infer_relationship_type(relation_text)
+            dedup_key = (source["entity_id"], target["entity_id"], relation_type)
+            if dedup_key in seen:
+                continue
+            seen.add(dedup_key)
+            inferred.append({
+                "id": f"inferred:{source['entity_id']}:{target['entity_id']}:{relation_type}",
+                "source_id": source["entity_id"],
+                "target_id": target["entity_id"],
+                "relation_type": relation_type,
+                "meta": {"source": "latest_state.relationships"},
+                "created_at_chapter_id": None,
+                "is_active": True,
+                "is_inferred": True,
+            })
+    return inferred
+
+
+def _classification_status(entity: Entity) -> str:
+    if entity.manual_category or entity.manual_group_id:
+        return "manual_override"
+    if entity.system_needs_review:
+        return "needs_review"
+    return "auto"
+
+
+async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> dict:
+    group_ids = [group_id for group_id in (entity.system_group_id, entity.manual_group_id) if group_id]
+    groups: dict[str, EntityGroup] = {}
+    if group_ids:
+        group_result = await session.execute(select(EntityGroup).where(EntityGroup.id.in_(group_ids)))
+        groups = {group.id: group for group in group_result.scalars().all()}
+
+    system_group = groups.get(entity.system_group_id) if entity.system_group_id else None
+    manual_group = groups.get(entity.manual_group_id) if entity.manual_group_id else None
+
+    return {
+        "entity_id": entity.id,
+        "type": entity.type,
+        "name": entity.name,
+        "novel_id": entity.novel_id,
+        "current_version": entity.current_version,
+        "created_at_chapter_id": entity.created_at_chapter_id,
+        "system_category": entity.system_category,
+        "system_group_id": entity.system_group_id,
+        "system_group_slug": system_group.group_slug if system_group else None,
+        "manual_category": entity.manual_category,
+        "manual_group_id": entity.manual_group_id,
+        "manual_group_slug": manual_group.group_slug if manual_group else None,
+        "classification_reason": entity.classification_reason,
+        "classification_confidence": entity.classification_confidence,
+        "system_needs_review": entity.system_needs_review,
+        "classification_status": _classification_status(entity),
+        "search_document": entity.search_document,
+    }
 
 
 async def get_session():
@@ -157,19 +258,91 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
     entities = list(result.scalars().all())
     svc = EntityService(session)
     states = await svc.get_latest_states([ent.id for ent in entities])
-    items = []
+    grouped: dict[tuple[str, str], list[dict]] = {}
     for ent in entities:
-        items.append({
+        row = {
             "entity_id": ent.id,
             "type": ent.type,
             "name": ent.name,
             "current_version": ent.current_version,
             "created_at_chapter_id": ent.created_at_chapter_id,
             "latest_state": states.get(ent.id),
-        })
+        }
+        key = (ent.type, EntityRepository.normalize_name(ent.name) or ent.name)
+        grouped.setdefault(key, []).append(row)
+
+    items = []
+    for rows in grouped.values():
+        rows.sort(key=lambda item: (len(item["name"]), item["name"]))
+        primary = dict(rows[0])
+        merged_state = dict(primary.get("latest_state") or {})
+        aliases = [row["name"] for row in rows[1:] if row["name"] != primary["name"]]
+        for row in rows[1:]:
+            for key, value in (row.get("latest_state") or {}).items():
+                if key == "name":
+                    continue
+                if key not in merged_state or merged_state[key] in (None, "", [], {}):
+                    if value not in (None, "", [], {}):
+                        merged_state[key] = value
+        primary["current_version"] = max(row["current_version"] for row in rows)
+        primary["latest_state"] = merged_state
+        primary["aliases"] = aliases
+        primary["merged_entity_ids"] = [row["entity_id"] for row in rows]
+        items.append(primary)
+    items.sort(key=lambda item: item["name"])
     return {"items": items}
 
 
+
+
+@router.get("/api/novels/{novel_id}/entities/search")
+async def search_entities(
+    novel_id: str,
+    q: str,
+    session: AsyncSession = Depends(get_session),
+):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    query_vector = await embedding_service.generate_embedding(q)
+    entity_repo = EntityRepository(session)
+    hits = await entity_repo.search_entities(
+        novel_id,
+        query=q,
+        query_vector=query_vector,
+        limit=20,
+    )
+    group_ids = []
+    for hit in hits:
+        group_id = hit.get("manual_group_id") or hit.get("system_group_id")
+        if group_id and group_id not in group_ids:
+            group_ids.append(group_id)
+
+    groups_by_id: dict[str, EntityGroup] = {}
+    if group_ids:
+        group_result = await session.execute(
+            select(EntityGroup).where(EntityGroup.id.in_(group_ids))
+        )
+        groups_by_id = {group.id: group for group in group_result.scalars().all()}
+
+    grouped_items: list[dict] = []
+    group_index_by_key: dict[tuple[str, str], int] = {}
+    for hit in hits:
+        effective_category = hit.get("manual_category") or hit.get("system_category") or "其他"
+        effective_group_id = hit.get("manual_group_id") or hit.get("system_group_id")
+        group = groups_by_id.get(effective_group_id) if effective_group_id else None
+        group_key = (effective_category, effective_group_id or "__ungrouped__")
+        if group_key not in group_index_by_key:
+            group_index_by_key[group_key] = len(grouped_items)
+            grouped_items.append({
+                "category": effective_category,
+                "group_id": effective_group_id,
+                "group_slug": group.group_slug if group else None,
+                "group_name": group.group_name if group else None,
+                "entities": [],
+            })
+        grouped_items[group_index_by_key[group_key]]["entities"].append(hit)
+
+    return {"items": grouped_items}
 
 
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
@@ -179,6 +352,42 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return {"entity_id": entity_id, "latest_state": state}
+
+
+@router.post("/api/novels/{novel_id}/entities/{entity_id}/classification")
+async def update_entity_classification(
+    novel_id: str,
+    entity_id: str,
+    req: EntityClassificationUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    entity_repo = EntityRepository(session)
+    entity = await entity_repo.get_by_id(entity_id)
+    if entity is None or entity.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    group_result = await session.execute(
+        select(EntityGroup).where(
+            EntityGroup.novel_id == novel_id,
+            EntityGroup.category == req.manual_category,
+            EntityGroup.group_slug == req.manual_group_slug,
+        )
+    )
+    manual_group = group_result.scalar_one_or_none()
+    if manual_group is None:
+        raise HTTPException(status_code=404, detail="Entity group not found")
+
+    await entity_repo.update_classification(
+        entity_id,
+        manual_category=req.manual_category,
+        manual_group_id=manual_group.id,
+    )
+    await session.commit()
+
+    updated = await entity_repo.get_by_id(entity_id)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return await _serialize_entity_payload(session, updated)
 
 
 @router.get("/api/novels/{novel_id}/entity_relationships")
@@ -197,9 +406,29 @@ async def list_entity_relationships(novel_id: str, session: AsyncSession = Depen
             "meta": rel.meta,
             "created_at_chapter_id": rel.created_at_chapter_id,
             "is_active": rel.is_active,
+            "is_inferred": False,
         }
         for rel in result.scalars().all()
     ]
+    if items:
+        return {"items": items}
+
+    entities_result = await session.execute(
+        select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
+    )
+    entities = list(entities_result.scalars().all())
+    svc = EntityService(session)
+    states = await svc.get_latest_states([ent.id for ent in entities])
+    entity_rows = [
+        {
+            "entity_id": ent.id,
+            "type": ent.type,
+            "name": ent.name,
+            "latest_state": states.get(ent.id),
+        }
+        for ent in entities
+    ]
+    items = _build_inferred_relationships(entity_rows)
     return {"items": items}
 
 
@@ -341,6 +570,11 @@ class UploadRequest(BaseModel):
     content: str
 
 
+class BatchUploadRequest(BaseModel):
+    items: list[UploadRequest] = Field(min_length=1)
+    max_concurrency: int | None = Field(default=None, ge=1, le=8)
+
+
 class FieldResolution(BaseModel):
     entity_type: str
     entity_name: str
@@ -358,6 +592,41 @@ class RollbackRequest(BaseModel):
     version: int
 
 
+async def _process_upload_with_new_session(
+    novel_id: str,
+    req: UploadRequest,
+    embedder,
+) -> dict:
+    async with async_session_maker() as session:
+        embedding_service = EmbeddingService(session, embedder)
+        svc = ExtractionService(session, embedding_service)
+        try:
+            pe = await svc.process_upload(novel_id, req.filename, req.content)
+            await session.commit()
+            return {
+                "filename": req.filename,
+                "pending_id": pe.id,
+                "status": pe.status,
+                "error": None,
+            }
+        except LLMTimeoutError:
+            await session.rollback()
+            return {
+                "filename": req.filename,
+                "pending_id": None,
+                "status": "failed",
+                "error": "设定提取超时，请稍后重试或切换模型",
+            }
+        except Exception as exc:
+            await session.rollback()
+            return {
+                "filename": req.filename,
+                "pending_id": None,
+                "status": "failed",
+                "error": str(exc) or "导入失败",
+            }
+
+
 @router.post("/api/novels/{novel_id}/documents/upload")
 async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSession = Depends(get_session)):
     embedder = llm_factory.get_embedder()
@@ -370,9 +639,34 @@ async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSessi
     await session.commit()
     return {
         "id": pe.id,
+        "source_filename": pe.source_filename,
         "extraction_type": pe.extraction_type,
         "status": pe.status,
         "created_at": pe.created_at.isoformat(),
+    }
+
+
+@router.post("/api/novels/{novel_id}/documents/upload/batch")
+async def upload_documents_batch(
+    novel_id: str,
+    req: BatchUploadRequest,
+):
+    embedder = llm_factory.get_embedder()
+    max_concurrency = min(req.max_concurrency or 3, 8)
+    semaphore = asyncio.Semaphore(max_concurrency)
+
+    async def run_one(item: UploadRequest) -> dict:
+        async with semaphore:
+            return await _process_upload_with_new_session(novel_id, item, embedder)
+
+    results = await asyncio.gather(*(run_one(item) for item in req.items))
+    succeeded = sum(1 for item in results if item["pending_id"])
+    failed = len(results) - succeeded
+    return {
+        "total": len(results),
+        "succeeded": succeeded,
+        "failed": failed,
+        "items": results,
     }
 
 
@@ -384,6 +678,7 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
         "items": [
             {
                 "id": i.id,
+                "source_filename": i.source_filename,
                 "extraction_type": i.extraction_type,
                 "status": i.status,
                 "raw_result": i.raw_result,

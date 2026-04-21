@@ -240,6 +240,53 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
 
 
 @pytest.mark.asyncio
+async def test_approve_setting_merges_character_alias_by_normalized_name(async_session):
+    from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
+    from novel_dev.agents.file_classifier import FileClassificationResult
+    from novel_dev.repositories.entity_repo import EntityRepository
+
+    first = ExtractedSetting(
+        worldview="test",
+        power_system="test",
+        factions="test",
+        character_profiles=[CharacterProfile(name="陆照（主角）", identity="主角", personality="坚毅", goal="修炼")],
+        important_items=[],
+        plot_synopsis="剧情",
+    )
+    second = ExtractedSetting(
+        worldview="test",
+        power_system="test",
+        factions="test",
+        character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", personality="沉稳", goal="超脱")],
+        important_items=[],
+        plot_synopsis="剧情",
+    )
+
+    with patch("novel_dev.llm.llm_factory.get") as mock_get:
+        mock_client = AsyncMock()
+        mock_client.acomplete.side_effect = [
+            type("R", (), {"text": FileClassificationResult(file_type="setting", confidence=0.95, reason="").model_dump_json()})(),
+            type("R", (), {"text": first.model_dump_json()})(),
+            type("R", (), {"text": FileClassificationResult(file_type="setting", confidence=0.95, reason="").model_dump_json()})(),
+            type("R", (), {"text": second.model_dump_json()})(),
+        ]
+        mock_get.return_value = mock_client
+
+        svc = ExtractionService(async_session)
+        pe1 = await svc.process_upload("n_alias", "setting1.txt", "first")
+        await svc.approve_pending(pe1.id)
+        pe2 = await svc.process_upload("n_alias", "setting2.txt", "second")
+        await svc.approve_pending(pe2.id)
+
+    entity_repo = EntityRepository(async_session)
+    entities = await entity_repo.list_by_novel("n_alias")
+    char_entities = [e for e in entities if e.type == "character"]
+
+    assert len(char_entities) == 1
+    assert char_entities[0].name == "陆照（主角）"
+
+
+@pytest.mark.asyncio
 async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
     from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
     from novel_dev.agents.file_classifier import FileClassificationResult

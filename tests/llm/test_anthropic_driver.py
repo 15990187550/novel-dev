@@ -1,7 +1,10 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
+import sys
+import types
 
 from novel_dev.llm.drivers.anthropic import AnthropicDriver
+from novel_dev.llm.exceptions import LLMRateLimitError
 from novel_dev.llm.models import ChatMessage, TaskConfig
 
 
@@ -77,3 +80,29 @@ async def test_anthropic_forwards_temperature():
     await driver.acomplete("hi", config)
     call_kwargs = mock_client.messages.create.call_args.kwargs
     assert call_kwargs["temperature"] == 0.5
+
+
+def test_map_exception_without_overloaded_error_symbol():
+    driver = AnthropicDriver(client=MagicMock())
+
+    class FakeRateLimitError(Exception):
+        pass
+
+    fake_module = types.SimpleNamespace(
+        RateLimitError=FakeRateLimitError,
+        APITimeoutError=type("APITimeoutError", (Exception,), {}),
+        APIConnectionError=type("APIConnectionError", (Exception,), {}),
+        AuthenticationError=type("AuthenticationError", (Exception,), {}),
+        PermissionDeniedError=type("PermissionDeniedError", (Exception,), {}),
+    )
+    original = sys.modules.get("anthropic")
+    sys.modules["anthropic"] = fake_module
+    try:
+        mapped = driver._map_exception(FakeRateLimitError("busy"))
+    finally:
+        if original is not None:
+            sys.modules["anthropic"] = original
+        else:
+            del sys.modules["anthropic"]
+
+    assert isinstance(mapped, LLMRateLimitError)

@@ -67,12 +67,25 @@ async def test_librarian_persist_writes_to_database(async_session):
     from novel_dev.repositories.timeline_repo import TimelineRepository
     from novel_dev.repositories.spaceline_repo import SpacelineRepository
     from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.relationship_repo import RelationshipRepository
+    from novel_dev.repositories.version_repo import EntityVersionRepository
 
     agent = LibrarianAgent(async_session)
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await entity_repo.create("e_ldz", "character", "陆照", novel_id="n1")
+    await entity_repo.create("e_sqh", "character", "苏清寒", novel_id="n1")
+    await version_repo.create("e_ldz", 1, {"name": "陆照"})
+    await version_repo.create("e_sqh", 1, {"name": "苏清寒"})
+    await entity_repo.update_version("e_ldz", 1)
+    await entity_repo.update_version("e_sqh", 1)
+
     extraction = ExtractionResult(
         timeline_events=[{"tick": 5, "narrative": "启程"}],
         spaceline_changes=[{"location_id": "loc_1", "name": "Cloud City"}],
         new_foreshadowings=[{"content": "神秘的戒指"}],
+        new_relationships=[{"source_entity_id": "陆照", "target_entity_id": "苏清寒", "relation_type": "ally"}],
     )
     await agent.persist(extraction, "c1", "n1")
     await async_session.commit()
@@ -84,3 +97,39 @@ async def test_librarian_persist_writes_to_database(async_session):
     assert sp.novel_id == "n1"
     fs_list = await ForeshadowingRepository(async_session).list_active()
     assert any(fs.content == "神秘的戒指" and fs.novel_id == "n1" for fs in fs_list)
+    rels = await RelationshipRepository(async_session).list_by_source("e_ldz", novel_id="n1")
+    assert len(rels) == 1
+    assert rels[0].target_id == "e_sqh"
+    assert rels[0].relation_type == "ally"
+
+
+@pytest.mark.asyncio
+async def test_librarian_persist_upserts_relationship_for_existing_pair(async_session):
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.relationship_repo import RelationshipRepository
+    from novel_dev.repositories.version_repo import EntityVersionRepository
+
+    agent = LibrarianAgent(async_session)
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    rel_repo = RelationshipRepository(async_session)
+
+    await entity_repo.create("e_ldz", "character", "陆照", novel_id="n1")
+    await entity_repo.create("e_sqh", "character", "苏清寒", novel_id="n1")
+    await version_repo.create("e_ldz", 1, {"name": "陆照"})
+    await version_repo.create("e_sqh", 1, {"name": "苏清寒"})
+    await entity_repo.update_version("e_ldz", 1)
+    await entity_repo.update_version("e_sqh", 1)
+    await rel_repo.create("e_ldz", "e_sqh", "rival", novel_id="n1")
+
+    extraction = ExtractionResult(
+        new_relationships=[{"source_entity_id": "陆照", "target_entity_id": "苏清寒", "relation_type": "ally", "meta": {"chapter": 1}}],
+    )
+    await agent.persist(extraction, "c2", "n1")
+    await async_session.commit()
+
+    rels = await rel_repo.list_by_source("e_ldz", novel_id="n1")
+    assert len(rels) == 1
+    assert rels[0].target_id == "e_sqh"
+    assert rels[0].relation_type == "ally"
+    assert rels[0].meta == {"chapter": 1}
