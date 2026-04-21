@@ -4,6 +4,10 @@ const STATUS_LABELS = {
   missing: '待创建',
 }
 
+function isValidOutlineItem(item) {
+  return Boolean(item?.outline_type && item?.outline_ref)
+}
+
 function normalizeSelection(selection) {
   const outlineType = selection?.outline_type || selection?.outlineType || ''
   const outlineRef = selection?.outline_ref || selection?.outlineRef || ''
@@ -20,7 +24,7 @@ function createItemId(outlineType, outlineRef) {
 
 export function resolveOutlineWorkbenchSelection(items = [], selection = null) {
   const normalizedSelection = normalizeSelection(selection)
-  const normalizedItems = Array.isArray(items) ? items : []
+  const normalizedItems = (Array.isArray(items) ? items : []).filter(isValidOutlineItem)
   const itemIds = new Set(
     normalizedItems.map((item) => createItemId(item?.outline_type, item?.outline_ref))
   )

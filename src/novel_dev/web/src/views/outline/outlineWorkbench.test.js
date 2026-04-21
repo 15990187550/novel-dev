@@ -69,4 +69,45 @@ describe('outline workbench helpers', () => {
     expect(items.find((item) => item.itemId === 'synopsis:synopsis')?.isCurrent).toBe(false)
     expect(items.find((item) => item.itemId === 'volume:vol_2')?.isCurrent).toBe(true)
   })
+
+  it('ignores invalid items when resolving current item fallback', () => {
+    const items = buildOutlineWorkbenchItems({
+      items: [
+        {
+          title: '损坏数据',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_4',
+          title: '第四卷',
+          status: 'ready',
+        },
+      ],
+      currentItem: {
+        outline_type: 'missing',
+        outline_ref: 'missing',
+      },
+    })
+
+    expect(items[0].isCurrent).toBe(false)
+    expect(items[1].isCurrent).toBe(true)
+  })
+
+  it('does not mark invalid first item as current when every fallback candidate is malformed', () => {
+    const items = buildOutlineWorkbenchItems({
+      items: [
+        {
+          title: '损坏数据',
+          status: 'ready',
+        },
+      ],
+      currentItem: {
+        outline_type: 'missing',
+        outline_ref: 'missing',
+      },
+    })
+
+    expect(items[0].isCurrent).toBe(false)
+  })
 })

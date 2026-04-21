@@ -52,6 +52,7 @@ const createOutlineWorkbenchState = () => ({
   sessionId: '',
   conversationSummary: '',
   lastResultSnapshot: null,
+  requestToken: 0,
 })
 
 const clearSupplementalForPanel = (store, panel) => {
@@ -497,16 +498,20 @@ export const useNovelStore = defineStore('novel', {
 
     async refreshOutlineWorkbench(selection = null) {
       if (!this.novelId) return
+      const existingSelection = this.outlineWorkbench.selection
+      const requestToken = this.outlineWorkbench.requestToken + 1
+      this.outlineWorkbench.requestToken = requestToken
       this.outlineWorkbench.state = 'loading'
       this.outlineWorkbench.error = ''
 
-      const requestedSelection = selection || this.outlineWorkbench.selection || {
+      const requestedSelection = selection || existingSelection || {
         outline_type: 'synopsis',
         outline_ref: 'synopsis',
       }
 
       try {
         const workbench = await api.getOutlineWorkbench(this.novelId, requestedSelection)
+        if (this.outlineWorkbench.requestToken !== requestToken) return
         const outlineItems = workbench?.outline_items || []
         const serviceSelection = workbench?.outline_type && workbench?.outline_ref
           ? {
@@ -523,7 +528,7 @@ export const useNovelStore = defineStore('novel', {
             outline_ref: synopsisItem.outline_ref,
           }
           : serviceSelection
-        const nextSelection = selection || this.outlineWorkbench.selection || defaultSelection
+        const nextSelection = selection || existingSelection || defaultSelection
         const resolvedSelection = resolveOutlineWorkbenchSelection(outlineItems, nextSelection)
         const resolvedCurrentItem = resolveOutlineWorkbenchSelection(outlineItems, serviceSelection)
         const normalizedItems = buildOutlineWorkbenchItems({
@@ -538,6 +543,7 @@ export const useNovelStore = defineStore('novel', {
             last_result_snapshot: null,
             session_id: workbench?.session_id || '',
           }
+        if (this.outlineWorkbench.requestToken !== requestToken) return
 
         this.outlineWorkbench.items = normalizedItems
         this.outlineWorkbench.selection = resolvedSelection
@@ -548,6 +554,7 @@ export const useNovelStore = defineStore('novel', {
         this.outlineWorkbench.lastResultSnapshot = messages?.last_result_snapshot || null
         this.outlineWorkbench.state = 'ready'
       } catch (error) {
+        if (this.outlineWorkbench.requestToken !== requestToken) return
         this.outlineWorkbench.state = 'error'
         this.outlineWorkbench.error = error?.message || '请求失败'
       }
@@ -564,7 +571,9 @@ export const useNovelStore = defineStore('novel', {
         outline_ref: selection.outline_ref,
         ...payload,
       })
-      await this.refreshOutlineWorkbench(selection)
+      const latestSelection = this.outlineWorkbench.selection
+      const refreshSelection = latestSelection || selection
+      await this.refreshOutlineWorkbench(refreshSelection)
     },
   },
 })
