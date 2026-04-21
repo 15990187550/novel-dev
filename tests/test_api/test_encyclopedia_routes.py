@@ -25,7 +25,10 @@ async def test_list_entities(async_session):
 
     repo = EntityRepository(async_session)
     version_repo = EntityVersionRepository(async_session)
+    group_repo = EntityGroupRepository(async_session)
     await repo.create("e1", "character", "Lin Feng", novel_id="n1")
+    group = await group_repo.upsert("n1", "人物", "主角阵营", "hero-camp", source="system")
+    await repo.update_classification("e1", system_category="人物", system_group_id=group.id)
     await version_repo.create(
         "e1",
         1,
@@ -44,6 +47,8 @@ async def test_list_entities(async_session):
             assert data["items"][0]["latest_state"]["identity"] == "弟子"
             assert data["items"][0]["latest_state"]["personality"] == "坚韧"
             assert data["items"][0]["latest_state"]["goal"] == "报仇"
+            assert data["items"][0]["effective_category"] == "人物"
+            assert data["items"][0]["effective_group_name"] == "主角阵营"
     finally:
         app.dependency_overrides.clear()
 
@@ -90,7 +95,10 @@ async def test_get_entity(async_session):
 
     repo = EntityRepository(async_session)
     version_repo = EntityVersionRepository(async_session)
+    group_repo = EntityGroupRepository(async_session)
     await repo.create("e1", "character", "Lin Feng", novel_id="n1")
+    group = await group_repo.upsert("n1", "人物", "主角阵营", "hero-camp", source="system")
+    await repo.update_classification("e1", system_category="人物", system_group_id=group.id)
     await version_repo.create(
         "e1",
         1,
@@ -106,6 +114,8 @@ async def test_get_entity(async_session):
             data = resp.json()
             assert data["entity_id"] == "e1"
             assert data["latest_state"]["identity"] == "弟子"
+            assert data["effective_category"] == "人物"
+            assert data["effective_group_name"] == "主角阵营"
     finally:
         app.dependency_overrides.clear()
 
@@ -121,7 +131,7 @@ async def test_update_entity_classification(async_session):
     repo = EntityRepository(async_session)
     group_repo = EntityGroupRepository(async_session)
     await repo.create("e1", "character", "Lin Feng", novel_id="n1")
-    await group_repo.upsert("n1", "人物", "主角阵营", "hero-camp", source="manual")
+    await group_repo.upsert("n1", "人物", "主角阵营", "hero-camp", source="custom")
     await async_session.commit()
 
     try:
@@ -134,6 +144,69 @@ async def test_update_entity_classification(async_session):
             data = resp.json()
             assert data["classification_status"] == "manual_override"
             assert data["manual_category"] == "人物"
+            updated = await repo.get_by_id("e1")
+            assert updated.search_vector_embedding is not None
+            assert "一级分类：人物" in (updated.search_document or "")
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_entity_classification_can_clear_manual_override(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    group_repo = EntityGroupRepository(async_session)
+    await repo.create("e1", "character", "Lin Feng", novel_id="n_clear")
+    group = await group_repo.upsert("n_clear", "人物", "主角阵营", "hero-camp", source="custom")
+    await repo.update_classification("e1", manual_category="人物", manual_group_id=group.id)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n_clear/entities/e1/classification",
+                json={"clear_manual_override": True},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["manual_category"] is None
+            assert data["manual_group_id"] is None
+            assert data["classification_status"] == "auto"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_entity_classification_allows_group_only_override(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    group_repo = EntityGroupRepository(async_session)
+    await repo.create("e1", "character", "Lin Feng", novel_id="n_group_only")
+    system_group = await group_repo.upsert("n_group_only", "人物", "主角阵营", "hero-camp", source="system")
+    await repo.update_classification("e1", system_category="人物", system_group_id=system_group.id)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n_group_only/entities/e1/classification",
+                json={"manual_group_slug": "shi-men", "manual_group_name": "师门"},
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["manual_category"] == "人物"
+            assert data["manual_group_slug"] == "shi-men"
+            assert data["effective_group_name"] == "师门"
     finally:
         app.dependency_overrides.clear()
 
@@ -152,6 +225,7 @@ async def test_search_entities_returns_grouped_results(async_session):
     entity = await repo.get_by_id("e1")
     group = await group_repo.upsert("n_search", "人物", "主角阵营", "hero-camp", source="system")
     await repo.update_classification("e1", system_category="人物", system_group_id=group.id)
+    await repo.update_classification("e1", manual_category="势力")
     entity.search_document = "名称：主角阵营\n一级分类：人物"
     entity.search_vector_embedding = [1.0, 0.0, 0.0]
     await async_session.commit()
@@ -163,12 +237,35 @@ async def test_search_entities_returns_grouped_results(async_session):
             data = resp.json()
             assert len(data["items"]) == 1
             group_item = data["items"][0]
-            assert group_item["category"] == "人物"
-            assert group_item["group_slug"] == "hero-camp"
-            assert group_item["group_name"] == "主角阵营"
+            assert group_item["category"] == "势力"
+            assert group_item["group_slug"] is None
+            assert group_item["group_name"] is None
             assert len(group_item["entities"]) == 1
             assert group_item["entities"][0]["entity_id"] == "e1"
             assert group_item["entities"][0]["match_reason"] in {"名称命中", "语义相关", "关系命中"}
+            assert group_item["entities"][0]["effective_category"] == "势力"
+            assert group_item["entities"][0]["classification_status"] == "manual_override"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_search_entities_blank_query_returns_empty_grouped_results(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    await repo.create("e1", "character", "主角阵营", novel_id="n_search_blank")
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_search_blank/entities/search", params={"q": "   "})
+            assert resp.status_code == 200
+            assert resp.json()["items"] == []
     finally:
         app.dependency_overrides.clear()
 

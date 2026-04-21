@@ -39,8 +39,11 @@ class CreateNovelRequest(BaseModel):
 
 
 class EntityClassificationUpdateRequest(BaseModel):
-    manual_category: str
-    manual_group_slug: str
+    manual_category: Optional[str] = None
+    manual_group_slug: Optional[str] = None
+    manual_group_name: Optional[str] = None
+    clear_manual_override: bool = False
+    reclassify: bool = False
 
 
 settings = Settings()
@@ -115,6 +118,49 @@ def _classification_status(entity: Entity) -> str:
     return "auto"
 
 
+def _effective_search_classification(
+    hit: dict,
+    groups_by_id: dict[str, EntityGroup],
+) -> tuple[str, Optional[str], Optional[EntityGroup]]:
+    manual_category = hit.get("manual_category")
+    manual_group_id = hit.get("manual_group_id")
+    system_category = hit.get("system_category")
+    system_group_id = hit.get("system_group_id")
+
+    manual_group = groups_by_id.get(manual_group_id) if manual_group_id else None
+    system_group = groups_by_id.get(system_group_id) if system_group_id else None
+
+    if (
+        manual_category
+        and manual_group_id
+        and manual_group is not None
+        and manual_group.category == manual_category
+    ):
+        return manual_category, manual_group_id, manual_group
+
+    if manual_category:
+        if (
+            manual_group_id
+            and manual_group is not None
+            and manual_group.category == manual_category
+        ):
+            return manual_category, manual_group_id, manual_group
+        return manual_category, None, None
+
+    if (
+        system_category
+        and system_group_id
+        and system_group is not None
+        and system_group.category == system_category
+    ):
+        return system_category, system_group_id, system_group
+
+    if system_category:
+        return system_category, None, None
+
+    return "其他", None, None
+
+
 async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> dict:
     group_ids = [group_id for group_id in (entity.system_group_id, entity.manual_group_id) if group_id]
     groups: dict[str, EntityGroup] = {}
@@ -124,6 +170,15 @@ async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> di
 
     system_group = groups.get(entity.system_group_id) if entity.system_group_id else None
     manual_group = groups.get(entity.manual_group_id) if entity.manual_group_id else None
+    effective_category, effective_group_id, effective_group = _effective_search_classification(
+        {
+            "manual_category": entity.manual_category,
+            "manual_group_id": entity.manual_group_id,
+            "system_category": entity.system_category,
+            "system_group_id": entity.system_group_id,
+        },
+        groups,
+    )
 
     return {
         "entity_id": entity.id,
@@ -135,9 +190,15 @@ async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> di
         "system_category": entity.system_category,
         "system_group_id": entity.system_group_id,
         "system_group_slug": system_group.group_slug if system_group else None,
+        "system_group_name": system_group.group_name if system_group else None,
         "manual_category": entity.manual_category,
         "manual_group_id": entity.manual_group_id,
         "manual_group_slug": manual_group.group_slug if manual_group else None,
+        "manual_group_name": manual_group.group_name if manual_group else None,
+        "effective_category": effective_category,
+        "effective_group_id": effective_group_id,
+        "effective_group_slug": effective_group.group_slug if effective_group else None,
+        "effective_group_name": effective_group.group_name if effective_group else None,
         "classification_reason": entity.classification_reason,
         "classification_confidence": entity.classification_confidence,
         "system_needs_review": entity.system_needs_review,
@@ -260,14 +321,8 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
     states = await svc.get_latest_states([ent.id for ent in entities])
     grouped: dict[tuple[str, str], list[dict]] = {}
     for ent in entities:
-        row = {
-            "entity_id": ent.id,
-            "type": ent.type,
-            "name": ent.name,
-            "current_version": ent.current_version,
-            "created_at_chapter_id": ent.created_at_chapter_id,
-            "latest_state": states.get(ent.id),
-        }
+        row = await _serialize_entity_payload(session, ent)
+        row["latest_state"] = states.get(ent.id)
         key = (ent.type, EntityRepository.normalize_name(ent.name) or ent.name)
         grouped.setdefault(key, []).append(row)
 
@@ -301,21 +356,25 @@ async def search_entities(
     q: str,
     session: AsyncSession = Depends(get_session),
 ):
+    query = q.strip()
+    if not query:
+        return {"items": []}
+
     embedder = llm_factory.get_embedder()
     embedding_service = EmbeddingService(session, embedder)
-    query_vector = await embedding_service.generate_embedding(q)
+    query_vector = await embedding_service.generate_embedding(query)
     entity_repo = EntityRepository(session)
     hits = await entity_repo.search_entities(
         novel_id,
-        query=q,
+        query=query,
         query_vector=query_vector,
         limit=20,
     )
     group_ids = []
     for hit in hits:
-        group_id = hit.get("manual_group_id") or hit.get("system_group_id")
-        if group_id and group_id not in group_ids:
-            group_ids.append(group_id)
+        for group_id in (hit.get("manual_group_id"), hit.get("system_group_id")):
+            if group_id and group_id not in group_ids:
+                group_ids.append(group_id)
 
     groups_by_id: dict[str, EntityGroup] = {}
     if group_ids:
@@ -324,12 +383,27 @@ async def search_entities(
         )
         groups_by_id = {group.id: group for group in group_result.scalars().all()}
 
+    hit_entity_ids = [hit["entity_id"] for hit in hits if hit.get("entity_id")]
+    entities_by_id: dict[str, Entity] = {}
+    states_by_id: dict[str, dict] = {}
+    serialized_by_id: dict[str, dict] = {}
+    if hit_entity_ids:
+        entity_result = await session.execute(
+            select(Entity).where(Entity.id.in_(hit_entity_ids))
+        )
+        entity_rows = entity_result.scalars().all()
+        entities_by_id = {entity.id: entity for entity in entity_rows}
+        svc = EntityService(session)
+        states_by_id = await svc.get_latest_states(hit_entity_ids)
+        for entity_id, entity in entities_by_id.items():
+            payload = await _serialize_entity_payload(session, entity)
+            payload["latest_state"] = states_by_id.get(entity_id)
+            serialized_by_id[entity_id] = payload
+
     grouped_items: list[dict] = []
     group_index_by_key: dict[tuple[str, str], int] = {}
     for hit in hits:
-        effective_category = hit.get("manual_category") or hit.get("system_category") or "其他"
-        effective_group_id = hit.get("manual_group_id") or hit.get("system_group_id")
-        group = groups_by_id.get(effective_group_id) if effective_group_id else None
+        effective_category, effective_group_id, group = _effective_search_classification(hit, groups_by_id)
         group_key = (effective_category, effective_group_id or "__ungrouped__")
         if group_key not in group_index_by_key:
             group_index_by_key[group_key] = len(grouped_items)
@@ -340,18 +414,27 @@ async def search_entities(
                 "group_name": group.group_name if group else None,
                 "entities": [],
             })
-        grouped_items[group_index_by_key[group_key]]["entities"].append(hit)
+        entity_payload = dict(serialized_by_id.get(hit.get("entity_id"), {}))
+        entity_payload["score"] = hit.get("score")
+        entity_payload["match_reason"] = hit.get("match_reason")
+        grouped_items[group_index_by_key[group_key]]["entities"].append(entity_payload)
 
     return {"items": grouped_items}
 
 
 @router.get("/api/novels/{novel_id}/entities/{entity_id}")
 async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depends(get_session)):
+    entity_repo = EntityRepository(session)
+    entity = await entity_repo.get_by_id(entity_id)
+    if entity is None or entity.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Entity not found")
     svc = EntityService(session)
     state = await svc.get_latest_state(entity_id)
     if state is None:
         raise HTTPException(status_code=404, detail="Entity not found")
-    return {"entity_id": entity_id, "latest_state": state}
+    payload = await _serialize_entity_payload(session, entity)
+    payload["latest_state"] = state
+    return payload
 
 
 @router.post("/api/novels/{novel_id}/entities/{entity_id}/classification")
@@ -366,22 +449,65 @@ async def update_entity_classification(
     if entity is None or entity.novel_id != novel_id:
         raise HTTPException(status_code=404, detail="Entity not found")
 
-    group_result = await session.execute(
-        select(EntityGroup).where(
-            EntityGroup.novel_id == novel_id,
-            EntityGroup.category == req.manual_category,
-            EntityGroup.group_slug == req.manual_group_slug,
+    if req.clear_manual_override:
+        await entity_repo.update_classification(
+            entity_id,
+            manual_category=None,
+            manual_group_id=None,
         )
-    )
-    manual_group = group_result.scalar_one_or_none()
-    if manual_group is None:
-        raise HTTPException(status_code=404, detail="Entity group not found")
+    else:
+        has_manual_update = (
+            req.manual_category is not None
+            or req.manual_group_slug is not None
+            or req.manual_group_name is not None
+        )
+        if has_manual_update:
+            current_effective_category, _, _ = _effective_search_classification(
+                {
+                    "manual_category": entity.manual_category,
+                    "manual_group_id": entity.manual_group_id,
+                    "system_category": entity.system_category,
+                    "system_group_id": entity.system_group_id,
+                },
+                {},
+            )
+            target_manual_category = req.manual_category
+            if target_manual_category is None and (req.manual_group_slug or req.manual_group_name):
+                target_manual_category = current_effective_category
 
-    await entity_repo.update_classification(
-        entity_id,
-        manual_category=req.manual_category,
-        manual_group_id=manual_group.id,
-    )
+            manual_group = None
+            if req.manual_group_slug:
+                if not target_manual_category:
+                    raise HTTPException(status_code=422, detail="manual_category is required when manual_group_slug is provided")
+                group_result = await session.execute(
+                    select(EntityGroup).where(
+                        EntityGroup.novel_id == novel_id,
+                        EntityGroup.category == target_manual_category,
+                        EntityGroup.group_slug == req.manual_group_slug,
+                    )
+                )
+                manual_group = group_result.scalar_one_or_none()
+                if manual_group is None:
+                    manual_group = await EntityService(session).group_repo.upsert(
+                        novel_id=novel_id,
+                        category=target_manual_category,
+                        group_name=(req.manual_group_name or req.manual_group_slug).strip(),
+                        group_slug=req.manual_group_slug,
+                        source="custom",
+                    )
+
+            await entity_repo.update_classification(
+                entity_id,
+                manual_category=target_manual_category,
+                manual_group_id=manual_group.id if manual_group else None,
+            )
+
+    if req.reclassify:
+        embedding_service = EmbeddingService(session, llm_factory.get_embedder())
+        await EntityService(session, embedding_service=embedding_service)._refresh_entity_artifacts(entity_id)
+    else:
+        embedding_service = EmbeddingService(session, llm_factory.get_embedder())
+        await embedding_service.index_entity_search(entity_id)
     await session.commit()
 
     updated = await entity_repo.get_by_id(entity_id)

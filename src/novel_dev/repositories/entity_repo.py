@@ -194,8 +194,12 @@ class EntityRepository:
         query_vector: Optional[List[float]],
         limit: int = 20,
     ) -> list[dict]:
+        query = (query or "").strip()
+        if not query:
+            return []
+
         normalized_query = self.normalize_name(query)
-        query_lower = (query or "").strip().lower()
+        query_lower = query.lower()
 
         result = await self.session.execute(
             select(Entity).where(Entity.novel_id == novel_id)
