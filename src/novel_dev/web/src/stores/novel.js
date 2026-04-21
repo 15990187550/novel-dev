@@ -45,6 +45,8 @@ const createDashboardPanels = () => ({
 const createOutlineWorkbenchState = () => ({
   state: 'idle',
   error: '',
+  submitting: false,
+  creatingKey: '',
   items: [],
   selection: null,
   currentItem: null,
@@ -562,18 +564,25 @@ export const useNovelStore = defineStore('novel', {
 
     async submitOutlineFeedback(payload) {
       if (!this.novelId) return
+      if (this.outlineWorkbench.submitting) return
       const selection = this.outlineWorkbench.selection || {
         outline_type: 'synopsis',
         outline_ref: 'synopsis',
       }
-      await api.submitOutlineFeedback(this.novelId, {
-        outline_type: selection.outline_type,
-        outline_ref: selection.outline_ref,
-        ...payload,
-      })
-      const latestSelection = this.outlineWorkbench.selection
-      const refreshSelection = latestSelection || selection
-      await this.refreshOutlineWorkbench(refreshSelection)
+      this.outlineWorkbench.submitting = true
+      this.outlineWorkbench.error = ''
+      try {
+        await api.submitOutlineFeedback(this.novelId, {
+          outline_type: selection.outline_type,
+          outline_ref: selection.outline_ref,
+          ...payload,
+        })
+        const latestSelection = this.outlineWorkbench.selection
+        const refreshSelection = latestSelection || selection
+        await this.refreshOutlineWorkbench(refreshSelection)
+      } finally {
+        this.outlineWorkbench.submitting = false
+      }
     },
   },
 })

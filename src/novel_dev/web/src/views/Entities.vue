@@ -33,7 +33,7 @@
         <div class="space-y-4 min-w-0">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="text-sm text-gray-500 dark:text-gray-400">
-              {{ workspaceMode === 'detail' ? '当前为实体详情视图' : '当前为分组整理视图' }}
+              {{ workspaceStatusText }}
             </div>
             <el-radio-group v-model="workspaceView" size="small">
               <el-radio-button label="workspace">工作区</el-radio-button>
@@ -42,8 +42,15 @@
           </div>
 
           <template v-if="workspaceView === 'workspace'">
+            <div
+              v-if="!selectedNode"
+              class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8"
+            >
+              <el-empty description="请先从左侧目录选择一个分类、分组或实体" />
+            </div>
+
             <EntityGroupTable
-              v-if="workspaceMode === 'group'"
+              v-else-if="workspaceMode === 'group'"
               :title="workspaceTitle"
               :items="workspaceItems"
               :selected-node-label="store.selectedEntityNode?.label || ''"
@@ -75,8 +82,8 @@
               </div>
             </div>
             <EntityGraph
-              :entities="store.entities"
-              :relationships="store.entityRelationships"
+              :entities="graphEntities"
+              :relationships="graphRelationships"
               height="28rem"
               show-fullscreen-action
               @fullscreen="graphFullscreenVisible = true"
@@ -94,8 +101,8 @@
       >
         <EntityGraph
           v-if="graphFullscreenVisible"
-          :entities="store.entities"
-          :relationships="store.entityRelationships"
+          :entities="graphEntities"
+          :relationships="graphRelationships"
           height="calc(100vh - 10rem)"
         />
       </el-dialog>
@@ -126,21 +133,14 @@ function collectEntities(node) {
   return (node.children || []).flatMap(child => collectEntities(child))
 }
 
-function firstSelectableNode(nodes = []) {
-  for (const node of nodes) {
-    if (node.nodeType === 'entity' || node.nodeType === 'group' || node.nodeType === 'category') {
-      return node
-    }
-    const match = firstSelectableNode(node.children || [])
-    if (match) return match
-  }
-  return null
-}
-
 const entityTreeNodeCount = computed(() => countTreeNodes(store.entityTree))
 const selectedNode = computed(() => store.selectedEntityNode)
 const workspaceMode = computed(() => selectedNode.value?.nodeType === 'entity' ? 'detail' : 'group')
 const workspaceTitle = computed(() => selectedNode.value?.label || '实体工作区')
+const workspaceStatusText = computed(() => {
+  if (!selectedNode.value) return '当前未选择目录节点'
+  return workspaceMode.value === 'detail' ? '当前为实体详情视图' : '当前为分组整理视图'
+})
 const workspaceItems = computed(() => {
   const node = selectedNode.value
   if (!node) return []
@@ -154,6 +154,44 @@ const workspaceGroupCount = computed(() => {
   return (node.children || []).filter(child => child.nodeType === 'group').length
 })
 const workspaceTotalCount = computed(() => workspaceItems.value.length)
+const graphScope = computed(() => {
+  const node = selectedNode.value
+  const allEntities = store.entities || []
+  const allRelationships = store.entityRelationships || []
+
+  if (!node) {
+    return {
+      entities: allEntities,
+      relationships: allRelationships,
+    }
+  }
+
+  if (node.nodeType === 'entity') {
+    const relatedRelationships = allRelationships.filter(
+      rel => rel.source_id === node.entityId || rel.target_id === node.entityId
+    )
+    const entityIds = new Set([node.entityId])
+    for (const rel of relatedRelationships) {
+      if (rel.source_id) entityIds.add(rel.source_id)
+      if (rel.target_id) entityIds.add(rel.target_id)
+    }
+    return {
+      entities: allEntities.filter(entity => entityIds.has(entity.entity_id)),
+      relationships: relatedRelationships,
+    }
+  }
+
+  const scopedEntities = collectEntities(node)
+  const entityIds = new Set(scopedEntities.map(entity => entity.entity_id))
+  return {
+    entities: allEntities.filter(entity => entityIds.has(entity.entity_id)),
+    relationships: allRelationships.filter(
+      rel => entityIds.has(rel.source_id) && entityIds.has(rel.target_id)
+    ),
+  }
+})
+const graphEntities = computed(() => graphScope.value.entities)
+const graphRelationships = computed(() => graphScope.value.relationships)
 
 function setSelectedNode(nodeData) {
   store.selectedEntityNode = nodeData || null
@@ -161,7 +199,6 @@ function setSelectedNode(nodeData) {
 }
 
 function handleNodeSelect(nodeData) {
-  workspaceView.value = 'workspace'
   setSelectedNode(nodeData)
 }
 
@@ -260,8 +297,14 @@ watch(
     }
 
     const currentId = store.selectedEntityNode?.id
-    const node = currentId ? findNodeById(nodes, currentId) : firstSelectableNode(nodes)
-    if (node) setSelectedNode(node)
+    if (!currentId) return
+    const node = findNodeById(nodes, currentId)
+    if (node) {
+      setSelectedNode(node)
+      return
+    }
+    store.selectedEntityNode = null
+    store.selectedEntityDetail = null
   },
   { immediate: true }
 )

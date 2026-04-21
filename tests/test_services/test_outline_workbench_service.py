@@ -99,9 +99,10 @@ async def test_submit_feedback_routes_volume_outline_and_returns_assistant_messa
     optimize_calls = []
     snapshot_calls = []
 
-    async def fake_optimize_outline(*, outline_type, outline_ref, feedback, context_window):
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
         optimize_calls.append(
             {
+                "novel_id": novel_id,
                 "outline_type": outline_type,
                 "outline_ref": outline_ref,
                 "feedback": feedback,
@@ -135,6 +136,7 @@ async def test_submit_feedback_routes_volume_outline_and_returns_assistant_messa
     )
 
     assert optimize_calls and optimize_calls[0]["outline_type"] == "volume"
+    assert optimize_calls[0]["novel_id"] == "n_submit"
     assert optimize_calls[0]["outline_ref"] == "vol_2"
     assert optimize_calls[0]["feedback"] == "第二卷冲突升级不够猛，再推高主角代价。"
     assert response.assistant_message.content == "已根据反馈补强第二卷冲突升级。"
@@ -170,3 +172,56 @@ async def test_submit_feedback_routes_volume_outline_and_returns_assistant_messa
     assert messages[1].content == "已根据反馈补强第二卷冲突升级。"
     assert session.last_result_snapshot == {"outline_ref": "vol_2", "title": "第二卷", "summary": "强化冲突升级"}
     assert session.conversation_summary == "用户要求强化第二卷中段冲突，已完成调整。"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_updates_synopsis_checkpoint(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=5,
+        estimated_total_chapters=800,
+        estimated_total_words=2400000,
+    )
+    await director.save_checkpoint(
+        "n_synopsis_submit",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        assert novel_id == "n_synopsis_submit"
+        assert outline_type == "synopsis"
+        assert outline_ref == "synopsis"
+        assert feedback == "总章数我想要达到 1300 章左右"
+        return {
+            "content": "已将总纲预计总章数调整为约 1300 章，并同步提高总字数预估。",
+            "result_snapshot": {
+                **synopsis.model_dump(),
+                "estimated_total_chapters": 1300,
+                "estimated_total_words": 3900000,
+            },
+            "conversation_summary": "用户希望把整书体量提升到约 1300 章，已更新总纲规模预估。",
+        }
+
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_synopsis_submit",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="总章数我想要达到 1300 章左右",
+    )
+
+    state = await service.novel_state_repo.get_state("n_synopsis_submit")
+    assert state is not None
+    assert state.checkpoint_data["synopsis_data"]["estimated_total_chapters"] == 1300
+    assert state.checkpoint_data["synopsis_data"]["estimated_total_words"] == 3900000
+    assert response.last_result_snapshot["estimated_total_chapters"] == 1300
+    assert response.assistant_message.content == "已将总纲预计总章数调整为约 1300 章，并同步提高总字数预估。"

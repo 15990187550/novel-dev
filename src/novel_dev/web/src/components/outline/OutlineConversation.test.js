@@ -28,5 +28,6 @@ describe('OutlineConversation', () => {
 
     expect(wrapper.get('button').attributes('disabled')).toBeDefined()
     expect(wrapper.text()).toContain('优化中')
+    expect(wrapper.text()).toContain('发送中...')
   })
 })

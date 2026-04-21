@@ -53,11 +53,21 @@
       </p>
       <button
         type="button"
-        class="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
+        class="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
         :disabled="disabled || submitting || !draft.trim()"
         @click="submit"
       >
-        发送修改意见
+        <svg
+          v-if="submitting"
+          class="h-4 w-4 animate-spin"
+          viewBox="0 0 24 24"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle cx="12" cy="12" r="9" stroke="currentColor" stroke-opacity="0.25" stroke-width="3" />
+          <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+        </svg>
+        {{ submitting ? '发送中...' : '发送修改意见' }}
       </button>
     </div>
   </section>

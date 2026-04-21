@@ -26,8 +26,11 @@ vi.mock('axios', () => ({
 }))
 
 import {
+  brainstorm,
+  getVolumePlan,
   getOutlineWorkbench,
   getOutlineWorkbenchMessages,
+  planVolume,
   submitOutlineFeedback,
 } from '@/api.js'
 
@@ -75,6 +78,30 @@ describe('outline workbench api', () => {
 
     await expect(submitOutlineFeedback('novel-1', payload)).resolves.toEqual({ ok: true })
 
-    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/outline_workbench/submit', payload)
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/outline_workbench/submit', payload, {
+      timeout: 180000,
+    })
+  })
+
+  it('requests volume plan with silent error handling for missing plans', async () => {
+    await expect(getVolumePlan('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/volume_plan', {
+      __skipGlobalErrorMessage: true,
+    })
+  })
+
+  it('uses a long timeout for brainstorm and volume planning requests', async () => {
+    await expect(brainstorm('novel-1')).resolves.toEqual({ ok: true })
+    await expect(planVolume('novel-1', 3)).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/novels/novel-1/brainstorm', null, {
+      timeout: 180000,
+    })
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/novels/novel-1/volume_plan', {
+      volume_number: 3,
+    }, {
+      timeout: 180000,
+    })
   })
 })

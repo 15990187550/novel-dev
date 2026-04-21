@@ -492,6 +492,34 @@ describe('novel store dashboard loading', () => {
     expect(store.outlineWorkbench.messages).toEqual([{ id: 'msg-2', content: 'message-2' }])
   })
 
+  it('submitOutlineFeedback prevents duplicate submits while a request is pending', async () => {
+    const store = useNovelStore()
+    const deferred = createDeferred()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+
+    vi.mocked(api.submitOutlineFeedback).mockReturnValueOnce(deferred.promise)
+
+    const firstSubmit = store.submitOutlineFeedback({ content: '把总章数调整到 1300 章左右' })
+    expect(store.outlineWorkbench.submitting).toBe(true)
+
+    await store.submitOutlineFeedback({ content: '第二次重复提交' })
+    expect(api.submitOutlineFeedback).toHaveBeenCalledTimes(1)
+
+    deferred.resolve({})
+    await firstSubmit
+
+    expect(store.outlineWorkbench.submitting).toBe(false)
+    expect(store.refreshOutlineWorkbench).toHaveBeenCalledWith({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+  })
+
   it('refreshOutlineWorkbench ignores stale responses that return after a newer request', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

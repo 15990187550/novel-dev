@@ -12,6 +12,28 @@
       :description="detail.emptyDescription || '可以直接在下方输入修改意见，要求系统先生成本卷卷纲。'"
     />
 
+    <div v-if="detail?.status === 'missing' && createAction" class="mt-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-sm font-medium text-gray-900">{{ createAction.title || '立即创建' }}</div>
+          <p class="mt-1 text-sm leading-6 text-gray-500">
+            {{ createAction.description || '根据当前阶段直接生成对应大纲内容。' }}
+          </p>
+          <p v-if="createAction.disabledReason" class="mt-2 text-xs leading-5 text-amber-700">
+            {{ createAction.disabledReason }}
+          </p>
+        </div>
+        <button
+          type="button"
+          class="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
+          :disabled="createAction.disabled || createAction.loading"
+          @click="$emit('create')"
+        >
+          {{ createAction.loading ? '创建中...' : (createAction.label || '一键创建') }}
+        </button>
+      </div>
+    </div>
+
     <div v-else class="space-y-5">
       <div class="flex flex-wrap items-start justify-between gap-4">
         <div>
@@ -99,5 +121,11 @@ defineProps({
     type: Object,
     default: null,
   },
+  createAction: {
+    type: Object,
+    default: null,
+  },
 })
+
+defineEmits(['create'])
 </script>

@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+  <div class="entity-tree bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
     <div class="space-y-2">
       <div class="flex items-center justify-between gap-2">
         <h3 class="font-bold">目录</h3>
@@ -29,20 +29,20 @@
         :props="treeProps"
         node-key="id"
         :current-node-key="selectedNodeId"
+        :default-expanded-keys="defaultExpandedKeys"
         highlight-current
-        default-expand-all
         :expand-on-click-node="false"
         @node-click="handleNodeClick"
       >
         <template #default="{ data }">
-          <div class="flex w-full items-center justify-between gap-2 py-0.5">
-            <div class="min-w-0">
-              <div class="truncate text-sm font-medium">{{ data.label }}</div>
+          <div class="flex w-full items-start justify-between gap-3 py-1">
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <div :class="nodeLabelClass(data)">{{ data.label }}</div>
               <div v-if="nodeSubtitle(data)" class="truncate text-xs text-gray-500 dark:text-gray-400">
                 {{ nodeSubtitle(data) }}
               </div>
             </div>
-            <div class="flex items-center gap-1 shrink-0">
+            <div class="flex shrink-0 flex-wrap items-center justify-end gap-1 max-w-[7.5rem]">
               <el-tag v-if="nodeBadge(data)" size="small" type="info">{{ nodeBadge(data) }}</el-tag>
               <el-tag v-if="nodeHint(data)" size="small" type="warning">{{ nodeHint(data) }}</el-tag>
             </div>
@@ -56,6 +56,8 @@
 </template>
 
 <script setup>
+import { computed } from 'vue'
+
 const props = defineProps({
   nodes: { type: Array, default: () => [] },
   searchQuery: { type: String, default: '' },
@@ -68,9 +70,19 @@ const props = defineProps({
 const emit = defineEmits(['update:searchQuery', 'search', 'reset', 'select'])
 
 const treeProps = { label: 'label', children: 'children' }
+const defaultExpandedKeys = computed(() =>
+  props.nodes
+    .filter(node => node.nodeType === 'category')
+    .map(node => node.id)
+)
 
 function handleNodeClick(nodeData) {
   emit('select', nodeData)
+}
+
+function nodeLabelClass(node) {
+  if (node.nodeType === 'entity') return 'truncate text-sm font-medium leading-5'
+  return 'truncate text-sm font-semibold leading-5'
 }
 
 function nodeBadge(node) {
@@ -90,8 +102,19 @@ function nodeHint(node) {
 
 function nodeSubtitle(node) {
   if (node.nodeType === 'category') return `一级分类 · ${(node.children || []).length} 个分组`
-  if (node.nodeType === 'group') return node.groupSlug ? `二级分组 · ${node.groupSlug}` : '二级分组'
-  if (node.nodeType === 'entity') return node.data?.effective_group_name || node.data?.effective_category || node.data?.type || '实体'
+  if (node.nodeType === 'group') return '二级分组'
+  if (node.nodeType === 'entity') return ''
   return ''
 }
 </script>
+
+<style scoped>
+.entity-tree :deep(.el-tree-node__content) {
+  min-height: 2.75rem;
+  align-items: flex-start;
+}
+
+.entity-tree :deep(.el-tree-node__expand-icon) {
+  margin-top: 0.45rem;
+}
+</style>

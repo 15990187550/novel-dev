@@ -121,9 +121,8 @@ async def test_submit_outline_workbench_feedback_returns_updated_assistant_messa
     data = resp.json()
     assert data["assistant_message"]["role"] == "assistant"
     assert data["assistant_message"]["message_type"] == "result"
-    assert data["assistant_message"]["content"] == (
-        "[stub] 已记录对 volume:vol_2 的反馈：第二卷中段冲突不够强，再提高主角代价。"
-    )
+    assert data["assistant_message"]["content"].startswith("已根据反馈更新《")
+    assert "[stub]" not in data["assistant_message"]["content"]
 
 
 @pytest.mark.asyncio
@@ -167,7 +166,8 @@ async def test_get_outline_workbench_messages_returns_recent_messages(async_sess
     assert data["recent_messages"][0]["role"] == "user"
     assert data["recent_messages"][0]["content"] == "把第二幕节奏再压紧。"
     assert data["recent_messages"][1]["role"] == "assistant"
-    assert data["recent_messages"][1]["content"] == "[stub] 已记录对 volume:vol_1 的反馈：把第二幕节奏再压紧。"
+    assert data["recent_messages"][1]["content"].startswith("已根据反馈更新《")
+    assert "[stub]" not in data["recent_messages"][1]["content"]
 
 
 @pytest.mark.asyncio

@@ -9,10 +9,10 @@
         </p>
       </div>
       <span
-        v-if="store.outlineWorkbench.state === 'loading'"
+        v-if="isWorkbenchBusy"
         class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
       >
-        加载中
+        {{ busyLabel }}
       </span>
     </div>
 
@@ -32,11 +32,11 @@
         <OutlineSidebar :items="sidebarItems" @select="handleSelect" />
 
         <div class="space-y-4">
-          <OutlineDetailPanel :detail="detailPanel" />
+          <OutlineDetailPanel :detail="detailPanel" :create-action="createAction" @create="handleCreate" />
           <OutlineConversation
             :messages="store.outlineWorkbench.messages"
-            :submitting="store.outlineWorkbench.state === 'loading'"
-            :disabled="!store.novelId || !activeSelection"
+            :submitting="store.outlineWorkbench.submitting"
+            :disabled="!store.novelId || !activeSelection || Boolean(store.outlineWorkbench.creatingKey)"
             :current-title="selectedItem?.title || detailPanel?.title || ''"
             @submit-feedback="handleSubmit"
           />
@@ -48,6 +48,7 @@
 
 <script setup>
 import { computed, watch } from 'vue'
+import * as api from '@/api.js'
 import OutlineConversation from '@/components/outline/OutlineConversation.vue'
 import OutlineDetailPanel from '@/components/outline/OutlineDetailPanel.vue'
 import OutlineSidebar from '@/components/outline/OutlineSidebar.vue'
@@ -56,12 +57,58 @@ import { useNovelStore } from '@/stores/novel.js'
 const store = useNovelStore()
 
 const activeSelection = computed(() => (
-  store.outlineWorkbench.selection || store.outlineWorkbench.currentItem || null
+  store.outlineWorkbench.selection ||
+  store.outlineWorkbench.currentItem ||
+  syntheticSynopsisSelection.value ||
+  null
+))
+
+const isWorkbenchBusy = computed(() => (
+  store.outlineWorkbench.state === 'loading' ||
+  store.outlineWorkbench.submitting ||
+  Boolean(store.outlineWorkbench.creatingKey)
+))
+
+const busyLabel = computed(() => {
+  if (store.outlineWorkbench.submitting) return '提交中'
+  if (store.outlineWorkbench.creatingKey) return '创建中'
+  return '加载中'
+})
+
+const workbenchItems = computed(() => {
+  const items = [...store.outlineWorkbench.items]
+  const hasSynopsis = items.some(
+    (item) => item.outline_type === 'synopsis' && item.outline_ref === 'synopsis'
+  )
+  if (!hasSynopsis) {
+    items.unshift({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+      key: 'synopsis:synopsis',
+      itemId: 'synopsis:synopsis',
+      title: '总纲',
+      status: 'missing',
+      statusLabel: '待创建',
+      summary: '当前还没有总纲，可以先一键创建总纲。',
+    })
+  }
+  return items
+})
+
+const syntheticSynopsisSelection = computed(() => (
+  !store.outlineWorkbench.selection &&
+  !store.outlineWorkbench.currentItem &&
+  !store.synopsisData &&
+  workbenchItems.value.some(
+    (item) => item.outline_type === 'synopsis' && item.outline_ref === 'synopsis'
+  )
+    ? { outline_type: 'synopsis', outline_ref: 'synopsis' }
+    : null
 ))
 
 const sidebarItems = computed(() => {
   const selection = activeSelection.value
-  return store.outlineWorkbench.items.map((item) => ({
+  return workbenchItems.value.map((item) => ({
     ...item,
     isCurrent: Boolean(
       selection &&
@@ -79,20 +126,66 @@ const selectedItem = computed(() => {
   ) || null
 })
 
+const createAction = computed(() => {
+  const detail = detailPanel.value
+  if (!detail || detail.status !== 'missing') return null
+
+  const actionKey = `${detail.outlineType}:${detail.outlineRef}`
+  if (detail.outlineType === 'synopsis') {
+    const disabledReason = !store.novelId ? '请先选择小说。' : ''
+    return {
+      key: actionKey,
+      label: '一键创建总纲',
+      title: '总纲还没有生成',
+      description: '系统会基于当前设定文档直接生成完整总纲。',
+      loading: store.outlineWorkbench.creatingKey === actionKey,
+      disabled: Boolean(disabledReason),
+      disabledReason,
+    }
+  }
+
+  const volumeNumber = parseVolumeNumber(detail.outlineRef)
+  const previousVolumeMissing = volumeNumber > 1 && sidebarItems.value.some(
+    (item) =>
+      item.outline_type === 'volume' &&
+      item.outline_ref === `vol_${volumeNumber - 1}` &&
+      item.status === 'missing'
+  )
+
+  let disabledReason = ''
+  if (!store.novelId) disabledReason = '请先选择小说。'
+  else if (previousVolumeMissing) disabledReason = `请先创建第 ${volumeNumber - 1} 卷，再创建当前卷。`
+  else if (!store.canVolumePlan) disabledReason = '当前阶段不允许创建卷纲。'
+
+  return {
+    key: actionKey,
+    label: `一键创建第 ${volumeNumber} 卷`,
+    title: `${selectedItem.value?.title || '当前卷'} 还没有卷纲`,
+    description: '系统会基于总纲与已完成卷纲，生成当前卷的卷级大纲。',
+    loading: store.outlineWorkbench.creatingKey === actionKey,
+    disabled: Boolean(disabledReason),
+    disabledReason,
+    volumeNumber,
+  }
+})
+
 const detailPanel = computed(() => {
   const selection = activeSelection.value
   const item = selectedItem.value
   if (!selection || !item) return null
 
   if (item.status === 'missing') {
+    const isSynopsis = selection.outline_type === 'synopsis'
     return {
       outlineType: selection.outline_type,
       outlineRef: selection.outline_ref,
       status: 'missing',
       statusLabel: item.statusLabel,
       title: item.title,
-      emptyTitle: `${item.title || '当前卷'} 尚未生成卷纲`,
-      emptyDescription: '你可以直接在下方输入意见，例如“先生成本卷卷纲，并突出与上一卷的承接冲突”。',
+      emptyTitle: isSynopsis ? '总纲尚未生成' : `${item.title || '当前卷'} 尚未生成卷纲`,
+      emptyDescription: isSynopsis
+        ? '先创建总纲，再继续做卷级规划和对话式优化。'
+        : '你可以直接在下方输入意见，或者先一键创建本卷卷纲。',
     }
   }
 
@@ -211,5 +304,31 @@ async function handleSelect(item) {
 
 async function handleSubmit(content) {
   await store.submitOutlineFeedback({ content })
+}
+
+async function handleCreate() {
+  const action = createAction.value
+  if (!action || action.disabled || action.loading || !store.novelId) return
+
+  store.outlineWorkbench.creatingKey = action.key
+  try {
+    if (detailPanel.value?.outlineType === 'synopsis') {
+      await api.brainstorm(store.novelId)
+      await store.refreshState()
+      await store.refreshOutlineWorkbench({ outline_type: 'synopsis', outline_ref: 'synopsis' })
+      return
+    }
+
+    await api.planVolume(store.novelId, action.volumeNumber)
+    await store.refreshState()
+    await store.refreshOutlineWorkbench({
+      outline_type: 'volume',
+      outline_ref: `vol_${action.volumeNumber}`,
+    })
+  } finally {
+    if (store.outlineWorkbench.creatingKey === action.key) {
+      store.outlineWorkbench.creatingKey = ''
+    }
+  }
 }
 </script>

@@ -2,10 +2,21 @@ import axios from 'axios'
 import { ElMessage } from 'element-plus'
 
 const api = axios.create({ baseURL: '/api', timeout: 30000 })
+const withSilentError = (config = {}) => ({
+  ...config,
+  __skipGlobalErrorMessage: true,
+})
+const withLongTimeout = (timeout = 180000, config = {}) => ({
+  ...config,
+  timeout,
+})
 
 api.interceptors.response.use(
   (res) => res,
   (err) => {
+    if (err.config?.__skipGlobalErrorMessage) {
+      return Promise.reject(err)
+    }
     const detail = err.response?.data?.detail
     ElMessage.error(detail || '请求失败')
     return Promise.reject(err)
@@ -27,13 +38,13 @@ export const getTimelines = (id) => api.get(`/novels/${id}/timelines`).then(r =>
 export const getSpacelines = (id) => api.get(`/novels/${id}/spacelines`).then(r => r.data)
 export const getForeshadowings = (id) => api.get(`/novels/${id}/foreshadowings`).then(r => r.data)
 export const getSynopsis = (id) => api.get(`/novels/${id}/synopsis`).then(r => r.data)
-export const getVolumePlan = (id) => api.get(`/novels/${id}/volume_plan`).then(r => r.data)
+export const getVolumePlan = (id) => api.get(`/novels/${id}/volume_plan`, withSilentError()).then(r => r.data)
 export const getOutlineWorkbench = (id, params) =>
   api.get(`/novels/${id}/outline_workbench`, { params }).then(r => r.data)
 export const getOutlineWorkbenchMessages = (id, params) =>
   api.get(`/novels/${id}/outline_workbench/messages`, { params }).then(r => r.data)
 export const submitOutlineFeedback = (id, payload) =>
-  api.post(`/novels/${id}/outline_workbench/submit`, payload).then(r => r.data)
+  api.post(`/novels/${id}/outline_workbench/submit`, payload, withLongTimeout()).then(r => r.data)
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
@@ -43,11 +54,11 @@ export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
   api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
 export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
-export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`).then(r => r.data)
+export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`, null, withLongTimeout()).then(r => r.data)
 export const importSynopsis = (id, content) =>
   api.post(`/novels/${id}/brainstorm/import`, { content }).then(r => r.data)
 export const planVolume = (id, volNum) =>
-  api.post(`/novels/${id}/volume_plan`, { volume_number: volNum }).then(r => r.data)
+  api.post(`/novels/${id}/volume_plan`, { volume_number: volNum }, withLongTimeout()).then(r => r.data)
 export const prepareContext = (id, cid) =>
   api.post(`/novels/${id}/chapters/${cid}/context`).then(r => r.data)
 export const draftChapter = (id, cid) =>
