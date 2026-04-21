@@ -5,16 +5,24 @@ class ResizeObserverMock {
 }
 
 class EventSourceMock {
-  constructor() {
+  static instances = []
+
+  constructor(url) {
+    this.url = url
     this.readyState = 0
+    this.closed = false
     this.onopen = null
     this.onmessage = null
     this.onerror = null
+    EventSourceMock.instances.push(this)
   }
 
   addEventListener() {}
   removeEventListener() {}
-  close() {}
+  close() {
+    this.closed = true
+    this.readyState = 2
+  }
 }
 
 if (!globalThis.ResizeObserver) {
@@ -38,4 +46,5 @@ if (!globalThis.matchMedia) {
 
 if (!globalThis.EventSource) {
   globalThis.EventSource = EventSourceMock
+  globalThis.EventSource.instances = EventSourceMock.instances
 }

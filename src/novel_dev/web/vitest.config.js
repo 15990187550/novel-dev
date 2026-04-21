@@ -1,18 +1,14 @@
-import { defineConfig } from 'vitest/config'
-import vue from '@vitejs/plugin-vue'
-import path from 'path'
+import { defineConfig, mergeConfig } from 'vitest/config'
+import viteConfig from './vite.config.js'
 
-export default defineConfig({
-  plugins: [vue()],
-  resolve: {
-    alias: {
-      '@': path.resolve(__dirname, 'src'),
+export default mergeConfig(
+  viteConfig,
+  defineConfig({
+    test: {
+      environment: 'jsdom',
+      setupFiles: ['./src/test/setup.js'],
+      globals: true,
+      css: true,
     },
-  },
-  test: {
-    environment: 'jsdom',
-    setupFiles: ['./src/test/setup.js'],
-    globals: true,
-    css: true,
-  },
-})
+  }),
+)
