@@ -5,6 +5,7 @@ import {
   buildRecentUpdates,
   buildRecommendedActions,
   buildRiskItems,
+  buildStatusCards,
 } from './dashboardSummary.js'
 
 describe('dashboard summary helpers', () => {
@@ -183,5 +184,49 @@ describe('dashboard summary helpers', () => {
 
     expect(safePhase.some((item) => item.type === 'current_chapter_missing')).toBe(false)
     expect(buildRiskItems({ currentChapter: null, currentPhase: 'completed', logs: [] }).some((item) => item.type === 'current_chapter_missing')).toBe(false)
+  })
+
+  it('buildStatusCards folds panel errors and recent logs into the dashboard overview', () => {
+    const cards = buildStatusCards({
+      summary: {
+        total: 7,
+        entities: 2,
+        timelines: 3,
+        foreshadowings: 1,
+        pendingDocs: 1,
+      },
+      panels: [
+        { id: 'entities', state: 'ready' },
+        { id: 'timelines', state: 'error' },
+      ],
+      currentPhaseLabel: '草稿写作',
+      currentVolumeChapter: 'V3 / C8',
+      currentChapter: { title: '第八章' },
+      recentLogs: [
+        { level: 'info', message: '运行正常' },
+        { level: 'error', message: '渲染失败' },
+      ],
+      connected: true,
+      dashboardLastUpdated: '2026-04-21 10:03:00',
+    })
+
+    expect(cards).toHaveLength(4)
+    expect(cards[1]).toMatchObject({
+      id: 'data',
+      title: '7',
+      meta: '存在面板异常',
+      panelState: 'error',
+    })
+    expect(cards[2]).toMatchObject({
+      id: 'logs',
+      title: '2 条最近日志',
+      meta: '实时连接中',
+      panelState: 'error',
+    })
+    expect(cards[3]).toMatchObject({
+      id: 'sync',
+      title: '已同步',
+      detail: '最后刷新于 2026-04-21 10:03:00',
+    })
   })
 })

@@ -247,10 +247,66 @@ function buildRiskItems({ panels = [], currentChapter = null, currentPhase = '',
   return risks
 }
 
+function buildStatusCards({
+  summary = {},
+  panels = [],
+  currentPhaseLabel = '',
+  currentVolumeChapter = '',
+  currentChapter = null,
+  recentLogs = [],
+  connected = false,
+  dashboardLastUpdated = '',
+} = {}) {
+  const hasPanelError = toArray(panels).some((panel) => panel?.state === 'error' || panel?.panelState === 'error')
+  const hasLogError = toArray(recentLogs).some((log) => log?.level === 'error')
+  const logCount = toArray(recentLogs).length
+  const lastLogMessage = toArray(recentLogs)[toArray(recentLogs).length - 1]?.message || '等待新的实时日志'
+
+  return [
+    {
+      id: 'flow',
+      label: '流程状态',
+      title: currentPhaseLabel || '待更新',
+      detail: currentChapter?.title || '当前章节待选择',
+      meta: currentVolumeChapter || '暂无卷/章信息',
+      route: '/chapters',
+      panelState: currentChapter ? 'ok' : 'warning',
+    },
+    {
+      id: 'data',
+      label: '数据状态',
+      title: `${summary.total || 0}`,
+      detail: `实体 ${summary.entities || 0} · 时间线 ${summary.timelines || 0} · 伏笔 ${summary.foreshadowings || 0} · 资料 ${summary.pendingDocs || 0}`,
+      meta: hasPanelError ? '存在面板异常' : '数据面板正常',
+      route: '/entities',
+      panelState: hasPanelError ? 'error' : 'ok',
+    },
+    {
+      id: 'logs',
+      label: '日志状态',
+      title: logCount ? `${logCount} 条最近日志` : '暂无日志',
+      detail: lastLogMessage,
+      meta: connected ? '实时连接中' : '连接已断开',
+      route: '/logs',
+      panelState: hasLogError ? 'error' : 'ok',
+    },
+    {
+      id: 'sync',
+      label: '同步状态',
+      title: dashboardLastUpdated ? '已同步' : '未同步',
+      detail: dashboardLastUpdated ? `最后刷新于 ${dashboardLastUpdated}` : '等待首次刷新',
+      meta: toArray(panels).length ? `${panels.length} 个面板` : '暂无面板',
+      route: '/dashboard',
+      panelState: hasPanelError ? 'error' : 'ok',
+    },
+  ]
+}
+
 export {
   buildChapterSummary,
   buildDataSummary,
   buildRecentUpdates,
   buildRecommendedActions,
   buildRiskItems,
+  buildStatusCards,
 }
