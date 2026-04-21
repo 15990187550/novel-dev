@@ -1,0 +1,218 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+html.dark body {
+  background-color: #0b0f19;
+  color: #f3f4f6;
+}
+
+.dashboard-hero {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 1.25rem;
+  background: linear-gradient(135deg, rgba(15, 23, 42, 0.96), rgba(30, 41, 59, 0.9));
+  color: #f8fafc;
+}
+
+.dashboard-hero__content {
+  min-width: 0;
+}
+
+.dashboard-hero__eyebrow,
+.dashboard-section-header__eyebrow {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.dashboard-hero__title,
+.dashboard-section-header__title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.dashboard-hero__phase {
+  margin: 0.5rem 0 0;
+  color: #cbd5e1;
+}
+
+.dashboard-hero__stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  flex: 1 1 360px;
+}
+
+.dashboard-hero__stat,
+.dashboard-status-card,
+.dashboard-volume-summary__panel,
+.dashboard-next-actions,
+.dashboard-insights__panel {
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 1rem;
+  background: rgba(15, 23, 42, 0.72);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.dashboard-hero__stat {
+  padding: 1rem;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.dashboard-hero__stat-label,
+.dashboard-status-card__label,
+.dashboard-insights__item-label,
+.dashboard-insights__link-label {
+  display: block;
+  font-size: 0.75rem;
+  color: #94a3b8;
+}
+
+.dashboard-hero__stat-value,
+.dashboard-status-card__title,
+.dashboard-action-card__title {
+  display: block;
+  margin-top: 0.35rem;
+  font-size: 1.05rem;
+  color: #f8fafc;
+}
+
+.dashboard-status-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.dashboard-status-card {
+  display: block;
+  padding: 1rem;
+  text-decoration: none;
+  color: inherit;
+  transition: transform 0.18s ease, border-color 0.18s ease;
+}
+
+.dashboard-status-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(96, 165, 250, 0.45);
+}
+
+.dashboard-status-card.is-error {
+  border-color: rgba(248, 113, 113, 0.72);
+  background: rgba(127, 29, 29, 0.32);
+}
+
+.dashboard-status-card__detail,
+.dashboard-status-card__meta,
+.dashboard-action-card__reason,
+.dashboard-action-card__route,
+.dashboard-insights__item-detail,
+.dashboard-insights__link-detail,
+.dashboard-section-header__meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  color: #cbd5e1;
+}
+
+.dashboard-volume-summary__grid,
+.dashboard-next-actions__grid,
+.dashboard-insights__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.dashboard-volume-summary__panel,
+.dashboard-insights__panel {
+  padding: 1rem;
+}
+
+.dashboard-volume-summary__panel-title,
+.dashboard-insights__panel-title {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+  color: #f8fafc;
+}
+
+.dashboard-section-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  align-items: end;
+  margin-bottom: 1rem;
+}
+
+.dashboard-next-actions {
+  padding: 1rem;
+}
+
+.dashboard-action-card {
+  width: 100%;
+  padding: 1rem;
+  text-align: left;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+}
+
+.dashboard-action-card.is-primary {
+  border-color: rgba(96, 165, 250, 0.5);
+}
+
+.dashboard-action-card.is-secondary {
+  border-color: rgba(148, 163, 184, 0.28);
+}
+
+.dashboard-action-card__detail {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+}
+
+.dashboard-insights__connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: #fca5a5;
+}
+
+.dashboard-insights__connected.is-connected {
+  color: #86efac;
+}
+
+.dashboard-insights__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.dashboard-insights__item + .dashboard-insights__item {
+  margin-top: 0.75rem;
+}
+
+.dashboard-insights__links {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.dashboard-insights__link {
+  display: block;
+  padding: 0.85rem 0.95rem;
+  border-radius: 0.85rem;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+}

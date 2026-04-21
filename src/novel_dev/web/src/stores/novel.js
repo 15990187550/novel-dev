@@ -13,6 +13,36 @@ const PHASE_LABELS = {
   completed: '已完成',
 }
 
+const createDashboardPanelState = () => ({
+  state: 'idle',
+  error: '',
+})
+
+const createDashboardPanels = () => ({
+  entities: createDashboardPanelState(),
+  timelines: createDashboardPanelState(),
+  foreshadowings: createDashboardPanelState(),
+  pendingDocs: createDashboardPanelState(),
+})
+
+const clearSupplementalForPanel = (store, panel) => {
+  switch (panel) {
+    case 'entities':
+      store.entities = []
+      store.entityRelationships = []
+      break
+    case 'timelines':
+      store.timelines = []
+      break
+    case 'foreshadowings':
+      store.foreshadowings = []
+      break
+    case 'pendingDocs':
+      store.pendingDocs = []
+      break
+  }
+}
+
 export const useNovelStore = defineStore('novel', {
   state: () => ({
     novelId: '',
@@ -30,6 +60,8 @@ export const useNovelStore = defineStore('novel', {
     foreshadowings: [],
     pendingDocs: [],
     loadingActions: {},
+    dashboardPanels: createDashboardPanels(),
+    dashboardLastUpdated: '',
   }),
 
   getters: {
@@ -49,14 +81,43 @@ export const useNovelStore = defineStore('novel', {
   },
 
   actions: {
+    resetDashboardSupplemental() {
+      this.entities = []
+      this.entityRelationships = []
+      this.timelines = []
+      this.foreshadowings = []
+      this.pendingDocs = []
+      this.dashboardPanels = createDashboardPanels()
+      this.dashboardLastUpdated = ''
+    },
+
+    syncCurrentChapter() {
+      const chapterId = this.novelState.current_chapter_id
+      const plan = this.volumePlan?.chapters?.find(c => c.chapter_id === chapterId)
+      const chapter = this.chapters.find(c => c.chapter_id === chapterId)
+      this.currentChapter = chapter ? { ...chapter, ...(plan || {}) } : plan || null
+    },
+
+    setDashboardPanelState(panel, state, error = '') {
+      if (!this.dashboardPanels[panel]) return
+      this.dashboardPanels[panel].state = state
+      this.dashboardPanels[panel].error = error
+    },
+
     async loadNovel(novelId) {
       this.novelId = novelId
+      this.resetDashboardSupplemental()
+      await this.refreshState()
+    },
+
+    async refreshState() {
+      if (!this.novelId) return
       const [state, stats, chapters, synopsis, volumePlan] = await Promise.all([
-        api.getNovelState(novelId),
-        api.getArchiveStats(novelId).catch(() => ({})),
-        api.getChapters(novelId).catch(() => ({ items: [] })),
-        api.getSynopsis(novelId).catch(() => null),
-        api.getVolumePlan(novelId).catch(() => null),
+        api.getNovelState(this.novelId),
+        api.getArchiveStats(this.novelId).catch(() => ({})),
+        api.getChapters(this.novelId).catch(() => ({ items: [] })),
+        api.getSynopsis(this.novelId).catch(() => null),
+        api.getVolumePlan(this.novelId).catch(() => null),
       ])
       this.novelState = state
       this.archiveStats = stats
@@ -64,22 +125,60 @@ export const useNovelStore = defineStore('novel', {
       this.synopsisContent = synopsis?.content || ''
       this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || null
       this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
-      const plan = this.volumePlan?.chapters?.find(c => c.chapter_id === state.current_chapter_id)
-      const ch = this.chapters.find(c => c.chapter_id === state.current_chapter_id)
-      this.currentChapter = ch ? { ...ch, ...plan } : plan || null
+      this.syncCurrentChapter()
     },
 
-    async refreshState() {
+    async loadDashboardSupplemental() {
       if (!this.novelId) return
-      const [state, synopsis, volumePlan] = await Promise.all([
-        api.getNovelState(this.novelId),
-        api.getSynopsis(this.novelId).catch(() => null),
-        api.getVolumePlan(this.novelId).catch(() => null),
-      ])
-      this.novelState = state
-      this.synopsisContent = synopsis?.content || this.synopsisContent
-      this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || this.synopsisData
-      this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
+
+      const panelTasks = {
+        entities: async () => {
+          const [entities, relationships] = await Promise.all([
+            api.getEntities(this.novelId),
+            api.getEntityRelationships(this.novelId).catch(() => ({ items: [] })),
+          ])
+          this.entities = entities.items || []
+          this.entityRelationships = relationships.items || []
+        },
+        timelines: async () => {
+          const res = await api.getTimelines(this.novelId)
+          this.timelines = res.items || []
+        },
+        foreshadowings: async () => {
+          const res = await api.getForeshadowings(this.novelId)
+          this.foreshadowings = res.items || []
+        },
+        pendingDocs: async () => {
+          const pending = await api.getPendingDocs(this.novelId)
+          this.pendingDocs = pending.items || []
+        },
+      }
+
+      for (const panel of Object.keys(panelTasks)) {
+        this.setDashboardPanelState(panel, 'loading')
+        clearSupplementalForPanel(this, panel)
+      }
+
+      try {
+        await Promise.all(Object.entries(panelTasks).map(async ([panel, task]) => {
+          try {
+            await task()
+            this.setDashboardPanelState(panel, 'ready')
+          } catch (error) {
+            clearSupplementalForPanel(this, panel)
+            this.setDashboardPanelState(panel, 'error', error?.message || '请求失败')
+          }
+        }))
+      } finally {
+        this.dashboardLastUpdated = new Date().toISOString()
+      }
+    },
+
+    async refreshDashboard() {
+      if (!this.novelId) return
+      await this.refreshState()
+      await this.loadDashboardSupplemental()
+      this.syncCurrentChapter()
     },
 
     async executeAction(actionType) {
