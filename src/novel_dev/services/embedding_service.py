@@ -3,6 +3,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from novel_dev.db.models import Entity
 from novel_dev.llm.embedder import BaseEmbedder
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -87,9 +88,45 @@ class EmbeddingService:
         entity.vector_embedding = vector
         await self.session.flush()
 
+    async def index_entity_search(self, entity_id: str) -> None:
+        entity_repo = EntityRepository(self.session)
+        version_repo = EntityVersionRepository(self.session)
+        entity = await entity_repo.get_by_id(entity_id)
+        if not entity:
+            return
+        version = await version_repo.get_latest(entity_id)
+        state = version.state if version else {}
+        text = self._flatten_entity_search_document(entity, state)
+        try:
+            vector = await self.generate_embedding(text)
+        except Exception as exc:
+            logger.warning("entity_search_embedding_failed", extra={"entity_id": entity_id, "error": str(exc)})
+            return
+        entity.search_document = text
+        entity.search_vector_embedding = vector
+        await self.session.flush()
+
     @staticmethod
     def _flatten_entity_state(name: str, entity_type: str, state: dict) -> str:
         parts = [f"名称：{name}", f"类型：{entity_type}"]
+        for key, value in state.items():
+            if isinstance(value, dict):
+                sub = ", ".join(f"{k}={v}" for k, v in value.items())
+                parts.append(f"{key}：{sub}")
+            else:
+                parts.append(f"{key}：{value}")
+        return "\n".join(parts)[:8000]
+
+    @staticmethod
+    def _flatten_entity_search_document(entity: Entity, state: dict) -> str:
+        effective_category = entity.manual_category or entity.system_category or "其他"
+        parts = [
+            f"名称：{entity.name}",
+            f"类型：{entity.type}",
+            f"一级分类：{effective_category}",
+        ]
+        if entity.system_needs_review:
+            parts.append("分类状态：待复核")
         for key, value in state.items():
             if isinstance(value, dict):
                 sub = ", ".join(f"{k}={v}" for k, v in value.items())

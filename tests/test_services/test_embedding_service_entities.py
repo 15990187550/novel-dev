@@ -84,3 +84,37 @@ async def test_flatten_entity_state_nested_dict():
     assert "类型：item" in text
     assert "level：hp=100, mp=50" in text
     assert "rarity：legendary" in text
+
+
+@pytest.mark.asyncio
+async def test_index_entity_search_refreshes_search_document(async_session):
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await entity_repo.create(
+        entity_id="e1",
+        entity_type="character",
+        name="张三",
+        novel_id="n1",
+    )
+    await version_repo.create(
+        entity_id="e1",
+        version=1,
+        state={"description": "一位修行者"},
+    )
+
+    entity = await entity_repo.get_by_id("e1")
+    entity.manual_category = "人物"
+    entity.system_category = "势力"
+    entity.system_needs_review = False
+    await async_session.flush()
+
+    mock_embedder = AsyncMock()
+    mock_embedder.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+    svc = EmbeddingService(async_session, mock_embedder)
+
+    await svc.index_entity_search("e1")
+
+    updated = await entity_repo.get_by_id("e1")
+    assert "一级分类：人物" in updated.search_document
+    assert "一级分类：势力" not in updated.search_document
+    assert updated.search_vector_embedding == [0.1, 0.2, 0.3]
