@@ -1356,25 +1356,14 @@ async def get_outline_workbench_messages(
     session: AsyncSession = Depends(get_session),
 ):
     service = OutlineWorkbenchService(session)
-    state = await service.novel_state_repo.get_state(novel_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail=f"Novel state not found: {novel_id}")
-
-    outline_session = await service.outline_session_repo.get_or_create(
-        novel_id=novel_id,
-        outline_type=outline_type,
-        outline_ref=outline_ref,
-        status="active",
-    )
-    context_window = await service._build_context_window(outline_session.id)
-    return {
-        "session_id": outline_session.id,
-        "outline_type": outline_type,
-        "outline_ref": outline_ref,
-        "last_result_snapshot": context_window.last_result_snapshot,
-        "conversation_summary": context_window.conversation_summary,
-        "recent_messages": [message.model_dump() for message in context_window.recent_messages],
-    }
+    try:
+        return await service.get_messages(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/api/novels/{novel_id}/outline_workbench/submit")
