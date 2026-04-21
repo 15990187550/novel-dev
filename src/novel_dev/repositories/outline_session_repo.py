@@ -1,7 +1,7 @@
 import uuid
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,7 +13,10 @@ class OutlineSessionRepository:
         self.session = session
 
     def _find_cached_session(self, novel_id: str, outline_type: str, outline_ref: str) -> Optional[OutlineSession]:
+        deleted_sessions = set(self.session.deleted)
         for candidate in list(self.session.new) + list(self.session.identity_map.values()):
+            if candidate in deleted_sessions or inspect(candidate).deleted:
+                continue
             if isinstance(candidate, OutlineSession) and (
                 candidate.novel_id == novel_id
                 and candidate.outline_type == outline_type
@@ -42,6 +45,10 @@ class OutlineSessionRepository:
                 )
             )
         existing_session = result.scalar_one_or_none()
+        if existing_session is not None and (
+            existing_session in self.session.deleted or inspect(existing_session).deleted
+        ):
+            existing_session = None
         if existing_session is not None:
             return existing_session
 

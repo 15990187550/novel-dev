@@ -17,7 +17,6 @@ async def test_outline_session_get_or_create_reuses_existing_session(async_sessi
         outline_type="volume",
         outline_ref="vol_1",
     )
-    await async_session.commit()
     second = await repo.get_or_create(
         novel_id="novel_1",
         outline_type="volume",
@@ -28,6 +27,28 @@ async def test_outline_session_get_or_create_reuses_existing_session(async_sessi
     assert first.novel_id == "novel_1"
     assert first.outline_type == "volume"
     assert first.outline_ref == "vol_1"
+
+
+@pytest.mark.asyncio
+async def test_outline_session_get_or_create_ignores_deleted_cached_session(async_session):
+    repo = OutlineSessionRepository(async_session)
+
+    existing = await repo.get_or_create(
+        novel_id="novel_del",
+        outline_type="volume",
+        outline_ref="vol_del",
+    )
+    await async_session.flush()
+    await async_session.delete(existing)
+
+    replacement = await repo.get_or_create(
+        novel_id="novel_del",
+        outline_type="volume",
+        outline_ref="vol_del",
+    )
+
+    assert replacement.id != existing.id
+    assert replacement not in async_session.deleted
 
 
 @pytest.mark.asyncio
@@ -66,6 +87,14 @@ async def test_outline_session_get_or_create_recovers_from_unique_conflict(async
     assert session.novel_id == conflict_key["novel_id"]
     assert session.outline_type == conflict_key["outline_type"]
     assert session.outline_ref == conflict_key["outline_ref"]
+    followup = await repo.get_or_create(
+        novel_id="novel_2",
+        outline_type="chapter",
+        outline_ref="ch_followup",
+    )
+    await async_session.commit()
+    assert followup.novel_id == "novel_2"
+    assert followup.outline_ref == "ch_followup"
 
 
 @pytest.mark.asyncio
