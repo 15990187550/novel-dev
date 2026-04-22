@@ -1,6 +1,6 @@
 """add brainstorm workspace
 
-Revision ID: 20260422_add_brainstorm_workspace
+Revision ID: 20260422_bw_workspace
 Revises: 20260421_outline_workbench
 Create Date: 2026-04-22 09:00:00.000000
 
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260422_add_brainstorm_workspace"
+revision: str = "20260422_bw_workspace"
 down_revision: Union[str, Sequence[str], None] = "20260421_outline_workbench"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

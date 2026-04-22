@@ -1,5 +1,5 @@
 from typing import Any, List, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
 from novel_dev.schemas.context import BeatPlan
@@ -9,6 +9,26 @@ class CharacterArc(BaseModel):
     name: str
     arc_summary: str
     key_turning_points: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "name" not in normalized and "character" in normalized:
+            normalized["name"] = normalized["character"]
+        if "arc_summary" not in normalized:
+            for legacy_key in ("arc", "summary", "description"):
+                if legacy_key in normalized:
+                    normalized["arc_summary"] = normalized[legacy_key]
+                    break
+        if "key_turning_points" not in normalized:
+            for legacy_key in ("turning_points", "turning_point", "beats"):
+                if legacy_key in normalized:
+                    normalized["key_turning_points"] = normalized[legacy_key]
+                    break
+        return normalized
 
     @field_validator("name", "arc_summary", mode="before")
     @classmethod
@@ -25,6 +45,29 @@ class PlotMilestone(BaseModel):
     act: str
     summary: str
     climax_event: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "act" not in normalized:
+            for legacy_key in ("name", "stage", "title"):
+                if legacy_key in normalized:
+                    normalized["act"] = normalized[legacy_key]
+                    break
+        if "summary" not in normalized:
+            for legacy_key in ("description", "desc", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "climax_event" not in normalized:
+            for legacy_key in ("climax", "turning_event", "hook"):
+                if legacy_key in normalized:
+                    normalized["climax_event"] = normalized[legacy_key]
+                    break
+        return normalized
 
     @field_validator("act", "summary", "climax_event", mode="before")
     @classmethod

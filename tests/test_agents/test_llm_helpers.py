@@ -135,3 +135,45 @@ async def test_call_and_parse_model_retries_with_regenerate_prompt_on_empty_outp
     retry_message = mock_client.acomplete.call_args_list[1].args[0][0].content
     assert "返回为空" in retry_message
     assert "original prompt" in retry_message
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_recovers_truncated_json_without_retry():
+    broken_json = '{"title": "诸天执道者", "tags": ["成长"]'
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=broken_json)
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "TestAgent", "test_task", "original prompt", ExamplePayload, max_retries=3
+        )
+
+    assert result.title == "诸天执道者"
+    assert result.tags == ["成长"]
+    assert mock_client.acomplete.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_uses_regenerate_prompt_after_repair_attempt_fails():
+    broken_json = '{"title": "诸天执道者", "tags": ["围绕'
+    regenerated_json = '{"title": "诸天执道者", "tags": ["围绕自由意志展开"]}'
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=broken_json),
+        LLMResponse(text=regenerated_json),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "TestAgent", "test_task", "original prompt", ExamplePayload, max_retries=3
+        )
+
+    assert result.title == "诸天执道者"
+    assert result.tags == ["围绕自由意志展开"]
+    retry_message = mock_client.acomplete.call_args_list[1].args[0][0].content
+    assert "请重新完成原始任务" in retry_message
+    assert "上次错误" in retry_message

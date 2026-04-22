@@ -25,6 +25,7 @@ api.interceptors.response.use(
 
 export const listNovels = () => api.get('/novels').then(r => r.data)
 export const createNovel = (title) => api.post('/novels', { title }).then(r => r.data)
+export const deleteNovel = (id) => api.delete(`/novels/${id}`).then(r => r.data)
 export const getNovelState = (id) => api.get(`/novels/${id}/state`).then(r => r.data)
 export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).then(r => r.data)
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
@@ -64,6 +65,8 @@ export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
   api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
 export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
+export const rejectPending = (id, pendingId) =>
+  api.post(`/novels/${id}/documents/pending/reject`, { pending_id: pendingId }).then(r => r.data)
 export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`, null, withLongTimeout()).then(r => r.data)
 export const importSynopsis = (id, content) =>
   api.post(`/novels/${id}/brainstorm/import`, { content }).then(r => r.data)

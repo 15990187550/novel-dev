@@ -83,3 +83,11 @@ class PendingExtractionRepository:
                 pe.resolution_result = resolution_result
             pe.error_message = error_message
             await self.session.flush()
+
+    async def delete(self, pe_id: str) -> bool:
+        pe = await self.get_by_id(pe_id)
+        if pe is None:
+            return False
+        await self.session.delete(pe)
+        await self.session.flush()
+        return True

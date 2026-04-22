@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3.11 *)",
+      "Bash(pip *)",
+      "Bash(psql *)",
+      "Bash(PYTHONPATH=src python3.11 *)",
+      "Bash(curl *)",
+      "Bash(npm run *)",
+      "Bash(PYTHONPATH=\"/Users/linlin/Desktop/novel-dev/src\" python3.11 *)",
+      "Bash(pkill *)",
+      "Bash(PYTHONPATH=/Users/linlin/Desktop/novel-dev/src python3.11 *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
+    ]
+  }
+}

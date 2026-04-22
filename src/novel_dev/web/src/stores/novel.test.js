@@ -19,6 +19,7 @@ vi.mock('@/api.js', () => ({
   getChapters: vi.fn(),
   getSynopsis: vi.fn(),
   getVolumePlan: vi.fn(),
+  deleteNovel: vi.fn(),
   getEntities: vi.fn(),
   getEntityRelationships: vi.fn(),
   getTimelines: vi.fn(),
@@ -293,6 +294,52 @@ describe('novel store dashboard loading', () => {
       summary: '刷新后的计划摘要',
     })
     expect(store.dashboardLastUpdated).toBeTruthy()
+  })
+
+  it('deletes the current novel and resets the store to the dashboard empty state', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState = {
+      current_phase: 'drafting',
+      current_chapter_id: 'ch-1',
+      checkpoint_data: {
+        synopsis_data: { title: '道照诸天' },
+      },
+    }
+    store.archiveStats = { total_word_count: 1234 }
+    store.chapters = [{ chapter_id: 'ch-1' }]
+    store.volumePlan = { chapters: [{ chapter_id: 'ch-1' }] }
+    store.synopsisContent = '内容'
+    store.synopsisData = { title: '道照诸天' }
+    store.entities = [{ entity_id: 'e-1' }]
+    store.entityRelationships = [{ id: 'rel-1' }]
+    store.timelines = [{ id: 't-1' }]
+    store.spacelines = [{ id: 's-1' }]
+    store.foreshadowings = [{ id: 'f-1' }]
+    store.pendingDocs = [{ id: 'd-1' }]
+    store.dashboardPanels.entities.state = 'ready'
+    store.dashboardLastUpdated = '2026-04-22T00:00:00.000Z'
+
+    vi.mocked(api.deleteNovel).mockResolvedValue()
+
+    await store.deleteCurrentNovel()
+
+    expect(api.deleteNovel).toHaveBeenCalledWith('novel-1')
+    expect(store.novelId).toBe('')
+    expect(store.novelState).toEqual({})
+    expect(store.archiveStats).toEqual({})
+    expect(store.chapters).toEqual([])
+    expect(store.volumePlan).toBeNull()
+    expect(store.synopsisContent).toBe('')
+    expect(store.synopsisData).toBeNull()
+    expect(store.entities).toEqual([])
+    expect(store.entityRelationships).toEqual([])
+    expect(store.timelines).toEqual([])
+    expect(store.spacelines).toEqual([])
+    expect(store.foreshadowings).toEqual([])
+    expect(store.pendingDocs).toEqual([])
+    expect(store.dashboardPanels.entities).toEqual({ state: 'idle', error: '' })
+    expect(store.dashboardLastUpdated).toBe('')
   })
 
   it('refreshOutlineWorkbench stores normalized items, selection and messages', async () => {

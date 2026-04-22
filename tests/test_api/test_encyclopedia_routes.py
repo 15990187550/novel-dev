@@ -488,6 +488,46 @@ async def test_list_entity_relationships_infers_relationships_for_non_character_
 
 
 @pytest.mark.asyncio
+async def test_list_entity_relationships_downgrades_non_character_mentor_inference(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("hero", "character", "陆照", novel_id="n_cross_rel")
+    await repo.create("manual", "item", "道经", novel_id="n_cross_rel")
+    await version_repo.create(
+        "hero",
+        1,
+        {"name": "陆照", "identity": "道经传人"},
+    )
+    await version_repo.create(
+        "manual",
+        1,
+        {"name": "道经"},
+    )
+    await repo.update_version("hero", 1)
+    await repo.update_version("manual", 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_cross_rel/entity_relationships")
+            assert resp.status_code == 200
+            items = resp.json()["items"]
+            assert len(items) == 1
+            assert items[0]["source_id"] == "hero"
+            assert items[0]["target_id"] == "manual"
+            assert items[0]["relation_type"] == "关联"
+            assert items[0]["meta"]["source"] == "latest_state.identity"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_list_timelines(async_session):
     async def override():
         yield async_session

@@ -1,7 +1,10 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.db.models import OutlineMessage
+from novel_dev.llm.models import LLMResponse
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 from novel_dev.schemas.outline import SynopsisData, VolumePlan, VolumeBeat
@@ -226,6 +229,75 @@ async def test_submit_feedback_updates_synopsis_checkpoint(async_session, monkey
     assert state.checkpoint_data["synopsis_data"]["estimated_total_words"] == 3900000
     assert response.last_result_snapshot["estimated_total_chapters"] == 1300
     assert response.assistant_message.content == "已将总纲预计总章数调整为约 1300 章，并同步提高总字数预估。"
+
+
+@pytest.mark.asyncio
+async def test_optimize_synopsis_prompt_explicitly_constrains_schema(async_session):
+    service = OutlineWorkbenchService(async_session)
+    checkpoint = {
+        "synopsis_data": {
+            "title": "道照诸天",
+            "logline": "陆照欲证彼岸，却被末劫与旧敌逼上绝路。",
+            "core_conflict": "陆照 vs 玄天道庭，争夺末劫前最后的彼岸道统",
+            "themes": ["求道"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 10,
+            "estimated_total_chapters": 1300,
+            "estimated_total_words": 3900000,
+        }
+    }
+    outline_session = await service.outline_session_repo.get_or_create(
+        novel_id="n_prompt_constraints",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+    )
+    context_window = await service._build_context_window(
+        outline_session.id,
+        outline_type="synopsis",
+        outline_ref="synopsis",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=SynopsisData(
+            title="道照诸天",
+            logline="陆照欲证彼岸，却被末劫与旧敌逼上绝路。",
+            core_conflict="陆照 vs 玄天道庭，争夺末劫前最后的彼岸道统",
+            themes=["求道"],
+            character_arcs=[],
+            milestones=[],
+            estimated_volumes=10,
+            estimated_total_chapters=1300,
+            estimated_total_words=3900000,
+        ).model_dump_json()
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        with patch.object(service, "_load_brainstorm_source_text", AsyncMock(return_value="世界设定")):
+            await service._optimize_synopsis(
+                novel_id="n_prompt_constraints",
+                checkpoint=checkpoint,
+                feedback="强化末劫压迫感，但不要改主线方向。",
+                context_window=context_window,
+            )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "只允许以下顶层字段" in prompt
+    assert '"title"' in prompt
+    assert '"logline"' in prompt
+    assert '"core_conflict"' in prompt
+    assert '"themes"' in prompt
+    assert '"character_arcs"' in prompt
+    assert '"milestones"' in prompt
+    assert '"estimated_volumes"' in prompt
+    assert '"estimated_total_chapters"' in prompt
+    assert '"estimated_total_words"' in prompt
+    assert "character_arcs: 数组,每项只包含 name / arc_summary / key_turning_points 三个字段" in prompt
+    assert "milestones: 数组,每项只包含 act / summary / climax_event 三个字段" in prompt
+    assert "禁止使用旧字段" in prompt
+    assert "character / arc / turning_points" in prompt
+    assert "name / description / chapter_range" in prompt
 
 
 @pytest.mark.asyncio

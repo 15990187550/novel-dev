@@ -50,10 +50,21 @@
                   size="small"
                   type="primary"
                   :loading="approvingPendingId === row.id"
-                  :disabled="!!approvingPendingId && approvingPendingId !== row.id"
+                  :disabled="(!!approvingPendingId && approvingPendingId !== row.id) || !!rejectingPendingId"
                   @click="approve(row.id)"
                 >
                   {{ approvingPendingId === row.id ? '批准中...' : '批准' }}
+                </el-button>
+                <el-button
+                  v-if="row.status === 'pending'"
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="rejectingPendingId === row.id"
+                  :disabled="(!!rejectingPendingId && rejectingPendingId !== row.id) || !!approvingPendingId"
+                  @click="reject(row.id)"
+                >
+                  {{ rejectingPendingId === row.id ? '拒绝中...' : '拒绝' }}
                 </el-button>
               </div>
             </template>
@@ -73,6 +84,14 @@
             v-if="selectedDoc.error_message"
             :title="selectedDoc.error_message"
             type="error"
+            :closable="false"
+            show-icon
+          />
+
+          <el-alert
+            v-if="mergeResolvingCount"
+            :title="`自动合并中：${mergeResolvingCount} 个冲突字段正在处理`"
+            type="warning"
             :closable="false"
             show-icon
           />
@@ -99,7 +118,7 @@
             </div>
 
             <div v-if="diffGroups.update.length">
-              <div class="font-semibold mb-2 text-blue-700 dark:text-blue-300">自动补充/更新</div>
+              <div class="font-semibold mb-2 text-blue-700 dark:text-blue-300">自动补充</div>
               <div class="space-y-2">
                 <div v-for="entity in diffGroups.update" :key="entityKey(entity)" class="rounded-lg border border-blue-200 dark:border-blue-800 p-3 bg-blue-50/60 dark:bg-blue-950/20">
                   <div class="font-semibold mb-2">{{ entity.entity_name }} <span class="text-xs text-gray-500">{{ entity.entity_type }}</span></div>
@@ -135,9 +154,23 @@
                     </el-table-column>
                     <el-table-column label="处理方式" width="180">
                       <template #default="{ row }">
-                        <el-select v-model="conflictSelections[conflictKey(entity, row)]" size="small">
+                        <el-tag v-if="row.auto_applicable" type="success" size="small">默认采用新值</el-tag>
+                        <el-tag
+                          v-else-if="isMergeResolving(entity, row)"
+                          type="warning"
+                          size="small"
+                        >
+                          自动合并中
+                        </el-tag>
+                        <el-select
+                          v-else
+                          v-model="conflictSelections[conflictKey(entity, row)]"
+                          size="small"
+                          :disabled="isApprovingSelectedDoc"
+                        >
                           <el-option label="保留旧值" value="keep_old" />
                           <el-option label="使用新值" value="use_new" />
+                          <el-option label="自动合并" value="merge" />
                           <el-option label="跳过" value="skip" />
                         </el-select>
                       </template>
@@ -186,7 +219,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
-import { uploadDocumentsBatch, approvePending } from '@/api.js'
+import { uploadDocumentsBatch, approvePending, rejectPending } from '@/api.js'
 import { ElMessage } from 'element-plus'
 
 const DOCUMENT_POLL_INTERVAL_MS = 2000
@@ -195,9 +228,12 @@ const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
 const approvingPendingId = ref('')
+const rejectingPendingId = ref('')
 const detailVisible = ref(false)
 const selectedDoc = ref(null)
 const conflictSelections = reactive({})
+const conflictSelectionMemory = reactive({})
+const resolvingMergeKeys = reactive({})
 const uploadSummary = ref(null)
 const documentPollTimer = ref(null)
 
@@ -213,6 +249,8 @@ const diffGroups = computed(() => {
 
 const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.field_resolutions || [])
 const hasProcessingDocs = computed(() => (store.pendingDocs || []).some((doc) => doc.status === 'processing'))
+const isApprovingSelectedDoc = computed(() => !!selectedDoc.value?.id && approvingPendingId.value === selectedDoc.value.id)
+const mergeResolvingCount = computed(() => Object.keys(resolvingMergeKeys).length)
 
 const fieldLabels = {
   identity: '身份',
@@ -261,7 +299,7 @@ function resolutionActionLabel(action) {
     created: '新增实体',
     auto_apply: '自动写入',
     use_new: '采用新值',
-    merge: '合并写入',
+    merge: '自动合并',
     keep_old: '保留旧值',
     skip: '跳过',
   }
@@ -290,12 +328,18 @@ function conflictKey(entity, change) {
   return `${entity.entity_type}:${entity.entity_name}:${change.field}`
 }
 
+function isMergeResolving(entity, change) {
+  return !!resolvingMergeKeys[conflictKey(entity, change)]
+}
+
 function initializeConflictSelections(doc) {
   Object.keys(conflictSelections).forEach(key => delete conflictSelections[key])
   for (const entity of doc?.diff_result?.entity_diffs || []) {
     if (entity.operation !== 'conflict') continue
     for (const change of entity.field_changes || []) {
-      conflictSelections[conflictKey(entity, change)] = 'keep_old'
+      if (change.auto_applicable) continue
+      const key = conflictKey(entity, change)
+      conflictSelections[key] = conflictSelectionMemory[`${doc?.id}:${key}`] || 'merge'
     }
   }
 }
@@ -330,6 +374,7 @@ function buildFieldResolutions() {
   for (const entity of selectedDoc.value?.diff_result?.entity_diffs || []) {
     if (entity.operation !== 'conflict') continue
     for (const change of entity.field_changes || []) {
+      if (change.auto_applicable) continue
       const action = conflictSelections[conflictKey(entity, change)]
       if (!action || action === 'keep_old') continue
       resolutions.push({
@@ -341,6 +386,37 @@ function buildFieldResolutions() {
     }
   }
   return resolutions
+}
+
+function rememberConflictSelections(doc) {
+  if (!doc?.id) return
+  for (const [key, value] of Object.entries(conflictSelections)) {
+    conflictSelectionMemory[`${doc.id}:${key}`] = value
+  }
+}
+
+function clearResolvingMergeKeys() {
+  Object.keys(resolvingMergeKeys).forEach(key => delete resolvingMergeKeys[key])
+}
+
+function markResolvingMergeKeys(fieldResolutions) {
+  clearResolvingMergeKeys()
+  for (const resolution of fieldResolutions) {
+    if (resolution.action !== 'merge') continue
+    resolvingMergeKeys[`${resolution.entity_type}:${resolution.entity_name}:${resolution.field}`] = true
+  }
+}
+
+function syncSelectedDocFromStore(id) {
+  if (!id) return
+  const latest = (store.pendingDocs || []).find((doc) => doc.id === id)
+  if (latest) {
+    selectedDoc.value = latest
+    initializeConflictSelections(latest)
+    return
+  }
+  detailVisible.value = false
+  selectedDoc.value = null
 }
 
 async function upload() {
@@ -361,14 +437,37 @@ async function upload() {
 async function approve(id) {
   if (approvingPendingId.value) return
   approvingPendingId.value = id
+  rememberConflictSelections(selectedDoc.value)
   const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
+  const hasMergeResolution = fieldResolutions.some((resolution) => resolution.action === 'merge')
+  if (selectedDoc.value?.id === id) {
+    markResolvingMergeKeys(fieldResolutions)
+  }
   try {
     await approvePending(store.novelId, id, fieldResolutions)
-    ElMessage.success('已批准')
-    detailVisible.value = false
+    await store.fetchDocuments()
+    syncSelectedDocFromStore(id)
+    ElMessage.success(hasMergeResolution ? '自动合并完成' : '已批准')
+  } finally {
+    clearResolvingMergeKeys()
+    approvingPendingId.value = ''
+  }
+}
+
+async function reject(id) {
+  if (rejectingPendingId.value) return
+  rejectingPendingId.value = id
+  try {
+    await rejectPending(store.novelId, id)
+    ElMessage.success('已拒绝并丢弃该记录')
+    clearResolvingMergeKeys()
+    if (selectedDoc.value?.id === id) {
+      detailVisible.value = false
+      selectedDoc.value = null
+    }
     await store.fetchDocuments()
   } finally {
-    approvingPendingId.value = ''
+    rejectingPendingId.value = ''
   }
 }
 
@@ -403,4 +502,8 @@ watch(hasProcessingDocs, (processing) => {
   }
   stopDocumentPolling()
 }, { immediate: true })
+
+watch(conflictSelections, () => {
+  rememberConflictSelections(selectedDoc.value)
+}, { deep: true })
 </script>

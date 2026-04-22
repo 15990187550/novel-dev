@@ -328,6 +328,22 @@ export const useNovelStore = defineStore('novel', {
       this.dashboardPanels[panel].error = error
     },
 
+    resetCurrentNovel() {
+      this.novelId = ''
+      this.novelState = {}
+      this.archiveStats = {}
+      this.currentChapter = null
+      this.chapters = []
+      this.volumePlan = null
+      this.synopsisContent = ''
+      this.synopsisData = null
+      this.spacelines = []
+      this.outlineWorkbench = createOutlineWorkbenchState()
+      this.brainstormWorkspace = createBrainstormWorkspaceState()
+      this.loadingActions = {}
+      this.resetDashboardSupplemental()
+    },
+
     async loadNovel(novelId) {
       this.novelId = novelId
       this.resetDashboardSupplemental()
@@ -503,6 +519,13 @@ export const useNovelStore = defineStore('novel', {
         return
       }
       await this.fetchEntities()
+    },
+
+    async deleteCurrentNovel() {
+      if (!this.novelId) return
+      const novelId = this.novelId
+      await api.deleteNovel(novelId)
+      this.resetCurrentNovel()
     },
 
     async fetchTimelines() {

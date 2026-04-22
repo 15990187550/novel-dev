@@ -15,6 +15,8 @@ from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import log_service
 from novel_dev.db.models import NovelDocument, PendingExtraction
+from novel_dev.llm import llm_factory
+from novel_dev.llm.models import ChatMessage
 from novel_dev.schemas.brainstorm_workspace import (
     PendingExtractionPayload,
     SettingDocDraftPayload,
@@ -227,18 +229,15 @@ class ExtractionService:
                 continue
             if old_text == new_text:
                 continue
-            is_auto = field in AUTO_APPLY_FIELDS
-            change_type = "update" if is_auto else "conflict"
-            if change_type == "conflict":
-                operation = "conflict"
+            operation = "conflict"
             field_changes.append({
                 "field": field,
                 "label": FIELD_LABELS.get(field, field),
                 "old_value": old_value,
                 "new_value": new_value,
-                "change_type": change_type,
-                "auto_applicable": is_auto,
-                "reason": "字段值不一致" if not is_auto else "补充型字段，自动采用新值",
+                "change_type": "conflict",
+                "auto_applicable": False,
+                "reason": "字段值不一致，需人工审核",
             })
 
         return {
@@ -248,6 +247,39 @@ class ExtractionService:
             "operation": operation if field_changes else "noop",
             "field_changes": field_changes,
         }
+
+    async def _merge_field_values(
+        self,
+        novel_id: str,
+        entity_type: str,
+        entity_name: str,
+        field: str,
+        old_value: Any,
+        new_value: Any,
+    ) -> str:
+        old_text = self._stringify_value(old_value)
+        new_text = self._stringify_value(new_value)
+        client = llm_factory.get("EditorAgent", task="polish_beat")
+        prompt = (
+            "你要合并小说设定中的同一字段的旧值与新值，输出一个最终采用的合并版本。\n\n"
+            "要求:\n"
+            "1. 只返回合并后的字段内容，不要解释。\n"
+            "2. 尽量保留双方不冲突的信息。\n"
+            "3. 如果信息冲突，优先保留更新、更具体、更完整的内容。\n"
+            "4. 保持适合设定字段直接存储的文本格式，不要加标题。\n"
+            "5. 不要编造原文中不存在的新事实。\n\n"
+            f"实体类型: {entity_type}\n"
+            f"实体名称: {entity_name}\n"
+            f"字段: {field}\n\n"
+            f"旧值:\n{old_text or '[空]'}\n\n"
+            f"新值:\n{new_text or '[空]'}"
+        )
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        merged_text = (response.text or "").strip()
+        if not merged_text:
+            raise RuntimeError(f"LLM merge returned empty result for {entity_type}/{entity_name}/{field}")
+        log_service.add_log(novel_id, "ExtractionService", f"字段自动合并完成: {entity_name}.{field}")
+        return merged_text
 
     async def _build_setting_diff(self, novel_id: str, raw_result: dict) -> dict:
         entity_diffs = []
@@ -324,7 +356,17 @@ class ExtractionService:
                     applied = True
                     resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "use_new", "applied": True})
                 elif action == "merge":
-                    merged_state[field] = resolution.get("merged_value", "")
+                    merged_value = resolution.get("merged_value")
+                    if not merged_value:
+                        merged_value = await self._merge_field_values(
+                            novel_id=novel_id,
+                            entity_type=entity_type,
+                            entity_name=entity_name,
+                            field=field,
+                            old_value=change.get("old_value"),
+                            new_value=change.get("new_value"),
+                        )
+                    merged_state[field] = merged_value
                     applied = True
                     resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "merge", "applied": True})
                 elif action == "skip":
@@ -578,6 +620,15 @@ class ExtractionService:
         await self.pending_repo.update_status(pe_id, "approved", resolution_result=resolution_result)
         log_service.add_log(pe.novel_id, "ExtractionService", f"审核通过，生成 {len(docs)} 份文档")
         return docs
+
+    async def reject_pending(self, pe_id: str) -> bool:
+        pe = await self.pending_repo.get_by_id(pe_id)
+        if not pe or pe.status != "pending":
+            return False
+        deleted = await self.pending_repo.delete(pe_id)
+        if deleted:
+            log_service.add_log(pe.novel_id, "ExtractionService", f"已拒绝并丢弃待审核记录: {pe.source_filename or pe.id}")
+        return deleted
 
     async def get_active_style_profile(self, novel_id: str) -> Optional[NovelDocument]:
         state = await self.state_repo.get_state(novel_id)

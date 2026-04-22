@@ -15,15 +15,17 @@ function createDeferred() {
   return { promise, resolve, reject }
 }
 
-const { approvePendingMock, uploadDocumentsBatchMock, successMessageMock } = vi.hoisted(() => ({
+const { approvePendingMock, uploadDocumentsBatchMock, rejectPendingMock, successMessageMock } = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
   uploadDocumentsBatchMock: vi.fn(),
+  rejectPendingMock: vi.fn(),
   successMessageMock: vi.fn(),
 }))
 
 vi.mock('@/api.js', () => ({
   approvePending: approvePendingMock,
   uploadDocumentsBatch: uploadDocumentsBatchMock,
+  rejectPending: rejectPendingMock,
 }))
 
 vi.mock('element-plus', () => ({
@@ -58,6 +60,30 @@ const ElButtonStub = defineComponent({
   },
 })
 
+const ElSelectStub = defineComponent({
+  name: 'ElSelectStub',
+  props: {
+    modelValue: { type: String, default: '' },
+    disabled: { type: Boolean, default: false },
+    size: { type: String, default: '' },
+  },
+  emits: ['update:modelValue'],
+  setup(props, { emit, slots }) {
+    return () =>
+      h(
+        'button',
+        {
+          class: 'el-select-stub',
+          type: 'button',
+          disabled: props.disabled,
+          'data-size': props.size,
+          onClick: () => emit('update:modelValue', 'merge'),
+        },
+        slots.default?.() || props.modelValue || 'select'
+      )
+  },
+})
+
 const tableRowKey = Symbol('table-row')
 
 const TableRowScope = defineComponent({
@@ -85,7 +111,15 @@ describe('Documents', () => {
       global: {
         plugins: [pinia],
         stubs: {
-          ElAlert: true,
+          ElAlert: defineComponent({
+            name: 'ElAlertStub',
+            props: {
+              title: { type: String, default: '' },
+            },
+            setup(props) {
+              return () => h('div', { class: 'el-alert-stub' }, props.title)
+            },
+          }),
           ElTable: defineComponent({
             name: 'ElTableStub',
             props: {
@@ -134,8 +168,16 @@ describe('Documents', () => {
           ElCollapse: true,
           ElCollapseItem: true,
           ElEmpty: true,
-          ElSelect: true,
-          ElOption: true,
+          ElSelect: ElSelectStub,
+          ElOption: defineComponent({
+            name: 'ElOptionStub',
+            props: {
+              label: { type: String, default: '' },
+            },
+            setup(props) {
+              return () => h('span', { class: 'el-option-stub' }, props.label)
+            },
+          }),
           ElTag: true,
         },
       },
@@ -193,6 +235,165 @@ describe('Documents', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('导入中')
+  })
+
+  it('shows merge loading state and refreshes detail results after automatic merge succeeds', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '设定一.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个冲突',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'conflict',
+              field_changes: [
+                {
+                  field: 'description',
+                  old_value: '旧描述',
+                  new_value: '新描述',
+                  auto_applicable: false,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockImplementation(async () => {
+      store.pendingDocs = [
+        {
+          id: 'doc-1',
+          source_filename: '设定一.md',
+          extraction_type: 'setting',
+          status: 'approved',
+          created_at: '2026-04-22T00:00:00Z',
+          diff_result: {
+            summary: '1 个冲突',
+            entity_diffs: [
+              {
+                entity_type: 'item',
+                entity_name: '道经',
+                operation: 'conflict',
+                field_changes: [
+                  {
+                    field: 'description',
+                    old_value: '旧描述',
+                    new_value: '新描述',
+                    auto_applicable: false,
+                  },
+                ],
+              },
+            ],
+          },
+          resolution_result: {
+            field_resolutions: [
+              {
+                entity_name: '道经',
+                field: 'description',
+                action: 'merge',
+                applied: true,
+              },
+            ],
+          },
+        },
+      ]
+    })
+
+    const deferred = createDeferred()
+    approvePendingMock.mockReturnValue(deferred.promise)
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    await wrapper.find('.el-select-stub').trigger('click')
+    await nextTick()
+
+    const approveButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '批准')
+    await approveButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('自动合并中')
+    expect(approvePendingMock).toHaveBeenCalledWith('novel-1', 'doc-1', [
+      {
+        entity_type: 'item',
+        entity_name: '道经',
+        field: 'description',
+        action: 'merge',
+      },
+    ])
+
+    deferred.resolve({})
+    await flushPromises()
+
+    expect(store.fetchDocuments).toHaveBeenCalled()
+    expect(wrapper.text()).toContain('自动合并')
+    expect(wrapper.text()).toContain('已写入')
+    expect(successMessageMock).toHaveBeenCalledWith('自动合并完成')
+  })
+
+  it('preserves conflict selections when the same document detail is reopened', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '设定一.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个冲突',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'conflict',
+              field_changes: [
+                {
+                  field: 'description',
+                  old_value: '旧描述',
+                  new_value: '新描述',
+                  auto_applicable: false,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.vm.conflictSelections['item:道经:description']).toBe('merge')
+
+    await wrapper.find('.el-select-stub').trigger('click')
+    expect(wrapper.vm.conflictSelections['item:道经:description']).toBe('merge')
+
+    wrapper.vm.detailVisible = false
+    await nextTick()
+
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.vm.conflictSelections['item:道经:description']).toBe('merge')
   })
 
   it('refreshes records after batch upload submission and polls while processing rows exist', async () => {

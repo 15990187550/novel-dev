@@ -1,17 +1,16 @@
 """Simple embedding server using sentence-transformers."""
 import os
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 
 app = FastAPI()
 
-MODEL_NAME = "BAAI/bge-m3"
+MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "BAAI/bge-m3")
 DIMENSIONS = 1024
 
 print(f"Loading {MODEL_NAME}...")
-model = SentenceTransformer(MODEL_NAME)
+model = SentenceTransformer(MODEL_NAME, local_files_only=True)
 print("Model loaded successfully")
 
 

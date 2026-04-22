@@ -32,6 +32,7 @@ from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspaceSubmitResponse,
 )
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
+from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
@@ -67,6 +68,10 @@ class OutlineWorkbenchSubmitRequest(BaseModel):
     content: str = Field(min_length=1)
 
 
+class RejectPendingRequest(BaseModel):
+    pending_id: str
+
+
 settings = Settings()
 
 
@@ -97,6 +102,16 @@ def _infer_relationship_type(text: str) -> str:
     return "关联"
 
 
+def _normalize_inferred_relationship_type(source_row: dict, target_row: dict, relation_text: str) -> str:
+    relation_type = _infer_relationship_type(relation_text)
+    source_type = (source_row.get("type") or "").strip().lower()
+    target_type = (target_row.get("type") or "").strip().lower()
+
+    if relation_type != "关联" and (source_type != "character" or target_type != "character"):
+        return "关联"
+    return relation_type
+
+
 def _iter_inference_text_fragments(latest_state: dict) -> list[tuple[str, str]]:
     fragments: list[tuple[str, str]] = []
     for field, value in (latest_state or {}).items():
@@ -124,7 +139,7 @@ def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
                     continue
                 if target["name"] not in relation_text:
                     continue
-                relation_type = _infer_relationship_type(relation_text)
+                relation_type = _normalize_inferred_relationship_type(source, target, relation_text)
                 dedup_key = (source["entity_id"], target["entity_id"], relation_type)
                 if dedup_key in seen:
                     continue
@@ -352,6 +367,14 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
         "checkpoint_data": state.checkpoint_data,
         "last_updated": state.last_updated.isoformat(),
     }
+
+
+@router.delete("/api/novels/{novel_id}", status_code=204)
+async def delete_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    deleted = await NovelDeletionService(session, settings.markdown_output_dir).delete_novel(novel_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    return None
 
 
 @router.get("/api/novels/{novel_id}/entities")
@@ -988,7 +1011,10 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
     pe = await repo.get_by_id(req.pending_id)
     if not pe or pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
-    docs = await svc.approve_pending(req.pending_id, field_resolutions=[r.model_dump() for r in req.field_resolutions])
+    try:
+        docs = await svc.approve_pending(req.pending_id, field_resolutions=[r.model_dump() for r in req.field_resolutions])
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=f"自动合并失败: {exc}") from exc
     await session.commit()
     return {
         "documents": [
@@ -1002,6 +1028,21 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
             for d in docs
         ]
     }
+
+
+@router.post("/api/novels/{novel_id}/documents/pending/reject", status_code=204)
+async def reject_pending_document(novel_id: str, req: RejectPendingRequest, session: AsyncSession = Depends(get_session)):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    repo = PendingExtractionRepository(session)
+    pe = await repo.get_by_id(req.pending_id)
+    if not pe or pe.novel_id != novel_id:
+        raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
+    deleted = await svc.reject_pending(req.pending_id)
+    if not deleted:
+        raise HTTPException(status_code=409, detail="待审核记录已不可拒绝")
+    await session.commit()
 
 
 @router.get("/api/novels/{novel_id}/style_profile/versions")

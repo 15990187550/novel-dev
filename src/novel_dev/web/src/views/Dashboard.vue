@@ -11,6 +11,7 @@
       :volume-chapter="store.currentVolumeChapter"
       :total-words="store.archiveStats.total_word_count || 0"
       :archived-count="store.archiveStats.archived_chapter_count || 0"
+      @delete-novel="handleDeleteNovel"
     />
 
     <DashboardStatusCards :panels="statusCards" />
@@ -38,6 +39,7 @@
 
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useNovelStore } from '@/stores/novel.js'
 import { useRealtimeLog } from '@/composables/useRealtimeLog.js'
 import DashboardHero from '@/components/dashboard/DashboardHero.vue'
@@ -197,7 +199,33 @@ async function handleAction(actionKey) {
   await refreshDashboardOnce()
 }
 
-watch(() => store.novelId, () => {
+async function handleDeleteNovel() {
+  if (!store.novelId) return
+  try {
+    await ElMessageBox.confirm(
+      `小说删除后无法恢复。确认删除《${store.novelTitle}》吗？`,
+      '删除小说',
+      {
+        confirmButtonText: '确认删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+
+  await store.deleteCurrentNovel()
+  stopAutoRefresh()
+  ElMessage.success('小说已删除')
+}
+
+watch(() => store.novelId, (novelId) => {
+  if (novelId) {
+    startAutoRefresh()
+  } else {
+    stopAutoRefresh()
+  }
   void refreshDashboardOnce()
 })
 

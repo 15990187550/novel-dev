@@ -98,6 +98,62 @@ def _should_regenerate_json(bad_output: str) -> bool:
     return "{" not in stripped and "[" not in stripped
 
 
+def _should_regenerate_for_error(error: Exception, bad_output: str) -> bool:
+    if _should_regenerate_json(bad_output):
+        return True
+    if isinstance(error, json.JSONDecodeError) and "Unterminated string" in str(error):
+        return True
+    return False
+
+
+def _repair_truncated_json(text: str) -> str | None:
+    stripped = (text or "").strip()
+    if not stripped:
+        return None
+
+    start_obj = stripped.find("{")
+    start_arr = stripped.find("[")
+    starts = [pos for pos in (start_obj, start_arr) if pos != -1]
+    if not starts:
+        return None
+
+    candidate = stripped[min(starts):]
+    stack: list[str] = []
+    in_string = False
+    escape_next = False
+
+    for ch in candidate:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+
+    repaired = candidate
+    if escape_next:
+        return None
+    if in_string:
+        # A payload cut off inside a string has already lost content.
+        # Prefer asking the model to regenerate instead of silently truncating semantics.
+        return None
+    repaired += "".join(reversed(stack))
+    repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+    return repaired if repaired != candidate else None
+
+
 def coerce_to_text(value: Any) -> str:
     if value is None:
         return ""
@@ -134,13 +190,20 @@ async def call_and_parse(
         try:
             response = await client.acomplete([ChatMessage(role="user", content=current_prompt)])
             cleaned = _strip_markdown(response.text)
-            result = parser(cleaned)
+            try:
+                result = parser(cleaned)
+            except (ValidationError, json.JSONDecodeError):
+                repaired = _repair_truncated_json(cleaned)
+                if repaired:
+                    result = parser(repaired)
+                else:
+                    raise
             if novel_id:
                 log_service.add_log(novel_id, agent_name, f"{task} 成功")
             return result
         except (ValidationError, json.JSONDecodeError) as exc:
             last_error = exc
-            if _should_regenerate_json(response.text):
+            if _should_regenerate_for_error(exc, response.text):
                 current_prompt = _build_json_regenerate_prompt(prompt, response.text, exc)
             else:
                 current_prompt = _build_json_repair_prompt(prompt, response.text, exc)
