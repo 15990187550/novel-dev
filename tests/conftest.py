@@ -1,9 +1,13 @@
 import os
+import sys
+from pathlib import Path
 
 # Force tests to use a shared SQLite file DB so the global engine
 # (used by MCP server and non-overridden API routes) can connect
 # to the same database across connections.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_novel_dev.db"
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import pytest
 import pytest_asyncio
