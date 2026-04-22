@@ -29,16 +29,17 @@ def upgrade() -> None:
         sa.Column("last_saved_at", sa.TIMESTAMP(), nullable=True),
         sa.Column("submitted_at", sa.TIMESTAMP(), nullable=True),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("novel_id", "status", name="uix_brainstorm_workspace_novel_status"),
     )
     op.create_index(
-        "ix_brainstorm_workspaces_novel_status",
+        "uq_brainstorm_workspaces_active_novel_id",
         "brainstorm_workspaces",
-        ["novel_id", "status"],
-        unique=False,
+        ["novel_id"],
+        unique=True,
+        sqlite_where=sa.text("status = 'active'"),
+        postgresql_where=sa.text("status = 'active'"),
     )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_brainstorm_workspaces_novel_status", table_name="brainstorm_workspaces")
+    op.drop_index("uq_brainstorm_workspaces_active_novel_id", table_name="brainstorm_workspaces")
     op.drop_table("brainstorm_workspaces")

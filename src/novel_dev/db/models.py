@@ -1,6 +1,7 @@
 from typing import List, Optional
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy import (
     ForeignKey, Text, Integer, Boolean, Float, JSON, TIMESTAMP, UniqueConstraint, Index
 )
@@ -207,8 +208,13 @@ class OutlineSession(Base):
 class BrainstormWorkspace(Base):
     __tablename__ = "brainstorm_workspaces"
     __table_args__ = (
-        UniqueConstraint("novel_id", "status", name="uix_brainstorm_workspace_novel_status"),
-        Index("ix_brainstorm_workspaces_novel_status", "novel_id", "status"),
+        Index(
+            "uq_brainstorm_workspaces_active_novel_id",
+            "novel_id",
+            unique=True,
+            sqlite_where=sa.text("status = 'active'"),
+            postgresql_where=sa.text("status = 'active'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(Text, primary_key=True)

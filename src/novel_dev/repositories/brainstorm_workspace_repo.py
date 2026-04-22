@@ -22,11 +22,7 @@ class BrainstormWorkspaceRepository:
                 return candidate
         return None
 
-    async def get_active_by_novel(self, novel_id: str) -> Optional[BrainstormWorkspace]:
-        cached_workspace = self._find_cached_active_workspace(novel_id)
-        if cached_workspace is not None:
-            return cached_workspace
-
+    async def _query_active_workspace(self, novel_id: str) -> Optional[BrainstormWorkspace]:
         with self.session.no_autoflush:
             result = await self.session.execute(
                 select(BrainstormWorkspace).where(
@@ -35,9 +31,16 @@ class BrainstormWorkspaceRepository:
                 )
             )
         workspace = result.scalar_one_or_none()
-        if workspace is not None and (workspace in self.session.deleted or inspect(workspace).deleted):
+        if workspace is None or workspace.status != "active":
             return None
         return workspace
+
+    async def get_active_by_novel(self, novel_id: str) -> Optional[BrainstormWorkspace]:
+        cached_workspace = self._find_cached_active_workspace(novel_id)
+        if cached_workspace is not None:
+            return cached_workspace
+
+        return await self._query_active_workspace(novel_id)
 
     async def get_or_create(self, novel_id: str) -> BrainstormWorkspace:
         cached_workspace = self._find_cached_active_workspace(novel_id)
@@ -65,14 +68,10 @@ class BrainstormWorkspaceRepository:
                 await self.session.flush()
             return workspace
         except IntegrityError:
-            with self.session.no_autoflush:
-                result = await self.session.execute(
-                    select(BrainstormWorkspace).where(
-                        BrainstormWorkspace.novel_id == novel_id,
-                        BrainstormWorkspace.status == "active",
-                    )
-                )
-            return result.scalar_one()
+            existing_workspace = await self._query_active_workspace(novel_id)
+            if existing_workspace is None:
+                raise
+            return existing_workspace
 
     async def get_by_id(self, workspace_id: str) -> Optional[BrainstormWorkspace]:
         result = await self.session.execute(
