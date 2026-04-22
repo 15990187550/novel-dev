@@ -85,6 +85,7 @@ class BrainstormWorkspaceRepository:
             return None
 
         workspace.status = "submitted"
-        workspace.submitted_at = datetime.utcnow()
+        if workspace.submitted_at is None:
+            workspace.submitted_at = datetime.utcnow()
         await self.session.flush()
         return workspace
