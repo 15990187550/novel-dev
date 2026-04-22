@@ -173,6 +173,12 @@ async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_p
         outline_ref="vol_1",
         result_snapshot={"title": "第一卷"},
     )
+    await service.save_outline_draft(
+        novel_id="novel_submit",
+        outline_type="volume",
+        outline_ref="vol_2",
+        result_snapshot={"title": "第二卷"},
+    )
     await service.merge_setting_drafts(
         "novel_submit",
         [
@@ -199,7 +205,7 @@ async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_p
 
     assert result.synopsis_title == "九霄行"
     assert result.pending_setting_count == 1
-    assert result.volume_outline_count == 1
+    assert result.volume_outline_count == 2
     assert len(docs) == 1
     assert docs[0].title == "九霄行"
     assert state.current_phase == "volume_planning"
@@ -209,6 +215,11 @@ async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_p
             "outline_ref": "vol_1",
             "outline_key": "volume:vol_1",
             "snapshot": {"title": "第一卷"},
+        },
+        {
+            "outline_ref": "vol_2",
+            "outline_key": "volume:vol_2",
+            "snapshot": {"title": "第二卷"},
         }
     ]
     assert len(pending) == 1
@@ -217,6 +228,48 @@ async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_p
     assert await workspace_repo.get_active_by_novel("novel_submit") is None
     assert submitted_workspace is not None
     assert submitted_workspace.status == "submitted"
+
+
+@pytest.mark.asyncio
+async def test_brainstorm_workspace_submit_workspace_allows_submission_with_synopsis_only(
+    async_session,
+):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_synopsis_only",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_synopsis_only",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风为改命踏上逆势而上的修行路。",
+            "core_conflict": "林风 vs 掌控宗门命脉的长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 7,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+
+    result = await service.submit_workspace("novel_submit_synopsis_only")
+
+    state = await NovelStateRepository(async_session).get_state("novel_submit_synopsis_only")
+
+    assert result.synopsis_title == "九霄行"
+    assert result.pending_setting_count == 0
+    assert result.volume_outline_count == 0
+    assert state.current_phase == "volume_planning"
+    assert state.checkpoint_data["submitted_volume_outline_drafts"] == []
 
 
 @pytest.mark.asyncio
@@ -393,6 +446,18 @@ async def test_brainstorm_workspace_submit_workspace_prevalidates_drafts_before_
             "estimated_total_words": 600000,
         },
     )
+    await service.save_outline_draft(
+        novel_id="novel_submit_invalid",
+        outline_type="volume",
+        outline_ref="vol_1",
+        result_snapshot={"title": "第一卷"},
+    )
+    await service.save_outline_draft(
+        novel_id="novel_submit_invalid",
+        outline_type="volume",
+        outline_ref="vol_2",
+        result_snapshot={"title": "第二卷"},
+    )
 
     workspace_repo = BrainstormWorkspaceRepository(async_session)
     workspace = await workspace_repo.get_active_by_novel("novel_submit_invalid")
@@ -455,6 +520,18 @@ async def test_brainstorm_workspace_submit_workspace_auto_classify_failure_abort
             "estimated_total_chapters": 200,
             "estimated_total_words": 600000,
         },
+    )
+    await service.save_outline_draft(
+        novel_id="novel_submit_auto_invalid",
+        outline_type="volume",
+        outline_ref="vol_1",
+        result_snapshot={"title": "第一卷"},
+    )
+    await service.save_outline_draft(
+        novel_id="novel_submit_auto_invalid",
+        outline_type="volume",
+        outline_ref="vol_2",
+        result_snapshot={"title": "第二卷"},
     )
     await service.merge_setting_drafts(
         "novel_submit_auto_invalid",

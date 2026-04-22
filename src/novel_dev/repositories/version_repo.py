@@ -1,6 +1,6 @@
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from novel_dev.db.models import EntityVersion
 
@@ -46,3 +46,9 @@ class EntityVersionRepository:
             .order_by(EntityVersion.version.desc())
         )
         return result.scalars().first()
+
+    async def delete_by_entity_id(self, entity_id: str) -> None:
+        await self.session.execute(
+            delete(EntityVersion).where(EntityVersion.entity_id == entity_id)
+        )
+        await self.session.flush()

@@ -57,6 +57,14 @@ const createOutlineWorkbenchState = () => ({
   requestToken: 0,
 })
 
+const createBrainstormWorkspaceState = () => ({
+  state: 'idle',
+  error: '',
+  submitting: false,
+  data: null,
+  requestToken: 0,
+})
+
 const clearSupplementalForPanel = (store, panel) => {
   switch (panel) {
     case 'entities':
@@ -263,6 +271,7 @@ export const useNovelStore = defineStore('novel', {
     foreshadowings: [],
     pendingDocs: [],
     outlineWorkbench: createOutlineWorkbenchState(),
+    brainstormWorkspace: createBrainstormWorkspaceState(),
     loadingActions: {},
     dashboardPanels: createDashboardPanels(),
     dashboardLastUpdated: '',
@@ -341,6 +350,9 @@ export const useNovelStore = defineStore('novel', {
       this.synopsisContent = synopsis?.content || ''
       this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || null
       this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
+      if (state.current_phase !== 'brainstorming') {
+        this.brainstormWorkspace = createBrainstormWorkspaceState()
+      }
       this.syncCurrentChapter()
     },
 
@@ -473,6 +485,26 @@ export const useNovelStore = defineStore('novel', {
       await this.fetchEntities()
     },
 
+    async updateEntity(entityId, payload) {
+      if (!this.novelId || !entityId) return
+      await api.updateEntity(this.novelId, entityId, payload)
+      if (this.entityCommittedSearchQuery) {
+        await this.searchEntities(this.entityCommittedSearchQuery)
+        return
+      }
+      await this.fetchEntities()
+    },
+
+    async deleteEntity(entityId) {
+      if (!this.novelId || !entityId) return
+      await api.deleteEntity(this.novelId, entityId)
+      if (this.entityCommittedSearchQuery) {
+        await this.searchEntities(this.entityCommittedSearchQuery)
+        return
+      }
+      await this.fetchEntities()
+    },
+
     async fetchTimelines() {
       const res = await api.getTimelines(this.novelId)
       this.timelines = res.items || []
@@ -497,6 +529,30 @@ export const useNovelStore = defineStore('novel', {
       if (!this.novelId) return
       await api.importSynopsis(this.novelId, content)
       await this.loadNovel(this.novelId)
+    },
+
+    async refreshBrainstormWorkspace() {
+      if (!this.novelId) return
+      if (this.novelState.current_phase !== 'brainstorming') {
+        this.brainstormWorkspace = createBrainstormWorkspaceState()
+        return
+      }
+
+      const requestToken = this.brainstormWorkspace.requestToken + 1
+      this.brainstormWorkspace.requestToken = requestToken
+      this.brainstormWorkspace.state = 'loading'
+      this.brainstormWorkspace.error = ''
+
+      try {
+        const workspace = await api.getBrainstormWorkspace(this.novelId)
+        if (this.brainstormWorkspace.requestToken !== requestToken) return
+        this.brainstormWorkspace.data = workspace
+        this.brainstormWorkspace.state = 'ready'
+      } catch (error) {
+        if (this.brainstormWorkspace.requestToken !== requestToken) return
+        this.brainstormWorkspace.state = 'error'
+        this.brainstormWorkspace.error = error?.message || '请求失败'
+      }
     },
 
     async refreshOutlineWorkbench(selection = null) {
@@ -546,6 +602,9 @@ export const useNovelStore = defineStore('novel', {
             last_result_snapshot: null,
             session_id: workbench?.session_id || '',
           }
+        const workspace = this.novelState.current_phase === 'brainstorming'
+          ? await api.getBrainstormWorkspace(this.novelId)
+          : null
         if (this.outlineWorkbench.requestToken !== requestToken) return
 
         this.outlineWorkbench.items = normalizedItems
@@ -556,6 +615,13 @@ export const useNovelStore = defineStore('novel', {
         this.outlineWorkbench.conversationSummary = messages?.conversation_summary || ''
         this.outlineWorkbench.lastResultSnapshot = messages?.last_result_snapshot || null
         this.outlineWorkbench.state = 'ready'
+        if (workspace) {
+          this.brainstormWorkspace.data = workspace
+          this.brainstormWorkspace.state = 'ready'
+          this.brainstormWorkspace.error = ''
+        } else {
+          this.brainstormWorkspace = createBrainstormWorkspaceState()
+        }
       } catch (error) {
         if (this.outlineWorkbench.requestToken !== requestToken) return
         this.outlineWorkbench.state = 'error'
@@ -583,6 +649,35 @@ export const useNovelStore = defineStore('novel', {
         await this.refreshOutlineWorkbench(refreshSelection)
       } finally {
         this.outlineWorkbench.submitting = false
+      }
+    },
+
+    async submitBrainstormWorkspace() {
+      if (!this.novelId) return
+      if (this.brainstormWorkspace.submitting) return
+
+      const refreshSelection = this.outlineWorkbench.selection || {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+      }
+
+      this.brainstormWorkspace.submitting = true
+      this.brainstormWorkspace.error = ''
+      try {
+        const result = await api.submitBrainstormWorkspace(this.novelId)
+        await this.refreshState()
+        if (this.novelState.current_phase === 'brainstorming') {
+          await this.refreshBrainstormWorkspace()
+        } else {
+          this.brainstormWorkspace = createBrainstormWorkspaceState()
+        }
+        await this.refreshOutlineWorkbench(refreshSelection)
+        return result
+      } catch (error) {
+        this.brainstormWorkspace.error = error?.message || '请求失败'
+        throw error
+      } finally {
+        this.brainstormWorkspace.submitting = false
       }
     },
   },

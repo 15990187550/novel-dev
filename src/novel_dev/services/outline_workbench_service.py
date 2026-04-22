@@ -18,6 +18,7 @@ from novel_dev.schemas.outline_workbench import (
     OutlineSubmitResponse,
     OutlineWorkbenchPayload,
 )
+from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.log_service import log_service
 
 
@@ -28,6 +29,7 @@ class OutlineWorkbenchService:
         self.doc_repo = DocumentRepository(session)
         self.outline_session_repo = OutlineSessionRepository(session)
         self.outline_message_repo = OutlineMessageRepository(session)
+        self.workspace_service = BrainstormWorkspaceService(session)
 
     async def build_workbench(
         self,
@@ -39,23 +41,49 @@ class OutlineWorkbenchService:
         if state is None:
             raise ValueError(f"Novel state not found: {novel_id}")
 
+        workspace_outline_drafts = None
+        if self._is_brainstorming_phase(state.current_phase):
+            workspace_outline_drafts = (
+                await self.workspace_service.get_workspace_payload(novel_id)
+            ).outline_drafts
+
         outline_session = await self.outline_session_repo.get_or_create(
             novel_id=novel_id,
             outline_type=outline_type,
             outline_ref=outline_ref,
             status="active",
         )
-        context_window = await self._build_context_window(outline_session.id)
+        context_window = await self._build_context_window(
+            outline_session.id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            workspace_outline_drafts=workspace_outline_drafts,
+        )
         return OutlineWorkbenchPayload(
             novel_id=novel_id,
             outline_type=outline_type,
             outline_ref=outline_ref,
             session_id=outline_session.id,
-            outline_items=self.build_outline_items(state.checkpoint_data or {}),
+            outline_items=self.build_outline_items(
+                state.checkpoint_data or {},
+                workspace_outline_drafts=workspace_outline_drafts,
+                phase=state.current_phase,
+            ),
             context_window=context_window,
         )
 
-    def build_outline_items(self, checkpoint_data: dict[str, Any]) -> list[OutlineItemSummary]:
+    def build_outline_items(
+        self,
+        checkpoint_data: dict[str, Any],
+        workspace_outline_drafts: Optional[dict[str, dict[str, Any]]] = None,
+        phase: Optional[str] = None,
+    ) -> list[OutlineItemSummary]:
+        if self._is_brainstorming_phase(phase):
+            return self._build_brainstorm_outline_items(
+                checkpoint_data,
+                workspace_outline_drafts or {},
+            )
+
         items: list[OutlineItemSummary] = []
         synopsis_data = checkpoint_data.get("synopsis_data") or {}
         if synopsis_data:
@@ -106,6 +134,16 @@ class OutlineWorkbenchService:
         outline_ref: str,
         feedback: str,
     ) -> OutlineSubmitResponse:
+        state = await self.novel_state_repo.get_state(novel_id)
+        if state is None:
+            raise ValueError(f"Novel state not found: {novel_id}")
+
+        workspace_outline_drafts = None
+        if self._is_brainstorming_phase(state.current_phase):
+            workspace_outline_drafts = (
+                await self.workspace_service.get_workspace_payload(novel_id)
+            ).outline_drafts
+
         outline_session = await self.outline_session_repo.get_or_create(
             novel_id=novel_id,
             outline_type=outline_type,
@@ -119,7 +157,46 @@ class OutlineWorkbenchService:
             content=feedback,
             meta={"outline_type": outline_type, "outline_ref": outline_ref},
         )
-        context_window = await self._build_context_window(outline_session.id)
+        context_window = await self._build_context_window(
+            outline_session.id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            workspace_outline_drafts=workspace_outline_drafts,
+        )
+        if self._should_request_generation_confirmation(
+            state=state,
+            outline_session=outline_session,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            workspace_outline_drafts=workspace_outline_drafts,
+        ):
+            outline_session.status = "awaiting_confirmation"
+            outline_session.conversation_summary = self._merge_conversation_summary(
+                context_window.conversation_summary,
+                feedback,
+            )
+            assistant_message = await self.outline_message_repo.create(
+                session_id=outline_session.id,
+                role="assistant",
+                message_type="question",
+                content=self._build_generation_confirmation_message(
+                    outline_type=outline_type,
+                    outline_ref=outline_ref,
+                ),
+                meta={
+                    "outline_type": outline_type,
+                    "outline_ref": outline_ref,
+                    "interaction_stage": "generation_confirmation",
+                },
+            )
+            await self.session.commit()
+            return OutlineSubmitResponse(
+                session_id=outline_session.id,
+                assistant_message=self._serialize_message(assistant_message),
+                last_result_snapshot=outline_session.last_result_snapshot,
+                conversation_summary=outline_session.conversation_summary,
+            )
+
         optimize_result = await self._optimize_outline(
             novel_id=novel_id,
             outline_type=outline_type,
@@ -128,6 +205,7 @@ class OutlineWorkbenchService:
             context_window=context_window,
         )
 
+        outline_session.status = "active"
         outline_session.last_result_snapshot = optimize_result.get("result_snapshot")
         outline_session.conversation_summary = optimize_result.get("conversation_summary")
         assistant_message = await self.outline_message_repo.create(
@@ -141,12 +219,26 @@ class OutlineWorkbenchService:
                 "result_snapshot": optimize_result.get("result_snapshot"),
             },
         )
-        await self._write_result_snapshot(
-            novel_id=novel_id,
-            outline_type=outline_type,
-            outline_ref=outline_ref,
-            result_snapshot=optimize_result.get("result_snapshot"),
-        )
+        if self._is_brainstorming_phase(state.current_phase):
+            if optimize_result.get("result_snapshot"):
+                await self.workspace_service.save_outline_draft(
+                    novel_id=novel_id,
+                    outline_type=outline_type,
+                    outline_ref=outline_ref,
+                    result_snapshot=optimize_result["result_snapshot"],
+                )
+            if optimize_result.get("setting_draft_updates"):
+                await self.workspace_service.merge_setting_drafts(
+                    novel_id=novel_id,
+                    setting_draft_updates=optimize_result["setting_draft_updates"],
+                )
+        else:
+            await self._write_result_snapshot(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                result_snapshot=optimize_result.get("result_snapshot"),
+            )
         await self.session.commit()
         return OutlineSubmitResponse(
             session_id=outline_session.id,
@@ -165,13 +257,24 @@ class OutlineWorkbenchService:
         if state is None:
             raise ValueError(f"Novel state not found: {novel_id}")
 
+        workspace_outline_drafts = None
+        if self._is_brainstorming_phase(state.current_phase):
+            workspace_outline_drafts = (
+                await self.workspace_service.get_workspace_payload(novel_id)
+            ).outline_drafts
+
         outline_session = await self.outline_session_repo.get_or_create(
             novel_id=novel_id,
             outline_type=outline_type,
             outline_ref=outline_ref,
             status="active",
         )
-        context_window = await self._build_context_window(outline_session.id)
+        context_window = await self._build_context_window(
+            outline_session.id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            workspace_outline_drafts=workspace_outline_drafts,
+        )
         return OutlineMessagesResponse(
             session_id=outline_session.id,
             outline_type=outline_type,
@@ -181,15 +284,34 @@ class OutlineWorkbenchService:
             recent_messages=context_window.recent_messages,
         )
 
-    async def _build_context_window(self, session_id: str, recent_limit: int = 6) -> OutlineContextWindow:
+    async def _build_context_window(
+        self,
+        session_id: str,
+        recent_limit: int = 6,
+        outline_type: Optional[str] = None,
+        outline_ref: Optional[str] = None,
+        workspace_outline_drafts: Optional[dict[str, dict[str, Any]]] = None,
+    ) -> OutlineContextWindow:
         outline_session = await self.outline_session_repo.get_by_id(session_id)
         if outline_session is None:
             raise ValueError(f"Outline session not found: {session_id}")
 
         recent_messages = await self.outline_message_repo.list_recent(session_id, limit=recent_limit)
         ordered_messages = [self._serialize_message(message) for message in reversed(recent_messages)]
+        last_result_snapshot = outline_session.last_result_snapshot
+        if (
+            last_result_snapshot is None
+            and workspace_outline_drafts is not None
+            and outline_type
+            and outline_ref
+        ):
+            last_result_snapshot = self._get_workspace_snapshot(
+                workspace_outline_drafts,
+                outline_type,
+                outline_ref,
+            )
         return OutlineContextWindow(
-            last_result_snapshot=outline_session.last_result_snapshot,
+            last_result_snapshot=last_result_snapshot,
             conversation_summary=outline_session.conversation_summary,
             recent_messages=ordered_messages,
         )
@@ -208,6 +330,11 @@ class OutlineWorkbenchService:
             raise ValueError(f"Novel state not found: {novel_id}")
 
         checkpoint = dict(state.checkpoint_data or {})
+        workspace_outline_drafts = None
+        if self._is_brainstorming_phase(state.current_phase):
+            workspace_outline_drafts = (
+                await self.workspace_service.get_workspace_payload(novel_id)
+            ).outline_drafts
 
         if outline_type == "synopsis":
             result = await self._optimize_synopsis(
@@ -215,6 +342,11 @@ class OutlineWorkbenchService:
                 checkpoint=checkpoint,
                 feedback=feedback,
                 context_window=context_window,
+                workspace_snapshot=self._get_workspace_snapshot(
+                    workspace_outline_drafts,
+                    "synopsis",
+                    "synopsis",
+                ),
             )
         elif outline_type == "volume":
             result = await self._optimize_volume(
@@ -223,6 +355,16 @@ class OutlineWorkbenchService:
                 checkpoint=checkpoint,
                 feedback=feedback,
                 context_window=context_window,
+                workspace_synopsis_snapshot=self._get_workspace_snapshot(
+                    workspace_outline_drafts,
+                    "synopsis",
+                    "synopsis",
+                ),
+                workspace_plan_snapshot=self._get_workspace_snapshot(
+                    workspace_outline_drafts,
+                    outline_type,
+                    outline_ref,
+                ),
             )
         else:
             raise ValueError(f"Unsupported outline type: {outline_type}")
@@ -230,6 +372,7 @@ class OutlineWorkbenchService:
         return {
             "content": result["content"],
             "result_snapshot": result["result_snapshot"],
+            "setting_draft_updates": result.get("setting_draft_updates", []),
             "conversation_summary": self._merge_conversation_summary(
                 context_window.conversation_summary,
                 feedback,
@@ -301,8 +444,13 @@ class OutlineWorkbenchService:
         checkpoint: dict[str, Any],
         feedback: str,
         context_window: OutlineContextWindow,
+        workspace_snapshot: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        current_snapshot = context_window.last_result_snapshot or checkpoint.get("synopsis_data")
+        current_snapshot = (
+            context_window.last_result_snapshot
+            or workspace_snapshot
+            or checkpoint.get("synopsis_data")
+        )
         if not current_snapshot:
             raise ValueError("Synopsis not found")
 
@@ -337,6 +485,7 @@ class OutlineWorkbenchService:
         return {
             "content": self._build_synopsis_result_message(current_synopsis, revised),
             "result_snapshot": revised.model_dump(),
+            "setting_draft_updates": [],
         }
 
     async def _optimize_volume(
@@ -347,8 +496,10 @@ class OutlineWorkbenchService:
         checkpoint: dict[str, Any],
         feedback: str,
         context_window: OutlineContextWindow,
+        workspace_synopsis_snapshot: Optional[dict[str, Any]] = None,
+        workspace_plan_snapshot: Optional[dict[str, Any]] = None,
     ) -> dict[str, Any]:
-        synopsis_payload = checkpoint.get("synopsis_data")
+        synopsis_payload = workspace_synopsis_snapshot or checkpoint.get("synopsis_data")
         if not synopsis_payload:
             raise ValueError("Synopsis not found")
 
@@ -361,7 +512,7 @@ class OutlineWorkbenchService:
         world_snapshot = await planner._load_world_snapshot(novel_id) if volume_number > 1 else None
         plan_context = planner._build_plan_context(synopsis, world_snapshot)
 
-        current_plan_payload = context_window.last_result_snapshot
+        current_plan_payload = context_window.last_result_snapshot or workspace_plan_snapshot
         if not current_plan_payload:
             persisted_plan = checkpoint.get("current_volume_plan")
             if persisted_plan and self._outline_ref_matches_volume_data(outline_ref, persisted_plan):
@@ -381,7 +532,134 @@ class OutlineWorkbenchService:
         return {
             "content": f"已根据反馈更新《{revised.title}》卷纲，共 {revised.total_chapters} 章。",
             "result_snapshot": revised.model_dump(),
+            "setting_draft_updates": [],
         }
+
+    def _is_brainstorming_phase(self, phase: Optional[str]) -> bool:
+        return phase == "brainstorming"
+
+    def _build_brainstorm_outline_items(
+        self,
+        checkpoint_data: dict[str, Any],
+        outline_drafts: dict[str, dict[str, Any]],
+    ) -> list[OutlineItemSummary]:
+        items: list[OutlineItemSummary] = []
+        checkpoint_synopsis = checkpoint_data.get("synopsis_data") or {}
+        synopsis_snapshot = outline_drafts.get("synopsis:synopsis") or checkpoint_synopsis
+
+        if synopsis_snapshot:
+            items.append(
+                OutlineItemSummary(
+                    outline_type="synopsis",
+                    outline_ref="synopsis",
+                    title="总纲",
+                    status="ready" if outline_drafts.get("synopsis:synopsis") else "missing",
+                    summary=synopsis_snapshot.get("logline") or synopsis_snapshot.get("core_conflict"),
+                )
+            )
+
+        volume_snapshots = []
+        for outline_key, snapshot in outline_drafts.items():
+            if not outline_key.startswith("volume:"):
+                continue
+            outline_ref = self._extract_outline_ref(outline_key)
+            volume_number = self._parse_volume_number(outline_ref)
+            volume_snapshots.append((volume_number or 0, outline_ref, snapshot))
+
+        for _, outline_ref, snapshot in sorted(volume_snapshots, key=lambda item: (item[0], item[1])):
+            volume_number = self._parse_volume_number(outline_ref)
+            items.append(
+                OutlineItemSummary(
+                    outline_type="volume",
+                    outline_ref=outline_ref,
+                    title=snapshot.get("title") or (f"第{volume_number}卷" if volume_number else outline_ref),
+                    status="ready",
+                    summary=snapshot.get("summary"),
+                )
+            )
+
+        estimated_volumes = (
+            synopsis_snapshot.get("estimated_volumes")
+            or checkpoint_synopsis.get("estimated_volumes")
+            or 0
+        )
+        existing_refs = {item.outline_ref for item in items}
+        for number in range(1, estimated_volumes + 1):
+            outline_ref = f"vol_{number}"
+            if outline_ref in existing_refs:
+                continue
+            items.append(
+                OutlineItemSummary(
+                    outline_type="volume",
+                    outline_ref=outline_ref,
+                    title=f"第{number}卷",
+                    status="missing",
+                )
+            )
+        return items
+
+    def _get_workspace_snapshot(
+        self,
+        outline_drafts: Optional[dict[str, dict[str, Any]]],
+        outline_type: str,
+        outline_ref: str,
+    ) -> Optional[dict[str, Any]]:
+        if not outline_drafts:
+            return None
+        return outline_drafts.get(f"{outline_type}:{outline_ref}")
+
+    def _extract_outline_ref(self, outline_key: str) -> str:
+        _, _, outline_ref = outline_key.partition(":")
+        return outline_ref
+
+    def _should_request_generation_confirmation(
+        self,
+        *,
+        state: Any,
+        outline_session: Any,
+        outline_type: str,
+        outline_ref: str,
+        workspace_outline_drafts: Optional[dict[str, dict[str, Any]]],
+    ) -> bool:
+        if not self._is_brainstorming_phase(getattr(state, "current_phase", None)):
+            return False
+        if getattr(outline_session, "status", "") == "awaiting_confirmation":
+            return False
+
+        items = self.build_outline_items(
+            state.checkpoint_data or {},
+            workspace_outline_drafts=workspace_outline_drafts,
+            phase=state.current_phase,
+        )
+        current_item = next(
+            (
+                item
+                for item in items
+                if item.outline_type == outline_type and item.outline_ref == outline_ref
+            ),
+            None,
+        )
+        return current_item is not None and current_item.status == "missing"
+
+    def _build_generation_confirmation_message(self, *, outline_type: str, outline_ref: str) -> str:
+        if outline_type == "synopsis":
+            return (
+                "在我开始生成总纲草稿前，先确认几个关键信息。你可以直接用一条消息回复，也可以只回答你在意的部分：\n"
+                "1. 题材、基调和你最想突出的卖点是什么？\n"
+                "2. 预计卷数、总篇幅是否按当前设定走，还是要调整？\n"
+                "3. 有没有必须保留或必须避免的人物关系、世界观设定、终局方向？\n"
+                "如果你已经想清楚，也可以直接回复“按当前设定生成”，我再开始生成总纲草稿。"
+            )
+
+        volume_number = self._parse_volume_number(outline_ref)
+        volume_label = f"第 {volume_number} 卷" if volume_number else "当前卷"
+        return (
+            f"在我开始生成{volume_label}卷纲前，先确认几个关键信息。你可以直接用一条消息回复，也可以只回答最在意的部分：\n"
+            "1. 这一卷最核心的主线目标、冲突和情绪走向是什么？\n"
+            "2. 有没有必须出现的角色推进、伏笔回收或卷末钩子？\n"
+            "3. 节奏上更偏升级推进、群像展开，还是阴谋揭示？\n"
+            f"如果你已经想清楚，也可以直接回复“按当前设定生成{volume_label}卷纲”，我再开始生成。"
+        )
 
     async def _load_brainstorm_source_text(self, novel_id: str) -> str:
         docs = await self.doc_repo.get_by_type(novel_id, "worldview")

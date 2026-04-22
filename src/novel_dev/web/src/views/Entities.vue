@@ -67,6 +67,8 @@
               :entity="store.selectedEntityDetail"
               :relationships="store.entityRelationships"
               :title="workspaceTitle"
+              @save-entity="saveEntity"
+              @delete-entity="deleteEntity"
               @save-classification="saveClassification"
               @clear-override="clearOverride"
               @reclassify="reclassifyEntity"
@@ -112,6 +114,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import { useNovelStore } from '@/stores/novel.js'
 import EntityGraph from '@/components/EntityGraph.vue'
 import EntityTree from '@/components/entities/EntityTree.vue'
@@ -183,11 +186,17 @@ const graphScope = computed(() => {
 
   const scopedEntities = collectEntities(node)
   const entityIds = new Set(scopedEntities.map(entity => entity.entity_id))
+  const relatedRelationships = allRelationships.filter(
+    rel => entityIds.has(rel.source_id) || entityIds.has(rel.target_id)
+  )
+  const graphEntityIds = new Set(entityIds)
+  for (const rel of relatedRelationships) {
+    if (rel.source_id) graphEntityIds.add(rel.source_id)
+    if (rel.target_id) graphEntityIds.add(rel.target_id)
+  }
   return {
-    entities: allEntities.filter(entity => entityIds.has(entity.entity_id)),
-    relationships: allRelationships.filter(
-      rel => entityIds.has(rel.source_id) && entityIds.has(rel.target_id)
-    ),
+    entities: allEntities.filter(entity => graphEntityIds.has(entity.entity_id)),
+    relationships: relatedRelationships,
   }
 })
 const graphEntities = computed(() => graphScope.value.entities)
@@ -275,6 +284,36 @@ async function clearOverride(entity) {
 async function reclassifyEntity(entity) {
   if (!entity?.entity_id) return
   await saveClassification(entity, { reclassify: true })
+}
+
+async function saveEntity(entity, payload) {
+  if (!entity?.entity_id) return
+  entityLoading.value = true
+  try {
+    await store.updateEntity(entity.entity_id, payload)
+  } finally {
+    entityLoading.value = false
+  }
+}
+
+async function deleteEntity(entity) {
+  if (!entity?.entity_id) return
+  await ElMessageBox.confirm(
+    `将硬删除实体“${entity.name || entity.entity_id}”，其版本记录和关系记录也会一并删除，且不可恢复。是否继续？`,
+    '确认删除实体',
+    {
+      type: 'warning',
+      confirmButtonText: '确认删除',
+      cancelButtonText: '取消',
+      confirmButtonClass: 'el-button--danger',
+    }
+  )
+  entityLoading.value = true
+  try {
+    await store.deleteEntity(entity.entity_id)
+  } finally {
+    entityLoading.value = false
+  }
 }
 
 async function fetchIfReady() {

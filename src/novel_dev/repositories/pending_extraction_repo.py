@@ -18,15 +18,19 @@ class PendingExtractionRepository:
         proposed_entities: Optional[List[dict]] = None,
         diff_result: Optional[dict] = None,
         source_filename: Optional[str] = None,
+        status: str = "pending",
+        error_message: Optional[str] = None,
     ) -> PendingExtraction:
         pe = PendingExtraction(
             id=pe_id,
             novel_id=novel_id,
             source_filename=source_filename,
             extraction_type=extraction_type,
+            status=status,
             raw_result=raw_result,
             proposed_entities=proposed_entities,
             diff_result=diff_result,
+            error_message=error_message,
         )
         self.session.add(pe)
         await self.session.flush()
@@ -44,10 +48,38 @@ class PendingExtractionRepository:
         )
         return result.scalars().all()
 
-    async def update_status(self, pe_id: str, status: str, resolution_result: Optional[dict] = None) -> None:
+    async def update_payload(
+        self,
+        pe_id: str,
+        *,
+        extraction_type: str,
+        raw_result: dict,
+        proposed_entities: Optional[List[dict]] = None,
+        diff_result: Optional[dict] = None,
+        status: str = "pending",
+        error_message: Optional[str] = None,
+    ) -> None:
+        pe = await self.get_by_id(pe_id)
+        if pe:
+            pe.extraction_type = extraction_type
+            pe.raw_result = raw_result
+            pe.proposed_entities = proposed_entities
+            pe.diff_result = diff_result
+            pe.status = status
+            pe.error_message = error_message
+            await self.session.flush()
+
+    async def update_status(
+        self,
+        pe_id: str,
+        status: str,
+        resolution_result: Optional[dict] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
         pe = await self.get_by_id(pe_id)
         if pe:
             pe.status = status
             if resolution_result is not None:
                 pe.resolution_result = resolution_result
+            pe.error_message = error_message
             await self.session.flush()

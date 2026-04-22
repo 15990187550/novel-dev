@@ -18,6 +18,24 @@ describe('OutlineConversation', () => {
     expect(wrapper.get('textarea').element.value).toBe('')
   })
 
+  it('allows empty submit when generation mode is enabled', async () => {
+    const wrapper = mount(OutlineConversation, {
+      props: {
+        messages: [],
+        submitting: false,
+        submitLabel: '生成大纲',
+        allowEmptySubmit: true,
+      },
+    })
+
+    expect(wrapper.get('button').text()).toContain('生成大纲')
+    expect(wrapper.get('button').attributes('disabled')).toBeUndefined()
+
+    await wrapper.get('button').trigger('click')
+
+    expect(wrapper.emitted('submit-feedback')?.[0]).toEqual([''])
+  })
+
   it('disables sending while submitting', () => {
     const wrapper = mount(OutlineConversation, {
       props: {

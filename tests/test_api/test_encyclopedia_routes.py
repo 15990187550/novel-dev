@@ -121,6 +121,89 @@ async def test_get_entity(async_session):
 
 
 @pytest.mark.asyncio
+async def test_update_entity_fields(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("e1", "character", "Lin Feng", novel_id="n_edit")
+    await version_repo.create(
+        "e1",
+        1,
+        {"name": "Lin Feng", "identity": "弟子", "personality": "坚韧"},
+    )
+    await repo.update_version("e1", 1)
+    await async_session.commit()
+
+    try:
+      async with AsyncClient(transport=transport, base_url="http://test") as client:
+          resp = await client.patch(
+              "/api/novels/n_edit/entities/e1",
+              json={
+                  "name": "林风",
+                  "type": "character",
+                  "aliases": ["Lin Feng", "阿风"],
+                  "state_fields": {
+                      "identity": "青云宗内门弟子",
+                      "goal": "查明灭门真相",
+                  },
+              },
+          )
+          assert resp.status_code == 200
+          data = resp.json()
+          assert data["name"] == "林风"
+          assert data["current_version"] == 2
+          assert data["latest_state"]["name"] == "林风"
+          assert data["latest_state"]["identity"] == "青云宗内门弟子"
+          assert data["latest_state"]["goal"] == "查明灭门真相"
+          assert data["aliases"] == ["Lin Feng", "阿风"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_entity_hard_deletes_versions_and_relationships(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    relationship_repo = RelationshipRepository(async_session)
+    await repo.create("e1", "character", "Lin Feng", novel_id="n_delete")
+    await repo.create("e2", "character", "苏瑶", novel_id="n_delete")
+    await version_repo.create("e1", 1, {"name": "Lin Feng"})
+    await version_repo.create("e2", 1, {"name": "苏瑶"})
+    await repo.update_version("e1", 1)
+    await repo.update_version("e2", 1)
+    await relationship_repo.create("e1", "e2", "盟友", novel_id="n_delete")
+    await relationship_repo.create("e2", "e1", "盟友", novel_id="n_delete")
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.delete("/api/novels/n_delete/entities/e1")
+            assert resp.status_code == 200
+            assert resp.json() == {"deleted": True, "entity_id": "e1"}
+
+            detail_resp = await client.get("/api/novels/n_delete/entities/e1")
+            assert detail_resp.status_code == 404
+
+            list_resp = await client.get("/api/novels/n_delete/entities")
+            assert list_resp.status_code == 200
+            items = list_resp.json()["items"]
+            assert [item["entity_id"] for item in items] == ["e2"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_update_entity_classification(async_session):
     async def override():
         yield async_session
@@ -207,6 +290,43 @@ async def test_update_entity_classification_allows_group_only_override(async_ses
             assert data["manual_category"] == "人物"
             assert data["manual_group_slug"] == "shi-men"
             assert data["effective_group_name"] == "师门"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_reclassify_entities_for_novel(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("e1", "character", "陆照", novel_id="n_reclassify")
+    await repo.create("e2", "item", "昆仑镜", novel_id="n_reclassify")
+    await version_repo.create("e1", 1, {"name": "陆照", "identity": "主角"})
+    await version_repo.create("e2", 1, {"name": "昆仑镜", "description": "上古镜类至宝"})
+    await repo.update_version("e1", 1)
+    await repo.update_version("e2", 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/novels/n_reclassify/entities/reclassify")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["total"] == 2
+            assert data["updated"] == 2
+
+            list_resp = await client.get("/api/novels/n_reclassify/entities")
+            assert list_resp.status_code == 200
+            items = {item["name"]: item for item in list_resp.json()["items"]}
+            assert items["陆照"]["effective_category"] == "人物"
+            assert items["陆照"]["effective_group_name"] == "主角阵营"
+            assert items["昆仑镜"]["effective_category"] == "法宝神兵"
+            assert items["昆仑镜"]["effective_group_name"] == "特殊法宝"
     finally:
         app.dependency_overrides.clear()
 
@@ -306,6 +426,63 @@ async def test_list_entity_relationships_falls_back_to_latest_state(async_sessio
             assert items[0]["target_id"] == "e2"
             assert items[0]["relation_type"] == "同盟"
             assert items[0]["is_inferred"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entity_relationships_infers_relationships_for_non_character_entities(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("hero", "character", "孟奇", novel_id="n_item_rel")
+    await repo.create("jade", "item", "护身玉佩", novel_id="n_item_rel")
+    await repo.create("mirror", "item", "照道镜", novel_id="n_item_rel")
+    await repo.create("kunlun", "item", "昆仑镜", novel_id="n_item_rel")
+    await version_repo.create("hero", 1, {"name": "孟奇"})
+    await version_repo.create(
+        "jade",
+        1,
+        {
+            "name": "护身玉佩",
+            "description": "孟奇所赠，可抵挡致命一击",
+            "significance": "前期保命之物，暗示主角与孟奇的关联",
+        },
+    )
+    await version_repo.create("mirror", 1, {"name": "照道镜"})
+    await version_repo.create(
+        "kunlun",
+        1,
+        {
+            "name": "昆仑镜",
+            "description": "昆仑山神兵，可观过去未来，映照诸天",
+            "significance": "与照道镜功能相似，可能形成对照或竞争关系",
+        },
+    )
+    await repo.update_version("hero", 1)
+    await repo.update_version("jade", 1)
+    await repo.update_version("mirror", 1)
+    await repo.update_version("kunlun", 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_item_rel/entity_relationships")
+            assert resp.status_code == 200
+            items = resp.json()["items"]
+            edges = {
+                (item["source_id"], item["target_id"], item["relation_type"]): item
+                for item in items
+            }
+            assert ("jade", "hero", "关联") in edges
+            assert edges[("jade", "hero", "关联")]["meta"]["source"] == "latest_state.description"
+            assert ("kunlun", "mirror", "关联") in edges
+            assert edges[("kunlun", "mirror", "关联")]["meta"]["source"] == "latest_state.significance"
     finally:
         app.dependency_overrides.clear()
 

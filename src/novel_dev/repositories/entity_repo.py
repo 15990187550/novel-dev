@@ -34,6 +34,31 @@ class EntityRepository:
         result = await self.session.execute(select(Entity).where(Entity.id == entity_id))
         return result.scalar_one_or_none()
 
+    async def update_basic_fields(
+        self,
+        entity_id: str,
+        *,
+        name: object = _UNSET,
+        entity_type: object = _UNSET,
+    ) -> Entity:
+        entity = await self.get_by_id(entity_id)
+        if entity is None:
+            raise ValueError("entity not found")
+
+        if name is not _UNSET:
+            entity.name = name
+        if entity_type is not _UNSET:
+            entity.type = entity_type
+        await self.session.flush()
+        return entity
+
+    async def delete(self, entity_id: str) -> None:
+        entity = await self.get_by_id(entity_id)
+        if entity is None:
+            return
+        await self.session.delete(entity)
+        await self.session.flush()
+
     async def update_classification(
         self,
         entity_id: str,

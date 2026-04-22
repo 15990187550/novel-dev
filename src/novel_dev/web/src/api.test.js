@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { mockGet, mockPost } = vi.hoisted(() => ({
+const { mockDelete, mockGet, mockPatch, mockPost } = vi.hoisted(() => ({
+  mockDelete: vi.fn(),
   mockGet: vi.fn(),
+  mockPatch: vi.fn(),
   mockPost: vi.fn(),
 }))
 
@@ -14,7 +16,9 @@ vi.mock('element-plus', () => ({
 vi.mock('axios', () => ({
   default: {
     create: vi.fn(() => ({
+      delete: mockDelete,
       get: mockGet,
+      patch: mockPatch,
       post: mockPost,
       interceptors: {
         response: {
@@ -28,17 +32,24 @@ vi.mock('axios', () => ({
 import {
   brainstorm,
   getSynopsis,
+  getBrainstormWorkspace,
   getVolumePlan,
   getOutlineWorkbench,
   getOutlineWorkbenchMessages,
   planVolume,
+  startBrainstormWorkspace,
+  deleteEntity,
+  submitBrainstormWorkspace,
   submitOutlineFeedback,
+  updateEntity,
 } from '@/api.js'
 
 describe('outline workbench api', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mockDelete.mockResolvedValue({ data: { ok: true } })
     mockGet.mockResolvedValue({ data: { ok: true } })
+    mockPatch.mockResolvedValue({ data: { ok: true } })
     mockPost.mockResolvedValue({ data: { ok: true } })
   })
 
@@ -84,6 +95,16 @@ describe('outline workbench api', () => {
     })
   })
 
+  it('requests brainstorm workspace lifecycle endpoints', async () => {
+    await expect(startBrainstormWorkspace('novel-1')).resolves.toEqual({ ok: true })
+    await expect(getBrainstormWorkspace('novel-1')).resolves.toEqual({ ok: true })
+    await expect(submitBrainstormWorkspace('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace/start')
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace')
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace/submit')
+  })
+
   it('requests volume plan with silent error handling for missing plans', async () => {
     await expect(getVolumePlan('novel-1')).resolves.toEqual({ ok: true })
 
@@ -98,6 +119,23 @@ describe('outline workbench api', () => {
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/synopsis', {
       __skipGlobalErrorMessage: true,
     })
+  })
+
+  it('updates and deletes entities through dedicated endpoints', async () => {
+    const payload = {
+      name: '林风',
+      type: 'character',
+      aliases: ['Lin Feng'],
+      state_fields: {
+        identity: '主角',
+      },
+    }
+
+    await expect(updateEntity('novel-1', 'e1', payload)).resolves.toEqual({ ok: true })
+    await expect(deleteEntity('novel-1', 'e1')).resolves.toEqual({ ok: true })
+
+    expect(mockPatch).toHaveBeenCalledWith('/novels/novel-1/entities/e1', payload)
+    expect(mockDelete).toHaveBeenCalledWith('/novels/novel-1/entities/e1')
   })
 
   it('uses a long timeout for brainstorm and volume planning requests', async () => {

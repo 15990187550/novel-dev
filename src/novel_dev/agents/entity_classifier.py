@@ -1,0 +1,68 @@
+import re
+from typing import Literal
+
+from pydantic import BaseModel
+
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.services.log_service import log_service
+
+
+class EntityClassificationLLMResult(BaseModel):
+    category: Literal["人物", "势力", "功法", "法宝神兵", "天材地宝", "其他"]
+    group_name: str = ""
+    confidence: float
+    reason: str
+
+
+class EntityClassifierAgent:
+    async def classify(
+        self,
+        *,
+        entity_type: str,
+        entity_name: str,
+        latest_state: dict,
+        relationships: list,
+        novel_id: str = "",
+    ) -> EntityClassificationLLMResult:
+        if novel_id:
+            log_service.add_log(novel_id, "EntityClassifierAgent", f"开始分类实体: {entity_name}")
+
+        safe_name = entity_name.replace("{", "{{").replace("}", "}}")[:200]
+        safe_type = (entity_type or "other").replace("{", "{{").replace("}", "}}")[:50]
+        state_preview = re.sub(r"[{}]", "", str(latest_state or {}))[:3000]
+        relationships_preview = re.sub(r"[{}]", "", str(relationships or []))[:1500]
+        prompt = (
+            "你是一位小说实体分类专家。请根据实体类型、名称、最新状态和关系，"
+            "判断实体的一级分类与二级分类，并返回严格符合 EntityClassificationLLMResult Schema 的 JSON。\n\n"
+            "一级分类只能是：人物、势力、功法、法宝神兵、天材地宝、其他。\n"
+            "二级分类 group_name 要求：\n"
+            "- 必须是该一级分类下可读的中文分组名，尽量简短。\n"
+            "- 如果无法可靠判断，返回空字符串。\n"
+            "- 不要返回“未分组”“其他”“默认分组”这类占位词。\n\n"
+            "判断偏好：\n"
+            "- entity_type=character 优先判断为人物，除非上下文明确不是人/角色。\n"
+            "- entity_type=faction 优先判断为势力。\n"
+            "- entity_type=item 需要结合名称与描述区分为功法、法宝神兵、天材地宝或其他。\n"
+            "- “经、诀、法、术、神通、剑诀、心法”等通常偏功法。\n"
+            "- “剑、刀、镜、印、钟、鼎、塔、棺、佩、珠、轮、图、旗、戟、枪、炉、令、幡”等通常偏法宝神兵。\n"
+            "- “丹、药、果、草、花、液、髓、血、骨、晶、石”等若是资源/材料通常偏天材地宝。\n\n"
+            f"实体类型：{safe_type}\n"
+            f"实体名称：{safe_name}\n"
+            f"最新状态：\n{state_preview}\n\n"
+            f"关系信息：\n{relationships_preview}"
+        )
+        result = await call_and_parse_model(
+            "EntityClassifierAgent",
+            "classify_entity",
+            prompt,
+            EntityClassificationLLMResult,
+            max_retries=3,
+            novel_id=novel_id,
+        )
+        if novel_id:
+            log_service.add_log(
+                novel_id,
+                "EntityClassifierAgent",
+                f"实体分类结果: {result.category} / {result.group_name or '-'} (置信度 {result.confidence:.2f})",
+            )
+        return result

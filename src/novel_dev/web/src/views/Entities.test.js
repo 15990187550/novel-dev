@@ -4,6 +4,17 @@ import { mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNovelStore } from '@/stores/novel.js'
 import Entities from './Entities.vue'
+import { ElMessageBox } from 'element-plus'
+
+vi.mock('element-plus', async () => {
+  const actual = await vi.importActual('element-plus')
+  return {
+    ...actual,
+    ElMessageBox: {
+      confirm: vi.fn(),
+    },
+  }
+})
 
 const EntityTreeStub = defineComponent({
   name: 'EntityTreeStub',
@@ -12,19 +23,25 @@ const EntityTreeStub = defineComponent({
   },
   emits: ['select'],
   setup(props, { emit }) {
+    function renderNode(node) {
+      return [
+        h(
+          'button',
+          {
+            class: 'tree-node-button',
+            type: 'button',
+            'data-node-id': node.id,
+            onClick: () => emit('select', node),
+          },
+          node.label
+        ),
+        ...(node.children || []).flatMap(renderNode),
+      ]
+    }
+
     return () =>
       h('div', { class: 'entity-tree-stub' }, [
-        props.nodes.map((node) =>
-          h(
-            'button',
-            {
-              class: 'tree-node-button',
-              type: 'button',
-              onClick: () => emit('select', node),
-            },
-            node.label
-          )
-        ),
+        props.nodes.flatMap(renderNode),
       ])
   },
 })
@@ -45,8 +62,28 @@ const EntityDetailPanelStub = defineComponent({
   props: {
     entity: { type: Object, default: null },
   },
-  setup(props) {
-    return () => h('div', { class: 'entity-detail-panel-stub' }, props.entity?.name || 'empty')
+  emits: ['save-entity', 'delete-entity'],
+  setup(props, { emit }) {
+    return () => h('div', { class: 'entity-detail-panel-stub' }, [
+      h('div', props.entity?.name || 'empty'),
+      h('button', {
+        class: 'save-entity-button',
+        type: 'button',
+        onClick: () => emit('save-entity', props.entity, {
+          name: '林风',
+          type: props.entity?.type || 'character',
+          aliases: ['Lin Feng'],
+          state_fields: {
+            identity: '主角',
+          },
+        }),
+      }, 'save-entity'),
+      h('button', {
+        class: 'delete-entity-button',
+        type: 'button',
+        onClick: () => emit('delete-entity', props.entity),
+      }, 'delete-entity'),
+    ])
   },
 })
 
@@ -83,6 +120,8 @@ describe('Entities', () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
     store.fetchEntities = vi.fn().mockResolvedValue()
+    store.updateEntity = vi.fn().mockResolvedValue()
+    store.deleteEntity = vi.fn().mockResolvedValue()
     store.entityTree = [
       {
         id: 'category:人物',
@@ -114,16 +153,41 @@ describe('Entities', () => {
           },
         ],
       },
+      {
+        id: 'category:法宝神兵',
+        label: '法宝神兵',
+        nodeType: 'category',
+        entityCount: 1,
+        children: [
+          {
+            id: 'group:法宝神兵:常用',
+            label: '常用',
+            nodeType: 'group',
+            entityCount: 1,
+            children: [
+              {
+                id: 'entity:jade',
+                label: '护身玉佩',
+                nodeType: 'entity',
+                entityId: 'jade',
+                data: { entity_id: 'jade', name: '护身玉佩' },
+              },
+            ],
+          },
+        ],
+      },
     ]
     store.entities = [
       { entity_id: 'lu', name: '陆照' },
       { entity_id: 'yao', name: '妖妖' },
       { entity_id: 'han', name: '韩广' },
+      { entity_id: 'jade', name: '护身玉佩' },
     ]
     store.entityRelationships = [
       { source_id: 'lu', target_id: 'yao', relation_type: '盟友' },
       { source_id: 'lu', target_id: 'han', relation_type: '宿敌' },
       { source_id: 'yao', target_id: 'han', relation_type: '对手' },
+      { source_id: 'jade', target_id: 'lu', relation_type: '持有' },
     ]
     return store
   }
@@ -209,13 +273,57 @@ describe('Entities', () => {
     await wrapper.find('[data-label="graph"]').trigger('click')
 
     const fullGraph = wrapper.find('.entity-graph-stub')
-    expect(fullGraph.attributes('data-entities')).toBe('lu,yao,han')
-    expect(fullGraph.attributes('data-relationships')).toBe('lu->yao,lu->han,yao->han')
+    expect(fullGraph.attributes('data-entities')).toBe('lu,yao,han,jade')
+    expect(fullGraph.attributes('data-relationships')).toBe('lu->yao,lu->han,yao->han,jade->lu')
 
     await wrapper.find('.tree-node-button').trigger('click')
 
     const scopedGraph = wrapper.find('.entity-graph-stub')
-    expect(scopedGraph.attributes('data-entities')).toBe('lu,yao')
-    expect(scopedGraph.attributes('data-relationships')).toBe('lu->yao')
+    expect(scopedGraph.attributes('data-entities')).toBe('lu,yao,han,jade')
+    expect(scopedGraph.attributes('data-relationships')).toBe('lu->yao,lu->han,yao->han,jade->lu')
+  })
+
+  it('includes one-hop cross-category relationships when a category is selected in graph view', async () => {
+    seedStore()
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-label="graph"]').trigger('click')
+    await wrapper.find('[data-node-id="category:法宝神兵"]').trigger('click')
+
+    const scopedGraph = wrapper.find('.entity-graph-stub')
+    expect(scopedGraph.attributes('data-entities')).toBe('lu,jade')
+    expect(scopedGraph.attributes('data-relationships')).toBe('jade->lu')
+  })
+
+  it('updates the selected entity from the detail panel action', async () => {
+    const store = seedStore()
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
+    await wrapper.find('.save-entity-button').trigger('click')
+
+    expect(store.updateEntity).toHaveBeenCalledWith('lu', {
+      name: '林风',
+      type: 'character',
+      aliases: ['Lin Feng'],
+      state_fields: {
+        identity: '主角',
+      },
+    })
+  })
+
+  it('asks for confirmation before deleting the selected entity', async () => {
+    vi.mocked(ElMessageBox.confirm).mockResolvedValue()
+    const store = seedStore()
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
+    await wrapper.find('.delete-entity-button').trigger('click')
+
+    expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1)
+    expect(store.deleteEntity).toHaveBeenCalledWith('lu')
   })
 })

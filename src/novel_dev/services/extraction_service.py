@@ -357,6 +357,52 @@ class ExtractionService:
             log_service.add_log(novel_id, "ExtractionService", "风格样本提取完成，待审核")
             return await self.persist_pending_payload(novel_id, payload)
 
+    async def create_processing_upload(self, novel_id: str, filename: str) -> PendingExtraction:
+        log_service.add_log(novel_id, "ExtractionService", f"受理上传文件: {filename}")
+        return await self.pending_repo.create(
+            pe_id=f"pe_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            source_filename=filename,
+            extraction_type="processing",
+            raw_result={},
+            status="processing",
+        )
+
+    async def complete_processing_upload(
+        self,
+        pe_id: str,
+        novel_id: str,
+        filename: str,
+        content: str,
+    ) -> None:
+        log_service.add_log(novel_id, "ExtractionService", f"开始后台提取: {filename}")
+        payload = await self._build_pending_payload_from_content(novel_id, filename, content)
+        await self.pending_repo.update_payload(
+            pe_id,
+            extraction_type=payload.extraction_type,
+            raw_result=payload.raw_result,
+            proposed_entities=payload.proposed_entities,
+            diff_result=payload.diff_result,
+            status="pending",
+            error_message=None,
+        )
+        if payload.extraction_type == "setting":
+            proposed_entity_count = len(payload.proposed_entities or [])
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"设定提取完成，待审核: {proposed_entity_count} 个实体",
+            )
+        else:
+            log_service.add_log(novel_id, "ExtractionService", "风格样本提取完成，待审核")
+
+    async def fail_processing_upload(self, pe_id: str, error_message: str) -> None:
+        await self.pending_repo.update_status(
+            pe_id,
+            "failed",
+            error_message=error_message,
+        )
+
     async def _build_pending_payload_from_content(
         self,
         novel_id: str,

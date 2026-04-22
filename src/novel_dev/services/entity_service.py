@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 class EntityService:
     def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
+        self.session = session
         self.entity_repo = EntityRepository(session)
         self.group_repo = EntityGroupRepository(session)
         self.version_repo = EntityVersionRepository(session)
@@ -35,7 +36,7 @@ class EntityService:
             system_group = await self.group_repo.upsert(
                 novel_id=entity.novel_id or "",
                 category=classification.system_category,
-                group_name=classification.system_category,
+                group_name=classification.system_group_name or classification.system_category,
                 group_slug=classification.system_group_slug,
             )
             system_group_id = system_group.id
@@ -60,6 +61,7 @@ class EntityService:
         try:
             classification = await self.classification_service.classify(
                 novel_id=entity.novel_id or "",
+                entity_type=entity.type,
                 entity_name=entity.name,
                 latest_state=latest_state,
                 relationships=relationships,
@@ -81,6 +83,18 @@ class EntityService:
                 await self.embedding_service.index_entity_search(entity_id)
             except Exception as exc:
                 logger.warning("entity_search_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
+
+    async def reclassify_entities_for_novel(self, novel_id: str) -> dict:
+        entities = await self.entity_repo.list_by_novel(novel_id)
+        updated = 0
+        for entity in entities:
+            await self._refresh_entity_artifacts(entity.id)
+            updated += 1
+        return {
+            "novel_id": novel_id,
+            "total": len(entities),
+            "updated": updated,
+        }
 
     async def create_entity(
         self,
@@ -154,3 +168,57 @@ class EntityService:
             if eid not in states:
                 states[eid] = row.state
         return states
+
+    async def update_entity_fields(
+        self,
+        entity_id: str,
+        *,
+        name: Optional[str] = None,
+        entity_type: Optional[str] = None,
+        aliases: Optional[list[str]] = None,
+        state_fields: Optional[dict[str, Any]] = None,
+    ) -> Entity:
+        entity = await self.entity_repo.get_by_id(entity_id)
+        if entity is None:
+            raise ValueError("entity not found")
+
+        latest_state = await self.get_latest_state(entity_id) or {}
+        new_state = dict(latest_state)
+        normalized_name = (name or entity.name or "").strip()
+        normalized_type = (entity_type or entity.type or "").strip()
+
+        if not normalized_name:
+            raise ValueError("entity name is required")
+        if not normalized_type:
+            raise ValueError("entity type is required")
+
+        if state_fields:
+            new_state.update(state_fields)
+        if aliases is not None:
+            new_state["aliases"] = [alias.strip() for alias in aliases if alias and alias.strip()]
+        new_state["name"] = normalized_name
+
+        await self.entity_repo.update_basic_fields(
+            entity_id,
+            name=normalized_name,
+            entity_type=normalized_type,
+        )
+        await self.update_state(
+            entity_id,
+            new_state,
+            diff_summary={"manual_edit": True},
+        )
+        updated = await self.entity_repo.get_by_id(entity_id)
+        if updated is None:
+            raise ValueError("entity not found")
+        return updated
+
+    async def delete_entity(self, entity_id: str) -> None:
+        entity = await self.entity_repo.get_by_id(entity_id)
+        if entity is None:
+            raise ValueError("entity not found")
+
+        await self.relationship_repo.delete_by_entity_id(entity_id)
+        await self.version_repo.delete_by_entity_id(entity_id)
+        await self.entity_repo.delete(entity_id)
+        await self.session.flush()

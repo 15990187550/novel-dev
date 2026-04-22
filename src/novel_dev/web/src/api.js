@@ -31,8 +31,12 @@ export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r
 export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/text`).then(r => r.data)
 export const getEntities = (id) => api.get(`/novels/${id}/entities`).then(r => r.data)
 export const searchEntities = (id, params) => api.get(`/novels/${id}/entities/search`, { params }).then(r => r.data)
+export const updateEntity = (id, entityId, payload) =>
+  api.patch(`/novels/${id}/entities/${entityId}`, payload).then(r => r.data)
 export const updateEntityClassification = (id, entityId, payload) =>
   api.post(`/novels/${id}/entities/${entityId}/classification`, payload).then(r => r.data)
+export const deleteEntity = (id, entityId) =>
+  api.delete(`/novels/${id}/entities/${entityId}`).then(r => r.data)
 export const getEntityRelationships = (id) => api.get(`/novels/${id}/entity_relationships`).then(r => r.data)
 export const getTimelines = (id) => api.get(`/novels/${id}/timelines`).then(r => r.data)
 export const getSpacelines = (id) => api.get(`/novels/${id}/spacelines`).then(r => r.data)
@@ -45,6 +49,12 @@ export const getOutlineWorkbenchMessages = (id, params) =>
   api.get(`/novels/${id}/outline_workbench/messages`, { params }).then(r => r.data)
 export const submitOutlineFeedback = (id, payload) =>
   api.post(`/novels/${id}/outline_workbench/submit`, payload, withLongTimeout()).then(r => r.data)
+export const startBrainstormWorkspace = (id) =>
+  api.post(`/novels/${id}/brainstorm/workspace/start`).then(r => r.data)
+export const getBrainstormWorkspace = (id) =>
+  api.get(`/novels/${id}/brainstorm/workspace`).then(r => r.data)
+export const submitBrainstormWorkspace = (id) =>
+  api.post(`/novels/${id}/brainstorm/workspace/submit`).then(r => r.data)
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)

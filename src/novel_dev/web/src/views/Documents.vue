@@ -14,7 +14,7 @@
         </div>
         <div v-if="uploadSummary" class="mt-3 space-y-2 text-sm">
           <div class="text-gray-700 dark:text-gray-300">
-            本次导入完成：成功 {{ uploadSummary.succeeded }}，失败 {{ uploadSummary.failed }}，共 {{ uploadSummary.total }} 个文件
+            本次导入任务已提交：已创建 {{ uploadSummary.accepted ?? uploadSummary.succeeded ?? 0 }} 条记录，失败 {{ uploadSummary.failed }}，共 {{ uploadSummary.total }} 个文件
           </div>
           <div v-if="uploadSummary.failed" class="text-red-600 dark:text-red-400 space-y-1">
             <div
@@ -31,17 +31,30 @@
         <h3 class="font-bold mb-3">设定提取记录</h3>
         <el-table :data="store.pendingDocs">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
-          <el-table-column prop="extraction_type" label="类型" />
-          <el-table-column prop="status" label="状态" />
+          <el-table-column label="类型">
+            <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
+          </el-table-column>
+          <el-table-column label="状态">
+            <template #default="{ row }">{{ statusLabel(row.status) }}</template>
+          </el-table-column>
           <el-table-column label="变更摘要" min-width="220">
-            <template #default="{ row }">{{ row.diff_result?.summary || '-' }}</template>
+            <template #default="{ row }">{{ row.diff_result?.summary || row.error_message || '-' }}</template>
           </el-table-column>
           <el-table-column prop="created_at" label="创建时间" />
           <el-table-column label="操作" width="220">
             <template #default="{ row }">
               <div class="flex gap-2">
                 <el-button size="small" @click="showDetail(row)">查看详情</el-button>
-                <el-button v-if="row.status !== 'approved'" size="small" type="primary" @click="approve(row.id)">批准</el-button>
+                <el-button
+                  v-if="row.status === 'pending'"
+                  size="small"
+                  type="primary"
+                  :loading="approvingPendingId === row.id"
+                  :disabled="!!approvingPendingId && approvingPendingId !== row.id"
+                  @click="approve(row.id)"
+                >
+                  {{ approvingPendingId === row.id ? '批准中...' : '批准' }}
+                </el-button>
               </div>
             </template>
           </el-table-column>
@@ -51,10 +64,18 @@
       <el-dialog v-model="detailVisible" title="设定提取详情" width="1080px">
         <div v-if="selectedDoc" class="space-y-4">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-            <div><span class="font-bold">类型：</span>{{ selectedDoc.extraction_type }}</div>
-            <div><span class="font-bold">状态：</span>{{ selectedDoc.status }}</div>
+            <div><span class="font-bold">类型：</span>{{ extractionTypeLabel(selectedDoc.extraction_type, selectedDoc.status) }}</div>
+            <div><span class="font-bold">状态：</span>{{ statusLabel(selectedDoc.status) }}</div>
             <div><span class="font-bold">创建时间：</span>{{ selectedDoc.created_at }}</div>
           </div>
+
+          <el-alert
+            v-if="selectedDoc.error_message"
+            :title="selectedDoc.error_message"
+            type="error"
+            :closable="false"
+            show-icon
+          />
 
           <div v-if="selectedDoc.diff_result" class="space-y-3">
             <div class="flex items-center justify-between">
@@ -163,19 +184,22 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
 import { uploadDocumentsBatch, approvePending } from '@/api.js'
 import { ElMessage } from 'element-plus'
 
+const DOCUMENT_POLL_INTERVAL_MS = 2000
 const store = useNovelStore()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
+const approvingPendingId = ref('')
 const detailVisible = ref(false)
 const selectedDoc = ref(null)
 const conflictSelections = reactive({})
 const uploadSummary = ref(null)
+const documentPollTimer = ref(null)
 
 const diffGroups = computed(() => {
   const groups = { create: [], update: [], conflict: [] }
@@ -188,6 +212,7 @@ const diffGroups = computed(() => {
 })
 
 const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.field_resolutions || [])
+const hasProcessingDocs = computed(() => (store.pendingDocs || []).some((doc) => doc.status === 'processing'))
 
 const fieldLabels = {
   identity: '身份',
@@ -209,6 +234,26 @@ const fieldLabels = {
 
 function fieldLabel(field) {
   return fieldLabels[field] || field
+}
+
+function extractionTypeLabel(type, status = '') {
+  if (status === 'processing' && (!type || type === 'processing')) return '处理中'
+  const labels = {
+    setting: '设定',
+    style_profile: '风格样本',
+    processing: '处理中',
+  }
+  return labels[type] || type || '-'
+}
+
+function statusLabel(status) {
+  const labels = {
+    processing: '导入中',
+    pending: '待审核',
+    failed: '失败',
+    approved: '已批准',
+  }
+  return labels[status] || status || '-'
 }
 
 function resolutionActionLabel(action) {
@@ -303,7 +348,8 @@ async function upload() {
   uploading.value = true
   try {
     uploadSummary.value = await uploadDocumentsBatch(store.novelId, selectedFiles.value, 3)
-    ElMessage.success(`上传完成：成功 ${uploadSummary.value.succeeded} 个`)
+    const accepted = uploadSummary.value.accepted ?? uploadSummary.value.succeeded ?? 0
+    ElMessage.success(`导入任务已提交：${accepted} 个`)
     await store.fetchDocuments()
   } finally {
     uploading.value = false
@@ -313,17 +359,48 @@ async function upload() {
 }
 
 async function approve(id) {
+  if (approvingPendingId.value) return
+  approvingPendingId.value = id
   const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
-  await approvePending(store.novelId, id, fieldResolutions)
-  ElMessage.success('已批准')
-  detailVisible.value = false
-  await store.fetchDocuments()
+  try {
+    await approvePending(store.novelId, id, fieldResolutions)
+    ElMessage.success('已批准')
+    detailVisible.value = false
+    await store.fetchDocuments()
+  } finally {
+    approvingPendingId.value = ''
+  }
 }
 
 function fetchIfReady() {
   if (store.novelId) store.fetchDocuments()
 }
 
+function stopDocumentPolling() {
+  if (documentPollTimer.value) {
+    window.clearInterval(documentPollTimer.value)
+    documentPollTimer.value = null
+  }
+}
+
+function startDocumentPolling() {
+  if (documentPollTimer.value || !store.novelId) return
+  documentPollTimer.value = window.setInterval(() => {
+    store.fetchDocuments()
+  }, DOCUMENT_POLL_INTERVAL_MS)
+}
+
 onMounted(fetchIfReady)
-watch(() => store.novelId, fetchIfReady)
+onBeforeUnmount(stopDocumentPolling)
+watch(() => store.novelId, () => {
+  stopDocumentPolling()
+  fetchIfReady()
+})
+watch(hasProcessingDocs, (processing) => {
+  if (processing) {
+    startDocumentPolling()
+    return
+  }
+  stopDocumentPolling()
+}, { immediate: true })
 </script>

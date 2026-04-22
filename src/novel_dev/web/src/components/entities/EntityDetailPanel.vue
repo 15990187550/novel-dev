@@ -16,6 +16,11 @@
     <el-empty v-if="!entity" description="暂无实体详情" />
 
     <template v-else>
+      <div class="flex flex-wrap justify-end gap-2">
+        <el-button type="primary" plain @click="openEditDialog">编辑实体</el-button>
+        <el-button type="danger" plain @click="emit('delete-entity', entity)">删除实体</el-button>
+      </div>
+
       <div class="rounded-lg border border-gray-200 dark:border-gray-700 p-3 space-y-3">
         <div class="font-semibold">人工覆盖</div>
         <div class="grid gap-3 lg:grid-cols-2">
@@ -90,12 +95,50 @@
         <div class="mb-2 font-semibold">搜索文档</div>
         <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-700 dark:text-gray-200">{{ prettyJson(entity.search_document) }}</pre>
       </div>
+
+      <el-dialog v-model="editDialogVisible" title="编辑实体" width="640px">
+        <div class="space-y-4">
+          <div class="grid gap-3 md:grid-cols-2">
+            <el-input v-model="editForm.name" placeholder="实体名称">
+              <template #prepend>名称</template>
+            </el-input>
+            <el-input v-model="editForm.type" placeholder="实体类型">
+              <template #prepend>类型</template>
+            </el-input>
+          </div>
+
+          <el-input
+            v-model="editForm.aliasesText"
+            placeholder="多个别名请用中文逗号、英文逗号或换行分隔"
+          >
+            <template #prepend>别名</template>
+          </el-input>
+
+          <div class="grid gap-3 md:grid-cols-2">
+            <el-input
+              v-for="field in EDITABLE_STATE_FIELDS"
+              :key="field.key"
+              v-model="editForm.stateFields[field.key]"
+              :placeholder="field.label"
+            >
+              <template #prepend>{{ field.label }}</template>
+            </el-input>
+          </div>
+        </div>
+
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <el-button @click="editDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="saveEntity">保存修改</el-button>
+          </div>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 const CATEGORY_OPTIONS = ['人物', '势力', '功法', '法宝神兵', '天材地宝', '其他']
 const GROUP_OPTIONS = {
@@ -107,15 +150,39 @@ const GROUP_OPTIONS = {
   其他: ['世界规则', '地点', '事件', '概念'],
 }
 
+const EDITABLE_STATE_FIELDS = [
+  { key: 'identity', label: '身份' },
+  { key: 'personality', label: '性格' },
+  { key: 'goal', label: '目标' },
+  { key: 'appearance', label: '外貌' },
+  { key: 'background', label: '背景' },
+  { key: 'ability', label: '能力' },
+  { key: 'realm', label: '境界' },
+  { key: 'resources', label: '资源' },
+  { key: 'secrets', label: '秘密' },
+  { key: 'conflict', label: '冲突' },
+  { key: 'arc', label: '人物弧光' },
+  { key: 'notes', label: '备注' },
+  { key: 'description', label: '描述' },
+  { key: 'significance', label: '重要性' },
+]
+
 const props = defineProps({
   entity: { type: Object, default: null },
   relationships: { type: Array, default: () => [] },
   title: { type: String, default: '实体详情' },
 })
 
-const emit = defineEmits(['save-classification', 'clear-override', 'reclassify', 'select-entity'])
+const emit = defineEmits(['save-classification', 'clear-override', 'reclassify', 'save-entity', 'delete-entity', 'select-entity'])
 const manualCategory = ref('')
 const manualGroupName = ref('')
+const editDialogVisible = ref(false)
+const editForm = reactive({
+  name: '',
+  type: '',
+  aliasesText: '',
+  stateFields: Object.fromEntries(EDITABLE_STATE_FIELDS.map((field) => [field.key, ''])),
+})
 
 watch(
   () => props.entity,
@@ -124,6 +191,7 @@ watch(
     manualGroupName.value = entity?.manual_category
       ? (entity?.manual_group_name || '')
       : (entity?.effective_group_name || entity?.system_group_name || '')
+    resetEditForm(entity)
   },
   { immediate: true }
 )
@@ -177,6 +245,40 @@ function saveClassification() {
 
 function handleCategoryChange() {
   manualGroupName.value = ''
+}
+
+function openEditDialog() {
+  resetEditForm(props.entity)
+  editDialogVisible.value = true
+}
+
+function resetEditForm(entity) {
+  editForm.name = entity?.name || ''
+  editForm.type = entity?.type || ''
+  editForm.aliasesText = (entity?.aliases || []).join('，')
+  for (const field of EDITABLE_STATE_FIELDS) {
+    const value = entity?.latest_state?.[field.key]
+    editForm.stateFields[field.key] = value == null ? '' : String(value)
+  }
+}
+
+function saveEntity() {
+  if (!props.entity) return
+  const aliases = editForm.aliasesText
+    .split(/[\n,，]+/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+  const stateFields = {}
+  for (const field of EDITABLE_STATE_FIELDS) {
+    stateFields[field.key] = editForm.stateFields[field.key] || ''
+  }
+  emit('save-entity', props.entity, {
+    name: editForm.name.trim(),
+    type: editForm.type.trim(),
+    aliases,
+    state_fields: stateFields,
+  })
+  editDialogVisible.value = false
 }
 
 function prettyJson(value) {

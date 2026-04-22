@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -150,6 +151,63 @@ def mock_llm_factory(monkeypatch):
                     plot_synopsis="mock synopsis",
                 ).model_dump_json()
             )
+        elif agent == "EntityClassifierAgent" and task == "classify_entity":
+            from novel_dev.agents.entity_classifier import EntityClassificationLLMResult
+
+            async def smart_entity_classify(messages):
+                prompt = messages[0].content if messages else ""
+                type_match = re.search(r"实体类型：([^\n]+)", prompt)
+                name_match = re.search(r"实体名称：([^\n]+)", prompt)
+                entity_type = (type_match.group(1).strip() if type_match else "")
+                entity_name = (name_match.group(1).strip() if name_match else "")
+
+                if entity_type == "character":
+                    group_name = "主角阵营" if any(keyword in prompt for keyword in ("陆照", "主角")) else "核心人物"
+                    return LLMResponse(
+                        text=EntityClassificationLLMResult(
+                            category="人物",
+                            group_name=group_name,
+                            confidence=0.93,
+                            reason="mock character classification",
+                        ).model_dump_json()
+                    )
+                if entity_type == "faction" or any(keyword in entity_name for keyword in ("宗", "门", "教", "阁", "殿", "盟")):
+                    return LLMResponse(
+                        text=EntityClassificationLLMResult(
+                            category="势力",
+                            group_name="宗门势力",
+                            confidence=0.9,
+                            reason="mock faction classification",
+                        ).model_dump_json()
+                    )
+                if any(keyword in entity_name for keyword in ("昆仑镜", "混沌剑", "荒剑", "佛骨舍利", "护身玉佩", "镜", "剑", "印")):
+                    return LLMResponse(
+                        text=EntityClassificationLLMResult(
+                            category="法宝神兵",
+                            group_name="特殊法宝",
+                            confidence=0.9,
+                            reason="mock treasure classification",
+                        ).model_dump_json()
+                    )
+                if any(keyword in entity_name for keyword in ("经", "诀", "法", "术", "神通")):
+                    return LLMResponse(
+                        text=EntityClassificationLLMResult(
+                            category="功法",
+                            group_name="传承",
+                            confidence=0.88,
+                            reason="mock skill classification",
+                        ).model_dump_json()
+                    )
+                return LLMResponse(
+                    text=EntityClassificationLLMResult(
+                        category="其他",
+                        group_name="",
+                        confidence=0.45,
+                        reason="mock fallback classification",
+                    ).model_dump_json()
+                )
+
+            mock_client.acomplete.side_effect = smart_entity_classify
         elif agent == "VolumePlannerAgent" and task == "generate_volume_plan":
             from novel_dev.schemas.outline import VolumePlan, VolumeBeat
             from novel_dev.schemas.context import BeatPlan
@@ -170,7 +228,11 @@ def mock_llm_factory(monkeypatch):
     def mock_get_embedder():
         class MockEmbedder:
             async def aembed(self, texts: list[str]) -> list[list[float]]:
-                return [[0.0] * 768 for _ in texts]
+                vectors = []
+                for text in texts:
+                    dimensions = 1024 if "一级分类：" in text else 1536
+                    vectors.append([0.0] * dimensions)
+                return vectors
         return MockEmbedder()
 
     monkeypatch.setattr(llm_factory, "get", mock_get)

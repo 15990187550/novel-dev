@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 from novel_dev.llm.exceptions import LLMTimeoutError
@@ -68,9 +69,10 @@ async def test_batch_upload_setting_returns_per_file_results_and_pending_source_
             assert resp.status_code == 200
             data = resp.json()
             assert data["total"] == 2
-            assert data["succeeded"] == 2
+            assert data["accepted"] == 2
             assert data["failed"] == 0
             assert all(item["pending_id"] for item in data["items"])
+            assert all(item["status"] == "processing" for item in data["items"])
 
             resp2 = await client.get("/api/novels/n1/documents/pending")
             pending_items = resp2.json()["items"]
@@ -87,14 +89,14 @@ async def test_batch_upload_continues_when_one_item_times_out(async_session, mon
     async def override():
         yield async_session
 
-    original = ExtractionService.process_upload
+    original = ExtractionService.complete_processing_upload
 
-    async def fake_process_upload(self, novel_id: str, filename: str, content: str):
+    async def fake_complete_processing_upload(self, pe_id: str, novel_id: str, filename: str, content: str):
         if filename == "bad.txt":
             raise LLMTimeoutError("Request timed out")
-        return await original(self, novel_id, filename, content)
+        return await original(self, pe_id, novel_id, filename, content)
 
-    monkeypatch.setattr(ExtractionService, "process_upload", fake_process_upload)
+    monkeypatch.setattr(ExtractionService, "complete_processing_upload", fake_complete_processing_upload)
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
     try:
@@ -111,13 +113,67 @@ async def test_batch_upload_continues_when_one_item_times_out(async_session, mon
             assert resp.status_code == 200
             data = resp.json()
             assert data["total"] == 2
-            assert data["succeeded"] == 1
-            assert data["failed"] == 1
+            assert data["accepted"] == 2
+            assert data["failed"] == 0
             failed = next(item for item in data["items"] if item["filename"] == "bad.txt")
             succeeded = next(item for item in data["items"] if item["filename"] == "good.txt")
-            assert failed["pending_id"] is None
-            assert "超时" in failed["error"]
+            assert failed["pending_id"] is not None
+            assert failed["status"] == "processing"
             assert succeeded["pending_id"] is not None
+            assert succeeded["status"] == "processing"
+
+            await asyncio.sleep(0.05)
+            resp2 = await client.get("/api/novels/n1/documents/pending")
+            items_by_name = {item["source_filename"]: item for item in resp2.json()["items"]}
+            assert items_by_name["good.txt"]["status"] == "pending"
+            assert items_by_name["bad.txt"]["status"] == "failed"
+            assert "超时" in items_by_name["bad.txt"]["error_message"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_batch_upload_creates_processing_records_before_background_completion(async_session, monkeypatch):
+    from novel_dev.services.extraction_service import ExtractionService
+
+    async def override():
+        yield async_session
+
+    blocker = asyncio.Event()
+
+    original = ExtractionService.complete_processing_upload
+
+    async def slow_complete(self, pe_id: str, novel_id: str, filename: str, content: str):
+        await blocker.wait()
+        return await original(self, pe_id, novel_id, filename, content)
+
+    monkeypatch.setattr(ExtractionService, "complete_processing_upload", slow_complete)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload/batch",
+                json={
+                    "items": [
+                        {"filename": "setting-1.txt", "content": "世界观：天玄大陆。主角林风。"},
+                    ]
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["accepted"] == 1
+            assert data["items"][0]["status"] == "processing"
+
+            pending_resp = await client.get("/api/novels/n1/documents/pending")
+            assert pending_resp.status_code == 200
+            pending_items = pending_resp.json()["items"]
+            assert len(pending_items) == 1
+            assert pending_items[0]["source_filename"] == "setting-1.txt"
+            assert pending_items[0]["status"] == "processing"
+
+            blocker.set()
+            await asyncio.sleep(0.05)
     finally:
         app.dependency_overrides.clear()
 

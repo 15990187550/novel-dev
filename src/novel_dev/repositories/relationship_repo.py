@@ -1,6 +1,6 @@
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from novel_dev.db.models import EntityRelationship
 
@@ -76,3 +76,14 @@ class RelationshipRepository:
         existing.created_at_chapter_id = chapter_id
         await self.session.flush()
         return existing
+
+    async def delete_by_entity_id(self, entity_id: str) -> None:
+        await self.session.execute(
+            delete(EntityRelationship).where(
+                or_(
+                    EntityRelationship.source_id == entity_id,
+                    EntityRelationship.target_id == entity_id,
+                )
+            )
+        )
+        await self.session.flush()

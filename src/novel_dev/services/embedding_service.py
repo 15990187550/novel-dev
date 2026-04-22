@@ -30,8 +30,10 @@ class EmbeddingService:
         vectors = await self.embedder.aembed([truncated])
         return vectors[0]
 
-    @staticmethod
-    def _vector_dimensions_match(column, vector: list[float], label: str, record_id: str) -> bool:
+    def _vector_dimensions_match(self, column, vector: list[float], label: str, record_id: str) -> bool:
+        bind = self.session.get_bind()
+        if bind is None or bind.dialect.name != "postgresql":
+            return True
         expected = getattr(getattr(column, "type", None), "dimensions", None)
         actual = len(vector)
         if expected is None or actual == expected:

@@ -26,6 +26,9 @@ vi.mock('@/api.js', () => ({
   getPendingDocs: vi.fn(),
   getOutlineWorkbench: vi.fn(),
   getOutlineWorkbenchMessages: vi.fn(),
+  getBrainstormWorkspace: vi.fn(),
+  startBrainstormWorkspace: vi.fn(),
+  submitBrainstormWorkspace: vi.fn(),
   submitOutlineFeedback: vi.fn(),
 }))
 
@@ -659,5 +662,96 @@ describe('novel store dashboard loading', () => {
       outline_type: 'volume',
       outline_ref: 'vol_3',
     })
+  })
+
+  it('refreshOutlineWorkbench also loads brainstorm workspace data during brainstorming', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [],
+      conversation_summary: '',
+      last_result_snapshot: { title: '工作区总纲' },
+    })
+    vi.mocked(api.getBrainstormWorkspace).mockResolvedValue({
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '工作区总纲' },
+      },
+      setting_docs_draft: [
+        {
+          draft_id: 'draft-1',
+          source_outline_ref: 'synopsis',
+          source_kind: 'character',
+          target_import_mode: 'explicit_type',
+          target_doc_type: 'concept',
+          title: '林风',
+          content: '外门弟子。',
+          order_index: 1,
+        },
+      ],
+    })
+
+    await store.refreshOutlineWorkbench({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+
+    expect(api.getBrainstormWorkspace).toHaveBeenCalledWith('novel-1')
+    expect(store.brainstormWorkspace.data?.workspace_id).toBe('ws-1')
+    expect(store.brainstormWorkspace.data?.setting_docs_draft).toHaveLength(1)
+  })
+
+  it('submitBrainstormWorkspace refreshes formal state and clears workspace after confirmation', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '工作区总纲' },
+      },
+      setting_docs_draft: [],
+    }
+
+    vi.mocked(api.submitBrainstormWorkspace).mockResolvedValue({
+      synopsis_title: '工作区总纲',
+      pending_setting_count: 1,
+      volume_outline_count: 1,
+    })
+
+    store.refreshState = vi.fn().mockImplementation(async () => {
+      store.novelState.current_phase = 'volume_planning'
+    })
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+
+    await store.submitBrainstormWorkspace()
+
+    expect(api.submitBrainstormWorkspace).toHaveBeenCalledWith('novel-1')
+    expect(store.refreshState).toHaveBeenCalledTimes(1)
+    expect(store.refreshOutlineWorkbench).toHaveBeenCalledWith({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.brainstormWorkspace.data).toBeNull()
   })
 })

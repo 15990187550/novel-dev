@@ -1,6 +1,6 @@
 import asyncio
 import json
-from typing import Optional
+from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +27,11 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
 from novel_dev.schemas.outline_workbench import OutlineMessagesResponse
+from novel_dev.schemas.brainstorm_workspace import (
+    BrainstormWorkspacePayload,
+    BrainstormWorkspaceSubmitResponse,
+)
+from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
@@ -34,6 +39,7 @@ import re
 import secrets
 
 router = APIRouter()
+document_upload_tasks: set[asyncio.Task] = set()
 
 
 class CreateNovelRequest(BaseModel):
@@ -46,6 +52,13 @@ class EntityClassificationUpdateRequest(BaseModel):
     manual_group_name: Optional[str] = None
     clear_manual_override: bool = False
     reclassify: bool = False
+
+
+class EntityUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    aliases: Optional[list[str]] = None
+    state_fields: dict[str, Any] = Field(default_factory=dict)
 
 
 class OutlineWorkbenchSubmitRequest(BaseModel):
@@ -84,37 +97,48 @@ def _infer_relationship_type(text: str) -> str:
     return "关联"
 
 
+def _iter_inference_text_fragments(latest_state: dict) -> list[tuple[str, str]]:
+    fragments: list[tuple[str, str]] = []
+    for field, value in (latest_state or {}).items():
+        if field in {"name", "aliases"}:
+            continue
+        text = _stringify_relationship_value(value).strip()
+        if not text or text in {"{}", "[]", '""'}:
+            continue
+        fragments.append((field, text))
+    return fragments
+
+
 def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
     inferred = []
     seen = set()
     sorted_rows = sorted(entity_rows, key=lambda item: len(item["name"]), reverse=True)
     for source in sorted_rows:
         latest_state = source.get("latest_state") or {}
-        relation_text = _stringify_relationship_value(
-            latest_state.get("relationships") or latest_state.get("relationship")
-        )
-        if not relation_text:
+        fragments = _iter_inference_text_fragments(latest_state)
+        if not fragments:
             continue
-        for target in sorted_rows:
-            if source["entity_id"] == target["entity_id"]:
-                continue
-            if target["name"] not in relation_text:
-                continue
-            relation_type = _infer_relationship_type(relation_text)
-            dedup_key = (source["entity_id"], target["entity_id"], relation_type)
-            if dedup_key in seen:
-                continue
-            seen.add(dedup_key)
-            inferred.append({
-                "id": f"inferred:{source['entity_id']}:{target['entity_id']}:{relation_type}",
-                "source_id": source["entity_id"],
-                "target_id": target["entity_id"],
-                "relation_type": relation_type,
-                "meta": {"source": "latest_state.relationships"},
-                "created_at_chapter_id": None,
-                "is_active": True,
-                "is_inferred": True,
-            })
+        for field, relation_text in fragments:
+            for target in sorted_rows:
+                if source["entity_id"] == target["entity_id"]:
+                    continue
+                if target["name"] not in relation_text:
+                    continue
+                relation_type = _infer_relationship_type(relation_text)
+                dedup_key = (source["entity_id"], target["entity_id"], relation_type)
+                if dedup_key in seen:
+                    continue
+                seen.add(dedup_key)
+                inferred.append({
+                    "id": f"inferred:{source['entity_id']}:{target['entity_id']}:{relation_type}",
+                    "source_id": source["entity_id"],
+                    "target_id": target["entity_id"],
+                    "relation_type": relation_type,
+                    "meta": {"source": f"latest_state.{field}"},
+                    "created_at_chapter_id": None,
+                    "is_active": True,
+                    "is_inferred": True,
+                })
     return inferred
 
 
@@ -213,6 +237,17 @@ async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> di
         "classification_status": _classification_status(entity),
         "search_document": entity.search_document,
     }
+
+
+def _normalize_aliases(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        text = value.strip()
+        return [text] if text else []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
 
 
 async def get_session():
@@ -331,6 +366,7 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
     for ent in entities:
         row = await _serialize_entity_payload(session, ent)
         row["latest_state"] = states.get(ent.id)
+        row["aliases"] = _normalize_aliases(row["latest_state"].get("aliases") if row["latest_state"] else None)
         key = (ent.type, EntityRepository.normalize_name(ent.name) or ent.name)
         grouped.setdefault(key, []).append(row)
 
@@ -339,7 +375,8 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
         rows.sort(key=lambda item: (len(item["name"]), item["name"]))
         primary = dict(rows[0])
         merged_state = dict(primary.get("latest_state") or {})
-        aliases = [row["name"] for row in rows[1:] if row["name"] != primary["name"]]
+        aliases = list(primary.get("aliases") or [])
+        aliases.extend(row["name"] for row in rows[1:] if row["name"] != primary["name"])
         for row in rows[1:]:
             for key, value in (row.get("latest_state") or {}).items():
                 if key == "name":
@@ -442,7 +479,65 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
         raise HTTPException(status_code=404, detail="Entity not found")
     payload = await _serialize_entity_payload(session, entity)
     payload["latest_state"] = state
+    payload["aliases"] = _normalize_aliases(state.get("aliases") if state else None)
     return payload
+
+
+@router.patch("/api/novels/{novel_id}/entities/{entity_id}")
+async def update_entity(
+    novel_id: str,
+    entity_id: str,
+    req: EntityUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = EntityService(session)
+    entity_repo = EntityRepository(session)
+    entity = await entity_repo.get_by_id(entity_id)
+    if entity is None or entity.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    try:
+        updated = await svc.update_entity_fields(
+            entity_id,
+            name=req.name,
+            entity_type=req.type,
+            aliases=req.aliases,
+            state_fields=req.state_fields,
+        )
+        await session.commit()
+    except ValueError as e:
+        detail = str(e)
+        status_code = 404 if "not found" in detail.lower() else 409
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    state = await svc.get_latest_state(entity_id)
+    payload = await _serialize_entity_payload(session, updated)
+    payload["latest_state"] = state
+    payload["aliases"] = _normalize_aliases(state.get("aliases") if state else None)
+    return payload
+
+
+@router.delete("/api/novels/{novel_id}/entities/{entity_id}")
+async def delete_entity(
+    novel_id: str,
+    entity_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = EntityService(session)
+    entity_repo = EntityRepository(session)
+    entity = await entity_repo.get_by_id(entity_id)
+    if entity is None or entity.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Entity not found")
+
+    try:
+        await svc.delete_entity(entity_id)
+        await session.commit()
+    except ValueError as e:
+        detail = str(e)
+        status_code = 404 if "not found" in detail.lower() else 409
+        raise HTTPException(status_code=status_code, detail=detail)
+
+    return {"deleted": True, "entity_id": entity_id}
 
 
 @router.post("/api/novels/{novel_id}/entities/{entity_id}/classification")
@@ -522,6 +617,14 @@ async def update_entity_classification(
     if updated is None:
         raise HTTPException(status_code=404, detail="Entity not found")
     return await _serialize_entity_payload(session, updated)
+
+
+@router.post("/api/novels/{novel_id}/entities/reclassify")
+async def reclassify_entities_for_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    service = EntityService(session)
+    result = await service.reclassify_entities_for_novel(novel_id)
+    await session.commit()
+    return result
 
 
 @router.get("/api/novels/{novel_id}/entity_relationships")
@@ -761,6 +864,37 @@ async def _process_upload_with_new_session(
             }
 
 
+async def _complete_processing_upload_with_new_session(
+    pending_id: str,
+    novel_id: str,
+    req: UploadRequest,
+    embedder,
+) -> None:
+    async with async_session_maker() as session:
+        embedding_service = EmbeddingService(session, embedder)
+        svc = ExtractionService(session, embedding_service)
+        repo = PendingExtractionRepository(session)
+        try:
+            await svc.complete_processing_upload(pending_id, novel_id, req.filename, req.content)
+            await session.commit()
+        except LLMTimeoutError:
+            await session.rollback()
+            await repo.update_status(
+                pending_id,
+                "failed",
+                error_message="设定提取超时，请稍后重试或切换模型",
+            )
+            await session.commit()
+        except Exception as exc:
+            await session.rollback()
+            await repo.update_status(
+                pending_id,
+                "failed",
+                error_message=str(exc) or "导入失败",
+            )
+            await session.commit()
+
+
 @router.post("/api/novels/{novel_id}/documents/upload")
 async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSession = Depends(get_session)):
     embedder = llm_factory.get_embedder()
@@ -786,21 +920,39 @@ async def upload_documents_batch(
     req: BatchUploadRequest,
 ):
     embedder = llm_factory.get_embedder()
+    async with async_session_maker() as session:
+        embedding_service = EmbeddingService(session, embedder)
+        svc = ExtractionService(session, embedding_service)
+        accepted_items = []
+        for item in req.items:
+            pe = await svc.create_processing_upload(novel_id, item.filename)
+            accepted_items.append(
+                {
+                    "filename": item.filename,
+                    "pending_id": pe.id,
+                    "status": pe.status,
+                    "error": None,
+                }
+            )
+        await session.commit()
+
     max_concurrency = min(req.max_concurrency or 3, 8)
     semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def run_one(item: UploadRequest) -> dict:
+    async def run_one(item: UploadRequest, pending_id: str) -> None:
         async with semaphore:
-            return await _process_upload_with_new_session(novel_id, item, embedder)
+            await _complete_processing_upload_with_new_session(pending_id, novel_id, item, embedder)
 
-    results = await asyncio.gather(*(run_one(item) for item in req.items))
-    succeeded = sum(1 for item in results if item["pending_id"])
-    failed = len(results) - succeeded
+    for item, accepted in zip(req.items, accepted_items):
+        task = asyncio.create_task(run_one(item, accepted["pending_id"]))
+        document_upload_tasks.add(task)
+        task.add_done_callback(document_upload_tasks.discard)
+
     return {
-        "total": len(results),
-        "succeeded": succeeded,
-        "failed": failed,
-        "items": results,
+        "total": len(accepted_items),
+        "accepted": len(accepted_items),
+        "failed": 0,
+        "items": accepted_items,
     }
 
 
@@ -819,6 +971,7 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
                 "proposed_entities": i.proposed_entities,
                 "diff_result": i.diff_result,
                 "resolution_result": i.resolution_result,
+                "error_message": i.error_message,
                 "created_at": i.created_at.isoformat(),
             }
             for i in items
@@ -1391,6 +1544,53 @@ async def submit_outline_workbench(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post(
+    "/api/novels/{novel_id}/brainstorm/workspace/start",
+    response_model=BrainstormWorkspacePayload,
+)
+async def start_brainstorm_workspace(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    service = BrainstormWorkspaceService(session)
+    try:
+        return await service.get_workspace_payload(novel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get(
+    "/api/novels/{novel_id}/brainstorm/workspace",
+    response_model=BrainstormWorkspacePayload,
+)
+async def get_brainstorm_workspace(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    service = BrainstormWorkspaceService(session)
+    try:
+        return await service.get_workspace_payload(novel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post(
+    "/api/novels/{novel_id}/brainstorm/workspace/submit",
+    response_model=BrainstormWorkspaceSubmitResponse,
+)
+async def submit_brainstorm_workspace(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    service = BrainstormWorkspaceService(session)
+    try:
+        return await service.submit_workspace(novel_id)
+    except ValueError as e:
+        detail = str(e)
+        status_code = 404 if "not found" in detail.lower() else 409
+        raise HTTPException(status_code=status_code, detail=detail)
 
 
 @router.post("/api/novels/{novel_id}/librarian")

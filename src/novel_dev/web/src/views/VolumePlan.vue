@@ -16,6 +16,30 @@
       </span>
     </div>
 
+    <div
+      v-if="isBrainstormWorkspaceMode"
+      class="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4"
+    >
+      <div>
+        <div class="text-sm font-semibold text-emerald-900">脑爆工作区</div>
+        <p class="mt-1 text-sm leading-6 text-emerald-800">
+          当前修改只会写入工作区草稿。确认无误后，再统一提交为正式总纲、卷纲与待审核设定。
+        </p>
+        <p v-if="finalConfirmationDisabledReason" class="mt-1 text-xs text-amber-700">
+          {{ finalConfirmationDisabledReason }}
+        </p>
+      </div>
+      <button
+        data-testid="brainstorm-submit"
+        type="button"
+        class="rounded-full bg-emerald-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-emerald-300"
+        :disabled="Boolean(finalConfirmationDisabledReason) || store.brainstormWorkspace.submitting"
+        @click="handleFinalConfirm"
+      >
+        {{ store.brainstormWorkspace.submitting ? '最终确认中...' : '最终确认' }}
+      </button>
+    </div>
+
     <div v-if="!store.novelId" class="rounded-3xl border border-dashed border-gray-300 bg-gray-50 px-6 py-12 text-center text-gray-500">
       请先选择小说
     </div>
@@ -32,16 +56,56 @@
         <OutlineSidebar :items="sidebarItems" @select="handleSelect" />
 
         <div class="space-y-4">
-          <OutlineDetailPanel :detail="detailPanel" :create-action="createAction" @create="handleCreate" />
+          <OutlineDetailPanel :detail="detailPanel" :create-action="null" @create="handleCreate" />
           <OutlineConversation
             :messages="store.outlineWorkbench.messages"
             :submitting="store.outlineWorkbench.submitting"
-            :disabled="!store.novelId || !activeSelection || Boolean(store.outlineWorkbench.creatingKey)"
+            :disabled="conversationDisabled"
             :current-title="selectedItem?.title || detailPanel?.title || ''"
+            :submit-label="conversationSubmitLabel"
+            :allow-empty-submit="allowEmptyConversationSubmit"
             @submit-feedback="handleSubmit"
           />
         </div>
       </div>
+
+      <section
+        v-if="isBrainstormWorkspaceMode"
+        class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm"
+      >
+        <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Setting Drafts</div>
+        <h2 class="mt-2 text-xl font-semibold text-gray-900">设定草稿</h2>
+        <p class="mt-1 text-sm leading-6 text-gray-500">
+          这些草稿会在最终确认后统一进入待审核导入链路。
+        </p>
+
+        <div v-if="!settingDrafts.length" class="mt-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+          当前还没有待提交的设定草稿。
+        </div>
+
+        <div v-else class="mt-4 grid gap-3 lg:grid-cols-2">
+          <article
+            v-for="draft in settingDrafts"
+            :key="draft.draft_id"
+            class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <div class="text-sm font-semibold text-gray-900">{{ draft.title }}</div>
+                <p class="mt-1 text-xs leading-5 text-gray-500">
+                  来源：{{ draft.source_outline_ref }} · 类型：{{ draft.source_kind }} · 导入：{{ draft.target_import_mode }}
+                </p>
+              </div>
+              <span class="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-600">
+                {{ draft.target_doc_type || 'auto' }}
+              </span>
+            </div>
+            <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700">
+              {{ draft.content }}
+            </p>
+          </article>
+        </div>
+      </section>
     </template>
   </div>
 </template>
@@ -55,6 +119,14 @@ import OutlineSidebar from '@/components/outline/OutlineSidebar.vue'
 import { useNovelStore } from '@/stores/novel.js'
 
 const store = useNovelStore()
+
+const isBrainstormWorkspaceMode = computed(() => (
+  store.canBrainstorm && store.brainstormWorkspace.data?.status === 'active'
+))
+
+const settingDrafts = computed(() => (
+  store.brainstormWorkspace.data?.setting_docs_draft || []
+))
 
 const activeSelection = computed(() => (
   store.outlineWorkbench.selection ||
@@ -89,7 +161,7 @@ const workbenchItems = computed(() => {
       title: '总纲',
       status: 'missing',
       statusLabel: '待创建',
-      summary: '当前还没有总纲，可以先一键创建总纲。',
+      summary: '当前还没有总纲，可以直接在下方对话生成总纲。',
     })
   }
   return items
@@ -126,13 +198,43 @@ const selectedItem = computed(() => {
   ) || null
 })
 
+const awaitingGenerationConfirmation = computed(() => {
+  if (detailPanel.value?.status !== 'missing') return false
+  const messages = store.outlineWorkbench.messages || []
+  const lastMessage = messages[messages.length - 1]
+  return lastMessage?.role === 'assistant' &&
+    lastMessage?.message_type === 'question' &&
+    lastMessage?.meta?.interaction_stage === 'generation_confirmation'
+})
+
+const conversationSubmitLabel = computed(() => (
+  detailPanel.value?.status !== 'missing'
+    ? '发送修改意见'
+    : awaitingGenerationConfirmation.value
+      ? '发送确认信息'
+      : '生成大纲'
+))
+
+const conversationDisabled = computed(() => (
+  !store.novelId ||
+  !activeSelection.value ||
+  Boolean(store.outlineWorkbench.creatingKey) ||
+  (detailPanel.value?.status === 'missing' && createAction.value?.disabled)
+))
+
+const allowEmptyConversationSubmit = computed(() => (
+  detailPanel.value?.status === 'missing' &&
+  !awaitingGenerationConfirmation.value &&
+  !createAction.value?.disabled
+))
+
 const createAction = computed(() => {
   const detail = detailPanel.value
   if (!detail || detail.status !== 'missing') return null
 
   const actionKey = `${detail.outlineType}:${detail.outlineRef}`
   if (detail.outlineType === 'synopsis') {
-    const disabledReason = !store.novelId ? '请先选择小说。' : ''
+    const disabledReason = resolveMissingOutlineDisabledReason(detail)
     return {
       key: actionKey,
       label: '一键创建总纲',
@@ -145,17 +247,7 @@ const createAction = computed(() => {
   }
 
   const volumeNumber = parseVolumeNumber(detail.outlineRef)
-  const previousVolumeMissing = volumeNumber > 1 && sidebarItems.value.some(
-    (item) =>
-      item.outline_type === 'volume' &&
-      item.outline_ref === `vol_${volumeNumber - 1}` &&
-      item.status === 'missing'
-  )
-
-  let disabledReason = ''
-  if (!store.novelId) disabledReason = '请先选择小说。'
-  else if (previousVolumeMissing) disabledReason = `请先创建第 ${volumeNumber - 1} 卷，再创建当前卷。`
-  else if (!store.canVolumePlan) disabledReason = '当前阶段不允许创建卷纲。'
+  const disabledReason = resolveMissingOutlineDisabledReason(detail)
 
   return {
     key: actionKey,
@@ -176,6 +268,7 @@ const detailPanel = computed(() => {
 
   if (item.status === 'missing') {
     const isSynopsis = selection.outline_type === 'synopsis'
+    const disabledReason = resolveMissingOutlineDisabledReason(selection)
     return {
       outlineType: selection.outline_type,
       outlineRef: selection.outline_ref,
@@ -183,9 +276,9 @@ const detailPanel = computed(() => {
       statusLabel: item.statusLabel,
       title: item.title,
       emptyTitle: isSynopsis ? '总纲尚未生成' : `${item.title || '当前卷'} 尚未生成卷纲`,
-      emptyDescription: isSynopsis
-        ? '先创建总纲，再继续做卷级规划和对话式优化。'
-        : '你可以直接在下方输入意见，或者先一键创建本卷卷纲。',
+      emptyDescription: disabledReason || (isSynopsis
+        ? '可以直接在下方对话生成总纲，再继续做卷级规划和对话式优化。'
+        : '可以直接在下方对话生成本卷卷纲，或补充你希望强化的要求。'),
     }
   }
 
@@ -196,6 +289,13 @@ const detailPanel = computed(() => {
   }
 
   return buildVolumeDetail(item, snapshot)
+})
+
+const finalConfirmationDisabledReason = computed(() => {
+  if (!isBrainstormWorkspaceMode.value) return ''
+  const synopsisDraft = store.brainstormWorkspace.data?.outline_drafts?.['synopsis:synopsis']
+  if (!synopsisDraft) return '请先完成总纲草稿。'
+  return ''
 })
 
 watch(
@@ -223,6 +323,26 @@ function resolveFallbackSnapshot(selection) {
 function parseVolumeNumber(value) {
   const match = String(value || '').match(/(\d+)/)
   return match ? Number(match[1]) : null
+}
+
+function resolveMissingOutlineDisabledReason(selection) {
+  if (!selection) return '请先选择小说。'
+  if (!store.novelId) return '请先选择小说。'
+  const outlineType = selection.outline_type || selection.outlineType
+  const outlineRef = selection.outline_ref || selection.outlineRef
+  if (outlineType === 'synopsis') return ''
+
+  const volumeNumber = parseVolumeNumber(outlineRef)
+  const previousVolumeMissing = volumeNumber > 1 && sidebarItems.value.some(
+    (item) =>
+      item.outline_type === 'volume' &&
+      item.outline_ref === `vol_${volumeNumber - 1}` &&
+      item.status === 'missing'
+  )
+
+  if (previousVolumeMissing) return `请先创建第 ${volumeNumber - 1} 卷，再创建当前卷。`
+  if (!store.canVolumePlan && !store.canBrainstorm) return '当前阶段不允许创建卷纲。'
+  return ''
 }
 
 function buildSynopsisDetail(item, snapshot) {
@@ -303,7 +423,13 @@ async function handleSelect(item) {
 }
 
 async function handleSubmit(content) {
-  await store.submitOutlineFeedback({ content })
+  const trimmedContent = content.trim()
+  const nextContent = !trimmedContent && allowEmptyConversationSubmit.value
+    ? buildMissingOutlinePrompt(detailPanel.value)
+    : trimmedContent
+  if (!nextContent) return
+
+  await store.submitOutlineFeedback({ content: nextContent })
 }
 
 async function handleCreate() {
@@ -312,6 +438,20 @@ async function handleCreate() {
 
   store.outlineWorkbench.creatingKey = action.key
   try {
+    if (store.canBrainstorm) {
+      if (detailPanel.value?.outlineType === 'synopsis') {
+        await store.submitOutlineFeedback({
+          content: '请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。',
+        })
+        return
+      }
+
+      await store.submitOutlineFeedback({
+        content: `请基于当前总纲与已完成卷纲，先生成第 ${action.volumeNumber} 卷的完整卷纲草稿，补齐卷目标、核心冲突、章节结构和卷末推进。`,
+      })
+      return
+    }
+
     if (detailPanel.value?.outlineType === 'synopsis') {
       await api.brainstorm(store.novelId)
       await store.refreshState()
@@ -330,5 +470,21 @@ async function handleCreate() {
       store.outlineWorkbench.creatingKey = ''
     }
   }
+}
+
+async function handleFinalConfirm() {
+  if (finalConfirmationDisabledReason.value) return
+  await store.submitBrainstormWorkspace()
+}
+
+function buildMissingOutlinePrompt(detail) {
+  if (!detail || detail.status !== 'missing') return ''
+  if (detail.outlineType === 'synopsis') {
+    return '请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。'
+  }
+
+  const volumeNumber = parseVolumeNumber(detail.outlineRef)
+  if (!volumeNumber) return '请基于当前总纲生成当前卷的完整卷纲草稿，补齐卷目标、核心冲突、章节结构和卷末推进。'
+  return `请基于当前总纲与已完成卷纲，先生成第 ${volumeNumber} 卷的完整卷纲草稿，补齐卷目标、核心冲突、章节结构和卷末推进。`
 }
 </script>

@@ -126,6 +126,44 @@ async def test_submit_outline_workbench_feedback_returns_updated_assistant_messa
 
 
 @pytest.mark.asyncio
+async def test_submit_outline_workbench_feedback_returns_confirmation_question_for_missing_brainstorm_synopsis(async_session, test_client):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=2,
+        estimated_total_chapters=20,
+        estimated_total_words=60000,
+    )
+    await director.save_checkpoint(
+        "n_outline_brainstorm_question",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+    await async_session.commit()
+
+    async with test_client as client:
+        resp = await client.post(
+            "/api/novels/n_outline_brainstorm_question/outline_workbench/submit",
+            json={
+                "outline_type": "synopsis",
+                "outline_ref": "synopsis",
+                "content": "请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
+            },
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["assistant_message"]["role"] == "assistant"
+    assert data["assistant_message"]["message_type"] == "question"
+    assert data["assistant_message"]["meta"]["interaction_stage"] == "generation_confirmation"
+    assert data["last_result_snapshot"] is None
+
+
+@pytest.mark.asyncio
 async def test_get_outline_workbench_messages_returns_recent_messages(async_session, test_client):
     director = NovelDirector(session=async_session)
     synopsis = SynopsisData(
