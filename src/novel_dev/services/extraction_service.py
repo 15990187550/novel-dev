@@ -15,6 +15,10 @@ from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import log_service
 from novel_dev.db.models import NovelDocument, PendingExtraction
+from novel_dev.schemas.brainstorm_workspace import (
+    PendingExtractionPayload,
+    SettingDocDraftPayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +63,114 @@ class ExtractionService:
         self.pending_repo = PendingExtractionRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.entity_svc = EntityService(session, embedding_service)
+
+    def _normalize_setting_draft(self, draft: dict[str, Any]) -> dict[str, Any]:
+        payload = SettingDocDraftPayload.model_validate(draft)
+        return {
+            "draft_id": payload.draft_id,
+            "source_outline_ref": payload.source_outline_ref,
+            "source_kind": payload.source_kind,
+            "target_import_mode": payload.target_import_mode,
+            "target_doc_type": payload.target_doc_type,
+            "title": payload.title,
+            "content": payload.content,
+            "order_index": payload.order_index,
+        }
+
+    def validate_setting_draft(self, draft: dict[str, Any]) -> dict[str, Any]:
+        normalized_draft = self._normalize_setting_draft(draft)
+        if normalized_draft["target_import_mode"] == "auto_classify":
+            return normalized_draft
+        if normalized_draft["target_import_mode"] != "explicit_type":
+            raise ValueError(
+                f"Unsupported target_import_mode: {normalized_draft['target_import_mode']}"
+            )
+
+        self._build_explicit_setting_payload(normalized_draft)
+        return normalized_draft
+
+    def _build_explicit_setting_payload(
+        self,
+        draft: dict[str, Any],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        raw_result = {
+            "worldview": "",
+            "power_system": "",
+            "factions": "",
+            "character_profiles": [],
+            "important_items": [],
+            "plot_synopsis": "",
+        }
+        proposed_entities: list[dict[str, Any]] = []
+
+        source_kind = draft["source_kind"]
+        target_doc_type = draft["target_doc_type"]
+        title = draft["title"]
+        content = draft["content"]
+
+        if target_doc_type == "worldview" and source_kind == "worldview":
+            raw_result["worldview"] = content
+        elif target_doc_type == "setting" and source_kind == "power_system":
+            raw_result["power_system"] = content
+        elif target_doc_type == "synopsis" and source_kind == "synopsis":
+            raw_result["plot_synopsis"] = content
+        elif target_doc_type == "concept":
+            if source_kind == "item":
+                item = {
+                    "name": title,
+                    "description": content,
+                    "significance": "",
+                }
+                raw_result["important_items"] = [item]
+                proposed_entities.append(
+                    {
+                        "type": "item",
+                        "name": title,
+                        "data": item,
+                    }
+                )
+            elif source_kind == "character":
+                character = {
+                    "name": title,
+                    "identity": content,
+                    "personality": "",
+                    "goal": "",
+                    "appearance": "",
+                    "background": "",
+                    "ability": "",
+                    "realm": "",
+                    "relationships": "",
+                    "resources": "",
+                    "secrets": "",
+                    "conflict": "",
+                    "arc": "",
+                    "notes": "",
+                }
+                raw_result["character_profiles"] = [character]
+                proposed_entities.append(
+                    {
+                        "type": "character",
+                        "name": title,
+                        "data": character,
+                    }
+                )
+            else:
+                raise ValueError(
+                    f"Unsupported explicit draft combination: source_kind={source_kind}, "
+                    f"target_doc_type={target_doc_type}"
+                )
+        elif target_doc_type == "setting" and source_kind == "faction":
+            raise ValueError(
+                "Explicit faction drafts are not supported by the pending-setting approval flow; "
+                "use auto_classify or extend the approval path first"
+            )
+        else:
+            raise ValueError(
+                f"Unsupported explicit draft combination: source_kind={source_kind}, "
+                f"target_doc_type={target_doc_type}"
+            )
+
+        return raw_result, proposed_entities
 
     def _stringify_value(self, value: Any) -> str:
         if value is None:
@@ -232,6 +344,25 @@ class ExtractionService:
 
     async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
         log_service.add_log(novel_id, "ExtractionService", f"处理上传文件: {filename}")
+        payload = await self._build_pending_payload_from_content(novel_id, filename, content)
+        if payload.extraction_type == "setting":
+            proposed_entity_count = len(payload.proposed_entities or [])
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"设定提取完成，待审核: {proposed_entity_count} 个实体",
+            )
+            return await self.persist_pending_payload(novel_id, payload)
+        else:
+            log_service.add_log(novel_id, "ExtractionService", "风格样本提取完成，待审核")
+            return await self.persist_pending_payload(novel_id, payload)
+
+    async def _build_pending_payload_from_content(
+        self,
+        novel_id: str,
+        filename: str,
+        content: str,
+    ) -> PendingExtractionPayload:
         classification = await self.classifier.classify(filename, content, novel_id)
 
         if classification.file_type == "setting":
@@ -245,28 +376,66 @@ class ExtractionService:
             if extracted.factions:
                 proposed_entities.append({"type": "faction", "name": "extracted_factions", "data": {"factions": extracted.factions}})
             diff_result = await self._build_setting_diff(novel_id, raw_result)
-
-            log_service.add_log(novel_id, "ExtractionService", f"设定提取完成，待审核: {len(proposed_entities)} 个实体")
-            return await self.pending_repo.create(
-                pe_id=f"pe_{uuid.uuid4().hex[:8]}",
-                novel_id=novel_id,
+            return PendingExtractionPayload(
                 source_filename=filename,
                 extraction_type="setting",
                 raw_result=raw_result,
                 proposed_entities=proposed_entities,
                 diff_result=diff_result,
             )
-        else:
-            profile = await self.style_agent.profile(content, novel_id)
-            raw_result = profile.model_dump()
-            log_service.add_log(novel_id, "ExtractionService", "风格样本提取完成，待审核")
-            return await self.pending_repo.create(
-                pe_id=f"pe_{uuid.uuid4().hex[:8]}",
+
+        profile = await self.style_agent.profile(content, novel_id)
+        return PendingExtractionPayload(
+            source_filename=filename,
+            extraction_type="style_profile",
+            raw_result=profile.model_dump(),
+        )
+
+    async def build_pending_payload_from_setting_draft(
+        self,
+        novel_id: str,
+        draft: dict[str, Any],
+    ) -> PendingExtractionPayload:
+        normalized_draft = self.validate_setting_draft(draft)
+        filename = (
+            f"brainstorm-{normalized_draft['source_outline_ref']}-{normalized_draft['draft_id']}.md"
+        )
+
+        if normalized_draft["target_import_mode"] == "auto_classify":
+            return await self._build_pending_payload_from_content(
                 novel_id=novel_id,
-                source_filename=filename,
-                extraction_type="style_profile",
-                raw_result=raw_result,
+                filename=filename,
+                content=normalized_draft["content"],
             )
+
+        raw_result, proposed_entities = self._build_explicit_setting_payload(normalized_draft)
+        diff_result = await self._build_setting_diff(novel_id, raw_result)
+        return PendingExtractionPayload(
+            source_filename=filename,
+            extraction_type="setting",
+            raw_result=raw_result,
+            proposed_entities=proposed_entities,
+            diff_result=diff_result,
+        )
+
+    async def persist_pending_payload(
+        self,
+        novel_id: str,
+        payload: PendingExtractionPayload,
+    ) -> PendingExtraction:
+        return await self.pending_repo.create(
+            pe_id=f"pe_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            source_filename=payload.source_filename,
+            extraction_type=payload.extraction_type,
+            raw_result=payload.raw_result,
+            proposed_entities=payload.proposed_entities,
+            diff_result=payload.diff_result,
+        )
+
+    async def create_pending_from_setting_draft(self, novel_id: str, draft: dict[str, Any]) -> PendingExtraction:
+        payload = await self.build_pending_payload_from_setting_draft(novel_id, draft)
+        return await self.persist_pending_payload(novel_id, payload)
 
     async def approve_pending(self, pe_id: str, field_resolutions: Optional[List[dict]] = None) -> List[NovelDocument]:
         pe = await self.pending_repo.get_by_id(pe_id)

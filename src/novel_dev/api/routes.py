@@ -1294,13 +1294,21 @@ async def plan_volume(novel_id: str, req: VolumePlanRequest = VolumePlanRequest(
 async def get_synopsis(novel_id: str, session: AsyncSession = Depends(get_session)):
     repo = DocumentRepository(session)
     state_repo = NovelStateRepository(session)
-    docs = await repo.get_by_type(novel_id, "synopsis")
-    if not docs:
-        raise HTTPException(status_code=404, detail="Synopsis not found")
     state = await state_repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    docs = await repo.get_by_type(novel_id, "synopsis")
     synopsis_data = {}
-    if state and state.checkpoint_data:
+    if state.checkpoint_data:
         synopsis_data = state.checkpoint_data.get("synopsis_data", {})
+
+    if not docs:
+        return {
+            "content": "",
+            "synopsis_data": synopsis_data,
+        }
+
     return {
         "content": docs[0].content,
         "synopsis_data": synopsis_data,

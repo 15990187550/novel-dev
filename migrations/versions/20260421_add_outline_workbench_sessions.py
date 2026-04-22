@@ -1,7 +1,7 @@
 """add outline workbench sessions
 
-Revision ID: 20260421_add_outline_workbench_sessions
-Revises: 20260421_add_entity_classification_and_search_fields
+Revision ID: 20260421_outline_workbench
+Revises: 20260421_entity_classification
 Create Date: 2026-04-21 22:00:00.000000
 
 """
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260421_add_outline_workbench_sessions"
-down_revision: Union[str, Sequence[str], None] = "20260421_add_entity_classification_and_search_fields"
+revision: str = "20260421_outline_workbench"
+down_revision: Union[str, Sequence[str], None] = "20260421_entity_classification"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

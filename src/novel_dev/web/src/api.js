@@ -37,7 +37,7 @@ export const getEntityRelationships = (id) => api.get(`/novels/${id}/entity_rela
 export const getTimelines = (id) => api.get(`/novels/${id}/timelines`).then(r => r.data)
 export const getSpacelines = (id) => api.get(`/novels/${id}/spacelines`).then(r => r.data)
 export const getForeshadowings = (id) => api.get(`/novels/${id}/foreshadowings`).then(r => r.data)
-export const getSynopsis = (id) => api.get(`/novels/${id}/synopsis`).then(r => r.data)
+export const getSynopsis = (id) => api.get(`/novels/${id}/synopsis`, withSilentError()).then(r => r.data)
 export const getVolumePlan = (id) => api.get(`/novels/${id}/volume_plan`, withSilentError()).then(r => r.data)
 export const getOutlineWorkbench = (id, params) =>
   api.get(`/novels/${id}/outline_workbench`, { params }).then(r => r.data)

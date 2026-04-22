@@ -27,6 +27,7 @@ vi.mock('axios', () => ({
 
 import {
   brainstorm,
+  getSynopsis,
   getVolumePlan,
   getOutlineWorkbench,
   getOutlineWorkbenchMessages,
@@ -87,6 +88,14 @@ describe('outline workbench api', () => {
     await expect(getVolumePlan('novel-1')).resolves.toEqual({ ok: true })
 
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/volume_plan', {
+      __skipGlobalErrorMessage: true,
+    })
+  })
+
+  it('requests synopsis with silent error handling for empty novels', async () => {
+    await expect(getSynopsis('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/synopsis', {
       __skipGlobalErrorMessage: true,
     })
   })

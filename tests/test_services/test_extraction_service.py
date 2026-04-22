@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from novel_dev.services.extraction_service import ExtractionService
+from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.agents.file_classifier import FileClassificationResult
 from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
 from novel_dev.agents.style_profiler import StyleProfile, StyleConfig
@@ -98,6 +99,23 @@ async def test_approve_setting_succeeds_when_entity_indexing_fails(async_session
     svc = ExtractionService(async_session, FailingFlushEmbeddingService())
     pe = await svc.process_upload(
         novel_id="n1",
+        filename="setting.txt",
+        content="世界观：天玄大陆。主角林风，外门弟子。",
+    )
+
+    docs = await svc.approve_pending(pe.id)
+
+    assert len(docs) > 0
+    assert pe.status == "approved"
+
+
+@pytest.mark.asyncio
+async def test_approve_setting_succeeds_when_entity_embedding_dimensions_mismatch(async_session, mock_llm):
+    mock_embedder = AsyncMock()
+    mock_embedder.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+    svc = ExtractionService(async_session, EmbeddingService(async_session, mock_embedder))
+    pe = await svc.process_upload(
+        novel_id="n_dim",
         filename="setting.txt",
         content="世界观：天玄大陆。主角林风，外门弟子。",
     )
@@ -530,3 +548,4 @@ async def test_approve_setting_builds_diff_for_legacy_pending(async_session):
     refreshed = await svc.pending_repo.get_by_id(pe.id)
     assert refreshed.resolution_result is not None
     assert refreshed.resolution_result["field_resolutions"]
+

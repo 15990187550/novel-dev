@@ -1,7 +1,7 @@
 """add resolution_result to pending extractions
 
-Revision ID: 20260420_add_pending_extraction_resolution_result
-Revises: 20260420_add_pending_extraction_diff_result
+Revision ID: 20260420_pe_resolution_result
+Revises: 20260420_pe_diff_result
 Create Date: 2026-04-20 19:20:00.000000
 
 """
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = '20260420_add_pending_extraction_resolution_result'
-down_revision: Union[str, Sequence[str], None] = '20260420_add_pending_extraction_diff_result'
+revision: str = '20260420_pe_resolution_result'
+down_revision: Union[str, Sequence[str], None] = '20260420_pe_diff_result'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

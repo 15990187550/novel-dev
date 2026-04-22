@@ -327,12 +327,13 @@ export const useNovelStore = defineStore('novel', {
 
     async refreshState() {
       if (!this.novelId) return
-      const [state, stats, chapters, synopsis, volumePlan] = await Promise.all([
-        api.getNovelState(this.novelId),
+      const state = await api.getNovelState(this.novelId)
+      const shouldLoadVolumePlan = !!state.checkpoint_data?.current_volume_plan
+      const [stats, chapters, synopsis, volumePlan] = await Promise.all([
         api.getArchiveStats(this.novelId).catch(() => ({})),
         api.getChapters(this.novelId).catch(() => ({ items: [] })),
         api.getSynopsis(this.novelId).catch(() => null),
-        api.getVolumePlan(this.novelId).catch(() => null),
+        shouldLoadVolumePlan ? api.getVolumePlan(this.novelId).catch(() => null) : Promise.resolve(null),
       ])
       this.novelState = state
       this.archiveStats = stats

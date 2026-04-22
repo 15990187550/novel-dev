@@ -3,7 +3,7 @@ from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.db.models import Entity
+from novel_dev.db.models import Chapter, Entity, NovelDocument
 from novel_dev.llm.embedder import BaseEmbedder
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -30,6 +30,22 @@ class EmbeddingService:
         vectors = await self.embedder.aembed([truncated])
         return vectors[0]
 
+    @staticmethod
+    def _vector_dimensions_match(column, vector: list[float], label: str, record_id: str) -> bool:
+        expected = getattr(getattr(column, "type", None), "dimensions", None)
+        actual = len(vector)
+        if expected is None or actual == expected:
+            return True
+        logger.warning(
+            label,
+            extra={
+                "record_id": record_id,
+                "expected_dimensions": expected,
+                "actual_dimensions": actual,
+            },
+        )
+        return False
+
     async def index_document(self, doc_id: str) -> None:
         repo = DocumentRepository(self.session)
         doc = await repo.get_by_id(doc_id)
@@ -42,6 +58,13 @@ class EmbeddingService:
                 "embedding_generation_failed",
                 extra={"doc_id": doc_id, "error": str(exc)},
             )
+            return
+        if not self._vector_dimensions_match(
+            NovelDocument.__table__.c.vector_embedding,
+            vector,
+            "document_embedding_dimension_mismatch",
+            doc_id,
+        ):
             return
         doc.vector_embedding = vector
         await self.session.flush()
@@ -85,6 +108,13 @@ class EmbeddingService:
         except Exception as exc:
             logger.warning("entity_embedding_failed", extra={"entity_id": entity_id, "error": str(exc)})
             return
+        if not self._vector_dimensions_match(
+            Entity.__table__.c.vector_embedding,
+            vector,
+            "entity_embedding_dimension_mismatch",
+            entity_id,
+        ):
+            return
         entity.vector_embedding = vector
         await self.session.flush()
 
@@ -101,6 +131,13 @@ class EmbeddingService:
             vector = await self.generate_embedding(text)
         except Exception as exc:
             logger.warning("entity_search_embedding_failed", extra={"entity_id": entity_id, "error": str(exc)})
+            return
+        if not self._vector_dimensions_match(
+            Entity.__table__.c.search_vector_embedding,
+            vector,
+            "entity_search_embedding_dimension_mismatch",
+            entity_id,
+        ):
             return
         entity.search_document = text
         entity.search_vector_embedding = vector
@@ -160,6 +197,13 @@ class EmbeddingService:
             vector = await self.generate_embedding(text)
         except Exception as exc:
             logger.warning("chapter_embedding_failed", extra={"chapter_id": chapter_id, "error": str(exc)})
+            return
+        if not self._vector_dimensions_match(
+            Chapter.__table__.c.vector_embedding,
+            vector,
+            "chapter_embedding_dimension_mismatch",
+            chapter_id,
+        ):
             return
         ch.vector_embedding = vector
         await self.session.flush()

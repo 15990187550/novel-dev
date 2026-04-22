@@ -56,6 +56,29 @@ describe('novel store dashboard loading', () => {
     expect(store.dashboardLastUpdated).toBeTruthy()
   })
 
+  it('skips volume plan request when the checkpoint has no current volume plan', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getNovelState).mockResolvedValue({
+      current_phase: 'brainstorming',
+      current_chapter_id: null,
+      checkpoint_data: {
+        synopsis_data: {
+          title: '道照诸天',
+        },
+      },
+    })
+    vi.mocked(api.getArchiveStats).mockResolvedValue({})
+    vi.mocked(api.getChapters).mockResolvedValue({ items: [] })
+
+    await store.refreshState()
+
+    expect(api.getVolumePlan).not.toHaveBeenCalled()
+    expect(store.volumePlan).toBeNull()
+    expect(store.synopsisData).toEqual({ title: '道照诸天' })
+  })
+
   it('marks a failed supplemental panel as error and clears its stale data', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

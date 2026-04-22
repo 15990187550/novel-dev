@@ -1,7 +1,7 @@
 """add entity classification and search fields
 
-Revision ID: 20260421_add_entity_classification_and_search_fields
-Revises: 20260421_add_source_filename_to_pending_extractions
+Revision ID: 20260421_entity_classification
+Revises: 20260421_pe_source_filename
 Create Date: 2026-04-21 21:00:00.000000
 
 """
@@ -32,8 +32,8 @@ class _VectorCompat(TypeDecorator):
 
 
 # revision identifiers, used by Alembic.
-revision: str = "20260421_add_entity_classification_and_search_fields"
-down_revision: Union[str, Sequence[str], None] = "20260421_add_source_filename_to_pending_extractions"
+revision: str = "20260421_entity_classification"
+down_revision: Union[str, Sequence[str], None] = "20260421_pe_source_filename"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

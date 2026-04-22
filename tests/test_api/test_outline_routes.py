@@ -61,6 +61,46 @@ async def test_get_synopsis(async_session, test_client, mock_llm_factory):
 
 
 @pytest.mark.asyncio
+async def test_get_synopsis_returns_empty_payload_when_doc_missing(async_session, test_client):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_empty_syn",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "道照诸天",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+    )
+
+    async with test_client as client:
+        resp = await client.get("/api/novels/n_empty_syn/synopsis")
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "content": "",
+            "synopsis_data": {
+                "title": "道照诸天",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            },
+        }
+
+
+@pytest.mark.asyncio
 async def test_get_volume_plan(async_session, test_client, mock_llm_factory):
     await DocumentRepository(async_session).create(
         "d1", "n_vp", "worldview", "WV", "大陆"
