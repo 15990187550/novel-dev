@@ -204,6 +204,23 @@ class OutlineSession(Base):
     messages: Mapped[List["OutlineMessage"]] = relationship(back_populates="session", cascade="all, delete-orphan")
 
 
+class BrainstormWorkspace(Base):
+    __tablename__ = "brainstorm_workspaces"
+    __table_args__ = (
+        UniqueConstraint("novel_id", "status", name="uix_brainstorm_workspace_novel_status"),
+        Index("ix_brainstorm_workspaces_novel_status", "novel_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    workspace_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    outline_drafts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    setting_docs_draft: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    last_saved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+
+
 class OutlineMessage(Base):
     __tablename__ = "outline_messages"
     __table_args__ = (
