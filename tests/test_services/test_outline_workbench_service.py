@@ -6,12 +6,17 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.db.models import OutlineMessage
 from novel_dev.llm.models import LLMResponse
+from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardMergePayload
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 from novel_dev.schemas.outline import SynopsisData, VolumePlan, VolumeBeat
 from novel_dev.schemas.context import BeatPlan
 from novel_dev.schemas.outline_workbench import OutlineContextWindow
-from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
+from novel_dev.services.outline_workbench_service import (
+    OutlineWorkbenchService,
+    SuggestionCardUpdateEnvelope,
+    SuggestionUpdateSummary,
+)
 
 
 @pytest.mark.asyncio
@@ -178,6 +183,58 @@ async def test_submit_feedback_routes_volume_outline_and_returns_assistant_messa
     assert messages[1].content == "已根据反馈补强第二卷冲突升级。"
     assert session.last_result_snapshot == {"outline_ref": "vol_2", "title": "第二卷", "summary": "强化冲突升级"}
     assert session.conversation_summary == "用户要求强化第二卷中段冲突，已完成调整。"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_omits_setting_update_summary_outside_brainstorming(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=2,
+        estimated_total_chapters=20,
+        estimated_total_words=60000,
+    )
+    await director.save_checkpoint(
+        "n_submit_no_summary",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_optimize_volume(**kwargs):
+        return {
+            "content": "已根据反馈补强第二卷冲突升级。",
+            "result_snapshot": {
+                "volume_id": "vol_2",
+                "volume_number": 2,
+                "title": "第二卷",
+                "summary": "强化冲突升级",
+                "total_chapters": 10,
+                "estimated_total_words": 30000,
+                "chapters": [],
+            },
+            "setting_draft_updates": [],
+        }
+
+    async def fake_write_result_snapshot(**kwargs):
+        return None
+
+    monkeypatch.setattr(service, "_optimize_volume", fake_optimize_volume)
+    monkeypatch.setattr(service, "_write_result_snapshot", fake_write_result_snapshot)
+
+    response = await service.submit_feedback(
+        novel_id="n_submit_no_summary",
+        outline_type="volume",
+        outline_ref="vol_2",
+        feedback="第二卷冲突升级不够猛，再推高主角代价。",
+    )
+
+    assert response.setting_update_summary is None
 
 
 @pytest.mark.asyncio
@@ -763,43 +820,56 @@ async def test_submit_feedback_merges_suggestion_cards_in_brainstorm_mode(async_
 
     service = OutlineWorkbenchService(async_session)
 
-    async def fake_optimize_outline(**kwargs):
+    async def fake_optimize_volume(**kwargs):
         return {
             "content": "已更新第一卷卷纲，并细化主要人物与关系。",
             "result_snapshot": {
+                "volume_id": "vol_1",
+                "volume_number": 1,
                 "title": "第一卷",
                 "summary": "卷一摘要",
+                "total_chapters": 10,
+                "estimated_total_words": 100000,
+                "chapters": [],
                 "entity_highlights": {"characters": ["陆照：主角"]},
                 "relationship_highlights": ["陆照 / 苏清寒：互疑转合作"],
             },
             "setting_draft_updates": [],
-            "setting_suggestion_card_updates": [
-                {
-                    "operation": "upsert",
-                    "card_id": "card_rel",
-                    "card_type": "relationship",
-                    "merge_key": "relationship:lu-zhao:su-qinghan",
-                    "title": "陆照 / 苏清寒",
-                    "summary": "互疑转合作",
-                    "status": "active",
-                    "source_outline_refs": ["vol_1"],
-                    "payload": {
+        }
+
+    async def fake_call_and_parse_model(*args, **kwargs):
+        return SuggestionCardUpdateEnvelope(
+            cards=[
+                SettingSuggestionCardMergePayload(
+                    operation="upsert",
+                    card_id="card_rel",
+                    card_type="relationship",
+                    merge_key="relationship:lu-zhao:su-qinghan",
+                    title="陆照 / 苏清寒",
+                    summary="互疑转合作",
+                    status="active",
+                    source_outline_refs=["vol_1"],
+                    payload={
                         "source_entity_ref": "陆照",
                         "target_entity_ref": "苏清寒",
                         "relation_type": "亦敌亦友",
                     },
-                    "display_order": 30,
-                }
+                    display_order=30,
+                )
             ],
-            "setting_update_summary": {
-                "created": 1,
-                "updated": 0,
-                "superseded": 0,
-                "unresolved": 0,
-            },
-        }
+            summary=SuggestionUpdateSummary(
+                created=1,
+                updated=0,
+                superseded=0,
+                unresolved=0,
+            ),
+        )
 
-    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+    monkeypatch.setattr(service, "_optimize_volume", fake_optimize_volume)
+    monkeypatch.setattr(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
 
     response = await service.submit_feedback(
         novel_id="novel_outline_cards",

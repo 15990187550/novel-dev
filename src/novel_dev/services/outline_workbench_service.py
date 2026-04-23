@@ -392,15 +392,16 @@ class OutlineWorkbenchService:
         else:
             raise ValueError(f"Unsupported outline type: {outline_type}")
 
+        is_brainstorming = self._is_brainstorming_phase(state.current_phase)
         setting_suggestion_card_updates: list[dict[str, Any]] = result.get(
             "setting_suggestion_card_updates",
             [],
         )
-        setting_update_summary: dict[str, int] = result.get(
-            "setting_update_summary",
-            SuggestionUpdateSummary().model_dump(),
+        setting_update_summary = self._normalize_setting_update_summary(
+            result.get("setting_update_summary"),
+            is_brainstorming=is_brainstorming,
         )
-        if self._is_brainstorming_phase(state.current_phase) and result.get("result_snapshot"):
+        if is_brainstorming and result.get("result_snapshot"):
             (
                 setting_suggestion_card_updates,
                 setting_update_summary,
@@ -424,6 +425,22 @@ class OutlineWorkbenchService:
                 feedback,
             ),
         }
+
+    def _normalize_setting_update_summary(
+        self,
+        summary: Optional[dict[str, int]],
+        *,
+        is_brainstorming: bool,
+    ) -> Optional[dict[str, int]]:
+        if summary is None:
+            return None
+
+        normalized = SuggestionUpdateSummary.model_validate(summary).model_dump()
+        if is_brainstorming:
+            return normalized
+        if any(value != 0 for value in normalized.values()):
+            return normalized
+        return None
 
     async def _build_suggestion_card_updates(
         self,
