@@ -254,9 +254,8 @@ describe('Entities', () => {
     seedStore()
     const wrapper = mountView()
 
-    const page = wrapper.find('.entities-theme')
-    expect(page.exists()).toBe(true)
-    expect(page.find('.entity-tree-stub').exists()).toBe(true)
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['entities-page', 'entities-theme']))
+    expect(wrapper.find('.entity-tree-stub').exists()).toBe(true)
   })
 
   it('shows an empty workspace until the user selects a node', async () => {
