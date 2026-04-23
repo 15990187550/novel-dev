@@ -3,12 +3,14 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.db.models import OutlineMessage
 from novel_dev.llm.models import LLMResponse
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 from novel_dev.schemas.outline import SynopsisData, VolumePlan, VolumeBeat
 from novel_dev.schemas.context import BeatPlan
+from novel_dev.schemas.outline_workbench import OutlineContextWindow
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 
 
@@ -293,11 +295,119 @@ async def test_optimize_synopsis_prompt_explicitly_constrains_schema(async_sessi
     assert '"estimated_volumes"' in prompt
     assert '"estimated_total_chapters"' in prompt
     assert '"estimated_total_words"' in prompt
+    assert '"entity_highlights"' in prompt
+    assert '"relationship_highlights"' in prompt
     assert "character_arcs: 数组,每项只包含 name / arc_summary / key_turning_points 三个字段" in prompt
     assert "milestones: 数组,每项只包含 act / summary / climax_event 三个字段" in prompt
+    assert "entity_highlights: 对象" in prompt
+    assert "relationship_highlights: 字符串数组" in prompt
     assert "禁止使用旧字段" in prompt
     assert "character / arc / turning_points" in prompt
     assert "name / description / chapter_range" in prompt
+
+
+@pytest.mark.asyncio
+async def test_optimize_synopsis_preserves_highlight_fields_in_result_snapshot(async_session):
+    service = OutlineWorkbenchService(async_session)
+    checkpoint = {
+        "synopsis_data": {
+            "title": "道照诸天",
+            "logline": "旧梗概",
+            "core_conflict": "旧冲突",
+            "themes": ["求道"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 10,
+            "estimated_total_chapters": 1300,
+            "estimated_total_words": 3900000,
+        }
+    }
+    context_window = OutlineContextWindow()
+
+    with patch(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        new=AsyncMock(
+            return_value=SynopsisData.model_validate(
+                {
+                    **checkpoint["synopsis_data"],
+                    "logline": "新梗概",
+                    "entity_highlights": {"characters": ["陆照：主角"]},
+                    "relationship_highlights": ["陆照 / 苏清寒：互疑转合作"],
+                }
+            )
+        ),
+    ):
+        with patch.object(service, "_load_brainstorm_source_text", AsyncMock(return_value="世界设定")):
+            result = await service._optimize_synopsis(
+                novel_id="n_synopsis_highlights",
+                checkpoint=checkpoint,
+                feedback="补强人物亮点",
+                context_window=context_window,
+            )
+
+    assert result["result_snapshot"]["entity_highlights"] == {"characters": ["陆照：主角"]}
+    assert result["result_snapshot"]["relationship_highlights"] == ["陆照 / 苏清寒：互疑转合作"]
+
+
+@pytest.mark.asyncio
+async def test_optimize_volume_preserves_highlight_fields_in_result_snapshot(async_session, monkeypatch):
+    checkpoint = {
+        "synopsis_data": {
+            "title": "道照诸天",
+            "logline": "陆照求道",
+            "core_conflict": "陆照 vs 玄天道庭",
+            "themes": ["求道"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 100,
+            "estimated_total_words": 300000,
+        }
+    }
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_generate_volume_plan(*args, **kwargs):
+        return VolumePlan.model_validate(
+            {
+                "volume_id": "vol_1",
+                "volume_number": 1,
+                "title": "第一卷",
+                "summary": "卷一摘要",
+                "total_chapters": 10,
+                "estimated_total_words": 100000,
+                "chapters": [],
+            }
+        )
+
+    async def fake_revise_volume_plan(*args, **kwargs):
+        return VolumePlan.model_validate(
+            {
+                "volume_id": "vol_1",
+                "volume_number": 1,
+                "title": "第一卷",
+                "summary": "卷一摘要",
+                "total_chapters": 10,
+                "estimated_total_words": 100000,
+                "chapters": [],
+                "entity_highlights": {"characters": ["陆照：主角"]},
+                "relationship_highlights": ["陆照 / 苏清寒：互疑转合作"],
+            }
+        )
+
+    monkeypatch.setattr(VolumePlannerAgent, "_generate_volume_plan", fake_generate_volume_plan)
+    monkeypatch.setattr(VolumePlannerAgent, "_revise_volume_plan", fake_revise_volume_plan)
+    monkeypatch.setattr(VolumePlannerAgent, "_build_plan_context", lambda *args, **kwargs: "plan context")
+
+    result = await service._optimize_volume(
+        novel_id="n_volume_highlights",
+        outline_ref="vol_1",
+        checkpoint=checkpoint,
+        feedback="补强人物关系亮点",
+        context_window=OutlineContextWindow(),
+    )
+
+    assert result["result_snapshot"]["entity_highlights"] == {"characters": ["陆照：主角"]}
+    assert result["result_snapshot"]["relationship_highlights"] == ["陆照 / 苏清寒：互疑转合作"]
 
 
 @pytest.mark.asyncio
@@ -699,7 +809,7 @@ async def test_submit_feedback_merges_suggestion_cards_in_brainstorm_mode(async_
     )
 
     assert "细化主要人物与关系" in response.assistant_message.content
-    assert response.assistant_message.meta["setting_update_summary"] == {
+    assert response.setting_update_summary == {
         "created": 1,
         "updated": 0,
         "superseded": 0,

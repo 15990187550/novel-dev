@@ -49,3 +49,4 @@ class OutlineSubmitResponse(BaseModel):
     assistant_message: OutlineMessagePayload
     last_result_snapshot: Optional[dict[str, Any]] = None
     conversation_summary: Optional[str] = None
+    setting_update_summary: Optional[dict[str, int]] = None

@@ -210,6 +210,7 @@ class OutlineWorkbenchService:
                 assistant_message=self._serialize_message(assistant_message),
                 last_result_snapshot=outline_session.last_result_snapshot,
                 conversation_summary=outline_session.conversation_summary,
+                setting_update_summary=None,
             )
 
         optimize_result = await self._optimize_outline(
@@ -266,6 +267,7 @@ class OutlineWorkbenchService:
             assistant_message=self._serialize_message(assistant_message),
             last_result_snapshot=outline_session.last_result_snapshot,
             conversation_summary=outline_session.conversation_summary,
+            setting_update_summary=optimize_result.get("setting_update_summary"),
         )
 
     async def get_messages(
@@ -545,7 +547,8 @@ class OutlineWorkbenchService:
             "## 输出字段约束(必须严格遵守)\n"
             "只允许以下顶层字段,禁止输出任何额外字段:\n"
             '{"title","logline","core_conflict","themes","character_arcs","milestones",'
-            '"estimated_volumes","estimated_total_chapters","estimated_total_words"}\n'
+            '"estimated_volumes","estimated_total_chapters","estimated_total_words",'
+            '"entity_highlights","relationship_highlights"}\n'
             "- title: 字符串\n"
             "- logline: 字符串\n"
             "- core_conflict: 字符串\n"
@@ -555,6 +558,8 @@ class OutlineWorkbenchService:
             "- estimated_volumes: 整数\n"
             "- estimated_total_chapters: 整数\n"
             "- estimated_total_words: 整数\n"
+            "- entity_highlights: 对象,可选键包括 characters / factions / locations / items,值均为字符串数组\n"
+            "- relationship_highlights: 字符串数组,每项描述一个关键关系推进\n"
             "禁止使用旧字段: character / arc / turning_points / name / description / chapter_range。\n"
             "不要输出 Markdown、代码块、解释文字、字段注释,也不要输出 worldview_summary、"
             "three_act_structure、volume_hooks、suspense_plants 等任何额外结构。\n\n"

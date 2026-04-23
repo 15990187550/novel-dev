@@ -85,6 +85,8 @@ class SynopsisData(BaseModel):
     estimated_volumes: int
     estimated_total_chapters: int
     estimated_total_words: int
+    entity_highlights: dict[str, List[str]] = Field(default_factory=dict)
+    relationship_highlights: List[str] = Field(default_factory=list)
 
     @field_validator("title", "logline", "core_conflict", mode="before")
     @classmethod
@@ -128,6 +130,8 @@ class VolumePlan(BaseModel):
     total_chapters: int
     estimated_total_words: int
     chapters: List[VolumeBeat] = Field(default_factory=list)
+    entity_highlights: dict[str, List[str]] = Field(default_factory=dict)
+    relationship_highlights: List[str] = Field(default_factory=list)
 
     @field_validator("volume_id", "title", "summary", mode="before")
     @classmethod
