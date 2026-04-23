@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-4">
+  <div class="entity-detail-panel surface-card p-4 space-y-4">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 class="font-bold">{{ title }}</h3>
@@ -21,13 +21,14 @@
         <el-button type="danger" plain @click="emit('delete-entity', entity)">删除实体</el-button>
       </div>
 
-      <div class="rounded-lg border border-gray-200 dark:border-gray-700 p-3 space-y-3">
+      <div class="entity-detail-panel__section entity-detail-panel__override rounded-lg border p-3 space-y-3">
         <div class="font-semibold">人工覆盖</div>
         <div class="grid gap-3 lg:grid-cols-2">
-          <el-select v-model="manualCategory" placeholder="选择一级分类" clearable @change="handleCategoryChange">
+          <el-select class="entity-detail-panel__select" v-model="manualCategory" placeholder="选择一级分类" clearable @change="handleCategoryChange">
             <el-option v-for="option in CATEGORY_OPTIONS" :key="option" :label="option" :value="option" />
           </el-select>
           <el-select
+            class="entity-detail-panel__select"
             v-model="manualGroupName"
             placeholder="选择或输入二级分组"
             clearable
@@ -45,7 +46,7 @@
         </div>
       </div>
 
-      <el-descriptions :column="2" border size="small">
+      <el-descriptions :column="2" border size="small" class="entity-detail-panel__descriptions">
         <el-descriptions-item label="名称">{{ entity.name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="类型">{{ entity.type || '-' }}</el-descriptions-item>
         <el-descriptions-item label="版本">{{ entity.current_version ?? '-' }}</el-descriptions-item>
@@ -60,6 +61,7 @@
       </el-descriptions>
 
       <el-alert
+        class="entity-detail-panel__reason"
         v-if="entity.classification_reason"
         title="分类依据"
         type="info"
@@ -72,14 +74,14 @@
       </el-alert>
 
       <div class="grid gap-3 lg:grid-cols-2">
-        <div class="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+        <div class="entity-detail-panel__section rounded-lg border p-3">
           <div class="mb-2 font-semibold">最新状态</div>
           <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-700 dark:text-gray-200">{{ prettyJson(entity.latest_state) }}</pre>
         </div>
-        <div class="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+        <div class="entity-detail-panel__section rounded-lg border p-3">
           <div class="mb-2 font-semibold">关系摘要</div>
           <div v-if="relatedItems.length" class="space-y-2">
-            <div v-for="item in relatedItems" :key="item.key" class="rounded-md bg-gray-50 dark:bg-gray-900 px-3 py-2">
+            <div v-for="item in relatedItems" :key="item.key" class="entity-detail-panel__relation rounded-md px-3 py-2">
               <div class="flex items-center justify-between gap-2">
                 <div class="font-medium">{{ item.label }}</div>
                 <el-button link type="primary" @click="emit('select-entity', item.otherEntityId)">查看关联实体</el-button>
@@ -91,23 +93,24 @@
         </div>
       </div>
 
-      <div v-if="entity.search_document" class="rounded-lg border border-gray-200 dark:border-gray-700 p-3">
+      <div v-if="entity.search_document" class="entity-detail-panel__section rounded-lg border p-3">
         <div class="mb-2 font-semibold">搜索文档</div>
         <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-700 dark:text-gray-200">{{ prettyJson(entity.search_document) }}</pre>
       </div>
 
-      <el-dialog v-model="editDialogVisible" title="编辑实体" width="640px">
+      <el-dialog v-model="editDialogVisible" title="编辑实体" width="640px" class="entity-detail-panel__dialog">
         <div class="space-y-4">
           <div class="grid gap-3 md:grid-cols-2">
-            <el-input v-model="editForm.name" placeholder="实体名称">
+            <el-input class="entity-detail-panel__input" v-model="editForm.name" placeholder="实体名称">
               <template #prepend>名称</template>
             </el-input>
-            <el-input v-model="editForm.type" placeholder="实体类型">
+            <el-input class="entity-detail-panel__input" v-model="editForm.type" placeholder="实体类型">
               <template #prepend>类型</template>
             </el-input>
           </div>
 
           <el-input
+            class="entity-detail-panel__input"
             v-model="editForm.aliasesText"
             placeholder="多个别名请用中文逗号、英文逗号或换行分隔"
           >
@@ -117,6 +120,7 @@
           <div class="grid gap-3 md:grid-cols-2">
             <el-input
               v-for="field in EDITABLE_STATE_FIELDS"
+              class="entity-detail-panel__input"
               :key="field.key"
               v-model="editForm.stateFields[field.key]"
               :placeholder="field.label"
@@ -302,3 +306,102 @@ function statusTagType(status) {
   return 'info'
 }
 </script>
+
+<style scoped>
+.entity-detail-panel {
+  border: 1px solid var(--entities-panel-border);
+  background: var(--entities-panel-bg);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__section {
+  border-color: var(--entities-panel-border);
+  background: var(--entities-panel-bg-soft);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__override {
+  border-color: var(--entities-panel-border-strong);
+  background: var(--entities-panel-bg-muted);
+}
+
+.entity-detail-panel__relation {
+  border: 1px solid var(--entities-panel-border);
+  background: var(--entities-panel-bg-muted);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__descriptions {
+  --el-descriptions-table-border: 1px solid var(--entities-panel-border);
+  --el-descriptions-item-bordered-label-background: var(--entities-grid-label-bg);
+  --el-descriptions-item-bordered-content-background: var(--entities-grid-content-bg);
+  --el-text-color-regular: var(--entities-text);
+  --el-text-color-primary: var(--entities-text);
+  --el-border-color-lighter: var(--entities-panel-border);
+  background: var(--entities-panel-bg-soft);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__descriptions :deep(.el-descriptions__label.el-descriptions__cell.is-bordered-label) {
+  color: var(--entities-text-muted);
+}
+
+.entity-detail-panel__descriptions :deep(.el-descriptions__content.el-descriptions__cell.is-bordered-content) {
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__reason {
+  --el-alert-bg-color: var(--entities-info-bg);
+  --el-alert-border-color: var(--entities-panel-border-strong);
+  --el-alert-title-font-color: var(--entities-text);
+  --el-alert-description-font-color: var(--entities-text-muted);
+  background: var(--entities-info-bg);
+  border: 1px solid var(--entities-panel-border-strong);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__reason :deep(.el-alert__title),
+.entity-detail-panel__reason :deep(.el-alert__description),
+.entity-detail-panel__reason :deep(.el-alert__content) {
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__dialog :deep(.el-dialog),
+.entity-detail-panel__dialog :deep(.el-overlay-dialog .el-dialog) {
+  background: var(--entities-panel-bg);
+  border: 1px solid var(--entities-panel-border);
+}
+
+.entity-detail-panel__dialog :deep(.el-dialog__header),
+.entity-detail-panel__dialog :deep(.el-dialog__body),
+.entity-detail-panel__dialog :deep(.el-dialog__footer) {
+  background: var(--entities-panel-bg);
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__select :deep(.el-select__wrapper) {
+  background: var(--entities-panel-bg-soft);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-detail-panel__select :deep(.el-select__placeholder),
+.entity-detail-panel__select :deep(.el-select__selected-item),
+.entity-detail-panel__select :deep(.el-input__inner) {
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__input :deep(.el-input__wrapper) {
+  background: var(--entities-panel-bg-soft);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-detail-panel__input :deep(.el-input-group__prepend) {
+  background: var(--entities-panel-bg-muted);
+  color: var(--entities-text-muted);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-detail-panel__input :deep(.el-input__inner) {
+  color: var(--entities-text);
+}
+</style>

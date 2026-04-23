@@ -1,6 +1,7 @@
 import { defineComponent, h, inject, provide } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import EntityDetailPanel from './EntityDetailPanel.vue'
 import EntityGroupTable from './EntityGroupTable.vue'
 import EntityTree from './EntityTree.vue'
 
@@ -63,6 +64,30 @@ const simpleStubs = {
     name: 'ElSelectStub',
     setup(_, { slots }) {
       return () => h('div', { class: 'el-select-stub' }, slots.default?.())
+    },
+  }),
+  ElAlert: defineComponent({
+    name: 'ElAlertStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-alert-stub' }, slots.default?.())
+    },
+  }),
+  ElDescriptions: defineComponent({
+    name: 'ElDescriptionsStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-descriptions-stub' }, slots.default?.())
+    },
+  }),
+  ElDescriptionsItem: defineComponent({
+    name: 'ElDescriptionsItemStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-descriptions-item-stub' }, slots.default?.())
+    },
+  }),
+  ElDialog: defineComponent({
+    name: 'ElDialogStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-dialog-stub' }, slots.default?.())
     },
   }),
   ElOption: defineComponent({
@@ -146,5 +171,27 @@ describe('entities theme classes', () => {
     expect(wrapper.findAll('.entity-group-table__select')).toHaveLength(4)
     expect(wrapper.findAll('.entity-group-table__subtext')).toHaveLength(4)
     expect(wrapper.findAll('.entity-group-table__summary')).toHaveLength(2)
+  })
+
+  it('renders themeable classes for the detail panel sections', () => {
+    const wrapper = mount(EntityDetailPanel, {
+      props: {
+        title: '实体详情',
+        entity: {
+          entity_id: 'e1',
+          name: '陆照',
+          type: 'character',
+          classification_status: 'manual_override',
+          classification_reason: { reason: 'entity_type_match' },
+          latest_state: { identity: '主角' },
+        },
+        relationships: [],
+      },
+      global: { stubs: simpleStubs },
+    })
+
+    expect(wrapper.find('.entity-detail-panel__override').exists()).toBe(true)
+    expect(wrapper.find('.entity-detail-panel__reason').exists()).toBe(true)
+    expect(wrapper.find('.entity-detail-panel__descriptions').exists()).toBe(true)
   })
 })
