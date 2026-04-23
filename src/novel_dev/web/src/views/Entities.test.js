@@ -250,11 +250,13 @@ describe('Entities', () => {
     })
   }
 
-  it('adds the local entities theme scope on the page root', () => {
+  it('keeps the entities theme scope on the workspace root', () => {
     seedStore()
     const wrapper = mountView()
 
-    expect(wrapper.classes()).toEqual(expect.arrayContaining(['entities-page', 'entities-theme']))
+    const page = wrapper.find('.entities-theme')
+    expect(page.exists()).toBe(true)
+    expect(page.find('.entity-tree-stub').exists()).toBe(true)
   })
 
   it('shows an empty workspace until the user selects a node', async () => {
