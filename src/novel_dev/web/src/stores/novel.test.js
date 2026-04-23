@@ -750,6 +750,19 @@ describe('novel store dashboard loading', () => {
           order_index: 1,
         },
       ],
+      setting_suggestion_cards: [
+        {
+          card_id: 'card-1',
+          card_type: 'character',
+          merge_key: 'character:lin-feng',
+          title: '林风',
+          summary: '建议补充人物弧光。',
+          status: 'active',
+          source_outline_refs: ['synopsis'],
+          payload: {},
+          display_order: 1,
+        },
+      ],
     })
 
     await store.refreshOutlineWorkbench({
@@ -760,6 +773,72 @@ describe('novel store dashboard loading', () => {
     expect(api.getBrainstormWorkspace).toHaveBeenCalledWith('novel-1')
     expect(store.brainstormWorkspace.data?.workspace_id).toBe('ws-1')
     expect(store.brainstormWorkspace.data?.setting_docs_draft).toHaveLength(1)
+    expect(store.brainstormWorkspace.lastRoundSummary).toBeNull()
+  })
+
+  it('submitOutlineFeedback stores brainstormWorkspace.lastRoundSummary from service response during brainstorming', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+    store.outlineWorkbench.currentItem = {
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    }
+
+    vi.mocked(api.submitOutlineFeedback).mockResolvedValue({
+      session_id: 's-1',
+      assistant_message: { id: 'assistant-1', role: 'assistant', message_type: 'result', content: '已处理' },
+      setting_update_summary: { created: 1, updated: 2, superseded: 0, unresolved: 1 },
+    })
+    vi.mocked(api.getOutlineWorkbench).mockResolvedValue({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+      outline_items: [
+        {
+          outline_type: 'synopsis',
+          outline_ref: 'synopsis',
+          title: '总纲',
+          status: 'ready',
+        },
+        {
+          outline_type: 'volume',
+          outline_ref: 'vol_2',
+          title: '第二卷',
+          status: 'ready',
+        },
+      ],
+    })
+    vi.mocked(api.getOutlineWorkbenchMessages).mockResolvedValue({
+      recent_messages: [{ id: 'msg-2', content: 'message-2' }],
+      conversation_summary: 'summary-2',
+      last_result_snapshot: { title: '快照 2' },
+      session_id: 's-1',
+      outline_type: 'volume',
+      outline_ref: 'vol_2',
+    })
+    vi.mocked(api.getBrainstormWorkspace).mockResolvedValue({
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '工作区总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    })
+
+    await store.submitOutlineFeedback({ content: '补充第二卷的反派动机' })
+
+    expect(store.brainstormWorkspace.lastRoundSummary).toEqual({
+      created: 1,
+      updated: 2,
+      superseded: 0,
+      unresolved: 1,
+    })
   })
 
   it('submitBrainstormWorkspace refreshes formal state and clears workspace after confirmation', async () => {

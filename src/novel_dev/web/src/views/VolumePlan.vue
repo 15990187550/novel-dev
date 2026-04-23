@@ -106,6 +106,12 @@
           </article>
         </div>
       </section>
+
+      <BrainstormSuggestionCards
+        v-if="isBrainstormWorkspaceMode"
+        :workspace="store.brainstormWorkspace.data"
+        :last-round-summary="store.brainstormWorkspace.lastRoundSummary"
+      />
     </template>
   </div>
 </template>
@@ -113,6 +119,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import * as api from '@/api.js'
+import BrainstormSuggestionCards from '@/components/outline/BrainstormSuggestionCards.vue'
 import OutlineConversation from '@/components/outline/OutlineConversation.vue'
 import OutlineDetailPanel from '@/components/outline/OutlineDetailPanel.vue'
 import OutlineSidebar from '@/components/outline/OutlineSidebar.vue'

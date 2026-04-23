@@ -194,6 +194,7 @@ describe('VolumePlan', () => {
     store.novelState.current_phase = 'brainstorming'
     store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
     store.submitBrainstormWorkspace = vi.fn().mockResolvedValue()
+    store.brainstormWorkspace.lastRoundSummary = { created: 1, updated: 0, superseded: 0, unresolved: 1 }
     store.outlineWorkbench.items = [
       {
         outline_type: 'synopsis',
@@ -229,6 +230,18 @@ describe('VolumePlan', () => {
           order_index: 1,
         },
       ],
+      setting_suggestion_cards: [
+        {
+          card_id: 'card-1',
+          card_type: 'character',
+          merge_key: 'character:lin-feng',
+          title: '林风',
+          summary: '建议补充：他的主要动机与关键成长节点。',
+          status: 'unresolved',
+          source_outline_refs: ['synopsis'],
+          display_order: 1,
+        },
+      ],
     }
 
     const wrapper = mount(VolumePlan, {
@@ -245,6 +258,8 @@ describe('VolumePlan', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('最终确认')
+    expect(wrapper.text()).toContain('设定建议卡')
+    expect(wrapper.text()).toContain('本轮设定更新')
     expect(wrapper.text()).toContain('设定草稿')
     expect(wrapper.text()).toContain('林风')
     expect(wrapper.text()).not.toContain('请先补齐卷纲')

@@ -62,6 +62,7 @@ const createBrainstormWorkspaceState = () => ({
   error: '',
   submitting: false,
   data: null,
+  lastRoundSummary: null,
   requestToken: 0,
 })
 
@@ -662,11 +663,14 @@ export const useNovelStore = defineStore('novel', {
       this.outlineWorkbench.submitting = true
       this.outlineWorkbench.error = ''
       try {
-        await api.submitOutlineFeedback(this.novelId, {
+        const response = await api.submitOutlineFeedback(this.novelId, {
           outline_type: selection.outline_type,
           outline_ref: selection.outline_ref,
           ...payload,
         })
+        if (this.novelState.current_phase === 'brainstorming') {
+          this.brainstormWorkspace.lastRoundSummary = response?.setting_update_summary || null
+        }
         const latestSelection = this.outlineWorkbench.selection
         const refreshSelection = latestSelection || selection
         await this.refreshOutlineWorkbench(refreshSelection)
