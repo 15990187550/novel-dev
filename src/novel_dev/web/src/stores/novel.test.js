@@ -841,6 +841,35 @@ describe('novel store dashboard loading', () => {
     })
   })
 
+  it('clears brainstormWorkspace.lastRoundSummary when a different workspace is loaded', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {},
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    }
+    store.brainstormWorkspace.lastRoundSummary = { created: 1, updated: 2, superseded: 0, unresolved: 1 }
+
+    vi.mocked(api.getBrainstormWorkspace).mockResolvedValue({
+      workspace_id: 'ws-2',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {},
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    })
+
+    await store.refreshBrainstormWorkspace()
+
+    expect(store.brainstormWorkspace.data?.workspace_id).toBe('ws-2')
+    expect(store.brainstormWorkspace.lastRoundSummary).toBeNull()
+  })
+
   it('submitBrainstormWorkspace refreshes formal state and clears workspace after confirmation', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

@@ -114,9 +114,7 @@ const normalizedLastRoundSummary = computed(() => {
 
 const resolvedSubmitWarnings = computed(() => {
   const fromProp = Array.isArray(props.submitWarnings) ? props.submitWarnings : []
-  if (fromProp.length) return fromProp.filter((item) => typeof item === 'string' && item.trim())
-  const fromWorkspace = props.workspace?.submit_warnings
-  return Array.isArray(fromWorkspace) ? fromWorkspace.filter((item) => typeof item === 'string' && item.trim()) : []
+  return fromProp.filter((item) => typeof item === 'string' && item.trim())
 })
 
 function formatSourceRefs(value) {
@@ -125,4 +123,3 @@ function formatSourceRefs(value) {
   return refs.join('、')
 }
 </script>
-

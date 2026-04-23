@@ -570,6 +570,14 @@ export const useNovelStore = defineStore('novel', {
       try {
         const workspace = await api.getBrainstormWorkspace(this.novelId)
         if (this.brainstormWorkspace.requestToken !== requestToken) return
+        const previous = this.brainstormWorkspace.data
+        const workspaceChanged = Boolean(
+          previous &&
+          (previous.workspace_id !== workspace?.workspace_id || previous.novel_id !== workspace?.novel_id)
+        )
+        if (workspaceChanged) {
+          this.brainstormWorkspace.lastRoundSummary = null
+        }
         this.brainstormWorkspace.data = workspace
         this.brainstormWorkspace.state = 'ready'
       } catch (error) {
@@ -640,6 +648,14 @@ export const useNovelStore = defineStore('novel', {
         this.outlineWorkbench.lastResultSnapshot = messages?.last_result_snapshot || null
         this.outlineWorkbench.state = 'ready'
         if (workspace) {
+          const previous = this.brainstormWorkspace.data
+          const workspaceChanged = Boolean(
+            previous &&
+            (previous.workspace_id !== workspace?.workspace_id || previous.novel_id !== workspace?.novel_id)
+          )
+          if (workspaceChanged) {
+            this.brainstormWorkspace.lastRoundSummary = null
+          }
           this.brainstormWorkspace.data = workspace
           this.brainstormWorkspace.state = 'ready'
           this.brainstormWorkspace.error = ''
