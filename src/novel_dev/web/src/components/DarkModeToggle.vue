@@ -1,7 +1,7 @@
 <template>
   <button
     @click="toggleDark()"
-    class="app-icon-button"
+    class="app-icon-button app-icon-button--square"
     :title="isDark ? '切换亮色模式' : '切换暗黑模式'"
   >
     <el-icon v-if="isDark" :size="18"><Sunny /></el-icon>

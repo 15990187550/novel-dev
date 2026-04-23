@@ -131,6 +131,35 @@ class DocumentRepository:
         )
         return result.scalars().first()
 
+    async def get_by_type_and_title(self, novel_id: str, doc_type: str, title: str) -> List[NovelDocument]:
+        result = await self.session.execute(
+            select(NovelDocument)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+                NovelDocument.title == title,
+            )
+            .order_by(NovelDocument.version.desc(), NovelDocument.updated_at.desc())
+        )
+        return result.scalars().all()
+
+    async def get_latest_by_type_and_title(
+        self,
+        novel_id: str,
+        doc_type: str,
+        title: str,
+    ) -> Optional[NovelDocument]:
+        result = await self.session.execute(
+            select(NovelDocument)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+                NovelDocument.title == title,
+            )
+            .order_by(NovelDocument.version.desc(), NovelDocument.updated_at.desc())
+        )
+        return result.scalars().first()
+
     async def get_by_type_and_version(self, novel_id: str, doc_type: str, version: int) -> Optional[NovelDocument]:
         """Return the document matching the exact version for the given novel and type."""
         result = await self.session.execute(

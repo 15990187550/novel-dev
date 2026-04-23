@@ -31,14 +31,14 @@
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Workbench</div>
-        <h1 class="mt-2 text-3xl font-semibold text-gray-900">大纲规划</h1>
-        <p class="mt-1 text-sm leading-6 text-gray-500">
+        <h1 class="mt-2 text-3xl font-semibold text-gray-900 dark:text-gray-100">大纲规划</h1>
+        <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
           左侧切换总纲与各卷卷纲，右侧查看当前版本并继续通过对话优化。
         </p>
       </div>
       <span
         v-if="isWorkbenchBusy"
-        class="rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700"
+        class="volume-plan-busy-chip"
       >
         {{ busyLabel }}
       </span>
@@ -46,21 +46,21 @@
 
     <div
       v-if="isBrainstormWorkspaceMode"
-      class="flex flex-wrap items-center justify-between gap-3 rounded-[1.6rem] border border-emerald-200 bg-gradient-to-r from-emerald-50 via-white to-teal-50 px-5 py-4 shadow-sm"
+      class="volume-plan-workspace-banner"
     >
       <div>
-        <div class="text-sm font-semibold text-emerald-900">脑爆工作区</div>
-        <p class="mt-1 text-sm leading-6 text-emerald-800">
+        <div class="volume-plan-workspace-banner__title">脑爆工作区</div>
+        <p class="volume-plan-workspace-banner__description">
           当前修改只会写入工作区草稿。确认无误后，再统一提交为正式总纲、卷纲与待审核设定。
         </p>
-        <p v-if="finalConfirmationDisabledReason" class="mt-1 text-xs text-amber-700">
+        <p v-if="finalConfirmationDisabledReason" class="volume-plan-workspace-banner__warning">
           {{ finalConfirmationDisabledReason }}
         </p>
       </div>
       <button
         data-testid="brainstorm-submit"
         type="button"
-        class="rounded-full bg-emerald-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-emerald-300"
+        class="volume-plan-workspace-banner__action"
         :disabled="Boolean(finalConfirmationDisabledReason) || store.brainstormWorkspace.submitting"
         @click="handleFinalConfirm"
       >
@@ -68,14 +68,14 @@
       </button>
     </div>
 
-    <div v-if="!store.novelId" class="surface-card rounded-[1.6rem] border-dashed px-6 py-12 text-center text-gray-500">
+    <div v-if="!store.novelId" class="surface-card volume-plan-empty-state rounded-[1.6rem] border-dashed px-6 py-12 text-center">
       请先选择小说
     </div>
 
     <template v-else>
       <div
         v-if="store.outlineWorkbench.error"
-        class="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700"
+        class="volume-plan-warning-banner"
       >
         {{ store.outlineWorkbench.error }}
       </div>
@@ -84,13 +84,13 @@
         v-if="isBrainstormWorkspaceMode"
         class="surface-card surface-card--soft p-5"
       >
-        <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Setting Drafts</div>
-        <h2 class="mt-2 text-xl font-semibold text-gray-900">设定草稿</h2>
-        <p class="mt-1 text-sm leading-6 text-gray-500">
+        <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400 dark:text-gray-500">Setting Drafts</div>
+        <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">设定草稿</h2>
+        <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
           这些草稿会在最终确认后统一进入待审核导入链路。
         </p>
 
-        <div v-if="!settingDrafts.length" class="mt-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500">
+        <div v-if="!settingDrafts.length" class="volume-plan-draft-empty mt-4 rounded-2xl border border-dashed px-4 py-6 text-sm">
           当前还没有待提交的设定草稿。
         </div>
 
@@ -98,20 +98,20 @@
           <article
             v-for="draft in settingDrafts"
             :key="draft.draft_id"
-            class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4"
+            class="volume-plan-draft-card rounded-2xl border px-4 py-4"
           >
             <div class="flex items-start justify-between gap-3">
               <div>
-                <div class="text-sm font-semibold text-gray-900">{{ draft.title }}</div>
-                <p class="mt-1 text-xs leading-5 text-gray-500">
+                <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ draft.title }}</div>
+                <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
                   来源：{{ draft.source_outline_ref }} · 类型：{{ draft.source_kind }} · 导入：{{ draft.target_import_mode }}
                 </p>
               </div>
-              <span class="rounded-full bg-white px-3 py-1 text-xs font-medium text-gray-600">
+              <span class="volume-plan-draft-card__tag rounded-full px-3 py-1 text-xs font-medium">
                 {{ draft.target_doc_type || 'auto' }}
               </span>
             </div>
-            <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700">
+            <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
               {{ draft.content }}
             </p>
           </article>
@@ -530,3 +530,98 @@ function buildMissingOutlinePrompt(detail) {
   return `请基于当前总纲与已完成卷纲，先生成第 ${volumeNumber} 卷的完整卷纲草稿，补齐卷目标、核心冲突、章节结构和卷末推进。`
 }
 </script>
+
+<style scoped>
+.volume-plan-busy-chip {
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface-soft);
+  color: var(--app-text-muted);
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+}
+
+.volume-plan-workspace-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-radius: 1.6rem;
+  border: 1px solid color-mix(in srgb, var(--app-accent, #34d399) 35%, var(--app-border));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--app-accent, #34d399) 8%, var(--app-surface)) 0%, var(--app-surface-soft) 55%, var(--app-surface) 100%);
+  padding: 1rem 1.25rem;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.volume-plan-workspace-banner__title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--app-accent, #34d399) 55%, var(--app-text));
+}
+
+.volume-plan-workspace-banner__description {
+  margin-top: 0.25rem;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--app-text);
+}
+
+.volume-plan-workspace-banner__warning {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: color-mix(in srgb, #f59e0b 72%, var(--app-text));
+}
+
+.volume-plan-workspace-banner__action {
+  border: 1px solid color-mix(in srgb, var(--app-accent, #34d399) 48%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-accent, #34d399) 78%, white 10%);
+  color: #ffffff;
+  padding: 0.625rem 1.25rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  transition: transform 0.18s ease, filter 0.18s ease, opacity 0.18s ease;
+}
+
+.volume-plan-workspace-banner__action:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.04);
+}
+
+.volume-plan-workspace-banner__action:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.volume-plan-empty-state {
+  color: var(--app-text-muted);
+}
+
+.volume-plan-warning-banner {
+  border: 1px solid color-mix(in srgb, #f59e0b 35%, var(--app-border));
+  border-radius: 1rem;
+  background: color-mix(in srgb, #f59e0b 10%, var(--app-surface-soft));
+  color: color-mix(in srgb, #f59e0b 72%, var(--app-text));
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+}
+
+.volume-plan-draft-empty {
+  border-color: var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+}
+
+.volume-plan-draft-card {
+  border-color: var(--app-border);
+  background: var(--app-surface);
+}
+
+.volume-plan-draft-card__tag {
+  background: var(--app-surface-soft);
+  color: var(--app-text-muted);
+}
+</style>

@@ -113,6 +113,21 @@ class VolumePlannerAgent:
         "page_turning": 70,
     }
 
+    def _suggest_volume_chapter_range(self, synopsis: SynopsisData) -> tuple[int, int]:
+        estimated_volumes = max(1, synopsis.estimated_volumes or 1)
+        estimated_total_chapters = max(1, synopsis.estimated_total_chapters or 1)
+        rough_chapters_per_volume = math.ceil(estimated_total_chapters / estimated_volumes)
+
+        if rough_chapters_per_volume <= 6:
+            lower = max(3, rough_chapters_per_volume)
+            upper = max(lower, min(6, rough_chapters_per_volume + 1))
+            return lower, upper
+        if rough_chapters_per_volume <= 18:
+            lower = max(6, rough_chapters_per_volume - 2)
+            upper = min(20, rough_chapters_per_volume + 2)
+            return lower, max(lower, upper)
+        return 12, 18
+
     def _is_acceptable(self, score) -> bool:
         if score.overall < self.OVERALL_THRESHOLD:
             return False
@@ -166,6 +181,7 @@ class VolumePlannerAgent:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成卷纲")
         MAX_CHARS = 12000
         truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
+        chapter_range = self._suggest_volume_chapter_range(synopsis)
 
         world_block = ""
         if world_snapshot:
@@ -190,6 +206,11 @@ class VolumePlannerAgent:
             "6. foreshadowings_to_embed 与 foreshadowings_to_recover 在章节之间要形成呼应,"
             "埋下的伏笔在合理章节内给出回收线索。\n"
             "7. 估算字数合理。\n\n"
+            "## 输出规模限制\n"
+            f"1. total_chapters 必须控制在 {chapter_range[0]}-{chapter_range[1]} 章之间。\n"
+            "2. 这是单卷可执行规划,不要试图一次覆盖整部小说的全部章节。\n"
+            "3. 每章 summary 控制在 40-80 字,每个 beat 控制在 18-40 字。\n"
+            "4. beats 保持 2-3 个即可,优先保证完整 JSON 和章节因果链。\n\n"
             f"大纲数据:\n{truncated_synopsis}\n\n"
             f"当前卷号:{volume_number}"
             f"{world_block}"

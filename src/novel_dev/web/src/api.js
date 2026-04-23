@@ -60,12 +60,16 @@ export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.dat
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
 export const getDocumentLibrary = (id) => api.get(`/novels/${id}/documents/library`).then(r => r.data)
+export const updateLibraryDocument = (id, docId, payload) =>
+  api.patch(`/novels/${id}/documents/library/${docId}`, payload).then(r => r.data)
 export const uploadDocument = (id, filename, content) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content }).then(r => r.data)
 export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
   api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
 export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
+export const updatePendingDraftField = (id, pendingId, payload) =>
+  api.patch(`/novels/${id}/documents/pending/${pendingId}/draft-field`, payload).then(r => r.data)
 export const rejectPending = (id, pendingId) =>
   api.post(`/novels/${id}/documents/pending/reject`, { pending_id: pendingId }).then(r => r.data)
 export const deletePendingDoc = (id, pendingId) =>

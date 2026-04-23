@@ -300,8 +300,8 @@ html.dark .app-nav-link.is-active {
   --entities-danger: #f28b82;
   --entities-chip-bg: rgba(227, 232, 242, 0.08);
   --entities-chip-border: rgba(185, 196, 214, 0.16);
-  --entities-grid-label-bg: rgba(108, 123, 149, 0.34);
-  --entities-grid-content-bg: rgba(231, 236, 245, 0.08);
+  --entities-grid-label-bg: rgba(70, 84, 108, 0.68);
+  --entities-grid-content-bg: rgba(18, 30, 49, 0.92);
   --entities-info-bg: rgba(243, 247, 255, 0.06);
 }
 

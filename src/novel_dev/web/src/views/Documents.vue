@@ -11,7 +11,7 @@
       <div class="page-header__meta-grid">
         <div class="page-header__meta-card">
           <span class="page-header__meta-label">待审核</span>
-          <span class="page-header__meta-value">{{ store.pendingDocs.length }}</span>
+          <span class="page-header__meta-value">{{ pendingReviewCount }}</span>
         </div>
         <div class="page-header__meta-card">
           <span class="page-header__meta-label">已生效资料</span>
@@ -124,7 +124,18 @@
                 <summary class="cursor-pointer list-none">
                   <div class="flex flex-wrap items-center justify-between gap-2">
                     <div class="font-medium text-gray-900 dark:text-gray-100">{{ item.title || group.label }}</div>
-                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(item.updated_at) }}</div>
+                    <div class="flex items-center gap-2">
+                      <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(item.updated_at) }}</div>
+                      <button
+                        type="button"
+                        class="documents-library-card__edit"
+                        title="编辑资料"
+                        aria-label="编辑资料"
+                        @click.prevent.stop="openLibraryEditor(item, group.label)"
+                      >
+                        编辑
+                      </button>
+                    </div>
                   </div>
                 </summary>
                 <pre class="mt-3 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ item.content }}</pre>
@@ -153,6 +164,15 @@
                   </div>
                   <div class="flex items-center gap-2">
                     <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(profile.updated_at) }}</div>
+                    <button
+                      type="button"
+                      class="documents-library-card__edit"
+                      title="编辑资料"
+                      aria-label="编辑资料"
+                      @click="openLibraryEditor(profile, '文风档案')"
+                    >
+                      编辑
+                    </button>
                     <el-button
                       v-if="!profile.is_active"
                       size="small"
@@ -192,9 +212,9 @@
         </div>
       </div>
 
-      <div v-if="store.pendingDocs.length" class="surface-card p-5">
+      <div v-if="store.pendingDocs.length" class="surface-card documents-pending p-5">
         <h3 class="font-bold mb-3">导入审核记录</h3>
-        <el-table :data="store.pendingDocs">
+        <el-table :data="store.pendingDocs" class="documents-pending-table">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
           <el-table-column label="类型">
             <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
@@ -208,8 +228,16 @@
           <el-table-column prop="created_at" label="创建时间" />
           <el-table-column label="操作" width="220">
             <template #default="{ row }">
-              <div class="flex gap-2">
-                <el-button size="small" @click="showDetail(row)">查看详情</el-button>
+              <div class="documents-pending-table__actions flex gap-2">
+                <el-button
+                  size="small"
+                  type="info"
+                  plain
+                  class="documents-pending-table__action"
+                  @click="showDetail(row)"
+                >
+                  查看详情
+                </el-button>
                 <el-button
                   v-if="row.status === 'pending'"
                   size="small"
@@ -254,6 +282,7 @@
         width="1080px"
         top="4vh"
         append-to-body
+        :close-on-press-escape="false"
       >
         <div v-if="selectedDoc" class="max-h-[78vh] space-y-4 overflow-y-auto pr-2">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
@@ -290,9 +319,50 @@
                 <div v-for="entity in diffGroups.create" :key="entityKey(entity)" class="rounded-lg border border-green-200 dark:border-green-800 p-3 bg-green-50/60 dark:bg-green-950/20">
                   <div class="font-semibold mb-2">{{ entity.entity_name }} <span class="text-xs text-gray-500">{{ entity.entity_type }}</span></div>
                   <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-                    <div v-for="change in visibleChanges(entity)" :key="change.field" class="flex gap-2">
-                      <span class="font-medium min-w-20">{{ change.label || change.field }}：</span>
-                      <span class="whitespace-pre-wrap">{{ formatValue(change.new_value) }}</span>
+                    <div
+                      v-for="change in visibleChanges(entity)"
+                      :key="change.field"
+                      class="documents-draft-field group rounded-lg border border-transparent px-2 py-2 hover:border-green-200/70 dark:hover:border-green-700/70"
+                    >
+                      <div class="flex items-start gap-2">
+                        <span class="font-medium min-w-20">{{ change.label || change.field }}：</span>
+                        <div class="min-w-0 flex-1">
+                          <template v-if="isEditingDraftField(entity, change)">
+                            <textarea
+                              v-if="isMultilineDraftField(change.field)"
+                              v-model="draftFieldInput"
+                              class="documents-draft-field__input documents-draft-field__input--textarea"
+                              :disabled="isSavingDraftField(entity, change)"
+                              @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                              @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                            />
+                            <input
+                              v-else
+                              v-model="draftFieldInput"
+                              class="documents-draft-field__input"
+                              :disabled="isSavingDraftField(entity, change)"
+                              @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                              @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                            />
+                            <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">回车保存，Esc 取消</div>
+                            <div v-if="draftFieldError" class="mt-1 text-xs text-red-600 dark:text-red-400">{{ draftFieldError }}</div>
+                          </template>
+                          <span v-else class="whitespace-pre-wrap">{{ formatValue(change.new_value) }}</span>
+                        </div>
+                        <button
+                          v-if="!isEditingDraftField(entity, change)"
+                          type="button"
+                          class="documents-draft-field__edit"
+                          title="编辑字段"
+                          aria-label="编辑字段"
+                          @click="beginDraftFieldEdit(entity, change)"
+                        >
+                          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" class="documents-draft-field__edit-icon">
+                            <path d="M13.96 3.64a1.5 1.5 0 0 1 2.12 0l.28.28a1.5 1.5 0 0 1 0 2.12l-8.9 8.9-3.32.94.94-3.32 8.88-8.92Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M12.5 5.1l2.4 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                          </svg>
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -304,7 +374,7 @@
               <div class="space-y-2">
                 <div v-for="entity in diffGroups.update" :key="entityKey(entity)" class="rounded-lg border border-blue-200 dark:border-blue-800 p-3 bg-blue-50/60 dark:bg-blue-950/20">
                   <div class="font-semibold mb-2">{{ entity.entity_name }} <span class="text-xs text-gray-500">{{ entity.entity_type }}</span></div>
-                  <el-table :data="visibleChanges(entity)" size="small" border>
+                  <el-table :data="visibleChanges(entity)" size="small" border class="documents-detail-table">
                     <el-table-column prop="label" label="字段" width="120">
                       <template #default="{ row }">{{ row.label || row.field }}</template>
                     </el-table-column>
@@ -312,7 +382,48 @@
                       <template #default="{ row }"><span class="whitespace-pre-wrap">{{ formatValue(row.old_value) || '-' }}</span></template>
                     </el-table-column>
                     <el-table-column label="新值">
-                      <template #default="{ row }"><span class="whitespace-pre-wrap">{{ formatValue(row.new_value) }}</span></template>
+                      <template #default="{ row }">
+                        <div class="documents-draft-field group rounded-lg border border-transparent px-2 py-2 hover:border-blue-200/70 dark:hover:border-blue-700/70">
+                          <div class="flex items-start gap-2">
+                            <div class="min-w-0 flex-1">
+                              <template v-if="isEditingDraftField(entity, row)">
+                                <textarea
+                                  v-if="isMultilineDraftField(row.field)"
+                                  v-model="draftFieldInput"
+                                  class="documents-draft-field__input documents-draft-field__input--textarea"
+                                  :disabled="isSavingDraftField(entity, row)"
+                                  @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                                  @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                                />
+                                <input
+                                  v-else
+                                  v-model="draftFieldInput"
+                                  class="documents-draft-field__input"
+                                  :disabled="isSavingDraftField(entity, row)"
+                                  @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                                  @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                                />
+                                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">回车保存，Esc 取消</div>
+                                <div v-if="draftFieldError" class="mt-1 text-xs text-red-600 dark:text-red-400">{{ draftFieldError }}</div>
+                              </template>
+                              <span v-else class="whitespace-pre-wrap">{{ formatValue(row.new_value) }}</span>
+                            </div>
+                            <button
+                              v-if="!isEditingDraftField(entity, row)"
+                              type="button"
+                              class="documents-draft-field__edit"
+                              title="编辑字段"
+                              aria-label="编辑字段"
+                              @click="beginDraftFieldEdit(entity, row)"
+                            >
+                              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" class="documents-draft-field__edit-icon">
+                                <path d="M13.96 3.64a1.5 1.5 0 0 1 2.12 0l.28.28a1.5 1.5 0 0 1 0 2.12l-8.9 8.9-3.32.94.94-3.32 8.88-8.92Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                                <path d="M12.5 5.1l2.4 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </template>
                     </el-table-column>
                   </el-table>
                 </div>
@@ -324,7 +435,7 @@
               <div class="space-y-2">
                 <div v-for="entity in diffGroups.conflict" :key="entityKey(entity)" class="rounded-lg border border-red-200 dark:border-red-800 p-3 bg-red-50/60 dark:bg-red-950/20">
                   <div class="font-semibold mb-2">{{ entity.entity_name }} <span class="text-xs text-gray-500">{{ entity.entity_type }}</span></div>
-                  <el-table :data="visibleChanges(entity)" size="small" border>
+                  <el-table :data="visibleChanges(entity)" size="small" border class="documents-detail-table">
                     <el-table-column prop="label" label="字段" width="120">
                       <template #default="{ row }">{{ row.label || row.field }}</template>
                     </el-table-column>
@@ -332,7 +443,48 @@
                       <template #default="{ row }"><span class="whitespace-pre-wrap">{{ formatValue(row.old_value) || '-' }}</span></template>
                     </el-table-column>
                     <el-table-column label="新值">
-                      <template #default="{ row }"><span class="whitespace-pre-wrap">{{ formatValue(row.new_value) }}</span></template>
+                      <template #default="{ row }">
+                        <div class="documents-draft-field group rounded-lg border border-transparent px-2 py-2 hover:border-red-200/70 dark:hover:border-red-700/70">
+                          <div class="flex items-start gap-2">
+                            <div class="min-w-0 flex-1">
+                              <template v-if="isEditingDraftField(entity, row)">
+                                <textarea
+                                  v-if="isMultilineDraftField(row.field)"
+                                  v-model="draftFieldInput"
+                                  class="documents-draft-field__input documents-draft-field__input--textarea"
+                                  :disabled="isSavingDraftField(entity, row)"
+                                  @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                                  @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                                />
+                                <input
+                                  v-else
+                                  v-model="draftFieldInput"
+                                  class="documents-draft-field__input"
+                                  :disabled="isSavingDraftField(entity, row)"
+                                  @keydown.enter.exact.prevent="saveDraftFieldEdit"
+                                  @keydown.esc.stop.prevent="cancelDraftFieldEdit"
+                                />
+                                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">回车保存，Esc 取消</div>
+                                <div v-if="draftFieldError" class="mt-1 text-xs text-red-600 dark:text-red-400">{{ draftFieldError }}</div>
+                              </template>
+                              <span v-else class="whitespace-pre-wrap">{{ formatValue(row.new_value) }}</span>
+                            </div>
+                            <button
+                              v-if="!isEditingDraftField(entity, row)"
+                              type="button"
+                              class="documents-draft-field__edit"
+                              title="编辑字段"
+                              aria-label="编辑字段"
+                              @click="beginDraftFieldEdit(entity, row)"
+                            >
+                              <svg viewBox="0 0 20 20" fill="none" aria-hidden="true" class="documents-draft-field__edit-icon">
+                                <path d="M13.96 3.64a1.5 1.5 0 0 1 2.12 0l.28.28a1.5 1.5 0 0 1 0 2.12l-8.9 8.9-3.32.94.94-3.32 8.88-8.92Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                                <path d="M12.5 5.1l2.4 2.4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </template>
                     </el-table-column>
                     <el-table-column label="处理方式" width="180">
                       <template #default="{ row }">
@@ -368,7 +520,7 @@
 
           <div v-if="resolutionRows.length">
             <div class="font-semibold mb-2 text-purple-700 dark:text-purple-300">处理结果</div>
-            <el-table :data="resolutionRows" size="small" border>
+            <el-table :data="resolutionRows" size="small" border class="documents-detail-table">
               <el-table-column prop="entity_name" label="实体" width="140" />
               <el-table-column prop="field" label="字段" width="120">
                 <template #default="{ row }">{{ fieldLabel(row.field) }}</template>
@@ -384,14 +536,40 @@
             </el-table>
           </div>
 
-          <el-collapse>
-            <el-collapse-item title="原始提取结果" name="raw">
-              <pre class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-xs overflow-auto max-h-80 whitespace-pre-wrap">{{ formatJson(selectedDoc.raw_result) }}</pre>
+          <el-collapse class="documents-detail-collapse">
+            <el-collapse-item title="原始提取结果" name="raw" class="documents-detail-collapse__panel">
+              <pre class="documents-detail-collapse__content bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-xs overflow-auto max-h-80 whitespace-pre-wrap">{{ formatJson(selectedDoc.raw_result) }}</pre>
             </el-collapse-item>
-            <el-collapse-item title="拟写入实体" name="entities">
-              <pre class="bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-xs overflow-auto max-h-80 whitespace-pre-wrap">{{ formatJson(selectedDoc.proposed_entities) }}</pre>
+            <el-collapse-item title="拟写入实体" name="entities" class="documents-detail-collapse__panel">
+              <pre class="documents-detail-collapse__content bg-gray-50 dark:bg-gray-900 rounded-lg p-3 text-xs overflow-auto max-h-80 whitespace-pre-wrap">{{ formatJson(selectedDoc.proposed_entities) }}</pre>
             </el-collapse-item>
           </el-collapse>
+        </div>
+      </el-dialog>
+
+      <el-dialog
+        v-model="libraryEditorVisible"
+        :title="libraryEditorTitle"
+        width="880px"
+        top="8vh"
+        append-to-body
+      >
+        <div class="space-y-4">
+          <div class="text-sm text-gray-500 dark:text-gray-400">
+            保存后会生成该资料的新版本，并立即作为当前资料库内容生效。
+          </div>
+          <textarea
+            v-model="libraryEditorContent"
+            class="documents-library-editor__textarea"
+            :disabled="libraryEditorSaving"
+          />
+          <div v-if="libraryEditorError" class="text-sm text-red-600 dark:text-red-400">{{ libraryEditorError }}</div>
+          <div class="flex justify-end gap-2">
+            <el-button :disabled="libraryEditorSaving" @click="closeLibraryEditor">取消</el-button>
+            <el-button type="primary" :loading="libraryEditorSaving" @click="saveLibraryEditor">
+              {{ libraryEditorSaving ? '保存中...' : '保存为新版本' }}
+            </el-button>
+          </div>
         </div>
       </el-dialog>
     </template>
@@ -404,9 +582,11 @@ import { useNovelStore } from '@/stores/novel.js'
 import {
   uploadDocumentsBatch,
   approvePending,
+  updatePendingDraftField,
   deletePendingDoc,
   rejectPending,
   getDocumentLibrary,
+  updateLibraryDocument,
   rollbackStyleProfile,
 } from '@/api.js'
 import { ElMessage } from 'element-plus'
@@ -430,9 +610,19 @@ const conflictSelectionMemory = reactive({})
 const resolvingMergeKeys = reactive({})
 const uploadSummary = ref(null)
 const documentPollTimer = ref(null)
+let draftFieldEscapeListenerAttached = false
 const libraryItems = ref([])
 const libraryLoading = ref(false)
 const rollingBackVersion = ref(null)
+const libraryEditorVisible = ref(false)
+const libraryEditorTarget = ref(null)
+const libraryEditorContent = ref('')
+const libraryEditorError = ref('')
+const libraryEditorSaving = ref(false)
+const editingDraftField = ref(null)
+const draftFieldInput = ref('')
+const draftFieldError = ref('')
+const savingDraftFieldKey = ref('')
 const approvingPendingId = computed({
   get: () => store.pendingDocActions.approvingPendingId,
   set: (value) => {
@@ -464,6 +654,9 @@ const diffGroups = computed(() => {
 
 const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.field_resolutions || [])
 const hasProcessingDocs = computed(() => (store.pendingDocs || []).some((doc) => doc.status === 'processing'))
+const pendingReviewCount = computed(() => (
+  (store.pendingDocs || []).filter((doc) => doc.status === 'pending' || doc.status === 'processing').length
+))
 const isApprovingSelectedDoc = computed(() => !!selectedDoc.value?.id && approvingPendingId.value === selectedDoc.value.id)
 const mergeResolvingCount = computed(() => Object.keys(resolvingMergeKeys).length)
 const hasLibraryContent = computed(() => libraryItems.value.length > 0)
@@ -471,6 +664,11 @@ const styleProfiles = computed(() => libraryItems.value.filter((item) => item.do
 const activeStyleVersionText = computed(() => {
   const active = styleProfiles.value.find((item) => item.is_active)
   return active ? `v${active.version}` : '未设置'
+})
+const libraryEditorTitle = computed(() => {
+  const target = libraryEditorTarget.value
+  if (!target) return '编辑资料'
+  return `编辑${target.groupLabel || target.title || '资料'}`
 })
 const libraryGroups = computed(() =>
   LIBRARY_GROUPS
@@ -482,6 +680,7 @@ const libraryGroups = computed(() =>
 )
 
 const fieldLabels = {
+  name: '名称',
   identity: '身份',
   personality: '性格',
   goal: '目标',
@@ -498,6 +697,18 @@ const fieldLabels = {
   description: '描述',
   significance: '重要性',
 }
+
+const multilineDraftFields = new Set([
+  'description',
+  'background',
+  'relationships',
+  'resources',
+  'secrets',
+  'conflict',
+  'arc',
+  'notes',
+  'significance',
+])
 
 function fieldLabel(field) {
   return fieldLabels[field] || field
@@ -551,6 +762,10 @@ function formatValue(value) {
   if (value == null || value === '') return ''
   if (typeof value === 'string') return value
   return JSON.stringify(value, null, 2)
+}
+
+function normalizeDraftFieldValue(value) {
+  return typeof value === 'string' ? value : formatValue(value)
 }
 
 function toList(value) {
@@ -614,7 +829,29 @@ function initializeConflictSelections(doc) {
 function showDetail(doc) {
   selectedDoc.value = doc
   initializeConflictSelections(doc)
+  cancelDraftFieldEdit()
   detailVisible.value = true
+}
+
+function openLibraryEditor(item, groupLabel = '') {
+  libraryEditorTarget.value = {
+    id: item.id,
+    docType: item.doc_type,
+    title: item.title,
+    version: item.version,
+    groupLabel,
+  }
+  libraryEditorContent.value = item.content || ''
+  libraryEditorError.value = ''
+  libraryEditorVisible.value = true
+}
+
+function closeLibraryEditor() {
+  if (libraryEditorSaving.value) return
+  libraryEditorVisible.value = false
+  libraryEditorTarget.value = null
+  libraryEditorContent.value = ''
+  libraryEditorError.value = ''
 }
 
 function visibleChanges(entity) {
@@ -623,6 +860,90 @@ function visibleChanges(entity) {
 
 function entityKey(entity) {
   return `${entity.entity_type}:${entity.entity_name}:${entity.operation}`
+}
+
+function createDraftFieldKey(entity, change) {
+  return `${entity.entity_type}:${entity.entity_name}:${change.field}`
+}
+
+function isEditingDraftField(entity, change) {
+  return !!editingDraftField.value && editingDraftField.value.key === createDraftFieldKey(entity, change)
+}
+
+function isSavingDraftField(entity, change) {
+  return savingDraftFieldKey.value === createDraftFieldKey(entity, change)
+}
+
+function isMultilineDraftField(field) {
+  return multilineDraftFields.has(field)
+}
+
+function beginDraftFieldEdit(entity, change) {
+  editingDraftField.value = {
+    key: createDraftFieldKey(entity, change),
+    pendingId: selectedDoc.value?.id || '',
+    entityType: entity.entity_type,
+    entityName: entity.entity_name,
+    field: change.field,
+  }
+  draftFieldInput.value = normalizeDraftFieldValue(change.new_value)
+  draftFieldError.value = ''
+}
+
+function cancelDraftFieldEdit() {
+  editingDraftField.value = null
+  draftFieldInput.value = ''
+  draftFieldError.value = ''
+  savingDraftFieldKey.value = ''
+}
+
+function handleDraftFieldEscape(event) {
+  if (!editingDraftField.value || event.key !== 'Escape') return
+  event.preventDefault()
+  event.stopPropagation()
+  cancelDraftFieldEdit()
+}
+
+function syncDraftFieldEscapeListener(active) {
+  if (active && !draftFieldEscapeListenerAttached) {
+    window.addEventListener('keydown', handleDraftFieldEscape, true)
+    draftFieldEscapeListenerAttached = true
+    return
+  }
+  if (!active && draftFieldEscapeListenerAttached) {
+    window.removeEventListener('keydown', handleDraftFieldEscape, true)
+    draftFieldEscapeListenerAttached = false
+  }
+}
+
+function replacePendingDoc(updatedDoc) {
+  const index = (store.pendingDocs || []).findIndex((doc) => doc.id === updatedDoc.id)
+  if (index >= 0) {
+    store.pendingDocs.splice(index, 1, updatedDoc)
+  }
+  if (selectedDoc.value?.id === updatedDoc.id) {
+    selectedDoc.value = updatedDoc
+  }
+}
+
+async function saveDraftFieldEdit() {
+  if (!editingDraftField.value || !store.novelId || !editingDraftField.value.pendingId) return
+  const payload = editingDraftField.value
+  savingDraftFieldKey.value = payload.key
+  draftFieldError.value = ''
+  try {
+    const response = await updatePendingDraftField(store.novelId, payload.pendingId, {
+      entity_type: payload.entityType,
+      entity_name: payload.entityName,
+      field: payload.field,
+      value: draftFieldInput.value,
+    })
+    replacePendingDoc(response.item)
+    cancelDraftFieldEdit()
+  } catch (error) {
+    draftFieldError.value = error?.response?.data?.detail || error?.message || '保存失败'
+    savingDraftFieldKey.value = payload.key
+  }
 }
 
 function buildFieldResolutions() {
@@ -688,6 +1009,32 @@ async function fetchLibrary() {
     libraryItems.value = []
   } finally {
     libraryLoading.value = false
+  }
+}
+
+async function saveLibraryEditor() {
+  if (!store.novelId || !libraryEditorTarget.value) return
+  const content = libraryEditorContent.value.trim()
+  if (!content) {
+    libraryEditorError.value = '内容不能为空'
+    return
+  }
+  libraryEditorSaving.value = true
+  libraryEditorError.value = ''
+  try {
+    await updateLibraryDocument(store.novelId, libraryEditorTarget.value.id, { content })
+    await fetchLibrary()
+    libraryEditorSaving.value = false
+    ElMessage.success(
+      libraryEditorTarget.value.docType === 'style_profile'
+        ? '文风档案已更新并设为当前版本'
+        : '资料已更新为新版本'
+    )
+    closeLibraryEditor()
+  } catch (error) {
+    libraryEditorError.value = error?.response?.data?.detail || error?.message || '保存失败'
+  } finally {
+    libraryEditorSaving.value = false
   }
 }
 
@@ -796,7 +1143,10 @@ function startDocumentPolling() {
 }
 
 onMounted(fetchIfReady)
-onBeforeUnmount(stopDocumentPolling)
+onBeforeUnmount(() => {
+  stopDocumentPolling()
+  syncDraftFieldEscapeListener(false)
+})
 watch(() => store.novelId, () => {
   stopDocumentPolling()
   uploadSummary.value = null
@@ -813,4 +1163,196 @@ watch(hasProcessingDocs, (processing) => {
 watch(conflictSelections, () => {
   rememberConflictSelections(selectedDoc.value)
 }, { deep: true })
+
+watch(editingDraftField, (value) => {
+  syncDraftFieldEscapeListener(Boolean(value))
+})
 </script>
+
+<style scoped>
+.documents-pending-table {
+  --el-table-border-color: var(--app-border);
+  --el-table-border: 1px solid var(--app-border);
+  --el-table-header-bg-color: var(--app-surface-soft);
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--app-surface-soft);
+  --el-table-bg-color: transparent;
+  --el-table-expanded-cell-bg-color: transparent;
+  --el-table-header-text-color: var(--app-text-soft);
+  --el-table-text-color: var(--app-text);
+  --el-fill-color-lighter: var(--app-surface-soft);
+  --el-fill-color-blank: transparent;
+  border-radius: 1.1rem;
+  overflow: hidden;
+}
+
+.documents-pending-table :deep(.el-table__inner-wrapper::before),
+.documents-pending-table :deep(.el-table::before) {
+  display: none;
+}
+
+.documents-pending-table :deep(th.el-table__cell) {
+  font-weight: 700;
+  background: var(--app-surface-soft);
+}
+
+.documents-pending-table :deep(td.el-table__cell),
+.documents-pending-table :deep(tr) {
+  background: transparent;
+}
+
+.documents-pending-table__action {
+  --el-button-bg-color: color-mix(in srgb, var(--app-surface-soft) 88%, transparent);
+  --el-button-border-color: var(--app-border);
+  --el-button-text-color: var(--app-text);
+  --el-button-hover-bg-color: var(--app-surface);
+  --el-button-hover-border-color: var(--app-border-strong);
+  --el-button-hover-text-color: var(--app-text);
+}
+
+.documents-pending-table__actions {
+  justify-content: flex-end;
+  padding-right: 0.75rem;
+  box-sizing: border-box;
+}
+
+.documents-detail-table {
+  --el-table-border-color: var(--app-border);
+  --el-table-border: 1px solid var(--app-border);
+  --el-table-header-bg-color: color-mix(in srgb, var(--app-surface-soft) 94%, transparent);
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--app-surface-soft);
+  --el-table-bg-color: transparent;
+  --el-table-expanded-cell-bg-color: transparent;
+  --el-table-header-text-color: var(--app-text-soft);
+  --el-table-text-color: var(--app-text);
+  --el-fill-color-lighter: var(--app-surface-soft);
+  --el-fill-color-blank: transparent;
+  border-radius: 0.9rem;
+  overflow: hidden;
+}
+
+.documents-detail-table :deep(.el-table__inner-wrapper::before),
+.documents-detail-table :deep(.el-table::before) {
+  display: none;
+}
+
+.documents-detail-table :deep(th.el-table__cell) {
+  font-weight: 700;
+  background: color-mix(in srgb, var(--app-surface-soft) 94%, transparent);
+}
+
+.documents-detail-table :deep(td.el-table__cell),
+.documents-detail-table :deep(tr) {
+  background: transparent;
+}
+
+.documents-library-card__edit {
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-surface-soft) 78%, transparent);
+  color: var(--app-text-muted);
+  padding: 0.28rem 0.7rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  transition: border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.documents-library-card__edit:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.documents-library-editor__textarea {
+  width: 100%;
+  min-height: 22rem;
+  resize: vertical;
+  border: 1px solid var(--app-border);
+  border-radius: 1rem;
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 0.9rem 1rem;
+  font-size: 0.95rem;
+  line-height: 1.7;
+}
+
+.documents-detail-collapse {
+  --el-collapse-border-color: var(--app-border);
+  --el-collapse-header-bg-color: var(--app-surface-soft);
+  --el-collapse-content-bg-color: transparent;
+  border-top: 1px solid var(--app-border);
+  border-bottom: 1px solid var(--app-border);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.documents-detail-collapse :deep(.el-collapse-item__header) {
+  padding: 0.95rem 1rem;
+  background: var(--app-surface-soft);
+  color: var(--app-text);
+  border-bottom: 1px solid var(--app-border);
+}
+
+.documents-detail-collapse :deep(.el-collapse-item__wrap),
+.documents-detail-collapse :deep(.el-collapse-item__content) {
+  background: transparent;
+  color: var(--app-text-muted);
+  border-bottom: none;
+}
+
+.documents-detail-collapse__panel {
+  background: transparent;
+}
+
+.documents-detail-collapse__content {
+  color: var(--app-text-muted);
+}
+
+.documents-draft-field__edit {
+  opacity: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--app-surface-soft) 72%, transparent);
+  color: var(--app-text-muted);
+  inline-size: 2rem;
+  block-size: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  transition: opacity 0.18s ease, border-color 0.18s ease, background-color 0.18s ease, color 0.18s ease;
+}
+
+.documents-draft-field:hover .documents-draft-field__edit,
+.documents-draft-field:focus-within .documents-draft-field__edit {
+  opacity: 1;
+}
+
+.documents-draft-field__edit:hover {
+  border-color: var(--app-border-strong);
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.documents-draft-field__edit-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.documents-draft-field__input {
+  width: 100%;
+  border: 1px solid var(--app-border);
+  border-radius: 0.8rem;
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 0.65rem 0.8rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.documents-draft-field__input--textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+</style>

@@ -35,3 +35,16 @@ async def test_get_by_type_and_version(async_session):
     doc = await repo.get_by_type_and_version("n1", "style_profile", 1)
     assert doc is not None
     assert doc.id == "d1"
+
+
+@pytest.mark.asyncio
+async def test_get_latest_by_type_and_title(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "setting", "修炼体系", "content1", version=1)
+    await repo.create("d2", "n1", "setting", "修炼体系", "content2", version=2)
+    await repo.create("d3", "n1", "setting", "地点设定", "content3", version=3)
+
+    latest = await repo.get_latest_by_type_and_title("n1", "setting", "修炼体系")
+
+    assert latest is not None
+    assert latest.id == "d2"

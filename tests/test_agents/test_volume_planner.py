@@ -183,3 +183,47 @@ async def test_extract_chapter_plan_merges_foreshadowings(async_session):
     )
     cp = agent._extract_chapter_plan(vb)
     assert cp["beats"][0]["foreshadowings_to_embed"] == ["fs_1"]
+
+
+@pytest.mark.asyncio
+async def test_generate_volume_plan_prompt_limits_output_scale_for_large_projects(async_session):
+    agent = VolumePlannerAgent(async_session)
+    synopsis = SynopsisData(
+        title="道经照诸天",
+        logline="陆照在诸天万界争夺超脱路径。",
+        core_conflict="陆照 vs 末劫幕后布局者",
+        estimated_volumes=26,
+        estimated_total_chapters=1300,
+        estimated_total_words=3900000,
+    )
+
+    mock_plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=12,
+        estimated_total_words=36000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="第一章剧情",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B1", target_mood="tense")],
+            ),
+        ],
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=mock_plan.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await agent._generate_volume_plan(synopsis, 1, novel_id="n_large")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "total_chapters 必须控制在 12-18 章之间" in prompt
+    assert "不要试图一次覆盖整部小说的全部章节" in prompt
+    assert "每章 summary 控制在 40-80 字" in prompt

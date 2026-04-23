@@ -16,15 +16,15 @@
 
     <DashboardStatusCards :panels="statusCards" />
 
-    <DashboardVolumeSummary
-      :chapters="chapterSummary.chapters"
-      :scores="currentChapterScores"
-      title="卷进度与评分"
-      :subtitle="volumeSubtitle"
-    />
+    <DashboardNextActions :actions="recommendedActions" @action="handleAction" />
 
-    <div class="grid gap-6 xl:grid-cols-2">
-      <DashboardNextActions :actions="recommendedActions" @action="handleAction" />
+    <div class="dashboard-detail-stack space-y-6">
+      <DashboardVolumeSummary
+        :chapters="chapterSummary.chapters"
+        :scores="currentChapterScores"
+        title="卷进度与评分"
+        :subtitle="volumeSubtitle"
+      />
 
       <DashboardInsights
         :recent-updates="recentUpdates"
@@ -34,6 +34,7 @@
         :links="quickLinks"
       />
     </div>
+
   </main>
 </template>
 

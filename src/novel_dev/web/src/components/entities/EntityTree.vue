@@ -3,7 +3,7 @@
     <div class="space-y-2">
       <div class="flex items-center justify-between gap-2">
         <h3 class="font-bold">目录</h3>
-        <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ totalCount }} 个实体</span>
+        <span class="entity-tree__meta text-xs">共 {{ totalCount }} 个实体</span>
       </div>
       <el-input
         class="entity-tree__search"
@@ -18,7 +18,7 @@
           <el-button :loading="loading" @click="emit('search')">搜索</el-button>
         </template>
       </el-input>
-      <div class="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+      <div class="entity-tree__meta flex flex-wrap gap-2 text-xs">
         <span>树节点 {{ treeNodeCount }}</span>
         <span v-if="searchQuery">搜索中保留当前树结构</span>
       </div>
@@ -39,7 +39,7 @@
           <div class="flex w-full items-start justify-between gap-3 py-1">
             <div class="min-w-0 flex-1 space-y-0.5">
               <div :class="nodeLabelClass(data)">{{ data.label }}</div>
-              <div v-if="nodeSubtitle(data)" class="truncate text-xs text-gray-500 dark:text-gray-400">
+              <div v-if="nodeSubtitle(data)" class="entity-tree__meta truncate text-xs">
                 {{ nodeSubtitle(data) }}
               </div>
             </div>
@@ -113,6 +113,10 @@ function nodeSubtitle(node) {
 .entity-tree {
   background: var(--entities-panel-bg);
   border-color: var(--entities-panel-border);
+}
+
+.entity-tree__meta {
+  color: var(--entities-text-muted);
 }
 
 .entity-tree__search :deep(.el-input__wrapper) {

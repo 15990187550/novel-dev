@@ -1,26 +1,30 @@
 <template>
   <section class="dashboard-hero">
-    <div class="dashboard-hero__content">
-      <p class="dashboard-hero__eyebrow">Dashboard Overview</p>
-      <h1 class="dashboard-hero__title">{{ title }}</h1>
-      <p class="dashboard-hero__phase">{{ phaseLabel }}</p>
-      <p class="dashboard-hero__summary">
-        把当前流程、章节推进和世界资料集中放在一个入口里，先看风险，再做下一步动作。
-      </p>
-      <div class="dashboard-hero__chips">
-        <span class="dashboard-hero__chip">当前阶段：{{ phaseLabel || '待更新' }}</span>
-        <span class="dashboard-hero__chip">当前卷章：{{ volumeChapter || '-' }}</span>
+    <div class="dashboard-hero__top">
+      <div class="dashboard-hero__content">
+        <div class="dashboard-hero__heading">
+          <p class="dashboard-hero__eyebrow">Dashboard Overview</p>
+          <h1 class="dashboard-hero__title">{{ title }}</h1>
+        </div>
+        <p class="dashboard-hero__phase">{{ phaseLabel }}</p>
+        <p class="dashboard-hero__summary">
+          把当前流程、章节推进和世界资料集中放在一个入口里，先看风险，再做下一步动作。
+        </p>
+        <div class="dashboard-hero__chips">
+          <span class="dashboard-hero__chip">当前阶段：{{ phaseLabel || '待更新' }}</span>
+          <span class="dashboard-hero__chip">当前卷章：{{ volumeChapter || '-' }}</span>
+        </div>
       </div>
-    </div>
 
-    <div class="dashboard-hero__actions">
-      <button
-        type="button"
-        class="dashboard-hero__delete"
-        @click="$emit('delete-novel')"
-      >
-        删除小说
-      </button>
+      <div class="dashboard-hero__actions">
+        <button
+          type="button"
+          class="dashboard-hero__delete dashboard-hero__action-button"
+          @click="$emit('delete-novel')"
+        >
+          删除小说
+        </button>
+      </div>
     </div>
 
     <div class="dashboard-hero__stats" aria-label="dashboard summary stats">
@@ -63,20 +67,41 @@ const formattedTotalWords = computed(() => {
 </script>
 
 <style scoped>
+.dashboard-hero__top {
+  display: flex;
+  flex: 1 1 100%;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.dashboard-hero__heading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
 .dashboard-hero__actions {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
+  align-items: flex-start;
+}
+
+.dashboard-hero__action-button {
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.65rem 0.95rem;
+  white-space: nowrap;
 }
 
 .dashboard-hero__delete {
-  border: 1px solid #fecaca;
-  border-radius: 999px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
   background: #fff1f2;
   color: #b91c1c;
   cursor: pointer;
-  font-size: 0.875rem;
-  font-weight: 600;
-  padding: 0.65rem 1rem;
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
 }
 
@@ -84,5 +109,16 @@ const formattedTotalWords = computed(() => {
   background: #ffe4e6;
   border-color: #fca5a5;
   color: #991b1b;
+}
+
+@media (max-width: 640px) {
+  .dashboard-hero__top {
+    flex-direction: column;
+  }
+
+  .dashboard-hero__actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }
 </style>

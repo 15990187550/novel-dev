@@ -40,6 +40,34 @@ const DashboardHeroStub = defineComponent({
   },
 })
 
+const DashboardStatusCardsStub = defineComponent({
+  name: 'DashboardStatusCardsStub',
+  setup() {
+    return () => h('section', { class: 'dashboard-status-cards-stub' }, 'status')
+  },
+})
+
+const DashboardNextActionsStub = defineComponent({
+  name: 'DashboardNextActionsStub',
+  setup() {
+    return () => h('section', { class: 'dashboard-next-actions-stub' }, 'actions')
+  },
+})
+
+const DashboardVolumeSummaryStub = defineComponent({
+  name: 'DashboardVolumeSummaryStub',
+  setup() {
+    return () => h('section', { class: 'dashboard-volume-summary-stub' }, 'volume')
+  },
+})
+
+const DashboardInsightsStub = defineComponent({
+  name: 'DashboardInsightsStub',
+  setup() {
+    return () => h('section', { class: 'dashboard-insights-stub' }, 'insights')
+  },
+})
+
 describe('Dashboard', () => {
   let pinia
 
@@ -55,14 +83,45 @@ describe('Dashboard', () => {
         plugins: [pinia],
         stubs: {
           DashboardHero: DashboardHeroStub,
-          DashboardStatusCards: true,
-          DashboardVolumeSummary: true,
-          DashboardNextActions: true,
-          DashboardInsights: true,
+          DashboardStatusCards: DashboardStatusCardsStub,
+          DashboardVolumeSummary: DashboardVolumeSummaryStub,
+          DashboardNextActions: DashboardNextActionsStub,
+          DashboardInsights: DashboardInsightsStub,
         },
       },
     })
   }
+
+  it('renders next actions above the dashboard content split', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshDashboard = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const html = wrapper.html()
+    const statusIndex = html.indexOf('dashboard-status-cards-stub')
+    const actionsIndex = html.indexOf('dashboard-next-actions-stub')
+    const volumeIndex = html.indexOf('dashboard-volume-summary-stub')
+    const insightsIndex = html.indexOf('dashboard-insights-stub')
+
+    expect(statusIndex).toBeGreaterThan(-1)
+    expect(actionsIndex).toBeGreaterThan(statusIndex)
+    expect(volumeIndex).toBeGreaterThan(actionsIndex)
+    expect(insightsIndex).toBeGreaterThan(volumeIndex)
+  })
+
+  it('stacks volume summary and insights vertically', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshDashboard = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.find('.dashboard-detail-stack').exists()).toBe(true)
+  })
 
   it('confirms deletion, deletes the selected novel, and returns to the empty dashboard state', async () => {
     vi.mocked(ElMessageBox.confirm).mockResolvedValue()

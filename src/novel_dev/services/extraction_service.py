@@ -25,6 +25,8 @@ from novel_dev.schemas.brainstorm_workspace import (
 
 logger = logging.getLogger(__name__)
 
+SETTING_MERGE_RETRY_LIMIT = 2
+
 AUTO_APPLY_FIELDS = {
     "appearance",
     "background",
@@ -71,6 +73,15 @@ FIELD_LABELS = {
     "region": "区域",
     "relationship_with_protagonist": "与主角关系",
 }
+
+PENDING_ENTITY_BUCKETS = {
+    "character": "character_profiles",
+    "faction": "factions",
+    "location": "locations",
+    "item": "important_items",
+}
+
+MERGEABLE_LIBRARY_DOC_TYPES = {"worldview", "setting", "synopsis", "concept"}
 
 
 class ExtractionService:
@@ -202,6 +213,73 @@ class ExtractionService:
             return value.strip()
         return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
+    def _pending_entity_bucket(self, entity_type: str) -> str:
+        bucket = PENDING_ENTITY_BUCKETS.get((entity_type or "").strip())
+        if not bucket:
+            raise ValueError(f"Unsupported pending draft entity type: {entity_type}")
+        return bucket
+
+    def _find_pending_entity_index(self, entities: list[dict[str, Any]], entity_name: str) -> int:
+        for index, entity in enumerate(entities):
+            if (entity.get("name") or "").strip() == entity_name.strip():
+                return index
+        return -1
+
+    async def update_pending_draft_field(
+        self,
+        pending_id: str,
+        *,
+        entity_type: str,
+        entity_name: str,
+        field: str,
+        value: str,
+    ) -> PendingExtraction:
+        pe = await self.pending_repo.get_by_id(pending_id)
+        if not pe:
+            raise ValueError("待审核记录不存在")
+        if pe.status != "pending":
+            raise ValueError("只有待审核记录可以编辑")
+        if pe.extraction_type != "setting":
+            raise ValueError("只有设定提取记录支持字段编辑")
+
+        bucket = self._pending_entity_bucket(entity_type)
+        raw_result = dict(pe.raw_result or {})
+        raw_entities = [dict(item) for item in raw_result.get(bucket, [])]
+        entity_index = self._find_pending_entity_index(raw_entities, entity_name)
+        if entity_index < 0:
+            raise ValueError("未找到要编辑的草稿实体")
+
+        raw_entities[entity_index] = {
+            **raw_entities[entity_index],
+            field: value,
+        }
+        raw_result[bucket] = raw_entities
+
+        proposed_entities = [dict(item) for item in (pe.proposed_entities or [])]
+        updated_name = raw_entities[entity_index].get("name", entity_name)
+        for proposed in proposed_entities:
+            if proposed.get("type") != entity_type:
+                continue
+            if (proposed.get("name") or "").strip() != entity_name.strip():
+                continue
+            proposed["name"] = updated_name
+            proposed["data"] = {
+                **dict(proposed.get("data") or {}),
+                field: value,
+            }
+            break
+
+        diff_result = await self._build_setting_diff(pe.novel_id, raw_result)
+        updated = await self.pending_repo.update_draft_content(
+            pending_id,
+            raw_result=raw_result,
+            proposed_entities=proposed_entities,
+            diff_result=diff_result,
+        )
+        if updated is None:
+            raise ValueError("待审核记录不存在")
+        return updated
+
     async def _build_entity_diff(self, novel_id: str, entity_type: str, incoming_state: dict) -> dict:
         entity_name = incoming_state.get("name", "unknown")
         existing = await self.entity_svc.entity_repo.find_by_name(entity_name, entity_type=entity_type, novel_id=novel_id)
@@ -301,6 +379,149 @@ class ExtractionService:
             raise RuntimeError(f"LLM merge returned empty result for {entity_type}/{entity_name}/{field}")
         log_service.add_log(novel_id, "ExtractionService", f"字段自动合并完成: {entity_name}.{field}")
         return merged_text
+
+    async def _request_setting_document_merge(
+        self,
+        *,
+        novel_id: str,
+        doc_type: str,
+        title: str,
+        existing_content: str,
+        incoming_content: str,
+    ) -> str:
+        client = llm_factory.get("EditorAgent", task="polish_beat")
+        prompt = (
+            "你要把同一小说资料库中同类型、同标题的两份设定文档合并成一份新的当前版本。\n\n"
+            "要求:\n"
+            "1. 只输出合并后的最终正文，不要解释。\n"
+            "2. 去重，保留不冲突信息。\n"
+            "3. 如果信息冲突，优先保留更新、更具体、更完整的描述。\n"
+            "4. 不要编造原文中不存在的新事实。\n"
+            "5. 输出应适合直接写入资料库。\n\n"
+            f"资料类型: {doc_type}\n"
+            f"资料标题: {title}\n\n"
+            f"已有版本:\n{existing_content or '[空]'}\n\n"
+            f"新批准内容:\n{incoming_content or '[空]'}"
+        )
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        merged_text = (response.text or "").strip()
+        if not merged_text:
+            raise RuntimeError(f"LLM returned empty merged content for {doc_type}/{title}")
+        return merged_text
+
+    async def _merge_setting_document_content(
+        self,
+        *,
+        novel_id: str,
+        doc_type: str,
+        title: str,
+        existing_content: str,
+        incoming_content: str,
+    ) -> str:
+        last_error: Exception | None = None
+        for attempt in range(1, SETTING_MERGE_RETRY_LIMIT + 1):
+            try:
+                merged = await self._request_setting_document_merge(
+                    novel_id=novel_id,
+                    doc_type=doc_type,
+                    title=title,
+                    existing_content=existing_content,
+                    incoming_content=incoming_content,
+                )
+                log_service.add_log(
+                    novel_id,
+                    "ExtractionService",
+                    f"资料自动合并完成: {title}（第 {attempt} 次尝试成功）",
+                )
+                return merged
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "setting_document_merge_failed",
+                    extra={
+                        "novel_id": novel_id,
+                        "doc_type": doc_type,
+                        "title": title,
+                        "attempt": attempt,
+                        "error": str(exc),
+                    },
+                )
+        log_service.add_log(
+            novel_id,
+            "ExtractionService",
+            f"资料自动合并失败，已保留最新批准内容: {title} ({last_error})",
+            level="warning",
+        )
+        return incoming_content
+
+    async def _create_or_merge_setting_document(
+        self,
+        *,
+        novel_id: str,
+        doc_type: str,
+        title: str,
+        content: str,
+    ) -> NovelDocument:
+        latest = await self.doc_repo.get_latest_by_type_and_title(novel_id, doc_type, title)
+        next_version = (latest.version + 1) if latest else 1
+        final_content = content
+        if latest and latest.content:
+            final_content = await self._merge_setting_document_content(
+                novel_id=novel_id,
+                doc_type=doc_type,
+                title=title,
+                existing_content=latest.content,
+                incoming_content=content,
+            )
+        return await self.doc_repo.create(
+            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type=doc_type,
+            title=title,
+            content=final_content,
+            version=next_version,
+        )
+
+    async def merge_existing_library_duplicates(self, novel_id: str) -> list[NovelDocument]:
+        grouped_docs: dict[tuple[str, str], list[NovelDocument]] = {}
+        for doc_type in MERGEABLE_LIBRARY_DOC_TYPES:
+            docs = await self.doc_repo.get_by_type(novel_id, doc_type)
+            for doc in docs:
+                grouped_docs.setdefault((doc.doc_type, doc.title), []).append(doc)
+
+        merged_docs: list[NovelDocument] = []
+        for (doc_type, title), docs in grouped_docs.items():
+            if len(docs) < 2:
+                continue
+
+            docs.sort(key=lambda item: (item.version or 0, item.updated_at))
+            merged_content = docs[0].content or ""
+            for doc in docs[1:]:
+                merged_content = await self._merge_setting_document_content(
+                    novel_id=novel_id,
+                    doc_type=doc_type,
+                    title=title,
+                    existing_content=merged_content,
+                    incoming_content=doc.content or "",
+                )
+
+            next_version = max((doc.version or 0) for doc in docs) + 1
+            merged_doc = await self.doc_repo.create(
+                doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+                novel_id=novel_id,
+                doc_type=doc_type,
+                title=title,
+                content=merged_content,
+                version=next_version,
+            )
+            merged_docs.append(merged_doc)
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"已合并重复资料: {doc_type}/{title} -> v{next_version}",
+            )
+
+        return merged_docs
 
     async def _build_setting_diff(self, novel_id: str, raw_result: dict) -> dict:
         entity_diffs = []
@@ -768,8 +989,7 @@ class ExtractionService:
                 val = raw.get(key)
                 if val:
                     text_val = self._format_setting_document_value(key, val)
-                    doc = await self.doc_repo.create(
-                        doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+                    doc = await self._create_or_merge_setting_document(
                         novel_id=pe.novel_id,
                         doc_type=doc_type,
                         title=title,
@@ -780,8 +1000,7 @@ class ExtractionService:
             chars = raw.get("character_profiles", [])
             if chars:
                 text = "\n".join(f"{c.get('name')}: {c.get('identity')} {c.get('personality')}" for c in chars)
-                doc = await self.doc_repo.create(
-                    doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+                doc = await self._create_or_merge_setting_document(
                     novel_id=pe.novel_id,
                     doc_type="concept",
                     title="人物设定",
@@ -792,8 +1011,7 @@ class ExtractionService:
             items = raw.get("important_items", [])
             if items:
                 text = "\n".join(f"{i.get('name')}: {i.get('description')}" for i in items)
-                doc = await self.doc_repo.create(
-                    doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+                doc = await self._create_or_merge_setting_document(
                     novel_id=pe.novel_id,
                     doc_type="concept",
                     title="物品设定",
@@ -890,3 +1108,37 @@ class ExtractionService:
                 current_volume_id=state.current_volume_id,
                 current_chapter_id=state.current_chapter_id,
             )
+
+    async def update_library_document(
+        self,
+        novel_id: str,
+        *,
+        doc_id: str,
+        content: str,
+    ) -> NovelDocument:
+        existing = await self.doc_repo.get_by_id(doc_id)
+        if not existing or existing.novel_id != novel_id:
+            raise ValueError("资料文档不存在")
+
+        latest = await self.doc_repo.get_latest_by_type_and_title(
+            novel_id,
+            existing.doc_type,
+            existing.title,
+        )
+        next_version = ((latest.version if latest else existing.version) or 0) + 1
+        updated = await self.doc_repo.create(
+            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type=existing.doc_type,
+            title=existing.title,
+            content=content,
+            version=next_version,
+        )
+        if existing.doc_type == "style_profile":
+            await self.rollback_style_profile(novel_id, updated.version)
+        log_service.add_log(
+            novel_id,
+            "ExtractionService",
+            f"资料库文档已更新: {existing.doc_type}/{existing.title} -> v{updated.version}",
+        )
+        return updated

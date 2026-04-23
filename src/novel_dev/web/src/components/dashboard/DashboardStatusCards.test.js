@@ -54,4 +54,39 @@ describe('DashboardStatusCards', () => {
     expect(wrapper.findAll('a')[1].attributes('data-to')).toBe('/documents')
     expect(wrapper.findAll('.dashboard-status-card.is-error')).toHaveLength(1)
   })
+
+  it('marks warning and error titles for high contrast rendering', () => {
+    const wrapper = mount(DashboardStatusCards, {
+      props: {
+        panels: [
+          {
+            id: 'warning',
+            label: '流程状态',
+            title: '脑暴中',
+            detail: '当前章待选择',
+            route: '/dashboard',
+            panelState: 'warning',
+          },
+          {
+            id: 'error',
+            label: '日志状态',
+            title: '3 条最近日志',
+            detail: '未找到设定文档',
+            route: '/logs',
+            panelState: 'error',
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          RouterLink: {
+            props: ['to'],
+            template: '<a :data-to="to"><slot /></a>',
+          },
+        },
+      },
+    })
+
+    expect(wrapper.findAll('.dashboard-status-card__title--contrast')).toHaveLength(2)
+  })
 })

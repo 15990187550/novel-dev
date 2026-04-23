@@ -72,6 +72,17 @@ class RejectPendingRequest(BaseModel):
     pending_id: str
 
 
+class UpdatePendingDraftFieldRequest(BaseModel):
+    entity_type: str
+    entity_name: str
+    field: str
+    value: str = ""
+
+
+class UpdateLibraryDocumentRequest(BaseModel):
+    content: str = Field(min_length=1)
+
+
 settings = Settings()
 
 
@@ -98,6 +109,47 @@ def _serialize_library_document(doc, *, is_active: bool = True) -> dict[str, Any
     if doc.doc_type == "style_profile":
         payload["style_config"] = _parse_style_config_title(doc.title)
     return payload
+
+
+def _serialize_pending_document(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "source_filename": item.source_filename,
+        "extraction_type": item.extraction_type,
+        "status": item.status,
+        "raw_result": item.raw_result,
+        "proposed_entities": item.proposed_entities,
+        "diff_result": item.diff_result,
+        "resolution_result": item.resolution_result,
+        "error_message": item.error_message,
+        "created_at": item.created_at.isoformat(),
+    }
+
+
+def _latest_documents_by_title(docs: list) -> list:
+    latest_by_key: dict[tuple[str, str], Any] = {}
+    for doc in docs:
+        key = (doc.doc_type, doc.title)
+        current = latest_by_key.get(key)
+        if current is None:
+            latest_by_key[key] = doc
+            continue
+        current_version = getattr(current, "version", 0) or 0
+        doc_version = getattr(doc, "version", 0) or 0
+        current_updated = getattr(current, "updated_at", None)
+        doc_updated = getattr(doc, "updated_at", None)
+        if doc_version > current_version or (
+            doc_version == current_version and doc_updated and current_updated and doc_updated > current_updated
+        ):
+            latest_by_key[key] = doc
+    return sorted(
+        latest_by_key.values(),
+        key=lambda doc: (
+            (getattr(doc, "updated_at", None).timestamp() if getattr(doc, "updated_at", None) else 0),
+            getattr(doc, "title", ""),
+        ),
+        reverse=True,
+    )
 
 
 def _word_count(text: Optional[str]) -> int:
@@ -1009,21 +1061,7 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
     repo = PendingExtractionRepository(session)
     items = await repo.list_by_novel(novel_id)
     return {
-        "items": [
-            {
-                "id": i.id,
-                "source_filename": i.source_filename,
-                "extraction_type": i.extraction_type,
-                "status": i.status,
-                "raw_result": i.raw_result,
-                "proposed_entities": i.proposed_entities,
-                "diff_result": i.diff_result,
-                "resolution_result": i.resolution_result,
-                "error_message": i.error_message,
-                "created_at": i.created_at.isoformat(),
-            }
-            for i in items
-        ]
+        "items": [_serialize_pending_document(i) for i in items]
     }
 
 
@@ -1040,10 +1078,10 @@ async def get_document_library(novel_id: str, session: AsyncSession = Depends(ge
     active_style_doc = await extraction_service.get_active_style_profile(novel_id)
 
     items = [
-        *[_serialize_library_document(doc) for doc in worldview_docs],
-        *[_serialize_library_document(doc) for doc in setting_docs],
-        *[_serialize_library_document(doc) for doc in synopsis_docs],
-        *[_serialize_library_document(doc) for doc in concept_docs],
+        *[_serialize_library_document(doc) for doc in _latest_documents_by_title(worldview_docs)],
+        *[_serialize_library_document(doc) for doc in _latest_documents_by_title(setting_docs)],
+        *[_serialize_library_document(doc) for doc in _latest_documents_by_title(synopsis_docs)],
+        *[_serialize_library_document(doc) for doc in _latest_documents_by_title(concept_docs)],
         *[
             _serialize_library_document(doc, is_active=bool(active_style_doc and doc.id == active_style_doc.id))
             for doc in style_docs
@@ -1052,6 +1090,27 @@ async def get_document_library(novel_id: str, session: AsyncSession = Depends(ge
     return {
         "items": items,
         "active_style_profile_version": active_style_doc.version if active_style_doc else None,
+    }
+
+
+@router.post("/api/novels/{novel_id}/documents/library/merge-duplicates")
+async def merge_duplicate_library_documents(novel_id: str, session: AsyncSession = Depends(get_session)):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    merged_docs = await svc.merge_existing_library_duplicates(novel_id)
+    await session.commit()
+    return {
+        "merged": [
+            {
+                "id": doc.id,
+                "doc_type": doc.doc_type,
+                "title": doc.title,
+                "version": doc.version,
+                "content": doc.content[:500],
+            }
+            for doc in merged_docs
+        ]
     }
 
 
@@ -1080,6 +1139,61 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
             }
             for d in docs
         ]
+    }
+
+
+@router.patch("/api/novels/{novel_id}/documents/pending/{pending_id}/draft-field")
+async def update_pending_draft_field(
+    novel_id: str,
+    pending_id: str,
+    req: UpdatePendingDraftFieldRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    repo = PendingExtractionRepository(session)
+    pe = await repo.get_by_id(pending_id)
+    if not pe or pe.novel_id != novel_id:
+        raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
+
+    try:
+        updated = await svc.update_pending_draft_field(
+            pending_id=pending_id,
+            entity_type=req.entity_type,
+            entity_name=req.entity_name,
+            field=req.field,
+            value=req.value,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    await session.commit()
+    return {"item": _serialize_pending_document(updated)}
+
+
+@router.patch("/api/novels/{novel_id}/documents/library/{doc_id}")
+async def update_library_document(
+    novel_id: str,
+    doc_id: str,
+    req: UpdateLibraryDocumentRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    try:
+        updated = await svc.update_library_document(novel_id, doc_id=doc_id, content=req.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    active_style_doc = await svc.get_active_style_profile(novel_id) if updated.doc_type == "style_profile" else None
+    await session.commit()
+    return {
+        "item": _serialize_library_document(
+            updated,
+            is_active=bool(updated.doc_type != "style_profile" or (active_style_doc and active_style_doc.id == updated.id)),
+        )
     }
 
 

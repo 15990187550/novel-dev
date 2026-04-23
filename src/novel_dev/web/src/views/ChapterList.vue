@@ -1,11 +1,11 @@
 <template>
   <div class="space-y-4">
     <h2 class="text-xl font-bold">章节列表</h2>
-    <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
+    <div class="chapter-list-panel rounded-xl p-4">
       <ChapterProgressGantt :chapters="store.chapters" />
     </div>
-    <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
-      <el-table :data="store.chapters" style="width: 100%">
+    <div class="chapter-list-panel overflow-hidden rounded-xl">
+      <el-table :data="store.chapters" style="width: 100%" class="chapter-list-table">
         <el-table-column prop="chapter_number" label="章号" width="70" />
         <el-table-column prop="title" label="标题" />
         <el-table-column prop="status" label="状态" width="100">
@@ -31,3 +31,46 @@ import ChapterProgressGantt from '@/components/ChapterProgressGantt.vue'
 const store = useNovelStore()
 function statusType(s) { return { pending: 'info', drafted: 'primary', edited: 'success', archived: 'danger' }[s] || 'info' }
 </script>
+
+<style scoped>
+.chapter-list-panel {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  box-shadow: var(--app-shadow-soft);
+}
+
+.chapter-list-table {
+  --el-table-border-color: var(--app-border);
+  --el-table-border: 1px solid var(--app-border);
+  --el-table-header-bg-color: var(--app-surface-soft);
+  --el-table-tr-bg-color: transparent;
+  --el-table-row-hover-bg-color: var(--app-surface-soft);
+  --el-table-bg-color: transparent;
+  --el-table-expanded-cell-bg-color: transparent;
+  --el-table-header-text-color: var(--app-text-soft);
+  --el-table-text-color: var(--app-text);
+  --el-fill-color-lighter: var(--app-surface-soft);
+  --el-fill-color-blank: transparent;
+}
+
+.chapter-list-table :deep(.el-table__inner-wrapper::before),
+.chapter-list-table :deep(.el-table::before) {
+  display: none;
+}
+
+.chapter-list-table :deep(th.el-table__cell) {
+  background: var(--app-surface-soft);
+  font-weight: 700;
+}
+
+.chapter-list-table :deep(td.el-table__cell),
+.chapter-list-table :deep(tr) {
+  background: transparent;
+}
+
+.chapter-list-table :deep(.el-table__empty-block),
+.chapter-list-table :deep(.el-table__empty-text) {
+  background: transparent;
+  color: var(--app-text-muted);
+}
+</style>

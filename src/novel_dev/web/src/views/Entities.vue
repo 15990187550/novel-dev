@@ -3,11 +3,11 @@
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2 class="text-xl font-bold">实体百科</h2>
-        <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        <p class="entities-page__meta mt-1 text-sm">
           左侧目录用于切换分类、分组和实体，右侧用于查看列表或详情。
         </p>
       </div>
-      <div class="text-sm text-gray-500 dark:text-gray-400" v-if="store.novelId">
+      <div class="entities-page__meta text-sm" v-if="store.novelId">
         <span class="mr-4">实体数：{{ store.entities.length }}</span>
         <span>关系数：{{ store.entityRelationships.length }}</span>
       </div>
@@ -32,7 +32,7 @@
 
         <div class="space-y-4 min-w-0">
           <div class="flex flex-wrap items-center justify-between gap-3">
-            <div class="text-sm text-gray-500 dark:text-gray-400">
+            <div class="entities-page__meta text-sm">
               {{ workspaceStatusText }}
             </div>
             <el-radio-group v-model="workspaceView" size="small">
@@ -44,7 +44,7 @@
           <template v-if="workspaceView === 'workspace'">
             <div
               v-if="!selectedNode"
-              class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8"
+              class="entities-page__workspace-empty surface-card p-8"
             >
               <el-empty description="请先从左侧目录选择一个分类、分组或实体" />
             </div>
@@ -76,11 +76,11 @@
             />
           </template>
 
-          <div v-else class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+          <div v-else class="entities-page__graph-card surface-card p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 class="font-bold">关系图谱</h3>
-                <p class="text-sm text-gray-500 dark:text-gray-400">辅助查看实体关系，可全屏放大。</p>
+                <p class="entities-page__meta text-sm">辅助查看实体关系，可全屏放大。</p>
               </div>
             </div>
             <EntityGraph
@@ -362,3 +362,16 @@ function findNodeById(nodes = [], nodeId) {
 onMounted(fetchIfReady)
 watch(() => store.novelId, fetchIfReady)
 </script>
+
+<style scoped>
+.entities-page__meta {
+  color: var(--entities-text-muted);
+}
+
+.entities-page__workspace-empty,
+.entities-page__graph-card {
+  border-color: var(--entities-panel-border);
+  background: var(--entities-panel-bg);
+  color: var(--entities-text);
+}
+</style>

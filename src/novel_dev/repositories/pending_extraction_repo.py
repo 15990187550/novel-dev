@@ -84,6 +84,23 @@ class PendingExtractionRepository:
             pe.error_message = error_message
             await self.session.flush()
 
+    async def update_draft_content(
+        self,
+        pe_id: str,
+        *,
+        raw_result: dict,
+        proposed_entities: Optional[List[dict]],
+        diff_result: Optional[dict],
+    ) -> Optional[PendingExtraction]:
+        pe = await self.get_by_id(pe_id)
+        if pe is None:
+            return None
+        pe.raw_result = raw_result
+        pe.proposed_entities = proposed_entities
+        pe.diff_result = diff_result
+        await self.session.flush()
+        return pe
+
     async def delete(self, pe_id: str) -> bool:
         pe = await self.get_by_id(pe_id)
         if pe is None:

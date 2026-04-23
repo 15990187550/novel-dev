@@ -128,6 +128,30 @@ async def test_brainstorm_uses_llm_factory(async_session):
     assert "generate_synopsis" in get_tasks
 
 
+def test_synopsis_score_result_accepts_nested_scores_shape():
+    payload = {
+        "scores": {
+            "overall": 82,
+            "logline_specificity": 80,
+            "conflict_concreteness": 81,
+            "character_arc_depth": 79,
+            "structural_turns": 78,
+            "hook_strength": 77,
+        },
+        "feedback": "需要把一句话梗概写得更具体。",
+    }
+
+    result = SynopsisScoreResult.model_validate(payload)
+
+    assert result.overall == 82
+    assert result.logline_specificity == 80
+    assert result.conflict_concreteness == 81
+    assert result.character_arc_depth == 79
+    assert result.structural_turns == 78
+    assert result.hook_strength == 77
+    assert result.summary_feedback == "需要把一句话梗概写得更具体。"
+
+
 @pytest.mark.asyncio
 async def test_generate_synopsis_prompt_explicitly_constrains_schema(async_session):
     mock_client = AsyncMock()

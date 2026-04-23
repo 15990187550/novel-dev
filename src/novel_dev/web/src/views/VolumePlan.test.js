@@ -268,6 +268,45 @@ describe('VolumePlan', () => {
     expect(store.submitBrainstormWorkspace).toHaveBeenCalledTimes(1)
   })
 
+  it('uses dark-mode friendly text classes for brainstorm draft section headings', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const heading = wrapper.findAll('h2').find((node) => node.text() === '设定草稿')
+    expect(heading.classes()).toContain('dark:text-gray-100')
+  })
+
   it('renders brainstorm draft panels before the main workbench', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

@@ -3,19 +3,19 @@
     class="surface-card surface-card--soft p-5"
     data-testid="brainstorm-suggestion-cards"
   >
-    <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Suggestion Cards</div>
-    <h2 class="mt-2 text-xl font-semibold text-gray-900">设定建议卡</h2>
-    <p class="mt-1 text-sm leading-6 text-gray-500">
+    <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400 dark:text-gray-500">Suggestion Cards</div>
+    <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">设定建议卡</h2>
+    <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
       对话优化大纲时，系统会持续整理需要补充或确认的设定建议卡。请优先处理未解决项，再进行最终确认。
     </p>
 
     <div
       v-if="normalizedLastRoundSummary"
-      class="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+      class="brainstorm-suggestion-summary mt-4 rounded-2xl border px-4 py-3 text-sm"
       data-testid="last-round-summary"
     >
       <div class="font-semibold">本轮设定更新</div>
-      <p class="mt-1 text-xs leading-5 text-emerald-800">
+      <p class="brainstorm-suggestion-summary__meta mt-1 text-xs leading-5">
         新增 {{ normalizedLastRoundSummary.created }} · 更新 {{ normalizedLastRoundSummary.updated }} ·
         覆盖 {{ normalizedLastRoundSummary.superseded }} · 未解决 {{ normalizedLastRoundSummary.unresolved }}
       </p>
@@ -23,7 +23,7 @@
 
     <div
       v-if="unresolvedCount > 0"
-      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800"
+      class="brainstorm-suggestion-warning mt-4 rounded-2xl border px-4 py-3 text-sm"
       data-testid="unresolved-warning"
     >
       当前仍有 {{ unresolvedCount }} 张建议卡处于未解决状态，最终确认前建议先处理或补充信息。
@@ -31,7 +31,7 @@
 
     <div
       v-if="resolvedSubmitWarnings.length"
-      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800"
+      class="brainstorm-suggestion-warning mt-4 rounded-2xl border px-4 py-3 text-sm"
       data-testid="submit-warnings"
     >
       <div class="font-semibold">提交提示</div>
@@ -42,7 +42,7 @@
 
     <div
       v-if="!activeCards.length"
-      class="mt-4 rounded-2xl border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-500"
+      class="brainstorm-suggestion-empty mt-4 rounded-2xl border border-dashed px-4 py-6 text-sm"
       data-testid="suggestion-empty"
     >
       当前还没有待处理的设定建议卡。
@@ -52,24 +52,24 @@
       <article
         v-for="card in activeCards"
         :key="card.card_id || card.merge_key"
-        class="rounded-2xl border border-gray-200 bg-white/80 px-4 py-4"
+        class="brainstorm-suggestion-card rounded-2xl border px-4 py-4"
         data-testid="suggestion-card"
       >
         <div class="flex items-start justify-between gap-3">
           <div>
-            <div class="text-sm font-semibold text-gray-900">{{ card.title }}</div>
-            <p class="mt-1 text-xs leading-5 text-gray-500">
+            <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ card.title }}</div>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
               类型：{{ card.card_type || 'unknown' }} · 来源：{{ formatSourceRefs(card.source_outline_refs) }}
             </p>
           </div>
           <span
-            class="rounded-full bg-white px-3 py-1 text-xs font-medium"
-            :class="card.status === 'unresolved' ? 'text-amber-700' : 'text-emerald-700'"
+            class="brainstorm-suggestion-card__status rounded-full px-3 py-1 text-xs font-medium"
+            :class="card.status === 'unresolved' ? 'brainstorm-suggestion-card__status--warning' : 'brainstorm-suggestion-card__status--accent'"
           >
             {{ card.status === 'unresolved' ? '未解决' : '待处理' }}
           </span>
         </div>
-        <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700">
+        <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
           {{ card.summary }}
         </p>
       </article>
@@ -123,3 +123,44 @@ function formatSourceRefs(value) {
   return refs.join('、')
 }
 </script>
+
+<style scoped>
+.brainstorm-suggestion-summary {
+  border-color: color-mix(in srgb, var(--app-accent, #34d399) 35%, var(--app-border));
+  background: color-mix(in srgb, var(--app-accent, #34d399) 10%, var(--app-surface-soft));
+  color: var(--app-text);
+}
+
+.brainstorm-suggestion-summary__meta {
+  color: var(--app-text-muted);
+}
+
+.brainstorm-suggestion-warning {
+  border-color: color-mix(in srgb, #f59e0b 35%, var(--app-border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--app-surface-soft));
+  color: color-mix(in srgb, #f59e0b 72%, var(--app-text));
+}
+
+.brainstorm-suggestion-empty {
+  border-color: var(--app-border);
+  background: var(--app-surface);
+  color: var(--app-text-muted);
+}
+
+.brainstorm-suggestion-card {
+  border-color: var(--app-border);
+  background: var(--app-surface);
+}
+
+.brainstorm-suggestion-card__status {
+  background: var(--app-surface-soft);
+}
+
+.brainstorm-suggestion-card__status--warning {
+  color: color-mix(in srgb, #f59e0b 72%, var(--app-text));
+}
+
+.brainstorm-suggestion-card__status--accent {
+  color: color-mix(in srgb, var(--app-accent, #34d399) 68%, var(--app-text));
+}
+</style>

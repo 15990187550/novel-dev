@@ -14,7 +14,12 @@
         <span class="dashboard-status-card__label">{{ panel.label }}</span>
         <span class="dashboard-status-card__state">{{ panelStateText(panel.panelState) }}</span>
       </div>
-      <strong class="dashboard-status-card__title">{{ panel.title }}</strong>
+      <strong
+        class="dashboard-status-card__title"
+        :class="{ 'dashboard-status-card__title--contrast': ['error', 'warning'].includes(panel.panelState) }"
+      >
+        {{ panel.title }}
+      </strong>
       <p class="dashboard-status-card__detail">{{ panel.detail }}</p>
       <span class="dashboard-status-card__meta">{{ panel.meta }}</span>
     </RouterLink>

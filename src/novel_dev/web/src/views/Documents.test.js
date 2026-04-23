@@ -20,7 +20,9 @@ const {
   deletePendingDocMock,
   uploadDocumentsBatchMock,
   rejectPendingMock,
+  updatePendingDraftFieldMock,
   getDocumentLibraryMock,
+  updateLibraryDocumentMock,
   rollbackStyleProfileMock,
   successMessageMock,
 } = vi.hoisted(() => ({
@@ -28,7 +30,9 @@ const {
   deletePendingDocMock: vi.fn(),
   uploadDocumentsBatchMock: vi.fn(),
   rejectPendingMock: vi.fn(),
+  updatePendingDraftFieldMock: vi.fn(),
   getDocumentLibraryMock: vi.fn(),
+  updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
   successMessageMock: vi.fn(),
 }))
@@ -38,7 +42,9 @@ vi.mock('@/api.js', () => ({
   deletePendingDoc: deletePendingDocMock,
   uploadDocumentsBatch: uploadDocumentsBatchMock,
   rejectPending: rejectPendingMock,
+  updatePendingDraftField: updatePendingDraftFieldMock,
   getDocumentLibrary: getDocumentLibraryMock,
+  updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
 }))
 
@@ -55,6 +61,7 @@ const ElButtonStub = defineComponent({
     disabled: { type: Boolean, default: false },
     type: { type: String, default: '' },
     size: { type: String, default: '' },
+    plain: { type: Boolean, default: false },
   },
   emits: ['click'],
   setup(props, { emit, slots }) {
@@ -67,6 +74,7 @@ const ElButtonStub = defineComponent({
           'data-loading': props.loading ? 'true' : 'false',
           'data-type': props.type,
           'data-size': props.size,
+          'data-plain': props.plain ? 'true' : 'false',
           onClick: () => emit('click'),
         },
         slots.default?.()
@@ -181,8 +189,24 @@ describe('Documents', () => {
               return () => h('div', { class: 'el-dialog-stub' }, slots.default?.())
             },
           }),
-          ElCollapse: true,
-          ElCollapseItem: true,
+          ElCollapse: defineComponent({
+            name: 'ElCollapseStub',
+            setup(_, { attrs, slots }) {
+              return () => h('div', { class: ['el-collapse-stub', attrs.class] }, slots.default?.())
+            },
+          }),
+          ElCollapseItem: defineComponent({
+            name: 'ElCollapseItemStub',
+            props: {
+              title: { type: String, default: '' },
+            },
+            setup(props, { slots }) {
+              return () => h('section', { class: 'el-collapse-item-stub' }, [
+                h('header', { class: 'el-collapse-item-stub__title' }, props.title),
+                h('div', { class: 'el-collapse-item-stub__content' }, slots.default?.()),
+              ])
+            },
+          }),
           ElEmpty: true,
           ElSelect: ElSelectStub,
           ElOption: defineComponent({
@@ -321,6 +345,144 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('短句推进')
   })
 
+  it('edits a library setting document in a modal and saves it as a new version', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'world-1',
+            doc_type: 'worldview',
+            title: '世界观',
+            content: '旧世界观',
+            version: 1,
+            updated_at: '2026-04-23T00:00:00Z',
+            is_active: true,
+          },
+        ],
+        active_style_profile_version: null,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'world-2',
+            doc_type: 'worldview',
+            title: '世界观',
+            content: '新世界观',
+            version: 2,
+            updated_at: '2026-04-24T00:00:00Z',
+            is_active: true,
+          },
+        ],
+        active_style_profile_version: null,
+      })
+    updateLibraryDocumentMock.mockResolvedValue({
+      item: {
+        id: 'world-2',
+        doc_type: 'worldview',
+        title: '世界观',
+        content: '新世界观',
+        version: 2,
+        updated_at: '2026-04-24T00:00:00Z',
+        is_active: true,
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const editButton = wrapper.find('.documents-library-card__edit')
+    expect(editButton.exists()).toBe(true)
+
+    await editButton.trigger('click')
+    await nextTick()
+
+    const textarea = wrapper.find('.documents-library-editor__textarea')
+    await textarea.setValue('新世界观')
+
+    const saveButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '保存为新版本')
+    await saveButton.trigger('click')
+    await flushPromises()
+
+    expect(updateLibraryDocumentMock).toHaveBeenCalledWith('novel-1', 'world-1', { content: '新世界观' })
+    expect(wrapper.text()).toContain('新世界观')
+    expect(successMessageMock).toHaveBeenCalledWith('资料已更新为新版本')
+  })
+
+  it('edits a style profile in a modal and promotes the new version', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'style-2',
+            doc_type: 'style_profile',
+            title: '{"tone":"热血"}',
+            content: '旧文风',
+            version: 2,
+            updated_at: '2026-04-23T00:00:00Z',
+            is_active: true,
+            style_config: { tone: '热血' },
+          },
+        ],
+        active_style_profile_version: 2,
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'style-3',
+            doc_type: 'style_profile',
+            title: '{"tone":"冷峻"}',
+            content: '新文风',
+            version: 3,
+            updated_at: '2026-04-24T00:00:00Z',
+            is_active: true,
+            style_config: { tone: '冷峻' },
+          },
+        ],
+        active_style_profile_version: 3,
+      })
+    updateLibraryDocumentMock.mockResolvedValue({
+      item: {
+        id: 'style-3',
+        doc_type: 'style_profile',
+        title: '{"tone":"冷峻"}',
+        content: '新文风',
+        version: 3,
+        updated_at: '2026-04-24T00:00:00Z',
+        is_active: true,
+        style_config: { tone: '冷峻' },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const editButtons = wrapper.findAll('.documents-library-card__edit')
+    await editButtons[0].trigger('click')
+    await nextTick()
+
+    const textarea = wrapper.find('.documents-library-editor__textarea')
+    await textarea.setValue('新文风')
+
+    const saveButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '保存为新版本')
+    await saveButton.trigger('click')
+    await flushPromises()
+
+    expect(updateLibraryDocumentMock).toHaveBeenCalledWith('novel-1', 'style-2', { content: '新文风' })
+    expect(wrapper.text()).toContain('版本 v3')
+    expect(wrapper.text()).toContain('新文风')
+    expect(successMessageMock).toHaveBeenCalledWith('文风档案已更新并设为当前版本')
+  })
+
   it('renders 导入中 for processing rows restored after remount', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -333,6 +495,26 @@ describe('Documents', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('导入中')
+  })
+
+  it('applies themed classes to the pending docs table and detail action', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-1', source_filename: '力量体系.md', extraction_type: 'processing', status: 'processing', created_at: '2026-04-23T06:27:28Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const themedTable = wrapper.find('.documents-pending-table')
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+
+    expect(themedTable.exists()).toBe(true)
+    expect(detailButton.classes()).toContain('documents-pending-table__action')
+    expect(detailButton.attributes('data-type')).toBe('info')
+    expect(detailButton.attributes('data-plain')).toBe('true')
   })
 
   it('shows merge loading state and refreshes detail results after automatic merge succeeds', async () => {
@@ -439,6 +621,344 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('自动合并')
     expect(wrapper.text()).toContain('已写入')
     expect(successMessageMock).toHaveBeenCalledWith('自动合并完成')
+  })
+
+  it('applies themed classes to detail tables inside the import dialog', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '设定一.md',
+        extraction_type: 'setting',
+        status: 'approved',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '2 处变更',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'update',
+              field_changes: [
+                { field: 'description', old_value: '旧描述', new_value: '新描述' },
+              ],
+            },
+            {
+              entity_type: 'item',
+              entity_name: '灵剑',
+              operation: 'conflict',
+              field_changes: [
+                { field: 'owner', old_value: '旧主人', new_value: '新主人', auto_applicable: false },
+              ],
+            },
+          ],
+        },
+        resolution_result: {
+          field_resolutions: [
+            { entity_name: '灵剑', field: 'owner', action: 'merge', applied: true },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.findAll('.documents-detail-table')).toHaveLength(3)
+  })
+
+  it('applies themed classes to the detail collapse area inside the import dialog', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '九重天八界.md',
+        extraction_type: 'setting',
+        status: 'approved',
+        created_at: '2026-04-22T00:00:00Z',
+        raw_result: { worlds: ['九重天八界'] },
+        proposed_entities: [{ name: '九幽', type: 'location' }],
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('.documents-detail-collapse').exists()).toBe(true)
+    expect(wrapper.findAll('.documents-detail-collapse__panel')).toHaveLength(2)
+  })
+
+  it('edits a created entity field and saves it on Enter', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '九重天八界.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'character',
+              entity_name: '孟奇',
+              operation: 'create',
+              field_changes: [
+                { field: 'identity', label: '身份', old_value: '', new_value: '道经传承者' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    updatePendingDraftFieldMock.mockResolvedValue({
+      item: {
+        ...store.pendingDocs[0],
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'character',
+              entity_name: '孟奇',
+              operation: 'create',
+              field_changes: [
+                { field: 'identity', label: '身份', old_value: '', new_value: '彼岸传承者' },
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButton = wrapper.find('.documents-draft-field__edit')
+    await editButton.trigger('click')
+    await nextTick()
+
+    const input = wrapper.find('.documents-draft-field__input')
+    await input.setValue('彼岸传承者')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(updatePendingDraftFieldMock).toHaveBeenCalledWith('novel-1', 'doc-1', {
+      entity_type: 'character',
+      entity_name: '孟奇',
+      field: 'identity',
+      value: '彼岸传承者',
+    })
+    expect(wrapper.text()).toContain('彼岸传承者')
+  })
+
+  it('cancels a draft field edit on Escape without closing the detail content', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-esc',
+        source_filename: '九重天八界.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'character',
+              entity_name: '孟奇',
+              operation: 'create',
+              field_changes: [
+                { field: 'background', label: '背景', old_value: '', new_value: '古老彼岸者' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButton = wrapper.find('.documents-draft-field__edit')
+    await editButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.find('.documents-draft-field__input').exists()).toBe(true)
+
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await nextTick()
+
+    expect(wrapper.find('.documents-draft-field__input').exists()).toBe(false)
+    expect(wrapper.text()).toContain('古老彼岸者')
+    expect(wrapper.text()).toContain('增量变更')
+    expect(updatePendingDraftFieldMock).not.toHaveBeenCalled()
+  })
+
+  it('edits an updated entity field and saves it on Enter', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-2',
+        source_filename: '九重天八界.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个可自动补充实体',
+          entity_diffs: [
+            {
+              entity_type: 'location',
+              entity_name: '真实界',
+              operation: 'update',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '旧描述', new_value: '核心世界' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    updatePendingDraftFieldMock.mockResolvedValue({
+      item: {
+        ...store.pendingDocs[0],
+        diff_result: {
+          summary: '1 个可自动补充实体',
+          entity_diffs: [
+            {
+              entity_type: 'location',
+              entity_name: '真实界',
+              operation: 'update',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '旧描述', new_value: '核心世界，诸天万界中心' },
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButtons = wrapper.findAll('.documents-draft-field__edit')
+    await editButtons[0].trigger('click')
+    await nextTick()
+
+    const input = wrapper.find('.documents-draft-field__input')
+    await input.setValue('核心世界，诸天万界中心')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+    await nextTick()
+
+    expect(updatePendingDraftFieldMock).toHaveBeenCalledWith('novel-1', 'doc-2', {
+      entity_type: 'location',
+      entity_name: '真实界',
+      field: 'description',
+      value: '核心世界，诸天万界中心',
+    })
+    expect(wrapper.vm.selectedDoc.diff_result.entity_diffs[0].field_changes[0].new_value).toBe('核心世界，诸天万界中心')
+    expect(store.pendingDocs[0].diff_result.entity_diffs[0].field_changes[0].new_value).toBe('核心世界，诸天万界中心')
+  })
+
+  it('edits a conflicting entity new value and saves it on Enter', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-3',
+        source_filename: '九重天八界.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个冲突实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'conflict',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '旧描述', new_value: '新描述', auto_applicable: false },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    updatePendingDraftFieldMock.mockResolvedValue({
+      item: {
+        ...store.pendingDocs[0],
+        diff_result: {
+          summary: '1 个冲突实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'conflict',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '旧描述', new_value: '融合后的新描述', auto_applicable: false },
+              ],
+            },
+          ],
+        },
+      },
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButtons = wrapper.findAll('.documents-draft-field__edit')
+    await editButtons[0].trigger('click')
+    await nextTick()
+
+    const input = wrapper.find('.documents-draft-field__input')
+    await input.setValue('融合后的新描述')
+    await input.trigger('keydown.enter')
+    await flushPromises()
+
+    expect(updatePendingDraftFieldMock).toHaveBeenCalledWith('novel-1', 'doc-3', {
+      entity_type: 'item',
+      entity_name: '道经',
+      field: 'description',
+      value: '融合后的新描述',
+    })
+    expect(wrapper.vm.selectedDoc.diff_result.entity_diffs[0].field_changes[0].new_value).toBe('融合后的新描述')
   })
 
   it('shows delete for failed rows and removes the record after deletion', async () => {

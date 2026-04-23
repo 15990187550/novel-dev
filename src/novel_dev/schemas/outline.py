@@ -149,6 +149,31 @@ class SynopsisScoreResult(BaseModel):
     hook_strength: int = Field(ge=0, le=100, description="整部结尾是否带明确开放性钩子")
     summary_feedback: str
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_nested_scores(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        nested_scores = normalized.get("scores")
+        if isinstance(nested_scores, dict):
+            for key in (
+                "overall",
+                "logline_specificity",
+                "conflict_concreteness",
+                "character_arc_depth",
+                "structural_turns",
+                "hook_strength",
+            ):
+                if key not in normalized and key in nested_scores:
+                    normalized[key] = nested_scores[key]
+        if "summary_feedback" not in normalized:
+            for legacy_key in ("feedback", "summary", "comment", "comments"):
+                if legacy_key in normalized:
+                    normalized["summary_feedback"] = normalized[legacy_key]
+                    break
+        return normalized
+
     @field_validator("summary_feedback", mode="before")
     @classmethod
     def _coerce_summary_feedback(cls, value: Any) -> str:
