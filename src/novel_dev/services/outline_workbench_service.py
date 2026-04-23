@@ -1,14 +1,17 @@
+import json
 from typing import Any, Optional
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.repositories.document_repo import DocumentRepository
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.outline_message_repo import OutlineMessageRepository
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
+from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardMergePayload
 from novel_dev.schemas.outline import SynopsisData, VolumePlan
 from novel_dev.schemas.outline_workbench import (
     OutlineContextWindow,
@@ -20,6 +23,18 @@ from novel_dev.schemas.outline_workbench import (
 )
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.log_service import log_service
+
+
+class SuggestionUpdateSummary(BaseModel):
+    created: int = 0
+    updated: int = 0
+    superseded: int = 0
+    unresolved: int = 0
+
+
+class SuggestionCardUpdateEnvelope(BaseModel):
+    cards: list[SettingSuggestionCardMergePayload] = Field(default_factory=list)
+    summary: SuggestionUpdateSummary = Field(default_factory=SuggestionUpdateSummary)
 
 
 class OutlineWorkbenchService:
@@ -217,6 +232,7 @@ class OutlineWorkbenchService:
                 "outline_type": outline_type,
                 "outline_ref": outline_ref,
                 "result_snapshot": optimize_result.get("result_snapshot"),
+                "setting_update_summary": optimize_result.get("setting_update_summary"),
             },
         )
         if self._is_brainstorming_phase(state.current_phase):
@@ -226,6 +242,11 @@ class OutlineWorkbenchService:
                     outline_type=outline_type,
                     outline_ref=outline_ref,
                     result_snapshot=optimize_result["result_snapshot"],
+                )
+            if optimize_result.get("setting_suggestion_card_updates"):
+                await self.workspace_service.merge_suggestion_cards(
+                    novel_id=novel_id,
+                    card_updates=optimize_result["setting_suggestion_card_updates"],
                 )
             if optimize_result.get("setting_draft_updates"):
                 await self.workspace_service.merge_setting_drafts(
@@ -369,15 +390,72 @@ class OutlineWorkbenchService:
         else:
             raise ValueError(f"Unsupported outline type: {outline_type}")
 
+        setting_suggestion_card_updates: list[dict[str, Any]] = result.get(
+            "setting_suggestion_card_updates",
+            [],
+        )
+        setting_update_summary: dict[str, int] = result.get(
+            "setting_update_summary",
+            SuggestionUpdateSummary().model_dump(),
+        )
+        if self._is_brainstorming_phase(state.current_phase) and result.get("result_snapshot"):
+            (
+                setting_suggestion_card_updates,
+                setting_update_summary,
+            ) = await self._build_suggestion_card_updates(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                feedback=feedback,
+                context_window=context_window,
+                result_snapshot=result["result_snapshot"],
+            )
+
         return {
             "content": result["content"],
             "result_snapshot": result["result_snapshot"],
             "setting_draft_updates": result.get("setting_draft_updates", []),
+            "setting_suggestion_card_updates": setting_suggestion_card_updates,
+            "setting_update_summary": setting_update_summary,
             "conversation_summary": self._merge_conversation_summary(
                 context_window.conversation_summary,
                 feedback,
             ),
         }
+
+    async def _build_suggestion_card_updates(
+        self,
+        *,
+        novel_id: str,
+        outline_type: str,
+        outline_ref: str,
+        feedback: str,
+        context_window: OutlineContextWindow,
+        result_snapshot: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, int]]:
+        workspace = await self.workspace_service.get_workspace_payload(novel_id)
+        active_cards = self.workspace_service.list_active_suggestion_cards(workspace)
+        update_prompt = (
+            "你是一位小说设定编辑。根据新的 outline 快照、已有建议卡、历史摘要与用户最新意见，"
+            "返回 suggestion card 增量更新 JSON。\n"
+            "只返回符合 SuggestionCardUpdateEnvelope Schema 的 JSON，不要解释。\n"
+            f"### outline_type\n{outline_type}\n\n"
+            f"### outline_ref\n{outline_ref}\n\n"
+            f"### 新 outline 快照\n{json.dumps(result_snapshot, ensure_ascii=False)}\n\n"
+            f"### 已有 active suggestion cards\n"
+            f"{json.dumps([card.model_dump() for card in active_cards], ensure_ascii=False)}\n\n"
+            f"### 历史会话摘要\n{context_window.conversation_summary or '无'}\n\n"
+            f"### 最近对话\n{self._format_recent_messages(context_window) or '无'}\n\n"
+            f"### 用户最新意见\n{feedback}"
+        )
+        updates = await call_and_parse_model(
+            "OutlineWorkbenchService",
+            "build_suggestion_card_updates",
+            update_prompt,
+            SuggestionCardUpdateEnvelope,
+            novel_id=novel_id,
+        )
+        return [item.model_dump() for item in updates.cards], updates.summary.model_dump()
 
     async def _write_result_snapshot(
         self,

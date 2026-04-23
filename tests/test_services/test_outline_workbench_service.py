@@ -638,3 +638,73 @@ async def test_submit_feedback_updates_workspace_without_mutating_checkpoint_dur
     assert workspace.outline_drafts["synopsis:synopsis"]["title"] == "工作区总纲"
     assert workspace.outline_drafts["synopsis:synopsis"]["estimated_total_chapters"] == 120
     assert response.last_result_snapshot["title"] == "工作区总纲"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_merges_suggestion_cards_in_brainstorm_mode(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_outline_cards",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_optimize_outline(**kwargs):
+        return {
+            "content": "已更新第一卷卷纲，并细化主要人物与关系。",
+            "result_snapshot": {
+                "title": "第一卷",
+                "summary": "卷一摘要",
+                "entity_highlights": {"characters": ["陆照：主角"]},
+                "relationship_highlights": ["陆照 / 苏清寒：互疑转合作"],
+            },
+            "setting_draft_updates": [],
+            "setting_suggestion_card_updates": [
+                {
+                    "operation": "upsert",
+                    "card_id": "card_rel",
+                    "card_type": "relationship",
+                    "merge_key": "relationship:lu-zhao:su-qinghan",
+                    "title": "陆照 / 苏清寒",
+                    "summary": "互疑转合作",
+                    "status": "active",
+                    "source_outline_refs": ["vol_1"],
+                    "payload": {
+                        "source_entity_ref": "陆照",
+                        "target_entity_ref": "苏清寒",
+                        "relation_type": "亦敌亦友",
+                    },
+                    "display_order": 30,
+                }
+            ],
+            "setting_update_summary": {
+                "created": 1,
+                "updated": 0,
+                "superseded": 0,
+                "unresolved": 0,
+            },
+        }
+
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="novel_outline_cards",
+        outline_type="volume",
+        outline_ref="vol_1",
+        feedback="强化第一卷主角与女主关系推进",
+    )
+
+    assert "细化主要人物与关系" in response.assistant_message.content
+    assert response.assistant_message.meta["setting_update_summary"] == {
+        "created": 1,
+        "updated": 0,
+        "superseded": 0,
+        "unresolved": 0,
+    }
+    workspace = await service.workspace_service.get_workspace_payload("novel_outline_cards")
+    assert workspace.setting_suggestion_cards[0].merge_key == "relationship:lu-zhao:su-qinghan"
+    assert response.last_result_snapshot["relationship_highlights"] == ["陆照 / 苏清寒：互疑转合作"]
