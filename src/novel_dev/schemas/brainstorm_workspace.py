@@ -1,6 +1,6 @@
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SettingDocDraftPayload(BaseModel):
@@ -45,6 +45,24 @@ class SettingSuggestionCardMergePayload(BaseModel):
     source_outline_refs: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
     display_order: int = 0
+
+    @model_validator(mode="after")
+    def validate_upsert_fields(self) -> "SettingSuggestionCardMergePayload":
+        if self.operation == "supersede":
+            return self
+
+        required_fields = {
+            "card_id": self.card_id,
+            "card_type": self.card_type,
+            "title": self.title,
+            "summary": self.summary,
+            "status": self.status,
+        }
+        missing_fields = [field_name for field_name, value in required_fields.items() if value is None]
+        if missing_fields:
+            missing = ", ".join(sorted(missing_fields))
+            raise ValueError(f"Upsert suggestion cards require fields: {missing}")
+        return self
 
 
 class BrainstormWorkspacePayload(BaseModel):

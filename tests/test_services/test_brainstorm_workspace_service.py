@@ -218,6 +218,140 @@ async def test_merge_suggestion_cards_marks_superseded_cards(async_session):
 
 
 @pytest.mark.asyncio
+async def test_merge_suggestion_cards_preserves_existing_payload_keys(async_session):
+    service = BrainstormWorkspaceService(async_session)
+
+    await service.merge_suggestion_cards(
+        "novel_payload_merge_cards",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_seed",
+                "card_type": "character",
+                "merge_key": "character:lu-zhao",
+                "title": "陆照",
+                "summary": "主角初版建议",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "陆照", "goal": "改命", "trait": "谨慎"},
+                "display_order": 10,
+            }
+        ],
+    )
+
+    cards = await service.merge_suggestion_cards(
+        "novel_payload_merge_cards",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_delta",
+                "card_type": "character",
+                "merge_key": "character:lu-zhao",
+                "title": "陆照",
+                "summary": "补充主角资源",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {"resources": "祖传黑刀"},
+                "display_order": 10,
+            }
+        ],
+    )
+
+    assert cards[0].payload == {
+        "canonical_name": "陆照",
+        "goal": "改命",
+        "trait": "谨慎",
+        "resources": "祖传黑刀",
+    }
+
+
+@pytest.mark.asyncio
+async def test_merge_suggestion_cards_supersede_is_sticky_with_reordered_batch(async_session):
+    service = BrainstormWorkspaceService(async_session)
+
+    cards = await service.merge_suggestion_cards(
+        "novel_reordered_supersede_cards",
+        [
+            {
+                "operation": "supersede",
+                "merge_key": "faction:tian-xing-zong",
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_faction",
+                "card_type": "faction",
+                "merge_key": "faction:tian-xing-zong",
+                "title": "天刑宗",
+                "summary": "旧版设定",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "天刑宗", "position": "铁板一块"},
+                "display_order": 20,
+            },
+        ],
+    )
+
+    assert cards[0].status == "superseded"
+
+
+def test_list_active_suggestion_cards_filters_terminal_statuses():
+    service = BrainstormWorkspaceService(AsyncMock())
+    payload = service.list_active_suggestion_cards(
+        service._serialize_workspace(
+            type(
+                "WorkspaceStub",
+                (),
+                {
+                    "id": "ws_1",
+                    "novel_id": "novel_cards_helper",
+                    "status": "active",
+                    "workspace_summary": None,
+                    "outline_drafts": {},
+                    "setting_docs_draft": [],
+                    "setting_suggestion_cards": [
+                        {
+                            "card_id": "card_active",
+                            "card_type": "character",
+                            "merge_key": "character:lu-zhao",
+                            "title": "陆照",
+                            "summary": "active",
+                            "status": "active",
+                            "source_outline_refs": [],
+                            "payload": {},
+                            "display_order": 10,
+                        },
+                        {
+                            "card_id": "card_unresolved",
+                            "card_type": "faction",
+                            "merge_key": "faction:tian-xing-zong",
+                            "title": "天刑宗",
+                            "summary": "unresolved",
+                            "status": "unresolved",
+                            "source_outline_refs": [],
+                            "payload": {},
+                            "display_order": 20,
+                        },
+                        {
+                            "card_id": "card_superseded",
+                            "card_type": "relationship",
+                            "merge_key": "relationship:lu-zhao:su-qinghan",
+                            "title": "陆照 / 苏清寒",
+                            "summary": "superseded",
+                            "status": "superseded",
+                            "source_outline_refs": [],
+                            "payload": {},
+                            "display_order": 30,
+                        },
+                    ],
+                },
+            )()
+        )
+    )
+
+    assert [card.status for card in payload] == ["active", "unresolved"]
+
+
+@pytest.mark.asyncio
 async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_pending_settings(async_session):
     director = NovelDirector(async_session)
     await director.save_checkpoint(

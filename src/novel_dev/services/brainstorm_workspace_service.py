@@ -83,12 +83,18 @@ class BrainstormWorkspaceService:
             for item in (workspace.setting_suggestion_cards or [])
         ]
         by_merge_key = {item["merge_key"]: item for item in cards}
+        superseded_merge_keys = {
+            item["merge_key"]
+            for item in cards
+            if item.get("status") == "superseded"
+        }
 
         for update in card_updates:
             normalized_update = SettingSuggestionCardMergePayload.model_validate(update)
             merge_key = normalized_update.merge_key
 
             if normalized_update.operation == "supersede":
+                superseded_merge_keys.add(merge_key)
                 if merge_key in by_merge_key:
                     by_merge_key[merge_key]["status"] = "superseded"
                 continue
@@ -98,13 +104,20 @@ class BrainstormWorkspaceService:
             ).model_dump()
             existing = by_merge_key.get(merge_key)
             if existing is None:
+                if merge_key in superseded_merge_keys:
+                    incoming["status"] = "superseded"
                 by_merge_key[merge_key] = incoming
                 continue
 
             existing["summary"] = incoming["summary"]
             existing["title"] = incoming["title"]
-            existing["status"] = incoming["status"]
-            existing["payload"] = incoming["payload"]
+            existing["status"] = (
+                "superseded" if merge_key in superseded_merge_keys else incoming["status"]
+            )
+            existing["payload"] = {
+                **existing.get("payload", {}),
+                **incoming["payload"],
+            }
             existing["display_order"] = incoming["display_order"]
             existing["source_outline_refs"] = sorted(
                 set(existing.get("source_outline_refs", []))
