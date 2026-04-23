@@ -1317,3 +1317,183 @@ async def test_submit_workspace_skips_empty_relation_type_with_warning(async_ses
     assert result.submit_warnings == [
         "Skipped relationship card relationship:lin-feng:su-xue: relation_type missing"
     ]
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_skips_close_match_relationship_resolution(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_close_match_rel",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    entity_service = EntityService(async_session)
+    source_entity = await entity_service.create_entity(
+        "ent_lin_feng_close",
+        "character",
+        "林风",
+        novel_id="novel_submit_close_match_rel",
+    )
+    await entity_service.create_entity(
+        "ent_su_xue_close",
+        "character",
+        "苏雪儿",
+        novel_id="novel_submit_close_match_rel",
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_close_match_rel",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_close_match_rel",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_rel_close",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:su-xue",
+                "title": "林风 / 苏雪",
+                "summary": "仅近似名可命中",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_ref": "林风",
+                    "target_entity_ref": "苏雪",
+                    "relation_type": "盟友",
+                },
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_close_match_rel")
+
+    relationships = await RelationshipRepository(async_session).list_by_source(
+        source_entity.id,
+        novel_id="novel_submit_close_match_rel",
+    )
+
+    assert result.relationship_count == 0
+    assert relationships == []
+    assert result.submit_warnings == [
+        "Skipped relationship card relationship:lin-feng:su-xue: target entity ref 苏雪 not found"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_skips_ambiguous_entity_ref_card_match(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_duplicate_card_match",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    entity_service = EntityService(async_session)
+    source_entity = await entity_service.create_entity(
+        "ent_lin_feng_dup",
+        "character",
+        "林风",
+        novel_id="novel_submit_duplicate_card_match",
+    )
+    await entity_service.create_entity(
+        "ent_qingyun_faction_dup",
+        "faction",
+        "青云宗",
+        novel_id="novel_submit_duplicate_card_match",
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_duplicate_card_match",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_duplicate_card_match",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_faction_qingyun",
+                "card_type": "faction",
+                "merge_key": "faction:qing-yun-zong",
+                "title": "青云宗",
+                "summary": "宗门建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "青云宗"},
+                "display_order": 10,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_location_qingyun",
+                "card_type": "location",
+                "merge_key": "location:qing-yun-zong",
+                "title": "青云 宗",
+                "summary": "地名建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "青云 宗"},
+                "display_order": 15,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_rel_dup_match",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:qing-yun-zong",
+                "title": "林风 / 青云宗",
+                "summary": "重名 suggestion card 歧义",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_ref": "林风",
+                    "target_entity_ref": "青 云宗",
+                    "relation_type": "敌对",
+                },
+                "display_order": 20,
+            },
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_duplicate_card_match")
+
+    relationships = await RelationshipRepository(async_session).list_by_source(
+        source_entity.id,
+        novel_id="novel_submit_duplicate_card_match",
+    )
+
+    assert result.relationship_count == 0
+    assert relationships == []
+    assert result.submit_warnings == [
+        "Skipped relationship card relationship:lin-feng:qing-yun-zong: target entity ref 青 云宗 is ambiguous"
+    ]

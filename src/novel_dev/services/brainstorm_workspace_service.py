@@ -331,11 +331,6 @@ class BrainstormWorkspaceService:
         warnings: list[str] = []
         entity_cards = [card for card in active_cards if card.card_type != "relationship"]
         entity_cards_by_key = {card.merge_key: card for card in entity_cards}
-        entity_cards_by_name = {
-            self._extract_card_entity_name(card): card
-            for card in entity_cards
-            if self._extract_card_entity_name(card)
-        }
 
         for card in cards:
             source_id, source_error = await self._resolve_relationship_endpoint(
@@ -344,7 +339,6 @@ class BrainstormWorkspaceService:
                 payload=card.payload,
                 entity_cards=entity_cards,
                 entity_cards_by_key=entity_cards_by_key,
-                entity_cards_by_name=entity_cards_by_name,
             )
             target_id, target_error = await self._resolve_relationship_endpoint(
                 novel_id=novel_id,
@@ -352,7 +346,6 @@ class BrainstormWorkspaceService:
                 payload=card.payload,
                 entity_cards=entity_cards,
                 entity_cards_by_key=entity_cards_by_key,
-                entity_cards_by_name=entity_cards_by_name,
             )
             if source_error:
                 warnings.append(
@@ -400,7 +393,6 @@ class BrainstormWorkspaceService:
         payload: dict[str, Any],
         entity_cards: list[SettingSuggestionCardPayload],
         entity_cards_by_key: dict[str, SettingSuggestionCardPayload],
-        entity_cards_by_name: dict[str, SettingSuggestionCardPayload],
     ) -> tuple[str | None, str | None]:
         card_key = payload.get(f"{endpoint}_entity_card_key")
         if card_key:
@@ -416,10 +408,16 @@ class BrainstormWorkspaceService:
 
         entity_ref = (payload.get(f"{endpoint}_entity_ref") or "").strip()
         if entity_ref:
-            card_match = entity_cards_by_name.get(entity_ref) or self._find_entity_card_by_name(
-                entity_cards,
-                entity_ref,
+            (
+                card_match,
+                card_match_error,
+            ) = self._find_unique_entity_card_by_name(
+                endpoint=endpoint,
+                entity_cards=entity_cards,
+                entity_ref=entity_ref,
             )
+            if card_match_error:
+                return None, card_match_error
             if card_match is not None:
                 entity_id, entity_error = await self._resolve_persisted_entity_id_from_card(
                     novel_id=novel_id,
@@ -505,30 +503,39 @@ class BrainstormWorkspaceService:
             for entity in candidates
             if repo.normalize_name(entity.name) == normalized_ref
         ]
-        if normalized_matches:
-            return normalized_matches
+        return normalized_matches
 
-        close_matches = [
-            entity
-            for entity in candidates
-            if repo._is_close_name_match(repo.normalize_name(entity.name), normalized_ref)
-        ]
-        return close_matches
-
-    def _find_entity_card_by_name(
+    def _find_unique_entity_card_by_name(
         self,
+        endpoint: str,
         entity_cards: list[SettingSuggestionCardPayload],
         entity_ref: str,
-    ) -> SettingSuggestionCardPayload | None:
+    ) -> tuple[SettingSuggestionCardPayload | None, str | None]:
         normalize_name = self.extraction_service.entity_svc.entity_repo.normalize_name
-        normalized_ref = normalize_name(entity_ref)
+        exact_matches = []
         for card in entity_cards:
             card_name = self._extract_card_entity_name(card)
             if card_name == entity_ref:
-                return card
+                exact_matches.append(card)
+        if len(exact_matches) == 1:
+            return exact_matches[0], None
+        if len(exact_matches) > 1:
+            return None, f"{endpoint} entity ref {entity_ref} is ambiguous"
+
+        normalized_ref = normalize_name(entity_ref)
+        if not normalized_ref:
+            return None, None
+
+        normalized_matches = []
+        for card in entity_cards:
+            card_name = self._extract_card_entity_name(card)
             if normalized_ref and normalize_name(card_name) == normalized_ref:
-                return card
-        return None
+                normalized_matches.append(card)
+        if len(normalized_matches) == 1:
+            return normalized_matches[0], None
+        if len(normalized_matches) > 1:
+            return None, f"{endpoint} entity ref {entity_ref} is ambiguous"
+        return None, None
 
     def _extract_card_entity_name(
         self,
