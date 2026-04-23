@@ -1,5 +1,5 @@
 <template>
-  <div class="space-y-4">
+  <div class="entities-page entities-theme space-y-4">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2 class="text-xl font-bold">实体百科</h2>

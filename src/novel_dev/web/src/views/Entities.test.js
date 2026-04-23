@@ -250,6 +250,14 @@ describe('Entities', () => {
     })
   }
 
+  it('adds the local entities theme scope on the page root', () => {
+    seedStore()
+    const wrapper = mountView()
+
+    expect(wrapper.find('.entities-page').exists()).toBe(true)
+    expect(wrapper.find('.entities-page').classes()).toContain('entities-theme')
+  })
+
   it('shows an empty workspace until the user selects a node', async () => {
     seedStore()
     const wrapper = mountView()
