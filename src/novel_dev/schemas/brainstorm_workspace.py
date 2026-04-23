@@ -79,3 +79,5 @@ class BrainstormWorkspaceSubmitResponse(BaseModel):
     synopsis_title: str
     pending_setting_count: int
     volume_outline_count: int
+    relationship_count: int = 0
+    submit_warnings: list[str] = Field(default_factory=list)

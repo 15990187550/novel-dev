@@ -7,6 +7,7 @@ from novel_dev.repositories.brainstorm_workspace_repo import BrainstormWorkspace
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 
 
@@ -854,3 +855,168 @@ async def test_brainstorm_workspace_submit_workspace_auto_classify_failure_abort
     assert pending == []
     assert active_workspace is not None
     assert active_workspace.status == "active"
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_relationship_count_materializes_entity_and_relationship_cards(
+    async_session,
+):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_cards",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_cards",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_cards",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_char",
+                "card_type": "character",
+                "merge_key": "character:lin-feng",
+                "title": "林风",
+                "summary": "主角建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "林风",
+                    "identity": "外门弟子",
+                    "goal": "改命",
+                },
+                "display_order": 10,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_rel",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:su-xue",
+                "title": "林风 / 苏雪",
+                "summary": "盟友关系",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_ref": "林风",
+                    "target_entity_ref": "苏雪",
+                    "relation_type": "盟友",
+                    "source_entity_card_key": "character:lin-feng",
+                    "target_entity_card_key": "character:su-xue",
+                },
+                "display_order": 20,
+            },
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_cards")
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel("novel_submit_cards")
+    relationships = await RelationshipRepository(async_session).list_by_source(
+        "character:lin-feng",
+        novel_id="novel_submit_cards",
+    )
+
+    assert result.pending_setting_count == 1
+    assert result.relationship_count == 1
+    assert result.submit_warnings == []
+    assert len(pending) == 1
+    assert len(relationships) == 1
+    assert relationships[0].target_id == "character:su-xue"
+    assert relationships[0].relation_type == "盟友"
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_relationship_count_collects_unresolved_card_warnings(
+    async_session,
+):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_card_warning",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_card_warning",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_card_warning",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_char",
+                "card_type": "character",
+                "merge_key": "character:lin-feng",
+                "title": "林风",
+                "summary": "主角建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "林风",
+                    "identity": "外门弟子",
+                    "goal": "改命",
+                },
+                "display_order": 10,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_rel",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:su-xue",
+                "title": "林风 / 苏雪",
+                "summary": "盟友关系",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_ref": "林风",
+                    "target_entity_ref": "苏雪",
+                    "relation_type": "盟友",
+                    "source_entity_card_key": "character:lin-feng",
+                },
+                "display_order": 20,
+            },
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_card_warning")
+
+    assert result.pending_setting_count == 1
+    assert result.relationship_count == 0
+    assert result.submit_warnings == [
+        "Skipped relationship card relationship:lin-feng:su-xue: target entity ref 苏雪 not found"
+    ]

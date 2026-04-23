@@ -9,6 +9,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.brainstorm_workspace_repo import BrainstormWorkspaceRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
@@ -26,6 +27,7 @@ class BrainstormWorkspaceService:
         self.workspace_repo = BrainstormWorkspaceRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.doc_repo = DocumentRepository(session)
+        self.relationship_repo = RelationshipRepository(session)
         self.director = NovelDirector(session)
         self.extraction_service = ExtractionService(session)
 
@@ -155,13 +157,43 @@ class BrainstormWorkspaceService:
         if synopsis_snapshot is None:
             raise ValueError("Synopsis draft is required before final confirmation")
 
-        pending_payloads = [
-            await self.extraction_service.build_pending_payload_from_setting_draft(
-                novel_id,
-                draft,
+        workspace_payload = self._serialize_workspace(workspace)
+        active_cards = self.list_active_suggestion_cards(workspace_payload)
+        submit_warnings: list[str] = []
+        relationship_count = 0
+
+        if active_cards:
+            entity_cards = [
+                card for card in active_cards if card.card_type != "relationship"
+            ]
+            relationship_cards = [
+                card for card in active_cards if card.card_type == "relationship"
+            ]
+            pending_payloads = [
+                await self.extraction_service.build_pending_payload_from_suggestion_card(
+                    novel_id,
+                    card,
+                )
+                for card in entity_cards
+            ]
+            (
+                resolved_relationships,
+                submit_warnings,
+            ) = await self._resolve_relationship_cards(
+                novel_id=novel_id,
+                cards=relationship_cards,
+                active_cards=active_cards,
             )
-            for draft in (workspace.setting_docs_draft or [])
-        ]
+        else:
+            pending_payloads = [
+                await self.extraction_service.build_pending_payload_from_setting_draft(
+                    novel_id,
+                    draft,
+                )
+                for draft in (workspace.setting_docs_draft or [])
+            ]
+            resolved_relationships = []
+
         volume_outline_drafts = self._collect_submitted_volume_outline_drafts(
             workspace.outline_drafts or {}
         )
@@ -183,6 +215,16 @@ class BrainstormWorkspaceService:
                     payload,
                 )
             )
+
+        for item in resolved_relationships:
+            await self.relationship_repo.upsert(
+                source_id=item["source_id"],
+                target_id=item["target_id"],
+                relation_type=item["relation_type"],
+                meta=item["meta"],
+                novel_id=novel_id,
+            )
+        relationship_count = len(resolved_relationships)
 
         checkpoint = dict(state.checkpoint_data or {})
         checkpoint["synopsis_data"] = synopsis.model_dump()
@@ -207,6 +249,8 @@ class BrainstormWorkspaceService:
                 for key in (workspace.outline_drafts or {})
                 if key.startswith("volume:")
             ),
+            relationship_count=relationship_count,
+            submit_warnings=submit_warnings,
         )
 
     def _serialize_workspace(self, workspace: Any) -> BrainstormWorkspacePayload:
@@ -276,3 +320,100 @@ class BrainstormWorkspaceService:
             "payload": {},
             "display_order": 0,
         }
+
+    async def _resolve_relationship_cards(
+        self,
+        novel_id: str,
+        cards: list[SettingSuggestionCardPayload],
+        active_cards: list[SettingSuggestionCardPayload],
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        resolved_relationships: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        entity_cards = [card for card in active_cards if card.card_type != "relationship"]
+        entity_card_names = {
+            self._extract_card_entity_name(card): card.merge_key
+            for card in entity_cards
+            if self._extract_card_entity_name(card)
+        }
+
+        for card in cards:
+            source_id, source_error = await self._resolve_relationship_endpoint(
+                novel_id=novel_id,
+                endpoint="source",
+                payload=card.payload,
+                entity_card_names=entity_card_names,
+            )
+            target_id, target_error = await self._resolve_relationship_endpoint(
+                novel_id=novel_id,
+                endpoint="target",
+                payload=card.payload,
+                entity_card_names=entity_card_names,
+            )
+            if source_error:
+                warnings.append(
+                    f"Skipped relationship card {card.merge_key}: {source_error}"
+                )
+                continue
+            if target_error:
+                warnings.append(
+                    f"Skipped relationship card {card.merge_key}: {target_error}"
+                )
+                continue
+
+            resolved_relationships.append(
+                {
+                    "source_id": source_id,
+                    "target_id": target_id,
+                    "relation_type": card.payload.get("relation_type", ""),
+                    "meta": {
+                        "card_id": card.card_id,
+                        "card_type": card.card_type,
+                        "merge_key": card.merge_key,
+                        "title": card.title,
+                        "summary": card.summary,
+                        "source_outline_refs": list(card.source_outline_refs),
+                        "source_entity_ref": card.payload.get("source_entity_ref"),
+                        "target_entity_ref": card.payload.get("target_entity_ref"),
+                        "source_entity_card_key": card.payload.get("source_entity_card_key"),
+                        "target_entity_card_key": card.payload.get("target_entity_card_key"),
+                    },
+                }
+            )
+
+        return resolved_relationships, warnings
+
+    async def _resolve_relationship_endpoint(
+        self,
+        novel_id: str,
+        endpoint: str,
+        payload: dict[str, Any],
+        entity_card_names: dict[str, str],
+    ) -> tuple[str | None, str | None]:
+        card_key = payload.get(f"{endpoint}_entity_card_key")
+        if card_key:
+            return card_key, None
+
+        entity_ref = (payload.get(f"{endpoint}_entity_ref") or "").strip()
+        if entity_ref:
+            card_match = entity_card_names.get(entity_ref)
+            if card_match:
+                return card_match, None
+            existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
+                entity_ref,
+                novel_id=novel_id,
+            )
+            if existing is not None:
+                return existing.id, None
+
+        if entity_ref:
+            return None, f"{endpoint} entity ref {entity_ref} not found"
+        return None, f"{endpoint} entity reference missing"
+
+    def _extract_card_entity_name(
+        self,
+        card: SettingSuggestionCardPayload,
+    ) -> str:
+        payload_name = card.payload.get("canonical_name") or card.payload.get("name")
+        if isinstance(payload_name, str) and payload_name.strip():
+            return payload_name.strip()
+        return card.title.strip()

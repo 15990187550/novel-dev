@@ -20,6 +20,7 @@ from novel_dev.llm.models import ChatMessage
 from novel_dev.schemas.brainstorm_workspace import (
     PendingExtractionPayload,
     SettingDocDraftPayload,
+    SettingSuggestionCardPayload,
 )
 
 logger = logging.getLogger(__name__)
@@ -505,6 +506,38 @@ class ExtractionService:
             proposed_entities=proposed_entities,
             diff_result=diff_result,
         )
+
+    async def build_pending_payload_from_suggestion_card(
+        self,
+        novel_id: str,
+        card: SettingSuggestionCardPayload,
+    ) -> PendingExtractionPayload:
+        payload = card.payload
+
+        if card.card_type == "character":
+            raw_result = {
+                "character_profiles": [{**payload, "name": payload["canonical_name"]}],
+            }
+            diff_result = await self._build_setting_diff(novel_id, raw_result)
+            return PendingExtractionPayload(
+                source_filename=f"brainstorm-{card.merge_key}.md",
+                extraction_type="setting",
+                raw_result=raw_result,
+                proposed_entities=[
+                    {
+                        "type": "character",
+                        "name": payload["canonical_name"],
+                        "data": {
+                            "identity": payload.get("identity", ""),
+                            "goal": payload.get("goal", ""),
+                            "resources": payload.get("resources", ""),
+                        },
+                    }
+                ],
+                diff_result=diff_result,
+            )
+
+        raise ValueError(f"Unsupported suggestion card type for pending payload: {card.card_type}")
 
     async def persist_pending_payload(
         self,

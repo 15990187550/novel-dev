@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardPayload
 from novel_dev.services.extraction_service import ExtractionService
 
 
@@ -260,3 +261,52 @@ async def test_create_pending_from_setting_draft_rejects_invalid_explicit_settin
                 "content": "直属皇权的监察机构。",
             },
         )
+
+
+@pytest.mark.asyncio
+async def test_build_pending_payload_from_suggestion_card_builds_character_pending(async_session):
+    svc = ExtractionService(async_session)
+    card = SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": "card_char",
+            "card_type": "character",
+            "merge_key": "character:lin-feng",
+            "title": "林风",
+            "summary": "主角建议卡",
+            "status": "active",
+            "source_outline_refs": ["synopsis"],
+            "payload": {
+                "canonical_name": "林风",
+                "identity": "外门弟子",
+                "goal": "改命",
+            },
+            "display_order": 10,
+        }
+    )
+
+    payload = await svc.build_pending_payload_from_suggestion_card(
+        "novel_card_mapper",
+        card,
+    )
+
+    assert payload.source_filename == "brainstorm-character:lin-feng.md"
+    assert payload.extraction_type == "setting"
+    assert payload.raw_result["character_profiles"] == [
+        {
+            "canonical_name": "林风",
+            "identity": "外门弟子",
+            "goal": "改命",
+            "name": "林风",
+        }
+    ]
+    assert payload.proposed_entities == [
+        {
+            "type": "character",
+            "name": "林风",
+            "data": {
+                "identity": "外门弟子",
+                "goal": "改命",
+                "resources": "",
+            },
+        }
+    ]
