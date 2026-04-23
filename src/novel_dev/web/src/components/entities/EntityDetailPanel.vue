@@ -3,7 +3,7 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 class="font-bold">{{ title }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400">
+        <p class="entity-detail-panel__meta text-sm">
           {{ entity ? '实体详情与分类信息' : '请选择一个实体查看详情' }}
         </p>
       </div>
@@ -52,7 +52,7 @@
         <el-descriptions-item label="版本">{{ entity.current_version ?? '-' }}</el-descriptions-item>
         <el-descriptions-item label="别名">
           <span v-if="entity.aliases?.length">{{ entity.aliases.join('、') }}</span>
-          <span v-else class="text-gray-400">-</span>
+          <span v-else class="entity-detail-panel__empty">-</span>
         </el-descriptions-item>
         <el-descriptions-item label="系统分类">{{ entity.system_category || '-' }}</el-descriptions-item>
         <el-descriptions-item label="人工分类">{{ entity.manual_category || '-' }}</el-descriptions-item>
@@ -69,14 +69,14 @@
         :closable="false"
       >
         <template #default>
-          <pre class="mt-2 whitespace-pre-wrap text-xs text-gray-600 dark:text-gray-300">{{ prettyJson(entity.classification_reason) }}</pre>
+          <pre class="entity-detail-panel__payload mt-2 whitespace-pre-wrap text-xs">{{ prettyJson(entity.classification_reason) }}</pre>
         </template>
       </el-alert>
 
       <div class="grid gap-3 lg:grid-cols-2">
         <div class="entity-detail-panel__section rounded-lg border p-3">
           <div class="mb-2 font-semibold">最新状态</div>
-          <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-700 dark:text-gray-200">{{ prettyJson(entity.latest_state) }}</pre>
+          <pre class="entity-detail-panel__payload max-h-72 overflow-auto whitespace-pre-wrap text-xs">{{ prettyJson(entity.latest_state) }}</pre>
         </div>
         <div class="entity-detail-panel__section rounded-lg border p-3">
           <div class="mb-2 font-semibold">关系摘要</div>
@@ -86,16 +86,16 @@
                 <div class="font-medium">{{ item.label }}</div>
                 <el-button link type="primary" @click="emit('select-entity', item.otherEntityId)">查看关联实体</el-button>
               </div>
-              <div class="text-xs text-gray-500 dark:text-gray-400">{{ item.detail }}</div>
+              <div class="entity-detail-panel__relation-detail text-xs">{{ item.detail }}</div>
             </div>
           </div>
-          <div v-else class="text-sm text-gray-400">暂无关系数据</div>
+          <div v-else class="entity-detail-panel__empty text-sm">暂无关系数据</div>
         </div>
       </div>
 
       <div v-if="entity.search_document" class="entity-detail-panel__section rounded-lg border p-3">
         <div class="mb-2 font-semibold">搜索文档</div>
-        <pre class="max-h-72 overflow-auto whitespace-pre-wrap text-xs text-gray-700 dark:text-gray-200">{{ prettyJson(entity.search_document) }}</pre>
+        <pre class="entity-detail-panel__payload max-h-72 overflow-auto whitespace-pre-wrap text-xs">{{ prettyJson(entity.search_document) }}</pre>
       </div>
 
       <el-dialog v-model="editDialogVisible" title="编辑实体" width="640px" class="entity-detail-panel__dialog">
@@ -320,6 +320,10 @@ function statusTagType(status) {
   color: var(--entities-text);
 }
 
+.entity-detail-panel__meta {
+  color: var(--entities-text-muted);
+}
+
 .entity-detail-panel__override {
   border-color: var(--entities-panel-border-strong);
   background: var(--entities-panel-bg-muted);
@@ -329,6 +333,10 @@ function statusTagType(status) {
   border: 1px solid var(--entities-panel-border);
   background: var(--entities-panel-bg-muted);
   color: var(--entities-text);
+}
+
+.entity-detail-panel__relation-detail {
+  color: var(--entities-text-muted);
 }
 
 .entity-detail-panel__descriptions {
@@ -364,6 +372,14 @@ function statusTagType(status) {
 .entity-detail-panel__reason :deep(.el-alert__description),
 .entity-detail-panel__reason :deep(.el-alert__content) {
   color: var(--entities-text);
+}
+
+.entity-detail-panel__payload {
+  color: var(--entities-text);
+}
+
+.entity-detail-panel__empty {
+  color: var(--entities-text-soft);
 }
 
 .entity-detail-panel__dialog :deep(.el-dialog),

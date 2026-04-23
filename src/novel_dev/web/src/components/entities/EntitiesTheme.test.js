@@ -185,7 +185,14 @@ describe('entities theme classes', () => {
           classification_reason: { reason: 'entity_type_match' },
           latest_state: { identity: '主角' },
         },
-        relationships: [],
+        relationships: [
+          {
+            source_id: 'e1',
+            target_id: 'e2',
+            relation_type: '师徒',
+            is_inferred: false,
+          },
+        ],
       },
       global: { stubs: simpleStubs },
     })
@@ -193,5 +200,9 @@ describe('entities theme classes', () => {
     expect(wrapper.find('.entity-detail-panel__override').exists()).toBe(true)
     expect(wrapper.find('.entity-detail-panel__reason').exists()).toBe(true)
     expect(wrapper.find('.entity-detail-panel__descriptions').exists()).toBe(true)
+    expect(wrapper.findAll('.entity-detail-panel__select')).toHaveLength(2)
+    expect(wrapper.find('.entity-detail-panel__relation').exists()).toBe(true)
+    expect(wrapper.find('.entity-detail-panel__relation-detail').exists()).toBe(true)
+    expect(wrapper.findAll('.entity-detail-panel__payload').length).toBeGreaterThanOrEqual(2)
   })
 })
