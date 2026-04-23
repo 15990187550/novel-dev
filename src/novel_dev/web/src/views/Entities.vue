@@ -44,7 +44,7 @@
           <template v-if="workspaceView === 'workspace'">
             <div
               v-if="!selectedNode"
-              class="entities-workspace-empty surface-card p-8"
+              class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8"
             >
               <el-empty description="请先从左侧目录选择一个分类、分组或实体" />
             </div>
@@ -76,7 +76,7 @@
             />
           </template>
 
-          <div v-else class="entities-graph-card surface-card p-4 space-y-3">
+          <div v-else class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 class="font-bold">关系图谱</h3>
@@ -362,10 +362,3 @@ function findNodeById(nodes = [], nodeId) {
 onMounted(fetchIfReady)
 watch(() => store.novelId, fetchIfReady)
 </script>
-
-<style scoped>
-.entities-workspace-empty,
-.entities-graph-card {
-  background: var(--app-surface);
-}
-</style>
