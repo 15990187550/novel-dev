@@ -294,6 +294,66 @@ async def test_merge_suggestion_cards_supersede_is_sticky_with_reordered_batch(a
     assert cards[0].status == "superseded"
 
 
+@pytest.mark.asyncio
+async def test_merge_suggestion_cards_supersede_is_sticky_across_calls(async_session):
+    service = BrainstormWorkspaceService(async_session)
+
+    first_cards = await service.merge_suggestion_cards(
+        "novel_cross_call_supersede_cards",
+        [
+            {
+                "operation": "supersede",
+                "merge_key": "faction:tian-xing-zong",
+            }
+        ],
+    )
+
+    assert first_cards[0].status == "superseded"
+
+    second_cards = await service.merge_suggestion_cards(
+        "novel_cross_call_supersede_cards",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_faction",
+                "card_type": "faction",
+                "merge_key": "faction:tian-xing-zong",
+                "title": "天刑宗",
+                "summary": "旧版设定",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "天刑宗", "position": "铁板一块"},
+                "display_order": 20,
+            }
+        ],
+    )
+
+    assert second_cards[0].status == "superseded"
+
+
+@pytest.mark.asyncio
+async def test_merge_suggestion_cards_rejects_partial_upsert(async_session):
+    service = BrainstormWorkspaceService(async_session)
+
+    with pytest.raises(ValueError, match="Upsert suggestion cards require fields: summary"):
+        await service.merge_suggestion_cards(
+            "novel_invalid_partial_card",
+            [
+                {
+                    "operation": "upsert",
+                    "card_id": "card_invalid",
+                    "card_type": "character",
+                    "merge_key": "character:lu-zhao",
+                    "title": "陆照",
+                    "status": "active",
+                    "source_outline_refs": ["synopsis"],
+                    "payload": {"canonical_name": "陆照"},
+                    "display_order": 10,
+                }
+            ],
+        )
+
+
 def test_list_active_suggestion_cards_filters_terminal_statuses():
     service = BrainstormWorkspaceService(AsyncMock())
     payload = service.list_active_suggestion_cards(

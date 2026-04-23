@@ -95,8 +95,11 @@ class BrainstormWorkspaceService:
 
             if normalized_update.operation == "supersede":
                 superseded_merge_keys.add(merge_key)
-                if merge_key in by_merge_key:
-                    by_merge_key[merge_key]["status"] = "superseded"
+                existing = by_merge_key.get(merge_key)
+                if existing is None:
+                    by_merge_key[merge_key] = self._build_superseded_placeholder_card(merge_key)
+                else:
+                    existing["status"] = "superseded"
                 continue
 
             incoming = SettingSuggestionCardPayload.model_validate(
@@ -109,6 +112,8 @@ class BrainstormWorkspaceService:
                 by_merge_key[merge_key] = incoming
                 continue
 
+            existing["card_id"] = incoming["card_id"]
+            existing["card_type"] = incoming["card_type"]
             existing["summary"] = incoming["summary"]
             existing["title"] = incoming["title"]
             existing["status"] = (
@@ -257,3 +262,17 @@ class BrainstormWorkspaceService:
     def _extract_outline_ref(self, outline_key: str) -> str:
         _, _, outline_ref = outline_key.partition(":")
         return outline_ref
+
+    def _build_superseded_placeholder_card(self, merge_key: str) -> dict[str, Any]:
+        card_type, _, _ = merge_key.partition(":")
+        return {
+            "card_id": f"superseded:{merge_key}",
+            "card_type": card_type or "unknown",
+            "merge_key": merge_key,
+            "title": merge_key,
+            "summary": "Superseded before first upsert.",
+            "status": "superseded",
+            "source_outline_refs": [],
+            "payload": {},
+            "display_order": 0,
+        }
