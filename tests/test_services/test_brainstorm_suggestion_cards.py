@@ -1,14 +1,12 @@
 import pytest
 
 from novel_dev.repositories.brainstorm_workspace_repo import BrainstormWorkspaceRepository
-from novel_dev.schemas.brainstorm_workspace import (
-    BrainstormWorkspacePayload,
-    SettingSuggestionCardPayload,
-)
+from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardPayload
+from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 
 
 @pytest.mark.asyncio
-async def test_workspace_payload_exposes_suggestion_cards(async_session):
+async def test_get_workspace_payload_exposes_persisted_suggestion_cards(async_session):
     repo = BrainstormWorkspaceRepository(async_session)
     workspace = await repo.get_or_create("novel_cards")
     workspace.setting_suggestion_cards = [
@@ -26,18 +24,16 @@ async def test_workspace_payload_exposes_suggestion_cards(async_session):
     ]
     await async_session.flush()
 
-    payload = BrainstormWorkspacePayload.model_validate(
-        {
-            "workspace_id": workspace.id,
-            "novel_id": workspace.novel_id,
-            "status": workspace.status,
-            "outline_drafts": workspace.outline_drafts,
-            "setting_docs_draft": workspace.setting_docs_draft,
-            "setting_suggestion_cards": workspace.setting_suggestion_cards,
-        }
-    )
+    payload = await BrainstormWorkspaceService(async_session).get_workspace_payload("novel_cards")
 
     assert payload.setting_suggestion_cards[0].merge_key == "character:lu-zhao"
+
+
+@pytest.mark.asyncio
+async def test_workspace_repo_initializes_empty_suggestion_cards(async_session):
+    workspace = await BrainstormWorkspaceRepository(async_session).get_or_create("novel_empty_cards")
+
+    assert workspace.setting_suggestion_cards == []
 
 
 def test_setting_suggestion_card_requires_structured_fields():

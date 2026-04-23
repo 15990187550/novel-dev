@@ -13,6 +13,7 @@ from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
     SettingDocDraftPayload,
+    SettingSuggestionCardPayload,
 )
 from novel_dev.schemas.outline import SynopsisData
 from novel_dev.services.extraction_service import ExtractionService
@@ -151,6 +152,10 @@ class BrainstormWorkspaceService:
             setting_docs_draft=[
                 SettingDocDraftPayload.model_validate(item)
                 for item in (workspace.setting_docs_draft or [])
+            ],
+            setting_suggestion_cards=[
+                SettingSuggestionCardPayload.model_validate(item)
+                for item in (workspace.setting_suggestion_cards or [])
             ],
         )
 

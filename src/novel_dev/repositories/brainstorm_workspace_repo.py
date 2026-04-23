@@ -58,6 +58,7 @@ class BrainstormWorkspaceRepository:
             workspace_summary=None,
             outline_drafts={},
             setting_docs_draft=[],
+            setting_suggestion_cards=[],
             last_saved_at=datetime.utcnow(),
             submitted_at=None,
         )
