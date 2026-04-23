@@ -111,6 +111,7 @@
         v-if="isBrainstormWorkspaceMode"
         :workspace="store.brainstormWorkspace.data"
         :last-round-summary="store.brainstormWorkspace.lastRoundSummary"
+        :submit-warnings="store.brainstormWorkspace.data?.submit_warnings || []"
       />
     </template>
   </div>

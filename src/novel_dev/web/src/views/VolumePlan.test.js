@@ -268,6 +268,45 @@ describe('VolumePlan', () => {
     expect(store.submitBrainstormWorkspace).toHaveBeenCalledTimes(1)
   })
 
+  it('renders brainstorm submit warnings from workspace data', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+      submit_warnings: ['关系卡存在未解析项，最终确认时将跳过部分关系导入。'],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('关系卡存在未解析项')
+  })
+
   it('allows final brainstorm confirmation with only a synopsis draft', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
