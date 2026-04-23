@@ -13,6 +13,7 @@ from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
     SettingDocDraftPayload,
+    SettingSuggestionCardMergePayload,
     SettingSuggestionCardPayload,
 )
 from novel_dev.schemas.outline import SynopsisData
@@ -70,6 +71,54 @@ class BrainstormWorkspaceService:
         workspace.last_saved_at = datetime.utcnow()
         await self.session.flush()
         return [SettingDocDraftPayload.model_validate(item) for item in merged]
+
+    async def merge_suggestion_cards(
+        self,
+        novel_id: str,
+        card_updates: list[dict[str, Any]],
+    ) -> list[SettingSuggestionCardPayload]:
+        workspace = await self.workspace_repo.get_or_create(novel_id)
+        cards = [
+            SettingSuggestionCardPayload.model_validate(item).model_dump()
+            for item in (workspace.setting_suggestion_cards or [])
+        ]
+        by_merge_key = {item["merge_key"]: item for item in cards}
+
+        for update in card_updates:
+            normalized_update = SettingSuggestionCardMergePayload.model_validate(update)
+            merge_key = normalized_update.merge_key
+
+            if normalized_update.operation == "supersede":
+                if merge_key in by_merge_key:
+                    by_merge_key[merge_key]["status"] = "superseded"
+                continue
+
+            incoming = SettingSuggestionCardPayload.model_validate(
+                normalized_update.model_dump(exclude={"operation"}, exclude_none=True)
+            ).model_dump()
+            existing = by_merge_key.get(merge_key)
+            if existing is None:
+                by_merge_key[merge_key] = incoming
+                continue
+
+            existing["summary"] = incoming["summary"]
+            existing["title"] = incoming["title"]
+            existing["status"] = incoming["status"]
+            existing["payload"] = incoming["payload"]
+            existing["display_order"] = incoming["display_order"]
+            existing["source_outline_refs"] = sorted(
+                set(existing.get("source_outline_refs", []))
+                | set(incoming.get("source_outline_refs", []))
+            )
+
+        merged = sorted(
+            by_merge_key.values(),
+            key=lambda item: (item["display_order"], item["merge_key"]),
+        )
+        workspace.setting_suggestion_cards = merged
+        workspace.last_saved_at = datetime.utcnow()
+        await self.session.flush()
+        return [SettingSuggestionCardPayload.model_validate(item) for item in merged]
 
     async def submit_workspace(self, novel_id: str) -> BrainstormWorkspaceSubmitResponse:
         workspace = await self.workspace_repo.get_active_by_novel(novel_id)
@@ -158,6 +207,16 @@ class BrainstormWorkspaceService:
                 for item in (workspace.setting_suggestion_cards or [])
             ],
         )
+
+    def list_active_suggestion_cards(
+        self,
+        workspace_payload: BrainstormWorkspacePayload,
+    ) -> list[SettingSuggestionCardPayload]:
+        return [
+            card
+            for card in workspace_payload.setting_suggestion_cards
+            if card.status in {"active", "unresolved"}
+        ]
 
     def _build_outline_key(self, outline_type: str, outline_ref: str) -> str:
         return f"{outline_type}:{outline_ref}"

@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -29,6 +29,19 @@ class SettingSuggestionCardPayload(BaseModel):
     title: str
     summary: str
     status: str
+    source_outline_refs: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    display_order: int = 0
+
+
+class SettingSuggestionCardMergePayload(BaseModel):
+    operation: Literal["upsert", "supersede"] = "upsert"
+    merge_key: str
+    card_id: Optional[str] = None
+    card_type: Optional[str] = None
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    status: Optional[str] = None
     source_outline_refs: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
     display_order: int = 0
