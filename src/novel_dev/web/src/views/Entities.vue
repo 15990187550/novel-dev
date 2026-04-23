@@ -44,7 +44,7 @@
           <template v-if="workspaceView === 'workspace'">
             <div
               v-if="!selectedNode"
-              class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-8"
+              class="entities-workspace-empty surface-card p-8"
             >
               <el-empty description="请先从左侧目录选择一个分类、分组或实体" />
             </div>
@@ -76,7 +76,7 @@
             />
           </template>
 
-          <div v-else class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+          <div v-else class="entities-graph-card surface-card p-4 space-y-3">
             <div class="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 class="font-bold">关系图谱</h3>
@@ -138,7 +138,9 @@ function collectEntities(node) {
 
 const entityTreeNodeCount = computed(() => countTreeNodes(store.entityTree))
 const selectedNode = computed(() => store.selectedEntityNode)
-const workspaceMode = computed(() => selectedNode.value?.nodeType === 'entity' ? 'detail' : 'group')
+const workspaceMode = computed(() =>
+  selectedNode.value?.nodeType === 'entity' ? 'detail' : 'group'
+)
 const workspaceTitle = computed(() => selectedNode.value?.label || '实体工作区')
 const workspaceStatusText = computed(() => {
   if (!selectedNode.value) return '当前未选择目录节点'
@@ -360,3 +362,10 @@ function findNodeById(nodes = [], nodeId) {
 onMounted(fetchIfReady)
 watch(() => store.novelId, fetchIfReady)
 </script>
+
+<style scoped>
+.entities-workspace-empty,
+.entities-graph-card {
+  background: var(--app-surface);
+}
+</style>
