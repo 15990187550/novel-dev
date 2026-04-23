@@ -1,11 +1,12 @@
 <template>
-  <div class="entity-tree bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+  <div class="entity-tree surface-card p-4 space-y-3">
     <div class="space-y-2">
       <div class="flex items-center justify-between gap-2">
         <h3 class="font-bold">目录</h3>
         <span class="text-xs text-gray-500 dark:text-gray-400">共 {{ totalCount }} 个实体</span>
       </div>
       <el-input
+        class="entity-tree__search"
         :model-value="searchQuery"
         clearable
         placeholder="搜索实体、别名、关系"
@@ -43,8 +44,8 @@
               </div>
             </div>
             <div class="flex shrink-0 flex-wrap items-center justify-end gap-1 max-w-[7.5rem]">
-              <el-tag v-if="nodeBadge(data)" size="small" type="info">{{ nodeBadge(data) }}</el-tag>
-              <el-tag v-if="nodeHint(data)" size="small" type="warning">{{ nodeHint(data) }}</el-tag>
+              <el-tag v-if="nodeBadge(data)" class="entity-tree__badge" size="small" type="info">{{ nodeBadge(data) }}</el-tag>
+              <el-tag v-if="nodeHint(data)" class="entity-tree__badge entity-tree__badge--warning" size="small" type="warning">{{ nodeHint(data) }}</el-tag>
             </div>
           </div>
         </template>
@@ -109,6 +110,39 @@ function nodeSubtitle(node) {
 </script>
 
 <style scoped>
+.entity-tree {
+  background: var(--entities-panel-bg);
+  border-color: var(--entities-panel-border);
+}
+
+.entity-tree__search :deep(.el-input__wrapper) {
+  background: var(--entities-panel-bg-soft);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-tree__search :deep(.el-input__inner),
+.entity-tree__search :deep(.el-input__wrapper input) {
+  color: var(--entities-text);
+}
+
+.entity-tree__search :deep(.el-input-group__append) {
+  background: var(--entities-panel-bg);
+  color: var(--entities-text);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-tree :deep(.el-tree) {
+  --el-tree-node-hover-bg-color: var(--entities-panel-bg-soft);
+  --el-tree-text-color: var(--entities-text);
+  background: transparent;
+  color: var(--entities-text);
+}
+
+.entity-tree :deep(.el-tree-node.is-current > .el-tree-node__content) {
+  background: color-mix(in srgb, var(--entities-accent) 14%, var(--entities-panel-bg-soft));
+  box-shadow: inset 0 0 0 1px var(--entities-panel-border-strong);
+}
+
 .entity-tree :deep(.el-tree-node__content) {
   min-height: 2.75rem;
   align-items: flex-start;
@@ -116,5 +150,17 @@ function nodeSubtitle(node) {
 
 .entity-tree :deep(.el-tree-node__expand-icon) {
   margin-top: 0.45rem;
+}
+
+.entity-tree :deep(.el-tag.entity-tree__badge) {
+  border-color: var(--entities-chip-border);
+  background: var(--entities-chip-bg);
+  color: var(--entities-text);
+}
+
+.entity-tree :deep(.el-tag.entity-tree__badge--warning) {
+  border-color: color-mix(in srgb, var(--entities-warning) 34%, transparent);
+  background: var(--entities-warning-soft);
+  color: var(--entities-warning);
 }
 </style>
