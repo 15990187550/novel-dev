@@ -118,20 +118,33 @@ describe('entities theme classes', () => {
   it('renders themeable classes for the entity group table controls', () => {
     const wrapper = mount(EntityGroupTable, {
       props: {
-        items: [{
-          entity_id: 'e1',
-          name: '陆照',
-          classification_status: 'needs_review',
-          system_category: '人物',
-          system_group_name: '主角阵营',
-          latest_state: {},
-        }],
+        items: [
+          {
+            entity_id: 'e1',
+            name: '陆照',
+            classification_status: 'needs_review',
+            system_category: '人物',
+            system_group_name: '主角阵营',
+            latest_state: {},
+          },
+          {
+            entity_id: 'e2',
+            name: '沈青',
+            classification_status: 'manual_override',
+            system_category: '势力',
+            system_group_name: '宗门',
+            classification_reason: { source: 'manual' },
+            latest_state: { description: '宗门执事' },
+          },
+        ],
       },
       global: { stubs: simpleStubs },
     })
 
     expect(wrapper.find('.entity-group-table__table').exists()).toBe(true)
-    expect(wrapper.find('.entity-group-table__quick-actions').exists()).toBe(true)
-    expect(wrapper.find('.entity-group-table__select').exists()).toBe(true)
+    expect(wrapper.findAll('.entity-group-table__quick-actions')).toHaveLength(2)
+    expect(wrapper.findAll('.entity-group-table__select')).toHaveLength(4)
+    expect(wrapper.findAll('.entity-group-table__subtext')).toHaveLength(4)
+    expect(wrapper.findAll('.entity-group-table__summary')).toHaveLength(2)
   })
 })
