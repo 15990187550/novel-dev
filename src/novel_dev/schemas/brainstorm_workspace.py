@@ -22,6 +22,18 @@ class PendingExtractionPayload(BaseModel):
     diff_result: Optional[dict[str, Any]] = None
 
 
+class SettingSuggestionCardPayload(BaseModel):
+    card_id: str
+    card_type: str
+    merge_key: str
+    title: str
+    summary: str
+    status: str
+    source_outline_refs: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    display_order: int = 0
+
+
 class BrainstormWorkspacePayload(BaseModel):
     workspace_id: str
     novel_id: str
@@ -29,6 +41,7 @@ class BrainstormWorkspacePayload(BaseModel):
     workspace_summary: Optional[str] = None
     outline_drafts: dict[str, dict[str, Any]] = Field(default_factory=dict)
     setting_docs_draft: list[SettingDocDraftPayload] = Field(default_factory=list)
+    setting_suggestion_cards: list[SettingSuggestionCardPayload] = Field(default_factory=list)
 
 
 class BrainstormWorkspaceSubmitResponse(BaseModel):

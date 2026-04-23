@@ -223,6 +223,7 @@ class BrainstormWorkspace(Base):
     workspace_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     outline_drafts: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     setting_docs_draft: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    setting_suggestion_cards: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
     last_saved_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
     submitted_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
 
