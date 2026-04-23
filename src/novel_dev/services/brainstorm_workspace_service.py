@@ -364,12 +364,18 @@ class BrainstormWorkspaceService:
                     f"Skipped relationship card {card.merge_key}: {target_error}"
                 )
                 continue
+            relation_type = (card.payload.get("relation_type") or "").strip()
+            if not relation_type:
+                warnings.append(
+                    f"Skipped relationship card {card.merge_key}: relation_type missing"
+                )
+                continue
 
             resolved_relationships.append(
                 {
                     "source_id": source_id,
                     "target_id": target_id,
-                    "relation_type": card.payload.get("relation_type", ""),
+                    "relation_type": relation_type,
                     "meta": {
                         "card_id": card.card_id,
                         "card_type": card.card_type,
@@ -415,19 +421,23 @@ class BrainstormWorkspaceService:
                 entity_ref,
             )
             if card_match is not None:
-                entity_id, _ = await self._resolve_persisted_entity_id_from_card(
+                entity_id, entity_error = await self._resolve_persisted_entity_id_from_card(
                     novel_id=novel_id,
                     endpoint=endpoint,
                     card=card_match,
                 )
                 if entity_id is not None:
                     return entity_id, None
-            existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
-                entity_ref,
+                return None, entity_error
+
+            entity_id, entity_error = await self._resolve_unique_entity_id_by_name(
                 novel_id=novel_id,
+                endpoint=endpoint,
+                entity_ref=entity_ref,
             )
-            if existing is not None:
-                return existing.id, None
+            if entity_id is not None:
+                return entity_id, None
+            return None, entity_error
 
         if entity_ref:
             return None, f"{endpoint} entity ref {entity_ref} not found"
@@ -442,27 +452,68 @@ class BrainstormWorkspaceService:
     ) -> tuple[str | None, str | None]:
         entity_name = self._extract_card_entity_name(card)
         entity_type = self._normalize_card_entity_type(card.card_type)
-        existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
-            entity_name,
+        entity_id, entity_error = await self._resolve_unique_entity_id_by_name(
+            novel_id=novel_id,
+            endpoint=endpoint,
+            entity_ref=entity_name,
             entity_type=entity_type,
-            novel_id=novel_id,
         )
-        if existing is not None:
-            return existing.id, None
-
-        existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
-            entity_name,
-            novel_id=novel_id,
-        )
-        if existing is not None:
-            return existing.id, None
+        if entity_id is not None:
+            return entity_id, None
 
         if card_key is not None:
             return None, (
                 f"{endpoint} entity card {card_key} resolved to {entity_name} "
-                "but persisted entity not found"
+                f"but {entity_error}"
             )
-        return None, f"{endpoint} entity ref {entity_name} not found"
+        return None, entity_error
+
+    async def _resolve_unique_entity_id_by_name(
+        self,
+        novel_id: str,
+        endpoint: str,
+        entity_ref: str,
+        entity_type: str | None = None,
+    ) -> tuple[str | None, str]:
+        candidates = await self.extraction_service.entity_svc.entity_repo.list_by_novel(novel_id)
+        if entity_type is not None:
+            candidates = [entity for entity in candidates if entity.type == entity_type]
+
+        matches = self._match_entities_by_name(candidates, entity_ref)
+        if len(matches) == 1:
+            return matches[0].id, ""
+        if len(matches) > 1:
+            return None, f"{endpoint} entity ref {entity_ref} is ambiguous"
+        return None, f"{endpoint} entity ref {entity_ref} not found"
+
+    def _match_entities_by_name(
+        self,
+        candidates: list[Any],
+        entity_ref: str,
+    ) -> list[Any]:
+        repo = self.extraction_service.entity_svc.entity_repo
+        exact_matches = [entity for entity in candidates if entity.name == entity_ref]
+        if exact_matches:
+            return exact_matches
+
+        normalized_ref = repo.normalize_name(entity_ref)
+        if not normalized_ref:
+            return []
+
+        normalized_matches = [
+            entity
+            for entity in candidates
+            if repo.normalize_name(entity.name) == normalized_ref
+        ]
+        if normalized_matches:
+            return normalized_matches
+
+        close_matches = [
+            entity
+            for entity in candidates
+            if repo._is_close_name_match(repo.normalize_name(entity.name), normalized_ref)
+        ]
+        return close_matches
 
     def _find_entity_card_by_name(
         self,

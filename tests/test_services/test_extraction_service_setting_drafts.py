@@ -291,25 +291,22 @@ async def test_build_pending_payload_from_suggestion_card_builds_character_pendi
 
     assert payload.source_filename == "brainstorm-character:lin-feng.md"
     assert payload.extraction_type == "setting"
-    assert payload.raw_result["character_profiles"] == [
-        {
-            "canonical_name": "林风",
-            "identity": "外门弟子",
-            "goal": "改命",
-            "name": "林风",
-        }
-    ]
-    assert payload.proposed_entities == [
-        {
-            "type": "character",
-            "name": "林风",
-            "data": {
-                "identity": "外门弟子",
-                "goal": "改命",
-                "resources": "",
-            },
-        }
-    ]
+    character_state = payload.raw_result["character_profiles"][0]
+    assert character_state["name"] == "林风"
+    assert character_state["identity"] == "外门弟子"
+    assert character_state["goal"] == "改命"
+    assert "canonical_name" not in character_state
+    assert payload.diff_result is not None
+    assert payload.diff_result["entity_diffs"][0]["entity_name"] == "林风"
+    assert {
+        change["field"] for change in payload.diff_result["entity_diffs"][0]["field_changes"]
+    } == {"name", "identity", "goal"}
+    assert payload.proposed_entities is not None
+    assert payload.proposed_entities[0]["type"] == "character"
+    assert payload.proposed_entities[0]["name"] == "林风"
+    assert payload.proposed_entities[0]["data"]["identity"] == "外门弟子"
+    assert payload.proposed_entities[0]["data"]["goal"] == "改命"
+    assert "canonical_name" not in payload.proposed_entities[0]["data"]
 
 
 @pytest.mark.asyncio

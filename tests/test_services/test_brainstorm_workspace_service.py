@@ -1123,3 +1123,197 @@ async def test_submit_workspace_materializes_non_character_suggestion_cards(asyn
     assert result.submit_warnings == []
     assert len(pending) == 1
     assert pending[0].source_filename == "brainstorm-faction:qing-yun-zong.md"
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_skips_ambiguous_name_resolution_with_warning(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_ambiguous_rel",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    entity_service = EntityService(async_session)
+    source_entity = await entity_service.create_entity(
+        "ent_lin_feng_amb",
+        "character",
+        "林风",
+        novel_id="novel_submit_ambiguous_rel",
+    )
+    await entity_service.create_entity(
+        "ent_qingyun_faction",
+        "faction",
+        "青云",
+        novel_id="novel_submit_ambiguous_rel",
+    )
+    await entity_service.create_entity(
+        "ent_qingyun_location",
+        "location",
+        "青云",
+        novel_id="novel_submit_ambiguous_rel",
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_ambiguous_rel",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_ambiguous_rel",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_rel_ambiguous",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:qing-yun",
+                "title": "林风 / 青云",
+                "summary": "关系歧义",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_ref": "林风",
+                    "target_entity_ref": "青云",
+                    "relation_type": "关联",
+                },
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_ambiguous_rel")
+
+    relationships = await RelationshipRepository(async_session).list_by_source(
+        source_entity.id,
+        novel_id="novel_submit_ambiguous_rel",
+    )
+
+    assert result.relationship_count == 0
+    assert relationships == []
+    assert result.submit_warnings == [
+        "Skipped relationship card relationship:lin-feng:qing-yun: target entity ref 青云 is ambiguous"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_skips_empty_relation_type_with_warning(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_empty_relation",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    entity_service = EntityService(async_session)
+    source_entity = await entity_service.create_entity(
+        "ent_lin_feng_empty",
+        "character",
+        "林风",
+        novel_id="novel_submit_empty_relation",
+    )
+    await entity_service.create_entity(
+        "ent_su_xue_empty",
+        "character",
+        "苏雪",
+        novel_id="novel_submit_empty_relation",
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_empty_relation",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_empty_relation",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_source_char",
+                "card_type": "character",
+                "merge_key": "character:lin-feng",
+                "title": "林风",
+                "summary": "主角建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "林风",
+                    "identity": "外门弟子",
+                    "goal": "改命",
+                },
+                "display_order": 10,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_target_char",
+                "card_type": "character",
+                "merge_key": "character:su-xue",
+                "title": "苏雪",
+                "summary": "目标角色建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "苏雪",
+                    "identity": "内门弟子",
+                    "goal": "查清真相",
+                },
+                "display_order": 15,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_rel_empty_type",
+                "card_type": "relationship",
+                "merge_key": "relationship:lin-feng:su-xue",
+                "title": "林风 / 苏雪",
+                "summary": "缺少关系类型",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {
+                    "source_entity_card_key": "character:lin-feng",
+                    "target_entity_card_key": "character:su-xue",
+                    "relation_type": "",
+                },
+                "display_order": 20,
+            },
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_empty_relation")
+
+    relationships = await RelationshipRepository(async_session).list_by_source(
+        source_entity.id,
+        novel_id="novel_submit_empty_relation",
+    )
+
+    assert result.relationship_count == 0
+    assert relationships == []
+    assert result.submit_warnings == [
+        "Skipped relationship card relationship:lin-feng:su-xue: relation_type missing"
+    ]

@@ -35,6 +35,22 @@ AUTO_APPLY_FIELDS = {
     "significance",
 }
 
+CHARACTER_SUGGESTION_STATE_FIELDS = (
+    "identity",
+    "personality",
+    "goal",
+    "appearance",
+    "background",
+    "ability",
+    "realm",
+    "relationships",
+    "resources",
+    "secrets",
+    "conflict",
+    "arc",
+    "notes",
+)
+
 FIELD_LABELS = {
     "identity": "身份",
     "personality": "性格",
@@ -516,13 +532,14 @@ class ExtractionService:
         canonical_name = self._extract_suggestion_card_name(card)
 
         if card.card_type == "character":
+            character_state = self._build_character_suggestion_state(canonical_name, payload)
             raw_result = {
-                "character_profiles": [{**payload, "name": canonical_name}],
+                "character_profiles": [character_state],
             }
             diff_result = await self._build_suggestion_card_diff(
                 novel_id=novel_id,
                 entity_type="character",
-                incoming_state=raw_result["character_profiles"][0],
+                incoming_state=character_state,
             )
             return PendingExtractionPayload(
                 source_filename=f"brainstorm-{card.merge_key}.md",
@@ -532,11 +549,7 @@ class ExtractionService:
                     {
                         "type": "character",
                         "name": canonical_name,
-                        "data": {
-                            "identity": payload.get("identity", ""),
-                            "goal": payload.get("goal", ""),
-                            "resources": payload.get("resources", ""),
-                        },
+                        "data": character_state,
                     }
                 ],
                 diff_result=diff_result,
@@ -647,6 +660,16 @@ class ExtractionService:
         if isinstance(payload_name, str) and payload_name.strip():
             return payload_name.strip()
         return card.title.strip()
+
+    def _build_character_suggestion_state(
+        self,
+        canonical_name: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        state = {"name": canonical_name}
+        for field in CHARACTER_SUGGESTION_STATE_FIELDS:
+            state[field] = payload.get(field, "")
+        return state
 
     async def persist_pending_payload(
         self,
