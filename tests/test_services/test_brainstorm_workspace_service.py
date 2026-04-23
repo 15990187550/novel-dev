@@ -9,6 +9,7 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
+from novel_dev.services.entity_service import EntityService
 
 
 @pytest.mark.asyncio
@@ -870,6 +871,20 @@ async def test_submit_workspace_relationship_count_materializes_entity_and_relat
         chapter_id=None,
     )
 
+    entity_service = EntityService(async_session)
+    source_entity = await entity_service.create_entity(
+        "ent_lin_feng",
+        "character",
+        "林风",
+        novel_id="novel_submit_cards",
+    )
+    target_entity = await entity_service.create_entity(
+        "ent_su_xue",
+        "character",
+        "苏雪",
+        novel_id="novel_submit_cards",
+    )
+
     service = BrainstormWorkspaceService(async_session)
     await service.save_outline_draft(
         novel_id="novel_submit_cards",
@@ -908,6 +923,22 @@ async def test_submit_workspace_relationship_count_materializes_entity_and_relat
             },
             {
                 "operation": "upsert",
+                "card_id": "card_target_char",
+                "card_type": "character",
+                "merge_key": "character:su-xue",
+                "title": "苏雪",
+                "summary": "目标角色建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "苏雪",
+                    "identity": "内门弟子",
+                    "goal": "查清真相",
+                },
+                "display_order": 15,
+            },
+            {
+                "operation": "upsert",
                 "card_id": "card_rel",
                 "card_type": "relationship",
                 "merge_key": "relationship:lin-feng:su-xue",
@@ -931,16 +962,17 @@ async def test_submit_workspace_relationship_count_materializes_entity_and_relat
 
     pending = await PendingExtractionRepository(async_session).list_by_novel("novel_submit_cards")
     relationships = await RelationshipRepository(async_session).list_by_source(
-        "character:lin-feng",
+        source_entity.id,
         novel_id="novel_submit_cards",
     )
 
-    assert result.pending_setting_count == 1
+    assert result.pending_setting_count == 2
     assert result.relationship_count == 1
     assert result.submit_warnings == []
-    assert len(pending) == 1
+    assert len(pending) == 2
     assert len(relationships) == 1
-    assert relationships[0].target_id == "character:su-xue"
+    assert relationships[0].source_id == source_entity.id
+    assert relationships[0].target_id == target_entity.id
     assert relationships[0].relation_type == "盟友"
 
 
@@ -955,6 +987,14 @@ async def test_submit_workspace_relationship_count_collects_unresolved_card_warn
         checkpoint_data={},
         volume_id=None,
         chapter_id=None,
+    )
+
+    entity_service = EntityService(async_session)
+    await entity_service.create_entity(
+        "ent_lin_feng",
+        "character",
+        "林风",
+        novel_id="novel_submit_card_warning",
     )
 
     service = BrainstormWorkspaceService(async_session)
@@ -1020,3 +1060,66 @@ async def test_submit_workspace_relationship_count_collects_unresolved_card_warn
     assert result.submit_warnings == [
         "Skipped relationship card relationship:lin-feng:su-xue: target entity ref 苏雪 not found"
     ]
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_materializes_non_character_suggestion_cards(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_faction_cards",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_faction_cards",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_faction_cards",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_faction",
+                "card_type": "faction",
+                "merge_key": "faction:qing-yun-zong",
+                "title": "青云宗",
+                "summary": "宗门势力建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "青云宗",
+                    "position": "北境七宗之一",
+                    "description": "林风早期依附的修行宗门",
+                },
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_faction_cards")
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel(
+        "novel_submit_faction_cards"
+    )
+
+    assert result.pending_setting_count == 1
+    assert result.relationship_count == 0
+    assert result.submit_warnings == []
+    assert len(pending) == 1
+    assert pending[0].source_filename == "brainstorm-faction:qing-yun-zong.md"

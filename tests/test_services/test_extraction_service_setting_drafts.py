@@ -310,3 +310,133 @@ async def test_build_pending_payload_from_suggestion_card_builds_character_pendi
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_build_pending_payload_from_suggestion_card_builds_faction_pending(async_session):
+    svc = ExtractionService(async_session)
+    card = SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": "card_faction",
+            "card_type": "faction",
+            "merge_key": "faction:qing-yun-zong",
+            "title": "青云宗",
+            "summary": "宗门势力建议卡",
+            "status": "active",
+            "source_outline_refs": ["synopsis"],
+            "payload": {
+                "canonical_name": "青云宗",
+                "position": "北境七宗之一",
+                "description": "林风早期依附的修行宗门",
+            },
+            "display_order": 20,
+        }
+    )
+
+    payload = await svc.build_pending_payload_from_suggestion_card(
+        "novel_card_mapper",
+        card,
+    )
+
+    assert payload.source_filename == "brainstorm-faction:qing-yun-zong.md"
+    assert payload.extraction_type == "setting"
+    assert payload.proposed_entities == [
+        {
+            "type": "faction",
+            "name": "青云宗",
+            "data": {
+                "name": "青云宗",
+                "position": "北境七宗之一",
+                "description": "林风早期依附的修行宗门",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_pending_payload_from_suggestion_card_builds_location_pending(async_session):
+    svc = ExtractionService(async_session)
+    card = SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": "card_location",
+            "card_type": "location",
+            "merge_key": "location:qing-yun-feng",
+            "title": "青云峰",
+            "summary": "地点建议卡",
+            "status": "active",
+            "source_outline_refs": ["vol_1"],
+            "payload": {
+                "canonical_name": "青云峰",
+                "description": "青云宗外门所在主峰",
+                "position": "北境",
+            },
+            "display_order": 30,
+        }
+    )
+
+    payload = await svc.build_pending_payload_from_suggestion_card(
+        "novel_card_mapper",
+        card,
+    )
+
+    assert payload.source_filename == "brainstorm-location:qing-yun-feng.md"
+    assert payload.extraction_type == "setting"
+    assert payload.proposed_entities == [
+        {
+            "type": "location",
+            "name": "青云峰",
+            "data": {
+                "name": "青云峰",
+                "description": "青云宗外门所在主峰",
+                "position": "北境",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_pending_payload_from_suggestion_card_builds_item_pending(async_session):
+    svc = ExtractionService(async_session)
+    card = SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": "card_item",
+            "card_type": "item",
+            "merge_key": "item:xuan-tie-ling",
+            "title": "玄铁令",
+            "summary": "法宝建议卡",
+            "status": "active",
+            "source_outline_refs": ["synopsis"],
+            "payload": {
+                "canonical_name": "玄铁令",
+                "description": "可开启祖地禁制的古令牌",
+                "significance": "牵出主线秘辛",
+            },
+            "display_order": 40,
+        }
+    )
+
+    payload = await svc.build_pending_payload_from_suggestion_card(
+        "novel_card_mapper",
+        card,
+    )
+
+    assert payload.source_filename == "brainstorm-item:xuan-tie-ling.md"
+    assert payload.extraction_type == "setting"
+    assert payload.raw_result["important_items"] == [
+        {
+            "name": "玄铁令",
+            "description": "可开启祖地禁制的古令牌",
+            "significance": "牵出主线秘辛",
+        }
+    ]
+    assert payload.proposed_entities == [
+        {
+            "type": "item",
+            "name": "玄铁令",
+            "data": {
+                "name": "玄铁令",
+                "description": "可开启祖地禁制的古令牌",
+                "significance": "牵出主线秘辛",
+            },
+        }
+    ]

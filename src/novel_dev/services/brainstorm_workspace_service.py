@@ -330,8 +330,9 @@ class BrainstormWorkspaceService:
         resolved_relationships: list[dict[str, Any]] = []
         warnings: list[str] = []
         entity_cards = [card for card in active_cards if card.card_type != "relationship"]
-        entity_card_names = {
-            self._extract_card_entity_name(card): card.merge_key
+        entity_cards_by_key = {card.merge_key: card for card in entity_cards}
+        entity_cards_by_name = {
+            self._extract_card_entity_name(card): card
             for card in entity_cards
             if self._extract_card_entity_name(card)
         }
@@ -341,13 +342,17 @@ class BrainstormWorkspaceService:
                 novel_id=novel_id,
                 endpoint="source",
                 payload=card.payload,
-                entity_card_names=entity_card_names,
+                entity_cards=entity_cards,
+                entity_cards_by_key=entity_cards_by_key,
+                entity_cards_by_name=entity_cards_by_name,
             )
             target_id, target_error = await self._resolve_relationship_endpoint(
                 novel_id=novel_id,
                 endpoint="target",
                 payload=card.payload,
-                entity_card_names=entity_card_names,
+                entity_cards=entity_cards,
+                entity_cards_by_key=entity_cards_by_key,
+                entity_cards_by_name=entity_cards_by_name,
             )
             if source_error:
                 warnings.append(
@@ -387,17 +392,36 @@ class BrainstormWorkspaceService:
         novel_id: str,
         endpoint: str,
         payload: dict[str, Any],
-        entity_card_names: dict[str, str],
+        entity_cards: list[SettingSuggestionCardPayload],
+        entity_cards_by_key: dict[str, SettingSuggestionCardPayload],
+        entity_cards_by_name: dict[str, SettingSuggestionCardPayload],
     ) -> tuple[str | None, str | None]:
         card_key = payload.get(f"{endpoint}_entity_card_key")
         if card_key:
-            return card_key, None
+            card = entity_cards_by_key.get(card_key)
+            if card is None:
+                return None, f"{endpoint} entity card {card_key} not found"
+            return await self._resolve_persisted_entity_id_from_card(
+                novel_id=novel_id,
+                endpoint=endpoint,
+                card=card,
+                card_key=card_key,
+            )
 
         entity_ref = (payload.get(f"{endpoint}_entity_ref") or "").strip()
         if entity_ref:
-            card_match = entity_card_names.get(entity_ref)
-            if card_match:
-                return card_match, None
+            card_match = entity_cards_by_name.get(entity_ref) or self._find_entity_card_by_name(
+                entity_cards,
+                entity_ref,
+            )
+            if card_match is not None:
+                entity_id, _ = await self._resolve_persisted_entity_id_from_card(
+                    novel_id=novel_id,
+                    endpoint=endpoint,
+                    card=card_match,
+                )
+                if entity_id is not None:
+                    return entity_id, None
             existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
                 entity_ref,
                 novel_id=novel_id,
@@ -409,6 +433,52 @@ class BrainstormWorkspaceService:
             return None, f"{endpoint} entity ref {entity_ref} not found"
         return None, f"{endpoint} entity reference missing"
 
+    async def _resolve_persisted_entity_id_from_card(
+        self,
+        novel_id: str,
+        endpoint: str,
+        card: SettingSuggestionCardPayload,
+        card_key: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        entity_name = self._extract_card_entity_name(card)
+        entity_type = self._normalize_card_entity_type(card.card_type)
+        existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
+            entity_name,
+            entity_type=entity_type,
+            novel_id=novel_id,
+        )
+        if existing is not None:
+            return existing.id, None
+
+        existing = await self.extraction_service.entity_svc.entity_repo.find_by_name(
+            entity_name,
+            novel_id=novel_id,
+        )
+        if existing is not None:
+            return existing.id, None
+
+        if card_key is not None:
+            return None, (
+                f"{endpoint} entity card {card_key} resolved to {entity_name} "
+                "but persisted entity not found"
+            )
+        return None, f"{endpoint} entity ref {entity_name} not found"
+
+    def _find_entity_card_by_name(
+        self,
+        entity_cards: list[SettingSuggestionCardPayload],
+        entity_ref: str,
+    ) -> SettingSuggestionCardPayload | None:
+        normalize_name = self.extraction_service.entity_svc.entity_repo.normalize_name
+        normalized_ref = normalize_name(entity_ref)
+        for card in entity_cards:
+            card_name = self._extract_card_entity_name(card)
+            if card_name == entity_ref:
+                return card
+            if normalized_ref and normalize_name(card_name) == normalized_ref:
+                return card
+        return None
+
     def _extract_card_entity_name(
         self,
         card: SettingSuggestionCardPayload,
@@ -417,3 +487,8 @@ class BrainstormWorkspaceService:
         if isinstance(payload_name, str) and payload_name.strip():
             return payload_name.strip()
         return card.title.strip()
+
+    def _normalize_card_entity_type(self, card_type: str) -> str:
+        if card_type in {"item", "artifact_or_skill", "artifact", "skill"}:
+            return "item"
+        return card_type

@@ -513,12 +513,17 @@ class ExtractionService:
         card: SettingSuggestionCardPayload,
     ) -> PendingExtractionPayload:
         payload = card.payload
+        canonical_name = self._extract_suggestion_card_name(card)
 
         if card.card_type == "character":
             raw_result = {
-                "character_profiles": [{**payload, "name": payload["canonical_name"]}],
+                "character_profiles": [{**payload, "name": canonical_name}],
             }
-            diff_result = await self._build_setting_diff(novel_id, raw_result)
+            diff_result = await self._build_suggestion_card_diff(
+                novel_id=novel_id,
+                entity_type="character",
+                incoming_state=raw_result["character_profiles"][0],
+            )
             return PendingExtractionPayload(
                 source_filename=f"brainstorm-{card.merge_key}.md",
                 extraction_type="setting",
@@ -526,7 +531,7 @@ class ExtractionService:
                 proposed_entities=[
                     {
                         "type": "character",
-                        "name": payload["canonical_name"],
+                        "name": canonical_name,
                         "data": {
                             "identity": payload.get("identity", ""),
                             "goal": payload.get("goal", ""),
@@ -537,7 +542,111 @@ class ExtractionService:
                 diff_result=diff_result,
             )
 
+        if card.card_type == "faction":
+            faction_state = {
+                "name": canonical_name,
+                "position": payload.get("position", ""),
+                "description": payload.get("description", ""),
+            }
+            description_lines = [canonical_name]
+            if faction_state["position"]:
+                description_lines.append(f"定位：{faction_state['position']}")
+            if faction_state["description"]:
+                description_lines.append(f"描述：{faction_state['description']}")
+            return PendingExtractionPayload(
+                source_filename=f"brainstorm-{card.merge_key}.md",
+                extraction_type="setting",
+                raw_result={"factions": "\n".join(description_lines)},
+                proposed_entities=[
+                    {
+                        "type": "faction",
+                        "name": canonical_name,
+                        "data": faction_state,
+                    }
+                ],
+                diff_result=await self._build_suggestion_card_diff(
+                    novel_id=novel_id,
+                    entity_type="faction",
+                    incoming_state=faction_state,
+                ),
+            )
+
+        if card.card_type == "location":
+            location_state = {
+                "name": canonical_name,
+                "description": payload.get("description", ""),
+                "position": payload.get("position", ""),
+            }
+            return PendingExtractionPayload(
+                source_filename=f"brainstorm-{card.merge_key}.md",
+                extraction_type="setting",
+                raw_result={},
+                proposed_entities=[
+                    {
+                        "type": "location",
+                        "name": canonical_name,
+                        "data": location_state,
+                    }
+                ],
+                diff_result=await self._build_suggestion_card_diff(
+                    novel_id=novel_id,
+                    entity_type="location",
+                    incoming_state=location_state,
+                ),
+            )
+
+        if card.card_type in {"item", "artifact_or_skill", "artifact", "skill"}:
+            item_state = {
+                "name": canonical_name,
+                "description": payload.get("description", ""),
+                "significance": payload.get("significance", ""),
+            }
+            return PendingExtractionPayload(
+                source_filename=f"brainstorm-{card.merge_key}.md",
+                extraction_type="setting",
+                raw_result={"important_items": [item_state]},
+                proposed_entities=[
+                    {
+                        "type": "item",
+                        "name": canonical_name,
+                        "data": item_state,
+                    }
+                ],
+                diff_result=await self._build_suggestion_card_diff(
+                    novel_id=novel_id,
+                    entity_type="item",
+                    incoming_state=item_state,
+                ),
+            )
+
         raise ValueError(f"Unsupported suggestion card type for pending payload: {card.card_type}")
+
+    async def _build_suggestion_card_diff(
+        self,
+        novel_id: str,
+        entity_type: str,
+        incoming_state: dict[str, Any],
+    ) -> dict[str, Any]:
+        entity_diff = await self._build_entity_diff(novel_id, entity_type, incoming_state)
+        entity_diffs = [] if entity_diff["operation"] == "noop" else [entity_diff]
+        summary = "无实体变更"
+        if entity_diff["operation"] == "create":
+            summary = "1 个新增实体"
+        elif entity_diff["operation"] == "update":
+            summary = "1 个可自动补充实体"
+        elif entity_diff["operation"] == "conflict":
+            summary = "1 个冲突实体"
+        return {
+            "entity_diffs": entity_diffs,
+            "document_changes": [],
+            "summary": summary,
+        }
+
+    def _extract_suggestion_card_name(self, card: SettingSuggestionCardPayload) -> str:
+        payload_name = card.payload.get("canonical_name") or card.payload.get("name")
+        if isinstance(payload_name, str) and payload_name.strip():
+            return payload_name.strip()
+        return card.title.strip()
 
     async def persist_pending_payload(
         self,
