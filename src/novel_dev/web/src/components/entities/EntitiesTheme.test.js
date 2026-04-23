@@ -1,6 +1,7 @@
 import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import EntityGroupTable from './EntityGroupTable.vue'
 import EntityTree from './EntityTree.vue'
 
 const simpleStubs = {
@@ -35,6 +36,30 @@ const simpleStubs = {
     setup(props, { slots }) {
       const renderNode = (node) => h('div', { class: 'tree-node' }, slots.default?.({ data: node }))
       return () => h('div', { class: 'el-tree-stub' }, props.data.map(renderNode))
+    },
+  }),
+  ElTable: defineComponent({
+    name: 'ElTableStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-table-stub' }, slots.default?.())
+    },
+  }),
+  ElTableColumn: defineComponent({
+    name: 'ElTableColumnStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-table-column-stub' }, slots.default?.({ row: {} }))
+    },
+  }),
+  ElSelect: defineComponent({
+    name: 'ElSelectStub',
+    setup(_, { slots }) {
+      return () => h('div', { class: 'el-select-stub' }, slots.default?.())
+    },
+  }),
+  ElOption: defineComponent({
+    name: 'ElOptionStub',
+    setup() {
+      return () => h('div', { class: 'el-option-stub' })
     },
   }),
 }
@@ -79,5 +104,25 @@ describe('entities theme classes', () => {
     expect(wrapper.find('.entity-tree__badge').exists()).toBe(true)
     expect(wrapper.find('.entity-tree__badge--warning').exists()).toBe(true)
     expect(wrapper.find('.entity-tree__search').exists()).toBe(true)
+  })
+
+  it('renders themeable classes for the entity group table controls', () => {
+    const wrapper = mount(EntityGroupTable, {
+      props: {
+        items: [{
+          entity_id: 'e1',
+          name: '陆照',
+          classification_status: 'needs_review',
+          system_category: '人物',
+          system_group_name: '主角阵营',
+          latest_state: {},
+        }],
+      },
+      global: { stubs: simpleStubs },
+    })
+
+    expect(wrapper.find('.entity-group-table__table').exists()).toBe(true)
+    expect(wrapper.find('.entity-group-table__quick-actions').exists()).toBe(true)
+    expect(wrapper.find('.entity-group-table__select').exists()).toBe(true)
   })
 })

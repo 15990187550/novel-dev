@@ -1,5 +1,5 @@
 <template>
-  <div class="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4 space-y-3">
+  <div class="entity-group-table surface-card p-4 space-y-3">
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 class="font-bold">{{ title }}</h3>
@@ -15,7 +15,7 @@
 
     <el-empty v-if="showEmptyState" description="该目录下暂无实体" />
 
-    <el-table v-else :data="items" style="width: 100%" @row-click="emit('select-entity', $event)">
+    <el-table v-else :data="items" class="entity-group-table__table" style="width: 100%" @row-click="emit('select-entity', $event)">
       <el-table-column prop="name" label="名称" min-width="160" />
       <el-table-column label="分类 / 分组" min-width="220">
         <template #default="{ row }">
@@ -59,6 +59,7 @@
         <template #default="{ row }">
           <div class="space-y-2" @click.stop>
             <el-select
+              class="entity-group-table__select"
               v-model="draftFor(row).manualCategory"
               placeholder="选择一级分类"
               clearable
@@ -68,6 +69,7 @@
               <el-option v-for="option in CATEGORY_OPTIONS" :key="option" :label="option" :value="option" />
             </el-select>
             <el-select
+              class="entity-group-table__select"
               v-model="draftFor(row).manualGroupName"
               placeholder="选择或输入二级分组"
               clearable
@@ -83,7 +85,7 @@
                 :value="option"
               />
             </el-select>
-            <div class="flex flex-wrap gap-2">
+            <div class="entity-group-table__quick-actions flex flex-wrap gap-2">
               <el-button size="small" type="primary" @click="saveDraft(row)">保存</el-button>
               <el-button size="small" @click="emit('clear-override', row)">清除覆盖</el-button>
               <el-button size="small" link type="primary" @click="emit('select-entity', row)">详情</el-button>
@@ -200,3 +202,52 @@ function summaryText(state) {
   return ''
 }
 </script>
+
+<style scoped>
+.entity-group-table {
+  background: var(--entities-panel-bg);
+  border: 1px solid var(--entities-panel-border);
+}
+
+.entity-group-table__table {
+  --el-table-border-color: var(--entities-panel-border);
+  --el-table-border: 1px solid var(--entities-panel-border);
+  --el-table-header-bg-color: var(--entities-panel-bg-soft);
+  --el-table-tr-bg-color: var(--entities-panel-bg);
+  --el-table-row-hover-bg-color: var(--entities-panel-bg-soft);
+  --el-table-bg-color: var(--entities-panel-bg);
+  --el-table-expanded-cell-bg-color: var(--entities-panel-bg);
+  --el-table-header-text-color: var(--entities-text-soft);
+  --el-table-text-color: var(--entities-text);
+  --el-fill-color-lighter: var(--entities-panel-bg-soft);
+  --el-fill-color-blank: transparent;
+  border-radius: 0.9rem;
+  overflow: hidden;
+}
+
+.entity-group-table__table :deep(.el-table__inner-wrapper::before),
+.entity-group-table__table :deep(.el-table::before) {
+  display: none;
+}
+
+.entity-group-table__table :deep(th.el-table__cell) {
+  background: var(--entities-panel-bg-soft);
+  font-weight: 700;
+}
+
+.entity-group-table__table :deep(td.el-table__cell),
+.entity-group-table__table :deep(tr) {
+  background: var(--entities-panel-bg);
+}
+
+.entity-group-table__select :deep(.el-select__wrapper) {
+  background: var(--entities-panel-bg-soft);
+  box-shadow: 0 0 0 1px var(--entities-panel-border) inset;
+}
+
+.entity-group-table__select :deep(.el-select__placeholder),
+.entity-group-table__select :deep(.el-select__selected-item),
+.entity-group-table__select :deep(.el-input__inner) {
+  color: var(--entities-text);
+}
+</style>
