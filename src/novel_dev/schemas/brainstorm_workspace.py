@@ -44,7 +44,9 @@ class SettingSuggestionCardMergePayload(BaseModel):
     status: Optional[str] = None
     source_outline_refs: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
-    display_order: int = 0
+    # Optional for merge semantics: omitted display_order should not clobber an
+    # existing card's ordering. New cards may default to 0 at merge time.
+    display_order: Optional[int] = None
 
     @model_validator(mode="after")
     def validate_upsert_fields(self) -> "SettingSuggestionCardMergePayload":

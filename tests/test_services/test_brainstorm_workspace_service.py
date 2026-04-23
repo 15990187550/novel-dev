@@ -268,6 +268,64 @@ async def test_merge_suggestion_cards_preserves_existing_payload_keys(async_sess
 
 
 @pytest.mark.asyncio
+async def test_merge_suggestion_cards_preserves_display_order_when_omitted(async_session):
+    service = BrainstormWorkspaceService(async_session)
+
+    await service.merge_suggestion_cards(
+        "novel_card_order_preserve",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_alpha",
+                "card_type": "character",
+                "merge_key": "character:alpha",
+                "title": "甲",
+                "summary": "alpha seed",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "甲"},
+                "display_order": 5,
+            },
+            {
+                "operation": "upsert",
+                "card_id": "card_beta",
+                "card_type": "character",
+                "merge_key": "character:beta",
+                "title": "乙",
+                "summary": "beta seed",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "乙"},
+                "display_order": 20,
+            },
+        ],
+    )
+
+    cards = await service.merge_suggestion_cards(
+        "novel_card_order_preserve",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_beta_v2",
+                "card_type": "character",
+                "merge_key": "character:beta",
+                "title": "乙",
+                "summary": "beta updated",
+                "status": "active",
+                "source_outline_refs": ["vol_1"],
+                "payload": {"resources": "新资源"},
+                # display_order intentionally omitted: should not clobber existing order.
+            }
+        ],
+    )
+
+    assert [card.merge_key for card in cards] == ["character:alpha", "character:beta"]
+    assert [card.display_order for card in cards] == [5, 20]
+    assert cards[1].summary == "beta updated"
+    assert cards[1].payload["resources"] == "新资源"
+
+
+@pytest.mark.asyncio
 async def test_merge_suggestion_cards_supersede_is_sticky_with_reordered_batch(async_session):
     service = BrainstormWorkspaceService(async_session)
 
@@ -974,6 +1032,86 @@ async def test_submit_workspace_relationship_count_materializes_entity_and_relat
     assert relationships[0].source_id == source_entity.id
     assert relationships[0].target_id == target_entity.id
     assert relationships[0].relation_type == "盟友"
+
+
+@pytest.mark.asyncio
+async def test_submit_workspace_includes_legacy_setting_drafts_when_active_cards_exist(async_session):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_cards_with_legacy_drafts",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_cards_with_legacy_drafts",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_setting_drafts(
+        "novel_submit_cards_with_legacy_drafts",
+        [
+            {
+                "draft_id": "draft_1",
+                "source_outline_ref": "synopsis",
+                "source_kind": "character",
+                "target_import_mode": "explicit_type",
+                "target_doc_type": "concept",
+                "title": "林风",
+                "content": "青云宗外门弟子，背负血仇。",
+                "order_index": 1,
+            }
+        ],
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_cards_with_legacy_drafts",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_char",
+                "card_type": "character",
+                "merge_key": "character:lu-zhao",
+                "title": "陆照",
+                "summary": "主角建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "陆照",
+                    "identity": "外门弟子",
+                    "goal": "改命",
+                },
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_cards_with_legacy_drafts")
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel(
+        "novel_submit_cards_with_legacy_drafts"
+    )
+
+    assert result.pending_setting_count == 2
+    assert result.relationship_count == 0
+    assert len(pending) == 2
+    assert {item.source_filename for item in pending} == {
+        "brainstorm-synopsis-draft_1.md",
+        "brainstorm-character:lu-zhao.md",
+    }
 
 
 @pytest.mark.asyncio

@@ -474,7 +474,8 @@ class OutlineWorkbenchService:
             SuggestionCardUpdateEnvelope,
             novel_id=novel_id,
         )
-        return [item.model_dump() for item in updates.cards], updates.summary.model_dump()
+        # Preserve merge semantics (e.g. omit display_order to avoid clobbering).
+        return [item.model_dump(exclude_none=True) for item in updates.cards], updates.summary.model_dump()
 
     async def _write_result_snapshot(
         self,

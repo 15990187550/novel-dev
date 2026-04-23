@@ -104,16 +104,29 @@ class BrainstormWorkspaceService:
                     existing["status"] = "superseded"
                 continue
 
-            incoming = SettingSuggestionCardPayload.model_validate(
-                normalized_update.model_dump(exclude={"operation"}, exclude_none=True)
-            ).model_dump()
+            incoming_payload = normalized_update.model_dump(
+                exclude={"operation"},
+                exclude_none=True,
+            )
             existing = by_merge_key.get(merge_key)
             if existing is None:
+                # For new cards, default display_order to 0 if omitted.
+                incoming_payload.setdefault("display_order", normalized_update.display_order or 0)
+                incoming = SettingSuggestionCardPayload.model_validate(incoming_payload).model_dump()
                 if merge_key in superseded_merge_keys:
                     incoming["status"] = "superseded"
                 by_merge_key[merge_key] = incoming
                 continue
 
+            # For existing cards, rely on validated upsert fields, but don't let an omitted
+            # display_order clobber the current ordering.
+            incoming = SettingSuggestionCardPayload.model_validate(
+                {
+                    **incoming_payload,
+                    # Required by SettingSuggestionCardPayload even if merge payload omits it.
+                    "display_order": incoming_payload.get("display_order", 0),
+                }
+            ).model_dump()
             existing["card_id"] = incoming["card_id"]
             existing["card_type"] = incoming["card_type"]
             existing["summary"] = incoming["summary"]
@@ -125,7 +138,9 @@ class BrainstormWorkspaceService:
                 **existing.get("payload", {}),
                 **incoming["payload"],
             }
-            existing["display_order"] = incoming["display_order"]
+            # Preserve ordering unless the update explicitly provides display_order.
+            if normalized_update.display_order is not None:
+                existing["display_order"] = normalized_update.display_order
             existing["source_outline_refs"] = sorted(
                 set(existing.get("source_outline_refs", []))
                 | set(incoming.get("source_outline_refs", []))
@@ -176,6 +191,17 @@ class BrainstormWorkspaceService:
                 )
                 for card in entity_cards
             ]
+            # Legacy setting drafts are still part of final confirmation even when
+            # suggestion cards exist. Do not silently drop them.
+            pending_payloads.extend(
+                [
+                    await self.extraction_service.build_pending_payload_from_setting_draft(
+                        novel_id,
+                        draft,
+                    )
+                    for draft in (workspace.setting_docs_draft or [])
+                ]
+            )
             (
                 resolved_relationships,
                 submit_warnings,
