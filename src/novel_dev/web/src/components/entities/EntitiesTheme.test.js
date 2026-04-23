@@ -1,4 +1,4 @@
-import { defineComponent, h } from 'vue'
+import { defineComponent, h, inject, provide } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import EntityGroupTable from './EntityGroupTable.vue'
@@ -40,14 +40,23 @@ const simpleStubs = {
   }),
   ElTable: defineComponent({
     name: 'ElTableStub',
-    setup(_, { slots }) {
+    props: { data: { type: Array, default: () => [] } },
+    setup(props, { slots }) {
+      provide('el-table-rows', props.data)
       return () => h('div', { class: 'el-table-stub' }, slots.default?.())
     },
   }),
   ElTableColumn: defineComponent({
     name: 'ElTableColumnStub',
-    setup(_, { slots }) {
-      return () => h('div', { class: 'el-table-column-stub' }, slots.default?.({ row: {} }))
+    props: {
+      prop: { type: String, default: '' },
+      label: { type: String, default: '' },
+    },
+    setup(props, { slots }) {
+      const rows = inject('el-table-rows', [])
+      return () => h('div', { class: 'el-table-column-stub', 'data-label': props.label }, rows.length
+        ? rows.map((row, index) => h('div', { class: 'el-table-row-stub', key: `${props.prop || props.label || index}-${index}` }, slots.default?.({ row }) ?? row?.[props.prop] ?? ''))
+        : [h('div', { class: 'el-table-row-stub' }, slots.default?.({ row: {} }) ?? '')])
     },
   }),
   ElSelect: defineComponent({

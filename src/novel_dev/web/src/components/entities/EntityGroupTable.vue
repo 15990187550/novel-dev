@@ -3,17 +3,17 @@
     <div class="flex flex-wrap items-start justify-between gap-3">
       <div>
         <h3 class="font-bold">{{ title }}</h3>
-        <p class="text-sm text-gray-500 dark:text-gray-400">
+        <p class="entity-group-table__meta text-sm">
           {{ selectedNodeLabel ? `当前目录：${selectedNodeLabel}` : '请选择左侧目录节点' }}
         </p>
       </div>
-      <div class="flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+      <div class="entity-group-table__meta flex flex-wrap gap-2 text-xs">
         <span>分组 {{ groupCount }}</span>
         <span>实体 {{ totalCount }}</span>
       </div>
     </div>
 
-    <el-empty v-if="showEmptyState" description="该目录下暂无实体" />
+    <el-empty v-if="showEmptyState" class="entity-group-table__empty" description="该目录下暂无实体" />
 
     <el-table v-else :data="items" class="entity-group-table__table" style="width: 100%" @row-click="emit('select-entity', $event)">
       <el-table-column prop="name" label="名称" min-width="160" />
@@ -21,10 +21,10 @@
         <template #default="{ row }">
           <div class="space-y-1 text-sm">
             <div>{{ row.effective_category || row.system_category || row.type || '-' }}</div>
-            <div class="text-gray-500 dark:text-gray-400">
+            <div class="entity-group-table__subtext">
               {{ currentGroupLabel(row) }}
             </div>
-            <div class="text-xs text-gray-400">
+            <div class="entity-group-table__subtext entity-group-table__subtext--soft text-xs">
               自动建议：{{ row.system_category || '-' }} / {{ row.system_group_name || '-' }}
             </div>
           </div>
@@ -42,16 +42,16 @@
           <div v-if="row.aliases?.length" class="flex flex-wrap gap-1">
             <el-tag v-for="alias in row.aliases" :key="alias" size="small" type="info">{{ alias }}</el-tag>
           </div>
-          <span v-else class="text-gray-400">-</span>
+          <span v-else class="entity-group-table__empty">-</span>
         </template>
       </el-table-column>
       <el-table-column label="信息摘要" min-width="280">
         <template #default="{ row }">
-          <div class="space-y-1 text-sm text-gray-600 dark:text-gray-300">
+          <div class="entity-group-table__summary space-y-1 text-sm">
             <div v-if="row.search_match_reason">命中：{{ row.search_match_reason }}</div>
             <div v-else-if="row.classification_reason">系统依据：{{ stringifyReason(row.classification_reason) }}</div>
             <div v-else-if="summaryText(row.latest_state)">摘要：{{ summaryText(row.latest_state) }}</div>
-            <div v-else class="text-gray-400">暂无摘要</div>
+            <div v-else class="entity-group-table__empty">暂无摘要</div>
           </div>
         </template>
       </el-table-column>
@@ -209,6 +209,26 @@ function summaryText(state) {
   border: 1px solid var(--entities-panel-border);
 }
 
+.entity-group-table__meta {
+  color: var(--entities-text-muted);
+}
+
+.entity-group-table__subtext {
+  color: var(--entities-text-muted);
+}
+
+.entity-group-table__subtext--soft {
+  color: var(--entities-text-soft);
+}
+
+.entity-group-table__summary {
+  color: var(--entities-text);
+}
+
+.entity-group-table__empty {
+  color: var(--entities-text-soft);
+}
+
 .entity-group-table__table {
   --el-table-border-color: var(--entities-panel-border);
   --el-table-border: 1px solid var(--entities-panel-border);
@@ -249,5 +269,9 @@ function summaryText(state) {
 .entity-group-table__select :deep(.el-select__selected-item),
 .entity-group-table__select :deep(.el-input__inner) {
   color: var(--entities-text);
+}
+
+.entity-group-table__empty :deep(.el-empty__description) {
+  color: var(--entities-text-soft);
 }
 </style>
