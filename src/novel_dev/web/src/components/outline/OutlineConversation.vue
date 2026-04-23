@@ -1,5 +1,5 @@
 <template>
-  <section class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+  <section class="surface-card p-5">
     <div class="flex items-start justify-between gap-3">
       <div>
         <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Conversation</div>
@@ -16,7 +16,7 @@
       </span>
     </div>
 
-    <div class="mt-4 max-h-80 space-y-3 overflow-auto rounded-2xl bg-gray-50 p-4">
+    <div class="mt-4 max-h-80 space-y-3 overflow-auto rounded-2xl border border-white/60 bg-gray-50/90 p-4">
       <div v-if="!messages.length" class="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-6 text-sm leading-6 text-gray-500">
         暂无对话记录。可以直接输入你想修改的大纲意见，例如“强化第二卷主线冲突，提前埋入终局伏笔”。
       </div>
@@ -25,7 +25,7 @@
         v-for="message in messages"
         :key="message.id"
         class="rounded-2xl px-4 py-3"
-        :class="message.role === 'user' ? 'bg-white' : 'bg-slate-900 text-white'"
+        :class="message.role === 'user' ? 'border border-gray-200 bg-white/95' : 'bg-gradient-to-br from-slate-900 via-slate-800 to-teal-900 text-white'"
       >
         <div class="text-xs font-medium uppercase tracking-wide" :class="message.role === 'user' ? 'text-gray-400' : 'text-slate-300'">
           {{ message.role === 'user' ? '你的意见' : '系统回应' }}
@@ -42,7 +42,7 @@
     <textarea
       id="outline-feedback-input"
       v-model="draft"
-      class="mt-2 min-h-[120px] w-full rounded-2xl border border-gray-200 px-4 py-3 text-sm leading-6 text-gray-700 outline-none transition focus:border-slate-400"
+      class="mt-2 min-h-[120px] w-full rounded-2xl border border-gray-200 bg-white/85 px-4 py-3 text-sm leading-6 text-gray-700 outline-none transition focus:border-slate-400 focus:bg-white"
       :disabled="disabled || submitting"
       placeholder="例如：把总纲里的终局目标写得更明确，第二卷提前埋下关键人物反转。"
     />
@@ -53,7 +53,7 @@
       </p>
       <button
         type="button"
-        class="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
+        class="inline-flex items-center gap-2 rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition duration-200 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:bg-slate-300"
         :disabled="submitDisabled"
         @click="submit"
       >

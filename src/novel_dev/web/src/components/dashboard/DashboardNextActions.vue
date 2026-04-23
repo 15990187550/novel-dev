@@ -17,7 +17,10 @@
         :class="[`is-${action.variant}`]"
         @click="emitAction(action.key)"
       >
-        <span class="dashboard-action-card__label">{{ action.label }}</span>
+        <div class="dashboard-action-card__topline">
+          <span class="dashboard-action-card__label">{{ action.label }}</span>
+          <span class="dashboard-action-card__pill">{{ action.variant === 'primary' ? '优先' : '备用' }}</span>
+        </div>
         <strong class="dashboard-action-card__title">{{ action.title }}</strong>
         <p class="dashboard-action-card__reason">{{ action.reason }}</p>
         <p v-if="action.detail" class="dashboard-action-card__detail">{{ action.detail }}</p>

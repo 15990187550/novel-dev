@@ -337,6 +337,7 @@ async def test_build_pending_payload_from_suggestion_card_builds_faction_pending
 
     assert payload.source_filename == "brainstorm-faction:qing-yun-zong.md"
     assert payload.extraction_type == "setting"
+    assert payload.raw_result == {}
     assert payload.proposed_entities == [
         {
             "type": "faction",
@@ -348,6 +349,44 @@ async def test_build_pending_payload_from_suggestion_card_builds_faction_pending
             },
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_approve_pending_from_faction_suggestion_card_does_not_create_setting_doc(async_session):
+    svc = ExtractionService(async_session)
+    card = SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": "card_faction",
+            "card_type": "faction",
+            "merge_key": "faction:qing-yun-zong",
+            "title": "青云宗",
+            "summary": "宗门势力建议卡",
+            "status": "active",
+            "source_outline_refs": ["synopsis"],
+            "payload": {
+                "canonical_name": "青云宗",
+                "position": "北境七宗之一",
+                "description": "林风早期依附的修行宗门",
+            },
+            "display_order": 20,
+        }
+    )
+
+    payload = await svc.build_pending_payload_from_suggestion_card(
+        "novel_card_mapper_approve_faction",
+        card,
+    )
+    pending = await svc.persist_pending_payload("novel_card_mapper_approve_faction", payload)
+
+    docs = await svc.approve_pending(pending.id)
+    entity = await svc.entity_svc.entity_repo.find_by_name(
+        "青云宗",
+        entity_type="faction",
+        novel_id="novel_card_mapper_approve_faction",
+    )
+
+    assert docs == []
+    assert entity is not None
 
 
 @pytest.mark.asyncio

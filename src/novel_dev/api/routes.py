@@ -75,6 +75,31 @@ class RejectPendingRequest(BaseModel):
 settings = Settings()
 
 
+def _parse_style_config_title(title: Optional[str]) -> dict[str, Any]:
+    if not title:
+        return {}
+    try:
+        parsed = json.loads(title)
+    except Exception:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _serialize_library_document(doc, *, is_active: bool = True) -> dict[str, Any]:
+    payload = {
+        "id": doc.id,
+        "doc_type": doc.doc_type,
+        "title": doc.title,
+        "content": doc.content,
+        "version": doc.version,
+        "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
+        "is_active": is_active,
+    }
+    if doc.doc_type == "style_profile":
+        payload["style_config"] = _parse_style_config_title(doc.title)
+    return payload
+
+
 def _word_count(text: Optional[str]) -> int:
     if not text:
         return 0
@@ -1002,6 +1027,34 @@ async def get_pending_documents(novel_id: str, session: AsyncSession = Depends(g
     }
 
 
+@router.get("/api/novels/{novel_id}/documents/library")
+async def get_document_library(novel_id: str, session: AsyncSession = Depends(get_session)):
+    repo = DocumentRepository(session)
+    extraction_service = ExtractionService(session)
+
+    worldview_docs = await repo.get_by_type(novel_id, "worldview")
+    setting_docs = await repo.get_by_type(novel_id, "setting")
+    synopsis_docs = await repo.get_by_type(novel_id, "synopsis")
+    concept_docs = await repo.get_by_type(novel_id, "concept")
+    style_docs = await repo.get_by_type(novel_id, "style_profile")
+    active_style_doc = await extraction_service.get_active_style_profile(novel_id)
+
+    items = [
+        *[_serialize_library_document(doc) for doc in worldview_docs],
+        *[_serialize_library_document(doc) for doc in setting_docs],
+        *[_serialize_library_document(doc) for doc in synopsis_docs],
+        *[_serialize_library_document(doc) for doc in concept_docs],
+        *[
+            _serialize_library_document(doc, is_active=bool(active_style_doc and doc.id == active_style_doc.id))
+            for doc in style_docs
+        ],
+    ]
+    return {
+        "items": items,
+        "active_style_profile_version": active_style_doc.version if active_style_doc else None,
+    }
+
+
 @router.post("/api/novels/{novel_id}/documents/pending/approve")
 async def approve_pending_document(novel_id: str, req: ApproveRequest, session: AsyncSession = Depends(get_session)):
     embedder = llm_factory.get_embedder()
@@ -1042,6 +1095,21 @@ async def reject_pending_document(novel_id: str, req: RejectPendingRequest, sess
     deleted = await svc.reject_pending(req.pending_id)
     if not deleted:
         raise HTTPException(status_code=409, detail="待审核记录已不可拒绝")
+    await session.commit()
+
+
+@router.delete("/api/novels/{novel_id}/documents/pending/{pending_id}", status_code=204)
+async def delete_failed_pending_document(novel_id: str, pending_id: str, session: AsyncSession = Depends(get_session)):
+    embedder = llm_factory.get_embedder()
+    embedding_service = EmbeddingService(session, embedder)
+    svc = ExtractionService(session, embedding_service)
+    repo = PendingExtractionRepository(session)
+    pe = await repo.get_by_id(pending_id)
+    if not pe or pe.novel_id != novel_id:
+        raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
+    deleted = await svc.delete_failed_pending(pending_id)
+    if not deleted:
+        raise HTTPException(status_code=409, detail="只有失败记录可以删除")
     await session.commit()
 
 

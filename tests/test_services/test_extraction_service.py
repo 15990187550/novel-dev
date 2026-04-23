@@ -5,7 +5,12 @@ import pytest
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.agents.file_classifier import FileClassificationResult
-from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
+from novel_dev.agents.setting_extractor import (
+    ExtractedSetting,
+    CharacterProfile,
+    FactionInfo,
+    LocationInfo,
+)
 from novel_dev.agents.style_profiler import StyleProfile, StyleConfig
 
 
@@ -24,7 +29,7 @@ def mock_llm():
                 return type("Resp", (), {"text": ExtractedSetting(
                     worldview="天玄大陆",
                     power_system="修炼体系",
-                    factions="宗门分布",
+                    factions=[],
                     character_profiles=[CharacterProfile(name="林风", identity="外门弟子", personality="坚韧", goal="变强", appearance="黑衣少年", background="寒门出身", ability="剑术", realm="筑基", relationships="与宗门长老关系紧张", resources="祖传玉佩", secrets="体内藏有残魂", conflict="与内门弟子敌对", arc="从求生走向担当", notes="遇强则强")],
                     important_items=[],
                     plot_synopsis="剧情梗概",
@@ -170,7 +175,7 @@ async def test_approve_setting_creates_item_entities_with_description(async_sess
     mock_resp = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="林风", identity="主角", personality="坚毅", goal="成神")],
         important_items=[
             ImportantItem(name="神秘戒指", description="蕴含上古力量", significance="主角崛起关键"),
@@ -215,7 +220,7 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
     first = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="主角", personality="坚毅", goal="修炼")],
         important_items=[],
         plot_synopsis="剧情",
@@ -223,7 +228,7 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
     second = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", personality="正统", goal="超脱")],
         important_items=[],
         plot_synopsis="剧情",
@@ -240,6 +245,7 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
+        svc.entity_svc._refresh_entity_artifacts = AsyncMock()
         pe1 = await svc.process_upload("n_dedup", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_dedup", "setting2.txt", "second")
@@ -266,7 +272,7 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
     first = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照（主角）", identity="主角", personality="坚毅", goal="修炼")],
         important_items=[],
         plot_synopsis="剧情",
@@ -274,7 +280,7 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
     second = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", personality="沉稳", goal="超脱")],
         important_items=[],
         plot_synopsis="剧情",
@@ -291,6 +297,7 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
+        svc.entity_svc._refresh_entity_artifacts = AsyncMock()
         pe1 = await svc.process_upload("n_alias", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_alias", "setting2.txt", "second")
@@ -323,7 +330,7 @@ async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
     extracted = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="主角", goal="修炼", appearance="青衫少年", resources="道经传承")],
         important_items=[],
         plot_synopsis="剧情",
@@ -362,6 +369,47 @@ async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
 
 
 @pytest.mark.asyncio
+async def test_process_setting_upload_includes_factions_and_locations_in_entity_diff(async_session):
+    from novel_dev.agents.file_classifier import FileClassificationResult
+    from novel_dev.repositories.entity_repo import EntityRepository
+
+    extracted = ExtractedSetting(
+        worldview="真实界",
+        power_system="正统修炼",
+        factions=[FactionInfo(name="玄天宗", description="正道魁首", relationship_with_protagonist="庇护")],
+        locations=[LocationInfo(name="天都", description="中土第一城", region="中土")],
+        character_profiles=[],
+        important_items=[],
+        plot_synopsis="",
+    )
+
+    with patch("novel_dev.llm.llm_factory.get") as mock_get:
+        mock_client = AsyncMock()
+        mock_client.acomplete.side_effect = [
+            type("R", (), {"text": FileClassificationResult(file_type="setting", confidence=0.95, reason="").model_dump_json()})(),
+            type("R", (), {"text": extracted.model_dump_json()})(),
+        ]
+        mock_get.return_value = mock_client
+
+        svc = ExtractionService(async_session)
+        pe = await svc.process_upload("n_world", "world.txt", "content")
+        proposed_types = {item["type"] for item in pe.proposed_entities}
+        diff_names = {item["entity_name"] for item in pe.diff_result["entity_diffs"]}
+
+        assert {"faction", "location"} <= proposed_types
+        assert {"玄天宗", "天都"} <= diff_names
+        assert pe.diff_result["summary"] == "2 个新增实体"
+
+        await svc.approve_pending(pe.id)
+
+    entity_repo = EntityRepository(async_session)
+    entities = await entity_repo.list_by_novel("n_world")
+    names_by_type = {(entity.type, entity.name) for entity in entities}
+    assert ("faction", "玄天宗") in names_by_type
+    assert ("location", "天都") in names_by_type
+
+
+@pytest.mark.asyncio
 async def test_approve_setting_records_conflict_resolution_result(async_session):
     from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile
     from novel_dev.agents.file_classifier import FileClassificationResult
@@ -378,7 +426,7 @@ async def test_approve_setting_records_conflict_resolution_result(async_session)
     extracted = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", goal="超脱")],
         important_items=[],
         plot_synopsis="剧情",
@@ -428,7 +476,7 @@ async def test_approve_setting_records_keep_old_resolution_result(async_session)
     extracted = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", goal="超脱")],
         important_items=[],
         plot_synopsis="剧情",
@@ -474,7 +522,7 @@ async def test_approve_setting_applies_conflict_resolution_use_new(async_session
     extracted = ExtractedSetting(
         worldview="test",
         power_system="test",
-        factions="test",
+        factions=[],
         character_profiles=[CharacterProfile(name="陆照", identity="道经继承者", goal="超脱")],
         important_items=[],
         plot_synopsis="剧情",
@@ -548,4 +596,3 @@ async def test_approve_setting_builds_diff_for_legacy_pending(async_session):
     refreshed = await svc.pending_repo.get_by_id(pe.id)
     assert refreshed.resolution_result is not None
     assert refreshed.resolution_result["field_resolutions"]
-

@@ -145,7 +145,7 @@ def mock_llm_factory(monkeypatch):
                 text=ExtractedSetting(
                     worldview="mock worldview",
                     power_system="mock power",
-                    factions="mock factions",
+                    factions=[],
                     character_profiles=[CharacterProfile(name="Mock", identity="mock", personality="mock", goal="mock")],
                     important_items=[ImportantItem(name="MockItem", description="mock", significance="mock")],
                     plot_synopsis="mock synopsis",

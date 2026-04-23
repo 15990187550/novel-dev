@@ -1,6 +1,6 @@
 <template>
   <section
-    class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm"
+    class="surface-card surface-card--soft p-5"
     data-testid="brainstorm-suggestion-cards"
   >
     <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Suggestion Cards</div>
@@ -23,7 +23,7 @@
 
     <div
       v-if="unresolvedCount > 0"
-      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800"
       data-testid="unresolved-warning"
     >
       当前仍有 {{ unresolvedCount }} 张建议卡处于未解决状态，最终确认前建议先处理或补充信息。
@@ -31,7 +31,7 @@
 
     <div
       v-if="resolvedSubmitWarnings.length"
-      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+      class="mt-4 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-800"
       data-testid="submit-warnings"
     >
       <div class="font-semibold">提交提示</div>
@@ -52,7 +52,7 @@
       <article
         v-for="card in activeCards"
         :key="card.card_id || card.merge_key"
-        class="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4"
+        class="rounded-2xl border border-gray-200 bg-white/80 px-4 py-4"
         data-testid="suggestion-card"
       >
         <div class="flex items-start justify-between gap-3">

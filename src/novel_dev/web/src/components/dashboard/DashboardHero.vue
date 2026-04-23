@@ -4,6 +4,13 @@
       <p class="dashboard-hero__eyebrow">Dashboard Overview</p>
       <h1 class="dashboard-hero__title">{{ title }}</h1>
       <p class="dashboard-hero__phase">{{ phaseLabel }}</p>
+      <p class="dashboard-hero__summary">
+        把当前流程、章节推进和世界资料集中放在一个入口里，先看风险，再做下一步动作。
+      </p>
+      <div class="dashboard-hero__chips">
+        <span class="dashboard-hero__chip">当前阶段：{{ phaseLabel || '待更新' }}</span>
+        <span class="dashboard-hero__chip">当前卷章：{{ volumeChapter || '-' }}</span>
+      </div>
     </div>
 
     <div class="dashboard-hero__actions">
@@ -17,17 +24,20 @@
     </div>
 
     <div class="dashboard-hero__stats" aria-label="dashboard summary stats">
-      <article class="dashboard-hero__stat">
+      <article class="dashboard-hero__stat dashboard-hero__stat--spotlight">
         <span class="dashboard-hero__stat-label">当前卷/章</span>
         <strong class="dashboard-hero__stat-value">{{ volumeChapter }}</strong>
+        <span class="dashboard-hero__stat-note">作为当前工作焦点</span>
       </article>
       <article class="dashboard-hero__stat">
         <span class="dashboard-hero__stat-label">总字数</span>
         <strong class="dashboard-hero__stat-value">{{ formattedTotalWords }}</strong>
+        <span class="dashboard-hero__stat-note">整体规模与积累</span>
       </article>
       <article class="dashboard-hero__stat">
         <span class="dashboard-hero__stat-label">已归档章节</span>
         <strong class="dashboard-hero__stat-value">{{ archivedCount }}</strong>
+        <span class="dashboard-hero__stat-note">已完成沉淀的内容</span>
       </article>
     </div>
   </section>

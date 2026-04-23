@@ -77,7 +77,14 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
     async_session.add_all([
         NovelState(novel_id=novel_id, current_phase="brainstorming", checkpoint_data={}),
         NovelState(novel_id=other_novel_id, current_phase="drafting", checkpoint_data={}),
-        Entity(id="e1", type="character", name="主角", novel_id=novel_id),
+        Entity(
+            id="e1",
+            type="character",
+            name="主角",
+            novel_id=novel_id,
+            manual_group_id="g1",
+            system_group_id="g1",
+        ),
         Entity(id="e2", type="character", name="旁观者", novel_id=other_novel_id),
         EntityGroup(id="g1", novel_id=novel_id, category="人物", group_name="主角团", group_slug="protagonists"),
         EntityRelationship(id=1, source_id="e1", target_id="e1", relation_type="关联", novel_id=novel_id),

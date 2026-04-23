@@ -59,6 +59,7 @@ export const submitBrainstormWorkspace = (id) =>
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
+export const getDocumentLibrary = (id) => api.get(`/novels/${id}/documents/library`).then(r => r.data)
 export const uploadDocument = (id, filename, content) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content }).then(r => r.data)
 export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
@@ -67,6 +68,10 @@ export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
 export const rejectPending = (id, pendingId) =>
   api.post(`/novels/${id}/documents/pending/reject`, { pending_id: pendingId }).then(r => r.data)
+export const deletePendingDoc = (id, pendingId) =>
+  api.delete(`/novels/${id}/documents/pending/${pendingId}`).then(r => r.data)
+export const rollbackStyleProfile = (id, version) =>
+  api.post(`/novels/${id}/style_profile/rollback`, { version }).then(r => r.data)
 export const brainstorm = (id) => api.post(`/novels/${id}/brainstorm`, null, withLongTimeout()).then(r => r.data)
 export const importSynopsis = (id, content) =>
   api.post(`/novels/${id}/brainstorm/import`, { content }).then(r => r.data)

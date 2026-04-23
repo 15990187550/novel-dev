@@ -1,5 +1,15 @@
 <template>
-  <div class="space-y-2">
+  <div class="space-y-3">
+    <div class="flex items-start justify-between gap-3">
+      <div>
+        <div class="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-400">Workspace</div>
+        <div class="mt-1 text-sm font-semibold text-slate-900 dark:text-slate-100">小说工作区</div>
+      </div>
+      <span class="rounded-full border border-slate-200 bg-white/70 px-2.5 py-1 text-[11px] font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-300">
+        {{ options.length }} 部
+      </span>
+    </div>
+
     <el-select-v2
       v-model="selected"
       :options="options"
@@ -18,7 +28,17 @@
       </el-button>
     </div>
 
-    <el-dialog v-model="showCreateDialog" title="新建小说" width="400px" :close-on-click-modal="false">
+    <div class="rounded-2xl border border-slate-200/80 bg-white/70 px-3 py-2.5 text-xs leading-5 text-slate-500 dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-300">
+      先选定小说，再进入资料、卷纲和正文模块，避免不同项目上下文串线。
+    </div>
+
+    <el-dialog
+      v-model="showCreateDialog"
+      title="新建小说"
+      width="400px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
       <el-form :model="createForm" @submit.prevent="doCreate">
         <el-form-item label="标题">
           <el-input v-model="createForm.title" placeholder="请输入小说标题" @keyup.enter="doCreate" />

@@ -1,17 +1,81 @@
 <template>
-  <div class="space-y-4">
-    <h2 class="text-xl font-bold">设定资料</h2>
+  <div class="space-y-6">
+    <section class="page-header">
+      <div>
+        <div class="page-header__eyebrow">Knowledge Base</div>
+        <h1 class="page-header__title">设定与文风</h1>
+        <p class="page-header__description">
+          把导入、审核、已生效资料和文风版本收敛到同一个面板里，避免上下文分散。
+        </p>
+      </div>
+      <div class="page-header__meta-grid">
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">待审核</span>
+          <span class="page-header__meta-value">{{ store.pendingDocs.length }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">已生效资料</span>
+          <span class="page-header__meta-value">{{ libraryItems.length }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">文风版本</span>
+          <span class="page-header__meta-value">{{ styleProfiles.length }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">当前版本</span>
+          <span class="page-header__meta-value">{{ activeStyleVersionText }}</span>
+        </div>
+      </div>
+    </section>
+
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
     <template v-else>
-      <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-        <h3 class="font-bold mb-3">上传设定文件</h3>
-        <div class="flex items-center gap-2">
-          <input ref="fileInput" type="file" accept=".txt,.md" multiple @change="onFileChange" class="text-sm" />
+      <div class="surface-card p-5">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h3 class="font-bold">导入设定 / 文风样本</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              支持批量上传 `.txt` / `.md`。系统会自动识别是“设定文档”还是“文风样本”。
+            </p>
+          </div>
+          <div class="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-700 dark:border-blue-900/60 dark:bg-blue-950/30 dark:text-blue-300">
+            每个文件尽量只放一种内容，识别和审核会更稳定
+          </div>
+        </div>
+
+        <div class="mt-4 grid gap-3 md:grid-cols-3 text-sm">
+          <div class="rounded-xl border border-gray-200 dark:border-gray-700 p-3">
+            <div class="font-semibold">支持文件</div>
+            <div class="mt-2 text-gray-600 dark:text-gray-300">`.txt`、`.md`，可一次上传多个文件。</div>
+          </div>
+          <div class="rounded-xl border border-gray-200 dark:border-gray-700 p-3">
+            <div class="font-semibold">设定文档会提取</div>
+            <div class="mt-2 text-gray-600 dark:text-gray-300">世界观、修炼体系、势力格局、剧情梗概，以及人物/物品实体。</div>
+          </div>
+          <div class="rounded-xl border border-gray-200 dark:border-gray-700 p-3">
+            <div class="font-semibold">文风样本会提取</div>
+            <div class="mt-2 text-gray-600 dark:text-gray-300">文笔文风、叙事视角、节奏、写作规则、风格边界。</div>
+          </div>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-2">
+          <input ref="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown" multiple @change="onFileChange" class="text-sm" />
           <el-button type="primary" :loading="uploading" @click="upload">上传</el-button>
         </div>
-        <div v-if="selectedFiles.length" class="mt-3 text-sm text-gray-500 dark:text-gray-400">
-          已选择 {{ selectedFiles.length }} 个文件
+
+        <div v-if="selectedFiles.length" class="mt-3 rounded-xl bg-gray-50 dark:bg-gray-900/60 p-3 text-sm text-gray-600 dark:text-gray-300">
+          <div class="font-medium text-gray-900 dark:text-gray-100">待导入文件</div>
+          <div class="mt-2 flex flex-wrap gap-2">
+            <span
+              v-for="file in selectedFiles"
+              :key="file.filename"
+              class="rounded-full border border-gray-200 dark:border-gray-700 px-3 py-1"
+            >
+              {{ file.filename }}
+            </span>
+          </div>
         </div>
+
         <div v-if="uploadSummary" class="mt-3 space-y-2 text-sm">
           <div class="text-gray-700 dark:text-gray-300">
             本次导入任务已提交：已创建 {{ uploadSummary.accepted ?? uploadSummary.succeeded ?? 0 }} 条记录，失败 {{ uploadSummary.failed }}，共 {{ uploadSummary.total }} 个文件
@@ -27,8 +91,109 @@
           </div>
         </div>
       </div>
-      <div v-if="store.pendingDocs.length" class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
-        <h3 class="font-bold mb-3">设定提取记录</h3>
+
+      <div class="surface-card p-5">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <h3 class="font-bold">当前资料库</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              已批准的设定和文风会沉淀在这里，供后续脑暴、卷纲和正文生成使用。
+            </p>
+          </div>
+          <div class="text-sm text-gray-500 dark:text-gray-400">
+            已生效 {{ libraryItems.length }} 份
+          </div>
+        </div>
+
+        <div v-if="libraryLoading" class="mt-4 text-sm text-gray-500 dark:text-gray-400">加载资料库中...</div>
+        <el-empty v-else-if="!hasLibraryContent" description="批准导入后，会在这里看到世界观、体系设定、剧情梗概和文风档案" />
+
+        <div v-else class="mt-4 space-y-6">
+          <section v-for="group in libraryGroups" :key="group.docType" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="font-semibold text-gray-900 dark:text-gray-100">{{ group.label }}</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">{{ group.items.length }} 份</div>
+            </div>
+            <div class="space-y-3">
+              <details
+                v-for="item in group.items"
+                :key="item.id"
+                class="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/50 p-3"
+                open
+              >
+                <summary class="cursor-pointer list-none">
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <div class="font-medium text-gray-900 dark:text-gray-100">{{ item.title || group.label }}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(item.updated_at) }}</div>
+                  </div>
+                </summary>
+                <pre class="mt-3 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ item.content }}</pre>
+              </details>
+            </div>
+          </section>
+
+          <section v-if="styleProfiles.length" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <div class="font-semibold text-gray-900 dark:text-gray-100">文风档案</div>
+              <div class="text-xs text-gray-500 dark:text-gray-400">
+                当前生效版本：{{ activeStyleVersionText }}
+              </div>
+            </div>
+            <div class="space-y-3">
+              <div
+                v-for="profile in styleProfiles"
+                :key="profile.id"
+                class="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/50 p-4"
+              >
+                <div class="flex flex-wrap items-center justify-between gap-3">
+                  <div class="flex items-center gap-2">
+                    <div class="font-medium text-gray-900 dark:text-gray-100">版本 v{{ profile.version }}</div>
+                    <el-tag v-if="profile.is_active" size="small" type="success">当前生效</el-tag>
+                    <el-tag v-else size="small" type="info">历史版本</el-tag>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(profile.updated_at) }}</div>
+                    <el-button
+                      v-if="!profile.is_active"
+                      size="small"
+                      :loading="rollingBackVersion === profile.version"
+                      @click="activateStyleVersion(profile.version)"
+                    >
+                      {{ rollingBackVersion === profile.version ? '切换中...' : '设为当前版本' }}
+                    </el-button>
+                  </div>
+                </div>
+
+                <div class="mt-3 rounded-xl bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700">
+                  <div class="text-xs uppercase tracking-wide text-gray-400">Style Guide</div>
+                  <div class="mt-2 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ profile.content }}</div>
+                </div>
+
+                <div v-if="styleSummaryItems(profile).length" class="mt-3 grid gap-3 md:grid-cols-3 text-sm">
+                  <div
+                    v-for="item in styleSummaryItems(profile)"
+                    :key="item.label"
+                    class="rounded-xl border border-gray-200 dark:border-gray-700 p-3"
+                  >
+                    <div class="text-xs text-gray-400">{{ item.label }}</div>
+                    <div class="mt-1 whitespace-pre-wrap text-gray-700 dark:text-gray-200">{{ item.value }}</div>
+                  </div>
+                </div>
+
+                <details class="mt-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
+                  <summary class="cursor-pointer list-none font-medium text-sm text-gray-700 dark:text-gray-200">
+                    查看完整风格配置
+                  </summary>
+                  <pre class="mt-3 whitespace-pre-wrap text-xs text-gray-600 dark:text-gray-300">{{ formatJson(profile.style_config || {}) }}</pre>
+                </details>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <div v-if="store.pendingDocs.length" class="surface-card p-5">
+        <h3 class="font-bold mb-3">导入审核记录</h3>
         <el-table :data="store.pendingDocs">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
           <el-table-column label="类型">
@@ -66,14 +231,31 @@
                 >
                   {{ rejectingPendingId === row.id ? '拒绝中...' : '拒绝' }}
                 </el-button>
+                <el-button
+                  v-if="row.status === 'failed'"
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="deletingPendingId === row.id"
+                  :disabled="(!!deletingPendingId && deletingPendingId !== row.id) || !!approvingPendingId || !!rejectingPendingId"
+                  @click="removeFailedRecord(row.id)"
+                >
+                  {{ deletingPendingId === row.id ? '删除中...' : '删除' }}
+                </el-button>
               </div>
             </template>
           </el-table-column>
         </el-table>
       </div>
 
-      <el-dialog v-model="detailVisible" title="设定提取详情" width="1080px">
-        <div v-if="selectedDoc" class="space-y-4">
+      <el-dialog
+        v-model="detailVisible"
+        title="导入详情"
+        width="1080px"
+        top="4vh"
+        append-to-body
+      >
+        <div v-if="selectedDoc" class="max-h-[78vh] space-y-4 overflow-y-auto pr-2">
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
             <div><span class="font-bold">类型：</span>{{ extractionTypeLabel(selectedDoc.extraction_type, selectedDoc.status) }}</div>
             <div><span class="font-bold">状态：</span>{{ statusLabel(selectedDoc.status) }}</div>
@@ -184,23 +366,23 @@
             <el-empty v-if="!selectedDoc.diff_result.entity_diffs?.length" description="无实体变更" />
           </div>
 
-            <div v-if="resolutionRows.length">
-              <div class="font-semibold mb-2 text-purple-700 dark:text-purple-300">处理结果</div>
-              <el-table :data="resolutionRows" size="small" border>
-                <el-table-column prop="entity_name" label="实体" width="140" />
-                <el-table-column prop="field" label="字段" width="120">
-                  <template #default="{ row }">{{ fieldLabel(row.field) }}</template>
-                </el-table-column>
-                <el-table-column prop="action" label="动作" width="140">
-                  <template #default="{ row }">
-                    <el-tag :type="row.applied ? 'success' : 'info'" size="small">{{ resolutionActionLabel(row.action) }}</el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="applied" label="是否写入" width="100">
-                  <template #default="{ row }">{{ row.applied ? '已写入' : '未写入' }}</template>
-                </el-table-column>
-              </el-table>
-            </div>
+          <div v-if="resolutionRows.length">
+            <div class="font-semibold mb-2 text-purple-700 dark:text-purple-300">处理结果</div>
+            <el-table :data="resolutionRows" size="small" border>
+              <el-table-column prop="entity_name" label="实体" width="140" />
+              <el-table-column prop="field" label="字段" width="120">
+                <template #default="{ row }">{{ fieldLabel(row.field) }}</template>
+              </el-table-column>
+              <el-table-column prop="action" label="动作" width="140">
+                <template #default="{ row }">
+                  <el-tag :type="row.applied ? 'success' : 'info'" size="small">{{ resolutionActionLabel(row.action) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="applied" label="是否写入" width="100">
+                <template #default="{ row }">{{ row.applied ? '已写入' : '未写入' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
 
           <el-collapse>
             <el-collapse-item title="原始提取结果" name="raw">
@@ -219,16 +401,28 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
-import { uploadDocumentsBatch, approvePending, rejectPending } from '@/api.js'
+import {
+  uploadDocumentsBatch,
+  approvePending,
+  deletePendingDoc,
+  rejectPending,
+  getDocumentLibrary,
+  rollbackStyleProfile,
+} from '@/api.js'
 import { ElMessage } from 'element-plus'
 
 const DOCUMENT_POLL_INTERVAL_MS = 2000
+const LIBRARY_GROUPS = [
+  { docType: 'worldview', label: '世界观' },
+  { docType: 'setting', label: '体系设定' },
+  { docType: 'synopsis', label: '剧情梗概' },
+  { docType: 'concept', label: '概念设定' },
+]
+
 const store = useNovelStore()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
-const approvingPendingId = ref('')
-const rejectingPendingId = ref('')
 const detailVisible = ref(false)
 const selectedDoc = ref(null)
 const conflictSelections = reactive({})
@@ -236,6 +430,27 @@ const conflictSelectionMemory = reactive({})
 const resolvingMergeKeys = reactive({})
 const uploadSummary = ref(null)
 const documentPollTimer = ref(null)
+const libraryItems = ref([])
+const libraryLoading = ref(false)
+const rollingBackVersion = ref(null)
+const approvingPendingId = computed({
+  get: () => store.pendingDocActions.approvingPendingId,
+  set: (value) => {
+    store.pendingDocActions.approvingPendingId = value
+  },
+})
+const rejectingPendingId = computed({
+  get: () => store.pendingDocActions.rejectingPendingId,
+  set: (value) => {
+    store.pendingDocActions.rejectingPendingId = value
+  },
+})
+const deletingPendingId = computed({
+  get: () => store.pendingDocActions.deletingPendingId,
+  set: (value) => {
+    store.pendingDocActions.deletingPendingId = value
+  },
+})
 
 const diffGroups = computed(() => {
   const groups = { create: [], update: [], conflict: [] }
@@ -251,6 +466,20 @@ const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.fiel
 const hasProcessingDocs = computed(() => (store.pendingDocs || []).some((doc) => doc.status === 'processing'))
 const isApprovingSelectedDoc = computed(() => !!selectedDoc.value?.id && approvingPendingId.value === selectedDoc.value.id)
 const mergeResolvingCount = computed(() => Object.keys(resolvingMergeKeys).length)
+const hasLibraryContent = computed(() => libraryItems.value.length > 0)
+const styleProfiles = computed(() => libraryItems.value.filter((item) => item.doc_type === 'style_profile'))
+const activeStyleVersionText = computed(() => {
+  const active = styleProfiles.value.find((item) => item.is_active)
+  return active ? `v${active.version}` : '未设置'
+})
+const libraryGroups = computed(() =>
+  LIBRARY_GROUPS
+    .map((group) => ({
+      ...group,
+      items: libraryItems.value.filter((item) => item.doc_type === group.docType),
+    }))
+    .filter((group) => group.items.length)
+)
 
 const fieldLabels = {
   identity: '身份',
@@ -306,6 +535,44 @@ function resolutionActionLabel(action) {
   return labels[action] || action
 }
 
+function formatTimestamp(value) {
+  if (!value) return '-'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', { hour12: false })
+}
+
+function formatJson(value) {
+  if (value == null) return '-'
+  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
+}
+
+function formatValue(value) {
+  if (value == null || value === '') return ''
+  if (typeof value === 'string') return value
+  return JSON.stringify(value, null, 2)
+}
+
+function toList(value) {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => formatValue(item)).filter(Boolean)
+}
+
+function styleSummaryItems(profile) {
+  const config = profile?.style_config || {}
+  const items = []
+  if (config.perspective) items.push({ label: '叙事视角', value: config.perspective })
+  if (config.pacing) items.push({ label: '节奏', value: config.pacing })
+  if (config.tone) items.push({ label: '整体气质', value: config.tone })
+  const writingRules = toList(config.writing_rules)
+  if (writingRules.length) items.push({ label: '写作规则', value: writingRules.join('\n') })
+  const boundaries = toList(config.style_boundary)
+  if (boundaries.length) items.push({ label: '风格边界', value: boundaries.join('\n') })
+  const vocabulary = toList(config.vocabulary_preferences)
+  if (vocabulary.length) items.push({ label: '偏好词汇', value: vocabulary.join(' / ') })
+  return items
+}
+
 function readFile(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -348,17 +615,6 @@ function showDetail(doc) {
   selectedDoc.value = doc
   initializeConflictSelections(doc)
   detailVisible.value = true
-}
-
-function formatJson(value) {
-  if (value == null) return '-'
-  return typeof value === 'string' ? value : JSON.stringify(value, null, 2)
-}
-
-function formatValue(value) {
-  if (value == null || value === '') return ''
-  if (typeof value === 'string') return value
-  return JSON.stringify(value, null, 2)
 }
 
 function visibleChanges(entity) {
@@ -419,6 +675,22 @@ function syncSelectedDocFromStore(id) {
   selectedDoc.value = null
 }
 
+async function fetchLibrary() {
+  if (!store.novelId) {
+    libraryItems.value = []
+    return
+  }
+  libraryLoading.value = true
+  try {
+    const library = await getDocumentLibrary(store.novelId)
+    libraryItems.value = library.items || []
+  } catch {
+    libraryItems.value = []
+  } finally {
+    libraryLoading.value = false
+  }
+}
+
 async function upload() {
   if (!selectedFiles.value.length) return
   uploading.value = true
@@ -426,7 +698,7 @@ async function upload() {
     uploadSummary.value = await uploadDocumentsBatch(store.novelId, selectedFiles.value, 3)
     const accepted = uploadSummary.value.accepted ?? uploadSummary.value.succeeded ?? 0
     ElMessage.success(`导入任务已提交：${accepted} 个`)
-    await store.fetchDocuments()
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
   } finally {
     uploading.value = false
     selectedFiles.value = []
@@ -445,7 +717,7 @@ async function approve(id) {
   }
   try {
     await approvePending(store.novelId, id, fieldResolutions)
-    await store.fetchDocuments()
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
     syncSelectedDocFromStore(id)
     ElMessage.success(hasMergeResolution ? '自动合并完成' : '已批准')
   } finally {
@@ -465,14 +737,48 @@ async function reject(id) {
       detailVisible.value = false
       selectedDoc.value = null
     }
-    await store.fetchDocuments()
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
   } finally {
     rejectingPendingId.value = ''
   }
 }
 
+async function removeFailedRecord(id) {
+  if (deletingPendingId.value) return
+  deletingPendingId.value = id
+  try {
+    await deletePendingDoc(store.novelId, id)
+    ElMessage.success('已删除失败记录')
+    clearResolvingMergeKeys()
+    if (selectedDoc.value?.id === id) {
+      detailVisible.value = false
+      selectedDoc.value = null
+    }
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
+  } finally {
+    deletingPendingId.value = ''
+  }
+}
+
+async function activateStyleVersion(version) {
+  if (!store.novelId || rollingBackVersion.value) return
+  rollingBackVersion.value = version
+  try {
+    await rollbackStyleProfile(store.novelId, version)
+    await fetchLibrary()
+    ElMessage.success(`已切换到文风版本 v${version}`)
+  } finally {
+    rollingBackVersion.value = null
+  }
+}
+
 function fetchIfReady() {
-  if (store.novelId) store.fetchDocuments()
+  if (!store.novelId) {
+    libraryItems.value = []
+    return
+  }
+  store.fetchDocuments()
+  fetchLibrary()
 }
 
 function stopDocumentPolling() {
@@ -493,6 +799,7 @@ onMounted(fetchIfReady)
 onBeforeUnmount(stopDocumentPolling)
 watch(() => store.novelId, () => {
   stopDocumentPolling()
+  uploadSummary.value = null
   fetchIfReady()
 })
 watch(hasProcessingDocs, (processing) => {

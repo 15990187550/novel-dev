@@ -1,5 +1,5 @@
 <template>
-  <aside class="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+  <aside class="surface-card surface-card--soft p-4">
     <div class="mb-4">
       <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Outline</div>
       <h2 class="mt-2 text-xl font-semibold text-gray-900">大纲规划</h2>
@@ -15,10 +15,10 @@
         v-for="item in items"
         :key="item.key || `${item.outline_type}:${item.outline_ref}`"
         type="button"
-        class="w-full rounded-2xl border px-4 py-3 text-left transition"
+        class="w-full rounded-2xl border px-4 py-3 text-left transition duration-200"
         :class="item.isCurrent
-          ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
-          : 'border-gray-200 bg-white text-gray-900 hover:border-slate-300 hover:bg-slate-50'"
+          ? 'border-teal-900 bg-gradient-to-br from-slate-900 via-slate-800 to-teal-900 text-white shadow-sm'
+          : 'border-gray-200 bg-white/80 text-gray-900 hover:-translate-y-0.5 hover:border-slate-300 hover:bg-slate-50'"
         @click="$emit('select', item)"
       >
         <div class="flex items-start justify-between gap-3">

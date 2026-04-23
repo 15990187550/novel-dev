@@ -13,6 +13,7 @@ from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
+    PendingExtractionPayload,
     SettingDocDraftPayload,
     SettingSuggestionCardMergePayload,
     SettingSuggestionCardPayload,
@@ -191,16 +192,19 @@ class BrainstormWorkspaceService:
                 )
                 for card in entity_cards
             ]
+            legacy_pending_payloads = [
+                await self.extraction_service.build_pending_payload_from_setting_draft(
+                    novel_id,
+                    draft,
+                )
+                for draft in (workspace.setting_docs_draft or [])
+            ]
             # Legacy setting drafts are still part of final confirmation even when
-            # suggestion cards exist. Do not silently drop them.
-            pending_payloads.extend(
-                [
-                    await self.extraction_service.build_pending_payload_from_setting_draft(
-                        novel_id,
-                        draft,
-                    )
-                    for draft in (workspace.setting_docs_draft or [])
-                ]
+            # suggestion cards exist. Keep them, but avoid creating duplicate
+            # pending items for the same entity-level suggestion.
+            pending_payloads = self._merge_pending_payloads(
+                primary_payloads=pending_payloads,
+                secondary_payloads=legacy_pending_payloads,
             )
             (
                 resolved_relationships,
@@ -305,6 +309,44 @@ class BrainstormWorkspaceService:
             for card in workspace_payload.setting_suggestion_cards
             if card.status in {"active", "unresolved"}
         ]
+
+    def _merge_pending_payloads(
+        self,
+        *,
+        primary_payloads: list[PendingExtractionPayload],
+        secondary_payloads: list[PendingExtractionPayload],
+    ) -> list[PendingExtractionPayload]:
+        merged = list(primary_payloads)
+        seen_keys = {
+            key
+            for payload in primary_payloads
+            if (key := self._build_pending_payload_dedupe_key(payload)) is not None
+        }
+        for payload in secondary_payloads:
+            key = self._build_pending_payload_dedupe_key(payload)
+            if key is not None and key in seen_keys:
+                continue
+            merged.append(payload)
+            if key is not None:
+                seen_keys.add(key)
+        return merged
+
+    def _build_pending_payload_dedupe_key(
+        self,
+        payload: PendingExtractionPayload,
+    ) -> str | None:
+        proposed_entities = payload.proposed_entities or []
+        if len(proposed_entities) != 1:
+            return None
+        entity = proposed_entities[0]
+        entity_type = entity.get("type")
+        entity_name = entity.get("name")
+        if not isinstance(entity_type, str) or not isinstance(entity_name, str):
+            return None
+        normalized_name = self.extraction_service.entity_svc.entity_repo.normalize_name(entity_name)
+        if not normalized_name:
+            return None
+        return f"entity:{entity_type}:{normalized_name}"
 
     def _build_outline_key(self, outline_type: str, outline_ref: str) -> str:
         return f"{outline_type}:{outline_ref}"

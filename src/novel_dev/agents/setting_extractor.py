@@ -1,8 +1,12 @@
 from typing import List, Union
-from pydantic import BaseModel, field_validator
+
+from pydantic import BaseModel, Field, field_validator
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.services.log_service import log_service
+
+
+MAX_SINGLE_EXTRACT_CHARS = 12000
 
 
 class CharacterProfile(BaseModel):
@@ -34,6 +38,12 @@ class FactionInfo(BaseModel):
     relationship_with_protagonist: str = ""
 
 
+class LocationInfo(BaseModel):
+    name: str = ""
+    description: str = ""
+    region: str = ""
+
+
 def _stringify_structured_value(value):
     if isinstance(value, dict):
         parts = []
@@ -55,12 +65,155 @@ def _stringify_structured_value(value):
     return value
 
 
+def _split_name_and_description(text: str) -> tuple[str, str]:
+    stripped = (text or "").strip().lstrip("-*•")
+    if not stripped:
+        return "", ""
+    for separator in ("：", ":"):
+        if separator in stripped:
+            name, desc = stripped.split(separator, 1)
+            return name.strip(), desc.strip()
+    return stripped, ""
+
+
+def _coerce_faction_list(value) -> list[FactionInfo]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, dict):
+        if "name" in value:
+            return [FactionInfo.model_validate(value)]
+        return [
+            FactionInfo(name=str(key).strip(), description=_stringify_structured_value(item).strip())
+            for key, item in value.items()
+            if str(key).strip()
+        ]
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            if isinstance(item, FactionInfo):
+                result.append(item)
+                continue
+            if isinstance(item, dict):
+                result.append(FactionInfo.model_validate(item))
+                continue
+            name, desc = _split_name_and_description(str(item))
+            if name:
+                result.append(FactionInfo(name=name, description=desc))
+        return result
+
+    result = []
+    for line in str(value).splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        rel = ""
+        if "与主角关系:" in stripped:
+            prefix, suffix = stripped.split("与主角关系:", 1)
+            stripped = prefix.rstrip("（）() ").rstrip()
+            rel = suffix.rstrip("）)").strip()
+        name, desc = _split_name_and_description(stripped)
+        if name:
+            result.append(
+                FactionInfo(name=name, description=desc, relationship_with_protagonist=rel)
+            )
+    return result
+
+
+def _coerce_location_list(value) -> list[LocationInfo]:
+    if value in (None, "", []):
+        return []
+    if isinstance(value, dict):
+        if "name" in value:
+            return [LocationInfo.model_validate(value)]
+        return [
+            LocationInfo(name=str(key).strip(), description=_stringify_structured_value(item).strip())
+            for key, item in value.items()
+            if str(key).strip()
+        ]
+    if isinstance(value, list):
+        result = []
+        for item in value:
+            if isinstance(item, LocationInfo):
+                result.append(item)
+                continue
+            if isinstance(item, dict):
+                result.append(LocationInfo.model_validate(item))
+                continue
+            name, desc = _split_name_and_description(str(item))
+            if name:
+                result.append(LocationInfo(name=name, description=desc))
+        return result
+
+    result = []
+    for line in str(value).splitlines():
+        name, desc = _split_name_and_description(line)
+        if name:
+            result.append(LocationInfo(name=name, description=desc))
+    return result
+
+
+def _merge_text(current: str, incoming: str) -> str:
+    current = (current or "").strip()
+    incoming = (incoming or "").strip()
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+    if incoming in current:
+        return current
+    if current in incoming:
+        return incoming
+    return f"{current}\n{incoming}"
+
+
+def _merge_named_models(items: list[BaseModel], model_cls: type[BaseModel]) -> list[BaseModel]:
+    merged: dict[str, BaseModel] = {}
+    for item in items:
+        if not getattr(item, "name", "").strip():
+            continue
+        key = item.name.strip()
+        if key not in merged:
+            merged[key] = item
+            continue
+        current = merged[key]
+        payload = current.model_dump()
+        incoming = item.model_dump()
+        for field, incoming_value in incoming.items():
+            if field == "name":
+                continue
+            payload[field] = _merge_text(str(payload.get(field, "")), str(incoming_value or ""))
+        merged[key] = model_cls.model_validate(payload)
+    return list(merged.values())
+
+
+def _split_text_into_chunks(text: str, max_chars: int = MAX_SINGLE_EXTRACT_CHARS) -> list[str]:
+    stripped = (text or "").strip()
+    if len(stripped) <= max_chars:
+        return [stripped]
+
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_len = 0
+    for line in stripped.splitlines():
+        extra = len(line) + 1
+        if current_lines and current_len + extra > max_chars:
+            chunks.append("\n".join(current_lines).strip())
+            current_lines = []
+            current_len = 0
+        current_lines.append(line)
+        current_len += extra
+    if current_lines:
+        chunks.append("\n".join(current_lines).strip())
+    return [chunk for chunk in chunks if chunk]
+
+
 class ExtractedSetting(BaseModel):
     worldview: Union[str, dict, list] = ""
     power_system: Union[str, dict, list] = ""
-    factions: Union[str, List[FactionInfo], dict] = ""
-    character_profiles: List[CharacterProfile] = []
-    important_items: List[ImportantItem] = []
+    factions: list[FactionInfo] = Field(default_factory=list)
+    locations: list[LocationInfo] = Field(default_factory=list)
+    character_profiles: List[CharacterProfile] = Field(default_factory=list)
+    important_items: List[ImportantItem] = Field(default_factory=list)
     plot_synopsis: Union[str, dict, list] = ""
 
     @field_validator("worldview", "power_system", "plot_synopsis", mode="before")
@@ -71,35 +224,24 @@ class ExtractedSetting(BaseModel):
     @field_validator("factions", mode="before")
     @classmethod
     def _coerce_factions(cls, v):
-        if isinstance(v, dict):
-            return _stringify_structured_value(v)
-        if isinstance(v, list):
-            parts = []
-            for item in v:
-                if isinstance(item, dict):
-                    name = item.get("name", "")
-                    desc = item.get("description", "")
-                    rel = item.get("relationship_with_protagonist", "")
-                    parts.append(f"{name}: {desc}" + (f" (与主角关系: {rel})" if rel else ""))
-                else:
-                    parts.append(str(item))
-            return "\n".join(parts)
-        return v
+        return _coerce_faction_list(v)
+
+    @field_validator("locations", mode="before")
+    @classmethod
+    def _coerce_locations(cls, v):
+        return _coerce_location_list(v)
 
 
 class SettingExtractorAgent:
-    async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
-        if novel_id:
-            log_service.add_log(novel_id, "SettingExtractorAgent", f"开始提取设定，文本长度: {len(text)} 字")
-        max_chars = 24000
-        truncated = text[:max_chars]
-        prompt = (
+    def _build_prompt(self, text: str) -> str:
+        return (
             "你是一位小说设定提取专家。请从以下设定文档中提取结构化信息，"
             "返回严格符合 ExtractedSetting Schema 的 JSON。只提取文档明确写出或强烈暗示的信息，不要自行补完剧情。\n"
-            "1. worldview: 世界观概述\n"
-            "2. power_system: 修炼/力量体系\n"
-            "3. factions: 势力/宗门分布\n"
-            "4. character_profiles: 人物列表，每个人物尽量完整填写：\n"
+            "1. worldview: 世界观概述，保持精炼，抓核心层级、规则、机制\n"
+            "2. power_system: 修炼/力量体系，保持精炼，抓核心境界、规则、压制关系\n"
+            "3. factions: 势力列表，每项含 name, description, relationship_with_protagonist\n"
+            "4. locations: 地点列表，每项含 name, description, region\n"
+            "5. character_profiles: 人物列表，每个人物尽量完整填写：\n"
             "   - name: 姓名/称号\n"
             "   - identity: 身份、定位、阵营、叙事功能\n"
             "   - personality: 性格、行为方式、价值观、情绪底色\n"
@@ -114,21 +256,84 @@ class SettingExtractorAgent:
             "   - conflict: 核心矛盾、阻碍、敌对关系\n"
             "   - arc: 人物成长/转变方向\n"
             "   - notes: 其他无法归类但对正文写作有用的信息\n"
-            "5. important_items: 重要物品列表（每件含 name, description, significance）\n"
-            "6. plot_synopsis: 剧情梗概\n\n"
+            "6. important_items: 重要物品列表（每件含 name, description, significance）\n"
+            "7. plot_synopsis: 剧情梗概，保持精炼\n\n"
             "要求：\n"
+            "- factions 和 locations 必须返回数组，不要把整张表原样塞进一个长字符串。\n"
+            "- 对长文档优先抽取最关键、最可复用的信息，避免逐字复述原文。\n"
             "- 人物字段不要只写一句泛泛概括；同一人物在文档中出现多次时要整合信息。\n"
             "- 没有依据的字段留空字符串，不要编造。\n"
             "- relationships 要优先记录人物之间的具体关系和立场。\n"
             "- ability/realm/resources/secrets/conflict/arc 只要文档有线索就提取。\n\n"
-            f"文档内容：\n\n{truncated}"
+            f"文档内容：\n\n{text}"
         )
-        result = await call_and_parse_model(
-            "SettingExtractorAgent", "extract_setting", prompt, ExtractedSetting, max_retries=3, novel_id=novel_id,
+
+    async def _extract_chunk(self, text: str, novel_id: str = "") -> ExtractedSetting:
+        prompt = self._build_prompt(text)
+        return await call_and_parse_model(
+            "SettingExtractorAgent",
+            "extract_setting",
+            prompt,
+            ExtractedSetting,
+            max_retries=3,
+            novel_id=novel_id,
         )
+
+    def _merge_results(self, parts: list[ExtractedSetting]) -> ExtractedSetting:
+        worldview = ""
+        power_system = ""
+        plot_synopsis = ""
+        factions: list[FactionInfo] = []
+        locations: list[LocationInfo] = []
+        characters: list[CharacterProfile] = []
+        items: list[ImportantItem] = []
+
+        for part in parts:
+            worldview = _merge_text(worldview, str(part.worldview or ""))
+            power_system = _merge_text(power_system, str(part.power_system or ""))
+            plot_synopsis = _merge_text(plot_synopsis, str(part.plot_synopsis or ""))
+            factions.extend(part.factions)
+            locations.extend(part.locations)
+            characters.extend(part.character_profiles)
+            items.extend(part.important_items)
+
+        return ExtractedSetting(
+            worldview=worldview,
+            power_system=power_system,
+            factions=_merge_named_models(factions, FactionInfo),
+            locations=_merge_named_models(locations, LocationInfo),
+            character_profiles=_merge_named_models(characters, CharacterProfile),
+            important_items=_merge_named_models(items, ImportantItem),
+            plot_synopsis=plot_synopsis,
+        )
+
+    async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
         if novel_id:
             log_service.add_log(
-                novel_id, "SettingExtractorAgent",
-                f"设定提取完成: 人物 {len(result.character_profiles)} 个, 物品 {len(result.important_items)} 个"
+                novel_id,
+                "SettingExtractorAgent",
+                f"开始提取设定，文本长度: {len(text)} 字",
+            )
+
+        chunks = _split_text_into_chunks(text, max_chars=MAX_SINGLE_EXTRACT_CHARS)
+        if novel_id and len(chunks) > 1:
+            log_service.add_log(
+                novel_id,
+                "SettingExtractorAgent",
+                f"长文档分段提取: {len(chunks)} 段",
+            )
+
+        extracted_parts = []
+        for chunk in chunks:
+            extracted_parts.append(await self._extract_chunk(chunk, novel_id))
+
+        result = extracted_parts[0] if len(extracted_parts) == 1 else self._merge_results(extracted_parts)
+        if novel_id:
+            log_service.add_log(
+                novel_id,
+                "SettingExtractorAgent",
+                "设定提取完成: "
+                f"势力 {len(result.factions)} 个, 地点 {len(result.locations)} 个, "
+                f"人物 {len(result.character_profiles)} 个, 物品 {len(result.important_items)} 个",
             )
         return result

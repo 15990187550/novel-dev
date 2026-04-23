@@ -1115,6 +1115,84 @@ async def test_submit_workspace_includes_legacy_setting_drafts_when_active_cards
 
 
 @pytest.mark.asyncio
+async def test_submit_workspace_dedupes_legacy_setting_drafts_against_matching_suggestion_cards(
+    async_session,
+):
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        "novel_submit_cards_deduped_legacy_drafts",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id="novel_submit_cards_deduped_legacy_drafts",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_setting_drafts(
+        "novel_submit_cards_deduped_legacy_drafts",
+        [
+            {
+                "draft_id": "draft_1",
+                "source_outline_ref": "synopsis",
+                "source_kind": "character",
+                "target_import_mode": "explicit_type",
+                "target_doc_type": "concept",
+                "title": "林风",
+                "content": "青云宗外门弟子，背负血仇。",
+                "order_index": 1,
+            }
+        ],
+    )
+    await service.merge_suggestion_cards(
+        "novel_submit_cards_deduped_legacy_drafts",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_char",
+                "card_type": "character",
+                "merge_key": "character:lin-feng",
+                "title": "林风",
+                "summary": "主角建议卡",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {
+                    "canonical_name": "林风",
+                    "identity": "外门弟子",
+                    "goal": "改命",
+                },
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace("novel_submit_cards_deduped_legacy_drafts")
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel(
+        "novel_submit_cards_deduped_legacy_drafts"
+    )
+
+    assert result.pending_setting_count == 1
+    assert len(pending) == 1
+    assert pending[0].source_filename == "brainstorm-character:lin-feng.md"
+
+
+@pytest.mark.asyncio
 async def test_submit_workspace_relationship_count_collects_unresolved_card_warnings(
     async_session,
 ):

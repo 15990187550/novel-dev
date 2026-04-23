@@ -5,9 +5,15 @@
       :key="panel.id"
       :to="panel.route"
       class="dashboard-status-card"
-      :class="{ 'is-error': panel.panelState === 'error' }"
+      :class="[
+        { 'is-error': panel.panelState === 'error' },
+        `is-${panel.panelState}`,
+      ]"
     >
-      <span class="dashboard-status-card__label">{{ panel.label }}</span>
+      <div class="dashboard-status-card__topline">
+        <span class="dashboard-status-card__label">{{ panel.label }}</span>
+        <span class="dashboard-status-card__state">{{ panelStateText(panel.panelState) }}</span>
+      </div>
       <strong class="dashboard-status-card__title">{{ panel.title }}</strong>
       <p class="dashboard-status-card__detail">{{ panel.detail }}</p>
       <span class="dashboard-status-card__meta">{{ panel.meta }}</span>
@@ -31,5 +37,15 @@ const normalizedPanels = computed(() => props.panels.map((panel, index) => ({
   route: panel?.route || '/dashboard',
   panelState: panel?.panelState || panel?.state || 'ok',
 })))
-</script>
 
+function panelStateText(state) {
+  switch (state) {
+    case 'error':
+      return '异常'
+    case 'warning':
+      return '注意'
+    default:
+      return '正常'
+  }
+}
+</script>

@@ -1,5 +1,33 @@
 <template>
-  <div class="space-y-4">
+  <div class="space-y-6">
+    <section class="page-header">
+      <div>
+        <div class="page-header__eyebrow">Outline Workbench</div>
+        <h1 class="page-header__title">大纲规划</h1>
+        <p class="page-header__description">
+          左侧管理总纲与卷纲，右侧集中查看详情、对话优化和脑爆工作区草稿。
+        </p>
+      </div>
+      <div class="page-header__meta-grid">
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">大纲项</span>
+          <span class="page-header__meta-value">{{ workbenchItems.length }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">设定草稿</span>
+          <span class="page-header__meta-value">{{ settingDrafts.length }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">建议卡</span>
+          <span class="page-header__meta-value">{{ suggestionCardCount }}</span>
+        </div>
+        <div class="page-header__meta-card">
+          <span class="page-header__meta-label">当前模式</span>
+          <span class="page-header__meta-value">{{ isBrainstormWorkspaceMode ? '脑爆工作区' : '标准规划' }}</span>
+        </div>
+      </div>
+    </section>
+
     <div class="flex flex-wrap items-end justify-between gap-4">
       <div>
         <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Workbench</div>
@@ -18,7 +46,7 @@
 
     <div
       v-if="isBrainstormWorkspaceMode"
-      class="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-emerald-200 bg-emerald-50 px-5 py-4"
+      class="flex flex-wrap items-center justify-between gap-3 rounded-[1.6rem] border border-emerald-200 bg-gradient-to-r from-emerald-50 via-white to-teal-50 px-5 py-4 shadow-sm"
     >
       <div>
         <div class="text-sm font-semibold text-emerald-900">脑爆工作区</div>
@@ -40,7 +68,7 @@
       </button>
     </div>
 
-    <div v-if="!store.novelId" class="rounded-3xl border border-dashed border-gray-300 bg-gray-50 px-6 py-12 text-center text-gray-500">
+    <div v-if="!store.novelId" class="surface-card rounded-[1.6rem] border-dashed px-6 py-12 text-center text-gray-500">
       请先选择小说
     </div>
 
@@ -52,26 +80,9 @@
         {{ store.outlineWorkbench.error }}
       </div>
 
-      <div class="grid gap-4 xl:grid-cols-[300px_minmax(0,1fr)]">
-        <OutlineSidebar :items="sidebarItems" @select="handleSelect" />
-
-        <div class="space-y-4">
-          <OutlineDetailPanel :detail="detailPanel" :create-action="null" @create="handleCreate" />
-          <OutlineConversation
-            :messages="store.outlineWorkbench.messages"
-            :submitting="store.outlineWorkbench.submitting"
-            :disabled="conversationDisabled"
-            :current-title="selectedItem?.title || detailPanel?.title || ''"
-            :submit-label="conversationSubmitLabel"
-            :allow-empty-submit="allowEmptyConversationSubmit"
-            @submit-feedback="handleSubmit"
-          />
-        </div>
-      </div>
-
       <section
         v-if="isBrainstormWorkspaceMode"
-        class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm"
+        class="surface-card surface-card--soft p-5"
       >
         <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">Setting Drafts</div>
         <h2 class="mt-2 text-xl font-semibold text-gray-900">设定草稿</h2>
@@ -113,6 +124,23 @@
         :last-round-summary="store.brainstormWorkspace.lastRoundSummary"
         :submit-warnings="store.brainstormWorkspace.data?.submit_warnings || []"
       />
+
+      <div class="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <OutlineSidebar :items="sidebarItems" @select="handleSelect" />
+
+        <div class="space-y-4">
+          <OutlineDetailPanel :detail="detailPanel" :create-action="null" @create="handleCreate" />
+          <OutlineConversation
+            :messages="store.outlineWorkbench.messages"
+            :submitting="store.outlineWorkbench.submitting"
+            :disabled="conversationDisabled"
+            :current-title="selectedItem?.title || detailPanel?.title || ''"
+            :submit-label="conversationSubmitLabel"
+            :allow-empty-submit="allowEmptyConversationSubmit"
+            @submit-feedback="handleSubmit"
+          />
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -134,6 +162,12 @@ const isBrainstormWorkspaceMode = computed(() => (
 
 const settingDrafts = computed(() => (
   store.brainstormWorkspace.data?.setting_docs_draft || []
+))
+
+const suggestionCardCount = computed(() => (
+  Array.isArray(store.brainstormWorkspace.data?.setting_suggestion_cards)
+    ? store.brainstormWorkspace.data.setting_suggestion_cards.length
+    : 0
 ))
 
 const activeSelection = computed(() => (

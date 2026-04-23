@@ -1,5 +1,5 @@
 <template>
-  <section class="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm">
+  <section class="surface-card p-5">
     <OutlineEmptyState
       v-if="!detail"
       title="选择左侧大纲开始查看"
@@ -12,7 +12,7 @@
       :description="detail.emptyDescription || '可以直接在下方输入修改意见，要求系统先生成本卷卷纲。'"
     />
 
-    <div v-if="detail?.status === 'missing' && createAction" class="mt-4 rounded-2xl border border-gray-200 bg-gray-50 px-4 py-4">
+    <div v-if="detail?.status === 'missing' && createAction" class="mt-4 rounded-2xl border border-gray-200 bg-gray-50/90 px-4 py-4">
       <div class="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div class="text-sm font-medium text-gray-900">{{ createAction.title || '立即创建' }}</div>
@@ -25,7 +25,7 @@
         </div>
         <button
           type="button"
-          class="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:bg-slate-300"
+          class="rounded-full bg-slate-900 px-5 py-2.5 text-sm font-medium text-white transition duration-200 hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:bg-slate-300"
           :disabled="createAction.disabled || createAction.loading"
           @click="$emit('create')"
         >
@@ -54,7 +54,7 @@
         <div
           v-for="item in detail.meta"
           :key="item.label"
-          class="rounded-2xl bg-gray-50 px-4 py-3"
+          class="rounded-2xl border border-white/60 bg-gray-50/90 px-4 py-3"
         >
           <div class="text-xs uppercase tracking-wide text-gray-400">{{ item.label }}</div>
           <div class="mt-1 text-sm font-medium text-gray-800">{{ item.value }}</div>
@@ -75,7 +75,7 @@
         <article
           v-for="section in detail.sections"
           :key="section.title"
-          class="rounded-2xl border border-gray-200 px-4 py-4"
+          class="rounded-2xl border border-gray-200 bg-white/65 px-4 py-4"
         >
           <h4 class="text-sm font-semibold text-gray-900">{{ section.title }}</h4>
           <p v-if="section.text" class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-600">
@@ -87,13 +87,13 @@
         </article>
       </div>
 
-      <div v-if="detail.chapters?.length" class="rounded-2xl border border-gray-200 px-4 py-4">
+      <div v-if="detail.chapters?.length" class="rounded-2xl border border-gray-200 bg-white/65 px-4 py-4">
         <h4 class="text-sm font-semibold text-gray-900">章节摘要</h4>
         <div class="mt-3 space-y-3">
           <div
             v-for="chapter in detail.chapters"
             :key="chapter.chapter_id || chapter.chapter_number || chapter.title"
-            class="rounded-2xl bg-gray-50 px-4 py-3"
+            class="rounded-2xl border border-white/60 bg-gray-50/90 px-4 py-3"
           >
             <div class="text-sm font-medium text-gray-900">
               {{ chapter.title || `第${chapter.chapter_number}章` }}
@@ -105,7 +105,7 @@
         </div>
       </div>
 
-      <details v-if="detail.rawSnapshot" class="rounded-2xl border border-gray-200 px-4 py-3">
+      <details v-if="detail.rawSnapshot" class="rounded-2xl border border-gray-200 bg-white/65 px-4 py-3">
         <summary class="cursor-pointer text-sm font-medium text-gray-700">查看原始结构化结果</summary>
         <pre class="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-2xl bg-gray-50 p-3 text-xs leading-6 text-gray-600">{{ JSON.stringify(detail.rawSnapshot, null, 2) }}</pre>
       </details>

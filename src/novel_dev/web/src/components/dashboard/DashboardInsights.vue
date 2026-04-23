@@ -14,7 +14,10 @@
 
     <div class="dashboard-insights__grid">
       <section class="dashboard-insights__panel">
-        <h3 class="dashboard-insights__panel-title">最近更新</h3>
+        <div class="dashboard-insights__panel-header">
+          <h3 class="dashboard-insights__panel-title">最近更新</h3>
+          <span class="dashboard-insights__panel-badge">{{ recentUpdates.length }}</span>
+        </div>
         <div class="dashboard-insights__links">
           <RouterLink
             v-for="(item, index) in recentUpdates"
@@ -29,7 +32,10 @@
       </section>
 
       <section class="dashboard-insights__panel">
-        <h3 class="dashboard-insights__panel-title">风险提醒</h3>
+        <div class="dashboard-insights__panel-header">
+          <h3 class="dashboard-insights__panel-title">风险提醒</h3>
+          <span class="dashboard-insights__panel-badge dashboard-insights__panel-badge--warn">{{ risks.length }}</span>
+        </div>
         <div class="dashboard-insights__links">
           <RouterLink
             v-for="(item, index) in risks"
@@ -44,7 +50,10 @@
       </section>
 
       <section class="dashboard-insights__panel">
-        <h3 class="dashboard-insights__panel-title">最近日志</h3>
+        <div class="dashboard-insights__panel-header">
+          <h3 class="dashboard-insights__panel-title">最近日志</h3>
+          <span class="dashboard-insights__panel-badge">{{ recentLogs.length }}</span>
+        </div>
         <ul class="dashboard-insights__list dashboard-insights__list--logs">
           <li v-for="(log, index) in recentLogs" :key="`${log.timestamp || log.message || index}`" class="dashboard-insights__item">
             <span class="dashboard-insights__item-label">{{ log.agent || log.level || '日志' }}</span>
@@ -54,7 +63,10 @@
       </section>
 
       <section class="dashboard-insights__panel">
-        <h3 class="dashboard-insights__panel-title">快捷链接</h3>
+        <div class="dashboard-insights__panel-header">
+          <h3 class="dashboard-insights__panel-title">快捷链接</h3>
+          <span class="dashboard-insights__panel-badge">{{ links.length }}</span>
+        </div>
         <div class="dashboard-insights__links">
           <RouterLink
             v-for="(link, index) in links"

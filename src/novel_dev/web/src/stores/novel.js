@@ -66,6 +66,12 @@ const createBrainstormWorkspaceState = () => ({
   requestToken: 0,
 })
 
+const createPendingDocActionState = () => ({
+  approvingPendingId: '',
+  rejectingPendingId: '',
+  deletingPendingId: '',
+})
+
 const clearSupplementalForPanel = (store, panel) => {
   switch (panel) {
     case 'entities':
@@ -271,6 +277,7 @@ export const useNovelStore = defineStore('novel', {
     spacelines: [],
     foreshadowings: [],
     pendingDocs: [],
+    pendingDocActions: createPendingDocActionState(),
     outlineWorkbench: createOutlineWorkbenchState(),
     brainstormWorkspace: createBrainstormWorkspaceState(),
     loadingActions: {},
@@ -312,6 +319,7 @@ export const useNovelStore = defineStore('novel', {
       this.timelines = []
       this.foreshadowings = []
       this.pendingDocs = []
+      this.pendingDocActions = createPendingDocActionState()
       this.dashboardPanels = createDashboardPanels()
       this.dashboardLastUpdated = ''
     },

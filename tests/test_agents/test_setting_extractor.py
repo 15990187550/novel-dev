@@ -2,7 +2,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from novel_dev.agents.setting_extractor import SettingExtractorAgent, ExtractedSetting
+from novel_dev.agents.setting_extractor import (
+    SettingExtractorAgent,
+    ExtractedSetting,
+    FactionInfo,
+    LocationInfo,
+    CharacterProfile,
+    ImportantItem,
+)
 from novel_dev.llm.models import LLMResponse
 
 
@@ -114,3 +121,76 @@ async def test_extract_retry_then_success():
 
     assert result.worldview == "大陆"
     assert mock_client.acomplete.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_extract_coerces_string_factions_and_locations_to_structured_lists():
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text="""{
+  "worldview": "真实界",
+  "power_system": "正统修炼",
+  "factions": "玄天宗: 正道魁首 (与主角关系: 庇护)\\n大雷音寺: 佛门领袖",
+  "locations": "天都: 中土第一城\\n灵山: 大雷音寺所在",
+  "character_profiles": [],
+  "important_items": [],
+  "plot_synopsis": ""
+}"""
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = SettingExtractorAgent()
+        result = await agent.extract("任意文本")
+
+    assert result.factions == [
+        FactionInfo(name="玄天宗", description="正道魁首", relationship_with_protagonist="庇护"),
+        FactionInfo(name="大雷音寺", description="佛门领袖", relationship_with_protagonist=""),
+    ]
+    assert result.locations == [
+        LocationInfo(name="天都", description="中土第一城", region=""),
+        LocationInfo(name="灵山", description="大雷音寺所在", region=""),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_extract_long_text_splits_and_merges_results():
+    first = ExtractedSetting(
+        worldview="真实界是万界中心",
+        power_system="正统修炼体系",
+        factions=[FactionInfo(name="玄天宗", description="正道魁首")],
+        locations=[LocationInfo(name="天都", description="中土第一城")],
+        character_profiles=[CharacterProfile(name="陆照", identity="主角")],
+        important_items=[ImportantItem(name="道经", description="核心传承", significance="金手指")],
+        plot_synopsis="陆照入宗",
+    )
+    second = ExtractedSetting(
+        worldview="诸天万界依附真实界",
+        power_system="系统外挂会被压制",
+        factions=[FactionInfo(name="大雷音寺", description="佛门领袖")],
+        locations=[LocationInfo(name="灵山", description="佛门圣地")],
+        character_profiles=[CharacterProfile(name="佛祖", identity="最终竞争者")],
+        important_items=[ImportantItem(name="佛骨舍利", description="佛门圣物", significance="关键圣物")],
+        plot_synopsis="陆照诸天历练",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=first.model_dump_json()),
+        LLMResponse(text=second.model_dump_json()),
+    ]
+
+    long_text = ("# 第一部分\n" + ("设定说明\n" * 1800) + "# 第二部分\n" + ("更多设定\n" * 1800))
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = SettingExtractorAgent()
+        result = await agent.extract(long_text)
+
+    assert mock_client.acomplete.call_count == 2
+    assert "真实界是万界中心" in result.worldview
+    assert "诸天万界依附真实界" in result.worldview
+    assert [item.name for item in result.factions] == ["玄天宗", "大雷音寺"]
+    assert [item.name for item in result.locations] == ["天都", "灵山"]
+    assert [item.name for item in result.character_profiles] == ["陆照", "佛祖"]
+    assert [item.name for item in result.important_items] == ["道经", "佛骨舍利"]

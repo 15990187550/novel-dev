@@ -44,7 +44,6 @@ class NovelDeletionService:
         await self.session.execute(
             delete(EntityRelationship).where(EntityRelationship.novel_id == novel_id)
         )
-        await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))
         await self.session.execute(delete(Timeline).where(Timeline.novel_id == novel_id))
         await self.session.execute(delete(Spaceline).where(Spaceline.novel_id == novel_id))
         await self.session.execute(delete(Foreshadowing).where(Foreshadowing.novel_id == novel_id))
@@ -60,6 +59,7 @@ class NovelDeletionService:
             delete(PendingExtraction).where(PendingExtraction.novel_id == novel_id)
         )
         await self.session.execute(delete(Entity).where(Entity.novel_id == novel_id))
+        await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))
         await self.session.execute(delete(NovelState).where(NovelState.novel_id == novel_id))
         await self.session.commit()
         shutil.rmtree(self.markdown_output_dir / novel_id, ignore_errors=True)

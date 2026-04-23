@@ -268,6 +268,70 @@ describe('VolumePlan', () => {
     expect(store.submitBrainstormWorkspace).toHaveBeenCalledTimes(1)
   })
 
+  it('renders brainstorm draft panels before the main workbench', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [
+        {
+          draft_id: 'draft-1',
+          source_outline_ref: 'synopsis',
+          source_kind: 'character',
+          target_import_mode: 'explicit_type',
+          target_doc_type: 'concept',
+          title: '林风',
+          content: '青云宗外门弟子',
+          order_index: 1,
+        },
+      ],
+      setting_suggestion_cards: [
+        {
+          card_id: 'card-1',
+          card_type: 'character',
+          merge_key: 'character:lin-feng',
+          title: '林风',
+          summary: '建议补充：他的主要动机与关键成长节点。',
+          status: 'unresolved',
+          source_outline_refs: ['synopsis'],
+          display_order: 1,
+        },
+      ],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: { template: '<div>OUTLINE SIDEBAR</div>' },
+          OutlineDetailPanel: { template: '<div>OUTLINE DETAIL</div>' },
+          OutlineConversation: { template: '<div>OUTLINE CONVERSATION</div>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const text = wrapper.text()
+    expect(text.indexOf('设定草稿')).toBeGreaterThan(-1)
+    expect(text.indexOf('设定建议卡')).toBeGreaterThan(-1)
+    expect(text.indexOf('设定草稿')).toBeLessThan(text.indexOf('OUTLINE SIDEBAR'))
+    expect(text.indexOf('设定建议卡')).toBeLessThan(text.indexOf('OUTLINE SIDEBAR'))
+  })
+
   it('renders brainstorm submit warnings from workspace data', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

@@ -1,10 +1,10 @@
 <template>
-  <div v-if="!store.novelId" class="rounded-2xl border border-dashed border-gray-300 bg-white/70 px-6 py-16 text-center text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-800/60 dark:text-gray-300">
+  <div v-if="!store.novelId" class="surface-card rounded-[1.6rem] border-dashed px-6 py-16 text-center text-gray-500 dark:text-gray-300">
     <p class="text-lg font-semibold text-gray-700 dark:text-gray-100">请从侧边栏选择或输入一个小说 ID</p>
     <p class="mt-2 text-sm">选中小说后，这里会展示总览、状态卡、实时日志和推荐动作。</p>
   </div>
 
-  <main v-else class="space-y-6">
+  <main v-else class="space-y-8">
     <DashboardHero
       :title="store.novelTitle"
       :phase-label="store.currentPhaseLabel"

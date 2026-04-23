@@ -15,17 +15,31 @@ function createDeferred() {
   return { promise, resolve, reject }
 }
 
-const { approvePendingMock, uploadDocumentsBatchMock, rejectPendingMock, successMessageMock } = vi.hoisted(() => ({
+const {
+  approvePendingMock,
+  deletePendingDocMock,
+  uploadDocumentsBatchMock,
+  rejectPendingMock,
+  getDocumentLibraryMock,
+  rollbackStyleProfileMock,
+  successMessageMock,
+} = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
+  deletePendingDocMock: vi.fn(),
   uploadDocumentsBatchMock: vi.fn(),
   rejectPendingMock: vi.fn(),
+  getDocumentLibraryMock: vi.fn(),
+  rollbackStyleProfileMock: vi.fn(),
   successMessageMock: vi.fn(),
 }))
 
 vi.mock('@/api.js', () => ({
   approvePending: approvePendingMock,
+  deletePendingDoc: deletePendingDocMock,
   uploadDocumentsBatch: uploadDocumentsBatchMock,
   rejectPending: rejectPendingMock,
+  getDocumentLibrary: getDocumentLibraryMock,
+  rollbackStyleProfile: rollbackStyleProfileMock,
 }))
 
 vi.mock('element-plus', () => ({
@@ -104,6 +118,8 @@ describe('Documents', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.clearAllMocks()
+    getDocumentLibraryMock.mockResolvedValue({ items: [], active_style_profile_version: null })
+    rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
   })
 
   function mountView() {
@@ -221,6 +237,88 @@ describe('Documents', () => {
     expect(settledButtons[1].attributes('disabled')).toBeUndefined()
     expect(store.fetchDocuments).toHaveBeenCalled()
     expect(successMessageMock).toHaveBeenCalledWith('已批准')
+  })
+
+  it('keeps approve loading state after remount while the same request is still pending', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-1', source_filename: '设定一.md', extraction_type: 'setting', status: 'pending', created_at: '2026-04-22T00:00:00Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const deferred = createDeferred()
+    approvePendingMock.mockReturnValue(deferred.promise)
+
+    const firstWrapper = mountView()
+    await flushPromises()
+
+    const firstApproveButton = firstWrapper.findAll('.el-button-stub').find((button) => button.text() === '批准')
+    await firstApproveButton.trigger('click')
+    await nextTick()
+
+    expect(firstWrapper.findAll('.el-button-stub').find((button) => ['批准', '批准中...'].includes(button.text())).text()).toBe('批准中...')
+
+    firstWrapper.unmount()
+
+    const secondWrapper = mountView()
+    await flushPromises()
+
+    const secondApproveButton = secondWrapper.findAll('.el-button-stub').find((button) => ['批准', '批准中...'].includes(button.text()))
+    expect(secondApproveButton.text()).toBe('批准中...')
+    expect(secondApproveButton.attributes('data-loading')).toBe('true')
+
+    deferred.resolve({ documents: [] })
+    await flushPromises()
+
+    const settledButton = secondWrapper.findAll('.el-button-stub').find((button) => button.text() === '批准')
+    expect(settledButton.attributes('data-loading')).toBe('false')
+  })
+
+  it('renders imported setting docs and style profile in the library section', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'world-1',
+          doc_type: 'worldview',
+          title: '世界观',
+          content: '天玄大陆，万族林立。',
+          version: 1,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+        },
+        {
+          id: 'style-2',
+          doc_type: 'style_profile',
+          title: '{"perspective":"limited","tone":"热血","writing_rules":["短句推进"]}',
+          content: '轻快吐槽里包着热血推进。',
+          version: 2,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+          style_config: {
+            perspective: 'limited',
+            tone: '热血',
+            writing_rules: ['短句推进'],
+          },
+        },
+      ],
+      active_style_profile_version: 2,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前资料库')
+    expect(wrapper.text()).toContain('天玄大陆，万族林立。')
+    expect(wrapper.text()).toContain('文风档案')
+    expect(wrapper.text()).toContain('轻快吐槽里包着热血推进。')
+    expect(wrapper.text()).toContain('当前生效')
+    expect(wrapper.text()).toContain('短句推进')
   })
 
   it('renders 导入中 for processing rows restored after remount', async () => {
@@ -341,6 +439,29 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('自动合并')
     expect(wrapper.text()).toContain('已写入')
     expect(successMessageMock).toHaveBeenCalledWith('自动合并完成')
+  })
+
+  it('shows delete for failed rows and removes the record after deletion', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-failed', source_filename: '诸天万界.md', extraction_type: 'setting', status: 'failed', created_at: '2026-04-23T09:43:45Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    deletePendingDocMock.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const deleteButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '删除')
+    expect(deleteButton).toBeTruthy()
+
+    await deleteButton.trigger('click')
+    await flushPromises()
+
+    expect(deletePendingDocMock).toHaveBeenCalledWith('novel-1', 'doc-failed')
+    expect(store.fetchDocuments).toHaveBeenCalled()
+    expect(successMessageMock).toHaveBeenCalledWith('已删除失败记录')
   })
 
   it('preserves conflict selections when the same document detail is reopened', async () => {

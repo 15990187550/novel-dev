@@ -67,6 +67,9 @@ FIELD_LABELS = {
     "notes": "备注",
     "description": "描述",
     "significance": "重要性",
+    "position": "定位",
+    "region": "区域",
+    "relationship_with_protagonist": "与主角关系",
 }
 
 
@@ -115,7 +118,8 @@ class ExtractionService:
         raw_result = {
             "worldview": "",
             "power_system": "",
-            "factions": "",
+            "factions": [],
+            "locations": [],
             "character_profiles": [],
             "important_items": [],
             "plot_synopsis": "",
@@ -307,6 +311,16 @@ class ExtractionService:
             if entity_diff["operation"] != "noop":
                 entity_diffs.append(entity_diff)
 
+        for faction in self._normalize_setting_entities(raw_result.get("factions")):
+            entity_diff = await self._build_entity_diff(novel_id, "faction", faction)
+            if entity_diff["operation"] != "noop":
+                entity_diffs.append(entity_diff)
+
+        for location in self._normalize_setting_entities(raw_result.get("locations")):
+            entity_diff = await self._build_entity_diff(novel_id, "location", location)
+            if entity_diff["operation"] != "noop":
+                entity_diffs.append(entity_diff)
+
         for item in raw_result.get("important_items", []):
             entity_diff = await self._build_entity_diff(novel_id, "item", item)
             if entity_diff["operation"] != "noop":
@@ -476,10 +490,12 @@ class ExtractionService:
             proposed_entities = []
             for c in extracted.character_profiles:
                 proposed_entities.append({"type": "character", "name": c.name, "data": c.model_dump()})
+            for faction in extracted.factions:
+                proposed_entities.append({"type": "faction", "name": faction.name, "data": faction.model_dump()})
+            for location in extracted.locations:
+                proposed_entities.append({"type": "location", "name": location.name, "data": location.model_dump()})
             for i in extracted.important_items:
                 proposed_entities.append({"type": "item", "name": i.name, "data": i.model_dump()})
-            if extracted.factions:
-                proposed_entities.append({"type": "faction", "name": "extracted_factions", "data": {"factions": extracted.factions}})
             diff_result = await self._build_setting_diff(novel_id, raw_result)
             return PendingExtractionPayload(
                 source_filename=filename,
@@ -561,15 +577,10 @@ class ExtractionService:
                 "position": payload.get("position", ""),
                 "description": payload.get("description", ""),
             }
-            description_lines = [canonical_name]
-            if faction_state["position"]:
-                description_lines.append(f"定位：{faction_state['position']}")
-            if faction_state["description"]:
-                description_lines.append(f"描述：{faction_state['description']}")
             return PendingExtractionPayload(
                 source_filename=f"brainstorm-{card.merge_key}.md",
                 extraction_type="setting",
-                raw_result={"factions": "\n".join(description_lines)},
+                raw_result={},
                 proposed_entities=[
                     {
                         "type": "faction",
@@ -671,6 +682,53 @@ class ExtractionService:
             state[field] = payload.get(field, "")
         return state
 
+    def _normalize_setting_entities(self, value: Any) -> list[dict[str, Any]]:
+        if value in (None, "", []):
+            return []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict) and item.get("name")]
+        if isinstance(value, dict):
+            if value.get("name"):
+                return [value]
+            return [
+                {"name": str(key).strip(), "description": self._stringify_value(item)}
+                for key, item in value.items()
+                if str(key).strip()
+            ]
+
+        result = []
+        for line in str(value).splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            for separator in ("：", ":"):
+                if separator in stripped:
+                    name, desc = stripped.split(separator, 1)
+                    result.append({"name": name.strip(), "description": desc.strip()})
+                    break
+            else:
+                result.append({"name": stripped, "description": ""})
+        return result
+
+    def _format_setting_document_value(self, key: str, value: Any) -> str:
+        if isinstance(value, str):
+            return value
+        if key == "factions":
+            rows = []
+            for item in self._normalize_setting_entities(value):
+                relation = item.get("relationship_with_protagonist", "")
+                suffix = f" (与主角关系: {relation})" if relation else ""
+                rows.append(f"{item.get('name', '')}: {item.get('description', '')}{suffix}".rstrip())
+            return "\n".join(row for row in rows if row.strip())
+        if key == "locations":
+            rows = []
+            for item in self._normalize_setting_entities(value):
+                region = item.get("region", "")
+                suffix = f" [{region}]" if region else ""
+                rows.append(f"{item.get('name', '')}: {item.get('description', '')}{suffix}".rstrip())
+            return "\n".join(row for row in rows if row.strip())
+        return str(value)
+
     async def persist_pending_payload(
         self,
         novel_id: str,
@@ -703,12 +761,13 @@ class ExtractionService:
                 ("worldview", "worldview", "世界观"),
                 ("power_system", "setting", "修炼体系"),
                 ("factions", "setting", "势力格局"),
+                ("locations", "setting", "地点设定"),
                 ("plot_synopsis", "synopsis", "剧情梗概"),
             ]
             for key, doc_type, title in mappings:
                 val = raw.get(key)
                 if val:
-                    text_val = val if isinstance(val, str) else str(val)
+                    text_val = self._format_setting_document_value(key, val)
                     doc = await self.doc_repo.create(
                         doc_id=f"doc_{uuid.uuid4().hex[:8]}",
                         novel_id=pe.novel_id,
@@ -793,6 +852,15 @@ class ExtractionService:
         deleted = await self.pending_repo.delete(pe_id)
         if deleted:
             log_service.add_log(pe.novel_id, "ExtractionService", f"已拒绝并丢弃待审核记录: {pe.source_filename or pe.id}")
+        return deleted
+
+    async def delete_failed_pending(self, pe_id: str) -> bool:
+        pe = await self.pending_repo.get_by_id(pe_id)
+        if not pe or pe.status != "failed":
+            return False
+        deleted = await self.pending_repo.delete(pe_id)
+        if deleted:
+            log_service.add_log(pe.novel_id, "ExtractionService", f"已删除失败记录: {pe.source_filename or pe.id}")
         return deleted
 
     async def get_active_style_profile(self, novel_id: str) -> Optional[NovelDocument]:
