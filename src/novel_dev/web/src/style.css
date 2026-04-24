@@ -300,8 +300,8 @@ html.dark .app-nav-link.is-active {
   --entities-danger: #f28b82;
   --entities-chip-bg: rgba(227, 232, 242, 0.08);
   --entities-chip-border: rgba(185, 196, 214, 0.16);
-  --entities-grid-label-bg: rgba(70, 84, 108, 0.68);
-  --entities-grid-content-bg: rgba(18, 30, 49, 0.92);
+  --entities-grid-label-bg: rgba(68, 81, 104, 0.78);
+  --entities-grid-content-bg: rgba(10, 18, 31, 0.98);
   --entities-info-bg: rgba(243, 247, 255, 0.06);
 }
 
@@ -490,7 +490,7 @@ html.dark .page-header__meta-card {
 .dashboard-insights__link-label {
   display: block;
   font-size: 0.75rem;
-  color: #7c8ba1;
+  color: var(--app-text-soft);
 }
 
 .dashboard-hero__stat-value,
@@ -499,7 +499,11 @@ html.dark .page-header__meta-card {
   display: block;
   margin-top: 0.45rem;
   font-size: 1.2rem;
-  color: #0f172a;
+  color: var(--app-text);
+}
+
+.dashboard-status-card__title--contrast {
+  color: var(--app-text);
 }
 
 .dashboard-hero__stat--spotlight .dashboard-hero__stat-label,
@@ -557,7 +561,7 @@ html.dark .page-header__meta-card {
   font-size: 0.72rem;
   font-weight: 700;
   background: rgba(148, 163, 184, 0.14);
-  color: #475569;
+  color: var(--app-text-muted);
 }
 
 .dashboard-insights__panel-badge--warn {
@@ -584,7 +588,7 @@ html.dark .page-header__meta-card {
 .dashboard-section-header__meta {
   margin: 0.35rem 0 0;
   font-size: 0.875rem;
-  color: #5f6c81;
+  color: var(--app-text-muted);
 }
 
 .dashboard-volume-summary__grid,
@@ -745,6 +749,10 @@ html.dark .dashboard-status-card.is-error {
 
 html.dark .dashboard-status-card.is-warning {
   background: rgba(120, 53, 15, 0.28);
+}
+
+html.dark .dashboard-status-card__title--contrast {
+  color: #f8fafc;
 }
 
 html.dark .dashboard-action-card.is-primary {

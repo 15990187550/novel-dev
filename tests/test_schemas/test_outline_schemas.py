@@ -124,3 +124,40 @@ def test_volume_score_result_bounds():
 
     with pytest.raises(ValueError):
         VolumeScoreResult(overall=101, outline_fidelity=0, character_plot_alignment=0, hook_distribution=0, foreshadowing_management=0, chapter_hooks=0, page_turning=0, summary_feedback="bad")
+
+
+def test_volume_plan_accepts_legacy_llm_field_names():
+    plan = VolumePlan.model_validate(
+        {
+            "volume_number": 1,
+            "volume_title": "第一卷 道经初鸣",
+            "description": "陆照起步，发现道经异动。",
+            "total_words": 36000,
+            "chapters": [
+                {
+                    "chapter_number": 1,
+                    "title": "藏经阁异响",
+                    "description": "陆照夜入藏经阁。",
+                    "planned_foreshadowings": ["道经印记"],
+                    "beats": [
+                        {
+                            "beat_number": 1,
+                            "description": "陆照察觉藏经阁异动。",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert plan.volume_id == "vol_1"
+    assert plan.title == "第一卷 道经初鸣"
+    assert plan.summary == "陆照起步，发现道经异动。"
+    assert plan.estimated_total_words == 36000
+    assert plan.total_chapters == 1
+    assert plan.chapters[0].chapter_id == "ch_1"
+    assert plan.chapters[0].target_word_count == 3000
+    assert plan.chapters[0].target_mood == "tense"
+    assert plan.chapters[0].foreshadowings_to_recover == ["道经印记"]
+    assert plan.chapters[0].beats[0].summary == "陆照察觉藏经阁异动。"
+    assert plan.chapters[0].beats[0].target_mood == "tense"

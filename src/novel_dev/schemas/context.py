@@ -1,6 +1,6 @@
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
 from novel_dev.schemas.similar_document import SimilarDocument
@@ -11,6 +11,31 @@ class BeatPlan(BaseModel):
     target_mood: str
     key_entities: List[str] = Field(default_factory=list)
     foreshadowings_to_embed: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "summary" not in normalized:
+            for legacy_key in ("description", "content", "beat_summary"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "target_mood" not in normalized:
+            for legacy_key in ("mood", "tone", "emotion"):
+                if legacy_key in normalized:
+                    normalized["target_mood"] = normalized[legacy_key]
+                    break
+        if "target_mood" not in normalized:
+            normalized["target_mood"] = "tense"
+        if "foreshadowings_to_embed" not in normalized:
+            for legacy_key in ("planned_foreshadowings", "foreshadowings", "embed_foreshadowings"):
+                if legacy_key in normalized:
+                    normalized["foreshadowings_to_embed"] = normalized[legacy_key]
+                    break
+        return normalized
 
     @field_validator("summary", "target_mood", mode="before")
     @classmethod

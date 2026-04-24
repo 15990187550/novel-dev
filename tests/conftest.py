@@ -49,6 +49,7 @@ def mock_llm_factory(monkeypatch):
 
     def mock_get(agent, task=None):
         from novel_dev.llm.models import LLMResponse
+        from novel_dev.agents.volume_planner import VolumePlanBlueprint
         from novel_dev.schemas.outline import VolumeScoreResult, VolumePlan, VolumeBeat
         from novel_dev.schemas.review import ScoreResult, DimensionScore
         from novel_dev.schemas.context import BeatPlan
@@ -80,6 +81,10 @@ def mock_llm_factory(monkeypatch):
                     beats=[BeatPlan(summary="B1", target_mood="tense")],
                 )],
             ).model_dump_json())
+        elif agent == "VolumePlannerAgent" and task == "expand_volume_plan_batch":
+            mock_client.acomplete.return_value = LLMResponse(
+                text='[{"chapter_id":"ch_1","chapter_number":1,"title":"第一章","summary":"章摘要","target_word_count":3000,"target_mood":"tense","beats":[{"summary":"B1","target_mood":"tense"}]}]'
+            )
         elif agent == "WriterAgent" and task == "generate_relay":
             mock_client.acomplete.return_value = LLMResponse(
                 text='{"scene_state":"场景状态","emotional_tone":"紧张","new_info_revealed":"新信息","open_threads":"悬念","next_beat_hook":"钩子"}'
@@ -209,16 +214,10 @@ def mock_llm_factory(monkeypatch):
 
             mock_client.acomplete.side_effect = smart_entity_classify
         elif agent == "VolumePlannerAgent" and task == "generate_volume_plan":
-            from novel_dev.schemas.outline import VolumePlan, VolumeBeat
-            from novel_dev.schemas.context import BeatPlan
-            mock_client.acomplete.return_value = LLMResponse(text=VolumePlan(
+            mock_client.acomplete.return_value = LLMResponse(text=VolumePlanBlueprint(
                 volume_id="vol_1", volume_number=1, title="第一卷", summary="卷总述",
                 total_chapters=1, estimated_total_words=3000,
-                chapters=[VolumeBeat(
-                    chapter_id="ch_1", chapter_number=1, title="第一章",
-                    summary="章摘要", target_word_count=3000, target_mood="tense",
-                    beats=[BeatPlan(summary="B1", target_mood="tense")],
-                )],
+                chapters=[{"chapter_number": 1, "title": "第一章", "summary": "章摘要"}],
             ).model_dump_json())
         else:
             mock_client.acomplete.return_value = LLMResponse(text="{}")

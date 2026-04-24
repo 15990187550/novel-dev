@@ -111,6 +111,43 @@ class VolumeBeat(BaseModel):
     foreshadowings_to_recover: List[str] = Field(default_factory=list)
     beats: List[BeatPlan] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        chapter_number = normalized.get("chapter_number") or normalized.get("number") or normalized.get("index")
+        if chapter_number is not None and "chapter_number" not in normalized:
+            normalized["chapter_number"] = chapter_number
+        if "chapter_id" not in normalized and chapter_number is not None:
+            normalized["chapter_id"] = f"ch_{chapter_number}"
+        if "summary" not in normalized:
+            for legacy_key in ("description", "chapter_summary", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "target_word_count" not in normalized:
+            for legacy_key in ("word_count", "estimated_words", "target_words"):
+                if legacy_key in normalized:
+                    normalized["target_word_count"] = normalized[legacy_key]
+                    break
+        if "target_word_count" not in normalized:
+            normalized["target_word_count"] = 3000
+        if "target_mood" not in normalized:
+            for legacy_key in ("mood", "tone", "emotion"):
+                if legacy_key in normalized:
+                    normalized["target_mood"] = normalized[legacy_key]
+                    break
+        if "target_mood" not in normalized:
+            normalized["target_mood"] = "tense"
+        if "foreshadowings_to_recover" not in normalized:
+            for legacy_key in ("planned_foreshadowings", "required_foreshadowings", "recover_foreshadowings"):
+                if legacy_key in normalized:
+                    normalized["foreshadowings_to_recover"] = normalized[legacy_key]
+                    break
+        return normalized
+
     @field_validator("chapter_id", "title", "summary", "target_mood", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
@@ -132,6 +169,48 @@ class VolumePlan(BaseModel):
     chapters: List[VolumeBeat] = Field(default_factory=list)
     entity_highlights: dict[str, List[str]] = Field(default_factory=dict)
     relationship_highlights: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        volume_number = normalized.get("volume_number") or normalized.get("number") or 1
+        if "volume_number" not in normalized:
+            normalized["volume_number"] = volume_number
+        if "volume_id" not in normalized:
+            for legacy_key in ("id", "volume_ref"):
+                if legacy_key in normalized:
+                    normalized["volume_id"] = normalized[legacy_key]
+                    break
+        if "volume_id" not in normalized:
+            normalized["volume_id"] = f"vol_{volume_number}"
+        if "title" not in normalized:
+            for legacy_key in ("volume_title", "name"):
+                if legacy_key in normalized:
+                    normalized["title"] = normalized[legacy_key]
+                    break
+        if "summary" not in normalized:
+            for legacy_key in ("volume_summary", "description", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "estimated_total_words" not in normalized:
+            for legacy_key in ("total_words", "word_count", "estimated_words"):
+                if legacy_key in normalized:
+                    normalized["estimated_total_words"] = normalized[legacy_key]
+                    break
+        if "estimated_total_words" not in normalized:
+            normalized["estimated_total_words"] = 3000
+        if "total_chapters" not in normalized:
+            for legacy_key in ("chapter_count",):
+                if legacy_key in normalized:
+                    normalized["total_chapters"] = normalized[legacy_key]
+                    break
+        if "total_chapters" not in normalized and isinstance(normalized.get("chapters"), list):
+            normalized["total_chapters"] = len(normalized["chapters"])
+        return normalized
 
     @field_validator("volume_id", "title", "summary", mode="before")
     @classmethod

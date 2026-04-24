@@ -1,7 +1,9 @@
+import json
 import math
 import uuid
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel, Field, model_validator
 
 from novel_dev.schemas.outline import (
     VolumePlan,
@@ -22,7 +24,65 @@ from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.services.log_service import log_service
 
 
+class VolumeChapterSkeleton(BaseModel):
+    chapter_number: int
+    title: str
+    summary: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "title" not in normalized and "chapter_title" in normalized:
+            normalized["title"] = normalized["chapter_title"]
+        if "summary" not in normalized:
+            for legacy_key in ("description", "chapter_summary", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        return normalized
+
+
+class VolumePlanBlueprint(BaseModel):
+    volume_id: str
+    volume_number: int
+    title: str
+    summary: str
+    total_chapters: int
+    estimated_total_words: int
+    chapters: list[VolumeChapterSkeleton] = Field(default_factory=list)
+    entity_highlights: dict[str, list[str]] = Field(default_factory=dict)
+    relationship_highlights: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        volume_number = normalized.get("volume_number") or normalized.get("number") or 1
+        if "volume_number" not in normalized:
+            normalized["volume_number"] = volume_number
+        if "volume_id" not in normalized:
+            normalized["volume_id"] = normalized.get("id") or normalized.get("volume_ref") or f"vol_{volume_number}"
+        if "title" not in normalized:
+            normalized["title"] = normalized.get("volume_title") or normalized.get("name") or f"第{volume_number}卷"
+        if "summary" not in normalized:
+            normalized["summary"] = normalized.get("volume_summary") or normalized.get("description") or ""
+        if "estimated_total_words" not in normalized:
+            normalized["estimated_total_words"] = (
+                normalized.get("total_words") or normalized.get("word_count") or normalized.get("estimated_words") or 3000
+            )
+        if "total_chapters" not in normalized:
+            normalized["total_chapters"] = normalized.get("chapter_count") or len(normalized.get("chapters") or [])
+        return normalized
+
+
 class VolumePlannerAgent:
+    MAX_AUTOREVISE_CHAPTERS = 18
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.state_repo = NovelStateRepository(session)
@@ -60,11 +120,20 @@ class VolumePlannerAgent:
         plan_context = self._build_plan_context(synopsis, world_snapshot)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
+        skip_full_revise = len(volume_plan.chapters) > self.MAX_AUTOREVISE_CHAPTERS
         while True:
             score = await self._generate_score(volume_plan, novel_id)
             log_service.add_log(novel_id, "VolumePlannerAgent", f"第 {attempt + 1} 次评分: overall={score.overall}")
             if self._is_acceptable(score):
                 log_service.add_log(novel_id, "VolumePlannerAgent", f"评分通过，overall={score.overall}")
+                break
+            if skip_full_revise:
+                log_service.add_log(
+                    novel_id,
+                    "VolumePlannerAgent",
+                    "大卷纲已跳过自动整卷修订，请在工作台继续细化章节。",
+                    level="warning",
+                )
                 break
             attempt += 1
             checkpoint["volume_plan_attempt_count"] = attempt
@@ -112,6 +181,7 @@ class VolumePlannerAgent:
         "character_plot_alignment": 75,
         "page_turning": 70,
     }
+    CHAPTER_BATCH_SIZE = 8
 
     def _suggest_volume_chapter_range(self, synopsis: SynopsisData) -> tuple[int, int]:
         estimated_volumes = max(1, synopsis.estimated_volumes or 1)
@@ -126,7 +196,7 @@ class VolumePlannerAgent:
             lower = max(6, rough_chapters_per_volume - 2)
             upper = min(20, rough_chapters_per_volume + 2)
             return lower, max(lower, upper)
-        return 12, 18
+        return 20, 36
 
     def _is_acceptable(self, score) -> bool:
         if score.overall < self.OVERALL_THRESHOLD:
@@ -175,6 +245,28 @@ class VolumePlannerAgent:
             f"已推进时间线:\n{world_snapshot.get('timeline', '无')}"
         )
 
+    def _build_score_plan_snapshot(self, plan: VolumePlan) -> str:
+        snapshot = {
+            "volume_id": plan.volume_id,
+            "volume_number": plan.volume_number,
+            "title": plan.title,
+            "summary": plan.summary,
+            "total_chapters": plan.total_chapters,
+            "estimated_total_words": plan.estimated_total_words,
+            "chapters": [],
+        }
+        for chapter in plan.chapters:
+            hook = chapter.beats[-1].summary if chapter.beats else ""
+            snapshot["chapters"].append({
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "summary": chapter.summary,
+                "hook": hook,
+                "foreshadowings_to_embed": chapter.foreshadowings_to_embed,
+                "foreshadowings_to_recover": chapter.foreshadowings_to_recover,
+            })
+        return json.dumps(snapshot, ensure_ascii=False)
+
     async def _generate_volume_plan(
         self, synopsis: SynopsisData, volume_number: int, world_snapshot: Optional[dict] = None, novel_id: str = ""
     ) -> VolumePlan:
@@ -215,11 +307,101 @@ class VolumePlannerAgent:
             f"当前卷号:{volume_number}"
             f"{world_block}"
         )
-        result = await call_and_parse_model(
-            "VolumePlannerAgent", "generate_volume_plan", prompt, VolumePlan, max_retries=3, novel_id=novel_id
+        blueprint = await call_and_parse_model(
+            "VolumePlannerAgent", "generate_volume_plan", prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+        )
+        detailed_chapters = await self._expand_volume_plan_batches(
+            blueprint,
+            synopsis,
+            world_snapshot=world_snapshot,
+            novel_id=novel_id,
+        )
+        result = VolumePlan(
+            volume_id=blueprint.volume_id,
+            volume_number=blueprint.volume_number,
+            title=blueprint.title,
+            summary=blueprint.summary,
+            total_chapters=len(detailed_chapters),
+            estimated_total_words=blueprint.estimated_total_words,
+            chapters=detailed_chapters,
+            entity_highlights=blueprint.entity_highlights,
+            relationship_highlights=blueprint.relationship_highlights,
         )
         log_service.add_log(novel_id, "VolumePlannerAgent", f"卷纲生成完成: {result.title}")
         return result
+
+    async def _expand_volume_plan_batches(
+        self,
+        blueprint: VolumePlanBlueprint,
+        synopsis: SynopsisData,
+        *,
+        world_snapshot: Optional[dict],
+        novel_id: str,
+    ) -> list[VolumeBeat]:
+        chapters: list[VolumeBeat] = []
+        skeletons = blueprint.chapters
+        for start in range(0, len(skeletons), self.CHAPTER_BATCH_SIZE):
+            batch = skeletons[start:start + self.CHAPTER_BATCH_SIZE]
+            start_no = batch[0].chapter_number
+            end_no = batch[-1].chapter_number
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"扩展章节细节: 第 {start_no}-{end_no} 章")
+            prompt = self._build_volume_plan_batch_prompt(
+                blueprint,
+                synopsis,
+                batch,
+                world_snapshot=world_snapshot,
+            )
+            batch_result = await call_and_parse_model(
+                "VolumePlannerAgent",
+                "expand_volume_plan_batch",
+                prompt,
+                list[VolumeBeat],
+                max_retries=3,
+                novel_id=novel_id,
+            )
+            chapters.extend(batch_result)
+        return chapters
+
+    def _build_volume_plan_batch_prompt(
+        self,
+        blueprint: VolumePlanBlueprint,
+        synopsis: SynopsisData,
+        batch: list[VolumeChapterSkeleton],
+        *,
+        world_snapshot: Optional[dict],
+    ) -> str:
+        batch_payload = [
+            {
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "summary": chapter.summary,
+            }
+            for chapter in batch
+        ]
+        world_block = ""
+        if world_snapshot:
+            world_block = (
+                "\n\n### 前卷世界状态快照\n"
+                f"活跃人物:\n{world_snapshot.get('entities', '无')}\n"
+                f"未回收伏笔:\n{world_snapshot.get('foreshadowings', '无')}\n"
+                f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
+            )
+        return (
+            "你是一位小说分卷规划专家。请根据给定的卷纲骨架，补全一批章节的详细 VolumeBeat 数组。"
+            "只返回合法 JSON 数组，每一项必须符合 VolumeBeat Schema。\n"
+            "要求:\n"
+            "1. 只扩展本批章节，不要返回其他章节。\n"
+            "2. 每章保留 chapter_number/title/summary 主线含义一致。\n"
+            "3. chapter_id 使用 ch_<chapter_number>。\n"
+            "4. target_word_count 给出合理整数；target_mood 用简短英文或中文短语。\n"
+            "5. 每章 2-3 个 beats，每个 beat 只写 summary 和 target_mood，必要时补 key_entities / foreshadowings_to_embed。\n"
+            "6. 章节之间必须形成因果推进，最后一个 beat 要有章末钩子。\n"
+            "7. 不要输出 Markdown，不要解释。\n\n"
+            f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
+            f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
+            f"### 本批待扩展章节\n{json.dumps(batch_payload, ensure_ascii=False)}"
+            f"{world_block}"
+        )
 
     async def _load_world_snapshot(self, novel_id: str) -> dict:
         """为跨卷延续加载世界状态快照:活跃实体、未回收伏笔、近期时间线。"""
@@ -260,7 +442,7 @@ class VolumePlannerAgent:
             "- page_turning >=70: 读者会自然想继续读下一章。\n"
             "## 输出\n"
             "严格 JSON，summary_feedback 控制在 300 字内，指出最需要改的 2-3 点。"
-            f"\n\n### VolumePlan\n{plan.model_dump_json()}"
+            f"\n\n### VolumePlan\n{self._build_score_plan_snapshot(plan)}"
         )
         result = await call_and_parse_model(
             "VolumePlannerAgent", "score_volume_plan", prompt, VolumeScoreResult, max_retries=3, novel_id=novel_id

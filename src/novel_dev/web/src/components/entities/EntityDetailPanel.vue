@@ -351,11 +351,18 @@ function statusTagType(status) {
 }
 
 .entity-detail-panel__descriptions :deep(.el-descriptions__label.el-descriptions__cell.is-bordered-label) {
+  background: var(--entities-grid-label-bg);
   color: var(--entities-text-muted);
 }
 
 .entity-detail-panel__descriptions :deep(.el-descriptions__content.el-descriptions__cell.is-bordered-content) {
+  background: var(--entities-grid-content-bg);
   color: var(--entities-text);
+}
+
+.entity-detail-panel__descriptions :deep(td.el-descriptions__cell),
+.entity-detail-panel__descriptions :deep(th.el-descriptions__cell) {
+  border-color: var(--entities-panel-border);
 }
 
 .entity-detail-panel__reason {
