@@ -13,6 +13,11 @@ from novel_dev.services.log_service import log_service
 
 CHAPTER_AUTO_RUN_JOB = "chapter_auto_run"
 ACTIVE_JOB_STATUSES = {"queued", "running"}
+RECOVERED_LOCK_RESULT = {
+    "stopped_reason": "failed",
+    "recovered": True,
+    "error": "Recovered stale auto_run_lock after process interruption",
+}
 
 
 class RecoveryCleanupOptions(BaseModel):
@@ -101,16 +106,7 @@ class RecoveryCleanupService:
                 continue
 
             checkpoint.pop("auto_run_lock", None)
-            checkpoint.setdefault(
-                "auto_run_last_result",
-                {
-                    "novel_id": state.novel_id,
-                    "current_phase": state.current_phase,
-                    "current_chapter_id": state.current_chapter_id,
-                    "completed_chapters": [],
-                    "stopped_reason": "recovered",
-                },
-            )
+            checkpoint.setdefault("auto_run_last_result", dict(RECOVERED_LOCK_RESULT))
             result.released_locks.append(state.novel_id)
             if options.dry_run:
                 continue
