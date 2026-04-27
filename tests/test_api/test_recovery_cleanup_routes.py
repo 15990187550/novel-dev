@@ -32,7 +32,8 @@ async def test_recovery_cleanup_route_marks_stale_job(async_session):
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
     try:
-        job_id = await _create_stale_running_job(async_session, "novel-route-stale")
+        novel_id = "novel-route-stale"
+        job_id = await _create_stale_running_job(async_session, novel_id)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
@@ -42,7 +43,12 @@ async def test_recovery_cleanup_route_marks_stale_job(async_session):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["cleaned_jobs"][0]["job_id"] == job_id
+        cleaned_job = data["cleaned_jobs"][0]
+        assert cleaned_job["job_id"] == job_id
+        assert cleaned_job["novel_id"] == novel_id
+        assert cleaned_job["job_type"] == "chapter_auto_run"
+        assert cleaned_job["previous_status"] == "running"
+        assert cleaned_job["reason"] == "Recovered stale running job after process interruption"
 
         refreshed = await GenerationJobRepository(async_session).get_by_id(job_id)
         assert refreshed.status == "failed"
@@ -58,7 +64,8 @@ async def test_recovery_cleanup_route_supports_dry_run(async_session):
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
     try:
-        job_id = await _create_stale_running_job(async_session, "novel-route-dry-run")
+        novel_id = "novel-route-dry-run"
+        job_id = await _create_stale_running_job(async_session, novel_id)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             response = await client.post(
@@ -68,7 +75,12 @@ async def test_recovery_cleanup_route_supports_dry_run(async_session):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["cleaned_jobs"][0]["job_id"] == job_id
+        cleaned_job = data["cleaned_jobs"][0]
+        assert cleaned_job["job_id"] == job_id
+        assert cleaned_job["novel_id"] == novel_id
+        assert cleaned_job["job_type"] == "chapter_auto_run"
+        assert cleaned_job["previous_status"] == "running"
+        assert cleaned_job["reason"] == "Recovered stale running job after process interruption"
 
         refreshed = await GenerationJobRepository(async_session).get_by_id(job_id)
         assert refreshed.status == "running"
