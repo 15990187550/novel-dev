@@ -1016,7 +1016,7 @@ Run:
 alembic heads
 ```
 
-Expected: one current head, including `20260427_generation_job_heartbeat`.
+Expected: one current head, including `20260427_job_heartbeat`.
 
 - [ ] **Step 2: Run focused backend tests**
 
