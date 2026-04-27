@@ -29,9 +29,9 @@ class RecoveryCleanupOptions(BaseModel):
 
 
 class RecoveryCleanupResult(BaseModel):
-    cleaned_jobs: list[str] = Field(default_factory=list)
-    released_locks: list[str] = Field(default_factory=list)
-    cleared_flow_stops: list[str] = Field(default_factory=list)
+    cleaned_jobs: list[dict[str, Any]] = Field(default_factory=list)
+    released_locks: list[dict[str, Any]] = Field(default_factory=list)
+    cleared_flow_stops: list[dict[str, Any]] = Field(default_factory=list)
     skipped: list[dict[str, Any]] = Field(default_factory=list)
 
 
@@ -83,7 +83,15 @@ class RecoveryCleanupService:
             stale_running_before=now - timedelta(minutes=options.stale_running_minutes),
         )
         for job in stale_jobs:
-            result.cleaned_jobs.append(job.id)
+            result.cleaned_jobs.append(
+                {
+                    "job_id": job.id,
+                    "novel_id": job.novel_id,
+                    "job_type": job.job_type,
+                    "previous_status": job.status,
+                    "reason": f"Recovered stale {job.status} job after process interruption",
+                }
+            )
             planned_recovered_job_ids.add(job.id)
             if options.dry_run:
                 continue
@@ -126,7 +134,14 @@ class RecoveryCleanupService:
 
             checkpoint.pop("auto_run_lock", None)
             checkpoint["auto_run_last_result"] = dict(RECOVERED_LOCK_RESULT)
-            result.released_locks.append(state.novel_id)
+            result.released_locks.append(
+                {
+                    "novel_id": state.novel_id,
+                    "chapter_id": state.current_chapter_id,
+                    "volume_id": state.current_volume_id,
+                    "reason": "Recovered stale auto_run_lock after process interruption",
+                }
+            )
             if options.dry_run:
                 continue
 
@@ -168,7 +183,12 @@ class RecoveryCleanupService:
                 result.skipped.append({"novel_id": state.novel_id, "reason": "active_job_with_unvalidated_flow_stop"})
                 continue
 
-            result.cleared_flow_stops.append(state.novel_id)
+            result.cleared_flow_stops.append(
+                {
+                    "novel_id": state.novel_id,
+                    "reason": "Cleared expired flow stop marker",
+                }
+            )
             if options.dry_run:
                 continue
 

@@ -8,6 +8,41 @@ from novel_dev.services.flow_control_service import clear_cancel_request, is_can
 from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 
 
+def _cleaned_job_detail(
+    job_id: str,
+    novel_id: str,
+    previous_status: str,
+    job_type: str = "chapter_auto_run",
+) -> dict[str, str]:
+    return {
+        "job_id": job_id,
+        "novel_id": novel_id,
+        "job_type": job_type,
+        "previous_status": previous_status,
+        "reason": f"Recovered stale {previous_status} job after process interruption",
+    }
+
+
+def _released_lock_detail(
+    novel_id: str,
+    chapter_id: str | None = None,
+    volume_id: str | None = None,
+) -> dict[str, str | None]:
+    return {
+        "novel_id": novel_id,
+        "chapter_id": chapter_id,
+        "volume_id": volume_id,
+        "reason": "Recovered stale auto_run_lock after process interruption",
+    }
+
+
+def _cleared_flow_stop_detail(novel_id: str) -> dict[str, str]:
+    return {
+        "novel_id": novel_id,
+        "reason": "Cleared expired flow stop marker",
+    }
+
+
 @pytest.mark.asyncio
 async def test_cleanup_marks_stale_running_job_failed(async_session):
     repo = GenerationJobRepository(async_session)
@@ -24,7 +59,9 @@ async def test_cleanup_marks_stale_running_job_failed(async_session):
     refreshed = await repo.get_by_id(job_id)
     assert refreshed.status == "failed"
     assert refreshed.result_payload["recovered"] is True
-    assert result.cleaned_jobs == [job_id]
+    assert result.cleaned_jobs == [
+        _cleaned_job_detail(job_id, "novel-stale-running", "running")
+    ]
 
 
 @pytest.mark.asyncio
@@ -41,7 +78,9 @@ async def test_cleanup_marks_stale_queued_job_failed(async_session):
     refreshed = await repo.get_by_id(job_id)
     assert refreshed.status == "failed"
     assert refreshed.result_payload["recovered"] is True
-    assert result.cleaned_jobs == [job_id]
+    assert result.cleaned_jobs == [
+        _cleaned_job_detail(job_id, "novel-stale-queued", "queued")
+    ]
 
 
 @pytest.mark.asyncio
@@ -81,7 +120,7 @@ async def test_cleanup_releases_lock_without_active_job(async_session):
         "recovered": True,
         "error": "Recovered stale auto_run_lock after process interruption",
     }
-    assert result.released_locks == ["novel-stale-lock"]
+    assert result.released_locks == [_released_lock_detail("novel-stale-lock")]
 
 
 @pytest.mark.asyncio
@@ -110,8 +149,10 @@ async def test_cleanup_releases_lock_after_recovering_stale_active_job(async_ses
     state = await director.resume("novel-stale-job-lock")
     assert refreshed.status == "failed"
     assert "auto_run_lock" not in state.checkpoint_data
-    assert result.cleaned_jobs == [job_id]
-    assert result.released_locks == ["novel-stale-job-lock"]
+    assert result.cleaned_jobs == [
+        _cleaned_job_detail(job_id, "novel-stale-job-lock", "running")
+    ]
+    assert result.released_locks == [_released_lock_detail("novel-stale-job-lock")]
 
 
 @pytest.mark.asyncio
@@ -183,7 +224,9 @@ async def test_cleanup_clears_expired_flow_stop(async_session):
 
     state = await director.resume("novel-expired-flow-stop")
     assert state.checkpoint_data == {"existing": "value"}
-    assert result.cleared_flow_stops == ["novel-expired-flow-stop"]
+    assert result.cleared_flow_stops == [
+        _cleared_flow_stop_detail("novel-expired-flow-stop")
+    ]
 
 
 @pytest.mark.asyncio
@@ -259,7 +302,9 @@ async def test_cleanup_clears_expired_flow_stop_with_offset_timestamp(async_sess
 
     state = await director.resume("novel-expired-offset-flow-stop")
     assert state.checkpoint_data == {"existing": "value"}
-    assert result.cleared_flow_stops == ["novel-expired-offset-flow-stop"]
+    assert result.cleared_flow_stops == [
+        _cleared_flow_stop_detail("novel-expired-offset-flow-stop")
+    ]
 
 
 @pytest.mark.asyncio
@@ -280,7 +325,9 @@ async def test_cleanup_clears_unvalidated_flow_stop_without_active_job(async_ses
 
     state = await director.resume(f"novel-{flow_control['reason']}")
     assert state.checkpoint_data == {"existing": "value"}
-    assert result.cleared_flow_stops == [f"novel-{flow_control['reason']}"]
+    assert result.cleared_flow_stops == [
+        _cleared_flow_stop_detail(f"novel-{flow_control['reason']}")
+    ]
 
 
 @pytest.mark.asyncio
@@ -341,9 +388,11 @@ async def test_cleanup_dry_run_does_not_mutate(async_session):
     assert refreshed.status == "running"
     assert state.checkpoint_data["auto_run_lock"]["token"] == "dry-token"
     assert state.checkpoint_data["flow_control"]["cancel_requested"] is True
-    assert result.cleaned_jobs == [job_id]
-    assert result.released_locks == ["novel-dry-run"]
-    assert result.cleared_flow_stops == ["novel-dry-run"]
+    assert result.cleaned_jobs == [
+        _cleaned_job_detail(job_id, "novel-dry-run", "running")
+    ]
+    assert result.released_locks == [_released_lock_detail("novel-dry-run")]
+    assert result.cleared_flow_stops == [_cleared_flow_stop_detail("novel-dry-run")]
 
 
 @pytest.mark.asyncio
@@ -377,8 +426,12 @@ async def test_cleanup_dry_run_plans_flow_stop_clear_after_stale_active_job_reco
     state = await director.resume("novel-dry-run-stale-flow")
     assert refreshed.status == "running"
     assert state.checkpoint_data["flow_control"]["cancel_requested"] is True
-    assert result.cleaned_jobs == [job_id]
-    assert result.cleared_flow_stops == ["novel-dry-run-stale-flow"]
+    assert result.cleaned_jobs == [
+        _cleaned_job_detail(job_id, "novel-dry-run-stale-flow", "running")
+    ]
+    assert result.cleared_flow_stops == [
+        _cleared_flow_stop_detail("novel-dry-run-stale-flow")
+    ]
     assert result.skipped == []
 
 

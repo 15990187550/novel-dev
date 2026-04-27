@@ -42,7 +42,7 @@ async def test_recovery_cleanup_route_marks_stale_job(async_session):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["cleaned_jobs"][0] == job_id
+        assert data["cleaned_jobs"][0]["job_id"] == job_id
 
         refreshed = await GenerationJobRepository(async_session).get_by_id(job_id)
         assert refreshed.status == "failed"
@@ -68,7 +68,7 @@ async def test_recovery_cleanup_route_supports_dry_run(async_session):
 
         assert response.status_code == 200
         data = response.json()
-        assert data["cleaned_jobs"][0] == job_id
+        assert data["cleaned_jobs"][0]["job_id"] == job_id
 
         refreshed = await GenerationJobRepository(async_session).get_by_id(job_id)
         assert refreshed.status == "running"
