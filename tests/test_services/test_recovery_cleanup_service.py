@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -112,6 +112,31 @@ async def test_cleanup_clears_expired_flow_stop(async_session):
 
 
 @pytest.mark.asyncio
+async def test_cleanup_clears_expired_flow_stop_with_offset_timestamp(async_session):
+    director = NovelDirector(session=async_session)
+    requested_at = (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()
+    await director.save_checkpoint(
+        "novel-expired-offset-flow-stop",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "existing": "value",
+            "flow_control": {
+                "cancel_requested": True,
+                "requested_at": requested_at,
+                "reason": "user_requested",
+            },
+        },
+    )
+    await async_session.commit()
+
+    result = await RecoveryCleanupService(async_session).run_cleanup()
+
+    state = await director.resume("novel-expired-offset-flow-stop")
+    assert state.checkpoint_data == {"existing": "value"}
+    assert result.cleared_flow_stops == ["novel-expired-offset-flow-stop"]
+
+
+@pytest.mark.asyncio
 async def test_cleanup_dry_run_does_not_mutate(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -145,3 +170,79 @@ async def test_cleanup_dry_run_does_not_mutate(async_session):
     assert state.checkpoint_data["auto_run_lock"]["token"] == "dry-token"
     assert state.checkpoint_data["flow_control"]["cancel_requested"] is True
     assert result.cleaned_jobs == [job_id]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dry_run_keeps_uncommitted_caller_work(async_session):
+    repo = GenerationJobRepository(async_session)
+    job = await repo.create("novel-uncommitted-work", "manual_job", {})
+    job_id = job.id
+
+    await RecoveryCleanupService(async_session).run_cleanup(
+        RecoveryCleanupOptions(dry_run=True)
+    )
+    await async_session.flush()
+    await async_session.commit()
+
+    refreshed = await repo.get_by_id(job_id)
+    assert refreshed is not None
+    assert refreshed.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_emits_logs_only_after_commit(async_session, monkeypatch):
+    repo = GenerationJobRepository(async_session)
+    job = await repo.create("novel-log-order", "chapter_auto_run", {})
+    await repo.mark_running(job.id)
+    old = datetime.utcnow() - timedelta(hours=3)
+    job.heartbeat_at = old
+    job.updated_at = old
+    await async_session.commit()
+
+    commit_completed = False
+    original_commit = async_session.commit
+    log_calls = []
+
+    async def tracked_commit():
+        nonlocal commit_completed
+        await original_commit()
+        commit_completed = True
+
+    def collect_log(*args, **kwargs):
+        assert commit_completed is True
+        log_calls.append((args, kwargs))
+
+    monkeypatch.setattr(async_session, "commit", tracked_commit)
+    monkeypatch.setattr(
+        "novel_dev.services.recovery_cleanup_service.log_service.add_log",
+        collect_log,
+    )
+
+    await RecoveryCleanupService(async_session).run_cleanup()
+
+    assert len(log_calls) == 1
+    assert log_calls[0][0][1] == "RecoveryCleanup"
+    assert log_calls[0][1]["event"] == "recovery.cleanup"
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dry_run_does_not_emit_mutation_logs(async_session, monkeypatch):
+    repo = GenerationJobRepository(async_session)
+    job = await repo.create("novel-dry-run-log", "chapter_auto_run", {})
+    await repo.mark_running(job.id)
+    old = datetime.utcnow() - timedelta(hours=3)
+    job.heartbeat_at = old
+    job.updated_at = old
+    await async_session.commit()
+    log_calls = []
+
+    monkeypatch.setattr(
+        "novel_dev.services.recovery_cleanup_service.log_service.add_log",
+        lambda *args, **kwargs: log_calls.append((args, kwargs)),
+    )
+
+    await RecoveryCleanupService(async_session).run_cleanup(
+        RecoveryCleanupOptions(dry_run=True)
+    )
+
+    assert log_calls == []

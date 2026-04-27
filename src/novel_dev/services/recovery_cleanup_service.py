@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -38,16 +38,17 @@ class RecoveryCleanupService:
     async def run_cleanup(self, options: RecoveryCleanupOptions | None = None) -> RecoveryCleanupResult:
         options = options or RecoveryCleanupOptions()
         result = RecoveryCleanupResult()
+        pending_logs: list[dict[str, Any]] = []
         now = datetime.utcnow()
 
-        await self._clean_stale_jobs(options, result, now)
-        await self._release_stale_locks(options, result)
-        await self._clear_expired_flow_stops(options, result, now)
+        await self._clean_stale_jobs(options, result, pending_logs, now)
+        await self._release_stale_locks(options, result, pending_logs)
+        await self._clear_expired_flow_stops(options, result, pending_logs, now)
 
-        if options.dry_run:
-            await self.session.rollback()
-        else:
+        if not options.dry_run:
             await self.session.commit()
+            for entry in pending_logs:
+                self._emit_log(entry)
             await log_service.flush_pending()
 
         return result
@@ -56,6 +57,7 @@ class RecoveryCleanupService:
         self,
         options: RecoveryCleanupOptions,
         result: RecoveryCleanupResult,
+        pending_logs: list[dict[str, Any]],
         now: datetime,
     ) -> None:
         stale_jobs = await self.job_repo.list_stale_active(
@@ -71,17 +73,20 @@ class RecoveryCleanupService:
                 job.id,
                 f"Recovered by cleanup after stale {job.status} generation job",
             )
-            self._log_mutation(
-                job.novel_id,
-                "cleaned_job",
-                f"Recovered stale generation job {job.id}",
-                {"job_id": job.id, "job_type": job.job_type, "status": job.status},
+            pending_logs.append(
+                self._log_entry(
+                    job.novel_id,
+                    "cleaned_job",
+                    f"Recovered stale generation job {job.id}",
+                    {"job_id": job.id, "job_type": job.job_type, "status": "failed"},
+                )
             )
 
     async def _release_stale_locks(
         self,
         options: RecoveryCleanupOptions,
         result: RecoveryCleanupResult,
+        pending_logs: list[dict[str, Any]],
     ) -> None:
         states = await self._states_with_checkpoint_key("auto_run_lock")
         for state in states:
@@ -111,17 +116,20 @@ class RecoveryCleanupService:
                 continue
 
             await self._save_state_checkpoint(state, checkpoint)
-            self._log_mutation(
-                state.novel_id,
-                "released_lock",
-                "Released stale auto-run lock",
-                {"lock": lock},
+            pending_logs.append(
+                self._log_entry(
+                    state.novel_id,
+                    "released_lock",
+                    "Released stale auto-run lock",
+                    {"lock": lock},
+                )
             )
 
     async def _clear_expired_flow_stops(
         self,
         options: RecoveryCleanupOptions,
         result: RecoveryCleanupResult,
+        pending_logs: list[dict[str, Any]],
         now: datetime,
     ) -> None:
         expires_before = now - timedelta(hours=options.stale_flow_stop_hours)
@@ -146,11 +154,13 @@ class RecoveryCleanupService:
 
             checkpoint.pop("flow_control", None)
             await self._save_state_checkpoint(state, checkpoint)
-            self._log_mutation(
-                state.novel_id,
-                "cleared_flow_stop",
-                "Cleared stale flow stop marker",
-                {"flow_control": flow_control},
+            pending_logs.append(
+                self._log_entry(
+                    state.novel_id,
+                    "cleared_flow_stop",
+                    "Cleared stale flow stop marker",
+                    {"flow_control": flow_control},
+                )
             )
 
     async def _states_with_checkpoint_key(self, key: str) -> list[NovelState]:
@@ -179,22 +189,30 @@ class RecoveryCleanupService:
             current_chapter_id=state.current_chapter_id,
         )
 
-    def _log_mutation(
+    def _log_entry(
         self,
         novel_id: str,
         status: str,
         message: str,
         metadata: dict[str, Any],
-    ) -> None:
+    ) -> dict[str, Any]:
+        return {
+            "novel_id": novel_id,
+            "status": status,
+            "message": message,
+            "metadata": metadata,
+        }
+
+    def _emit_log(self, entry: dict[str, Any]) -> None:
         log_service.add_log(
-            novel_id,
+            entry["novel_id"],
             "RecoveryCleanup",
-            message,
+            entry["message"],
             event="recovery.cleanup",
-            status=status,
+            status=entry["status"],
             node="recovery",
             task="cleanup",
-            metadata=metadata,
+            metadata=entry["metadata"],
         )
 
     def _parse_requested_at(self, value: Any) -> datetime | None:
@@ -202,6 +220,9 @@ class RecoveryCleanupService:
             return None
         try:
             normalized = value.removesuffix("Z")
-            return datetime.fromisoformat(normalized)
+            parsed = datetime.fromisoformat(normalized)
         except ValueError:
             return None
+        if parsed.tzinfo is not None:
+            return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        return parsed
