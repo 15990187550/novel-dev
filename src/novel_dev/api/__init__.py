@@ -1,5 +1,6 @@
+import asyncio
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -31,8 +32,14 @@ async def run_startup_recovery_cleanup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await run_startup_recovery_cleanup()
-    yield
+    cleanup_task = asyncio.create_task(run_startup_recovery_cleanup())
+    try:
+        yield
+    finally:
+        if not cleanup_task.done():
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
 
 
 app = FastAPI(lifespan=lifespan)
