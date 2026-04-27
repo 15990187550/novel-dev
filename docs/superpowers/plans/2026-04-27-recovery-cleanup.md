@@ -100,7 +100,7 @@ Create `migrations/versions/20260427_add_generation_job_heartbeat.py`:
 ```python
 """add generation job heartbeat
 
-Revision ID: 20260427_generation_job_heartbeat
+Revision ID: 20260427_job_heartbeat
 Revises: 20260427_document_embedding_dims
 Create Date: 2026-04-27 00:00:00.000000
 
@@ -111,7 +111,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "20260427_generation_job_heartbeat"
+revision: str = "20260427_job_heartbeat"
 down_revision: Union[str, Sequence[str], None] = "20260427_document_embedding_dims"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
