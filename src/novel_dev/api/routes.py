@@ -35,7 +35,7 @@ from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceS
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.chapter_generation_service import AutoRunChaptersRequest
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
-from novel_dev.services.generation_job_service import CHAPTER_AUTO_RUN_JOB, CHAPTER_REWRITE_JOB, schedule_generation_job
+from novel_dev.services.generation_job_service import CHAPTER_AUTO_RUN_JOB, schedule_generation_job
 from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
@@ -1620,46 +1620,6 @@ async def auto_run_chapters(
         "stop_at_volume_end": req.stop_at_volume_end,
     }
     job = await repo.create(novel_id, CHAPTER_AUTO_RUN_JOB, payload)
-    await session.commit()
-    schedule_generation_job(job.id)
-    return _generation_job_response(job)
-
-
-@router.post("/api/novels/{novel_id}/chapters/{chapter_id}/rewrite", status_code=status.HTTP_202_ACCEPTED)
-async def rewrite_chapter(
-    novel_id: str,
-    chapter_id: str,
-    session: AsyncSession = Depends(get_session),
-):
-    state = await NovelStateRepository(session).get_state(novel_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Novel state not found")
-
-    chapter = await ChapterRepository(session).get_by_id(chapter_id)
-    if not chapter or chapter.novel_id != novel_id:
-        raise HTTPException(status_code=404, detail="Chapter not found")
-    if chapter.status not in {"edited", "archived"}:
-        raise HTTPException(status_code=409, detail="Only edited or archived chapters can be rewritten")
-
-    checkpoint = dict(state.checkpoint_data or {})
-    volume_plan = checkpoint.get("current_volume_plan") or {}
-    plan_chapter_ids = {
-        c.get("chapter_id")
-        for c in volume_plan.get("chapters", [])
-        if isinstance(c, dict) and c.get("chapter_id")
-    }
-    if chapter_id not in plan_chapter_ids:
-        raise HTTPException(status_code=404, detail="Chapter plan not found")
-
-    repo = GenerationJobRepository(session)
-    active_rewrite = await repo.get_active(novel_id, CHAPTER_REWRITE_JOB)
-    if active_rewrite:
-        raise HTTPException(status_code=409, detail="Chapter rewrite is already running")
-    active_auto_run = await repo.get_active(novel_id, CHAPTER_AUTO_RUN_JOB)
-    if active_auto_run and state.current_chapter_id == chapter_id:
-        raise HTTPException(status_code=409, detail="Current chapter is being generated")
-
-    job = await repo.create(novel_id, CHAPTER_REWRITE_JOB, {"chapter_id": chapter_id})
     await session.commit()
     schedule_generation_job(job.id)
     return _generation_job_response(job)
