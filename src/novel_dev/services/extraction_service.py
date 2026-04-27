@@ -4,11 +4,12 @@ import logging
 from typing import Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.agents.file_classifier import FileClassifier
+from novel_dev.agents.file_classifier import FileClassificationResult, FileClassifier
 from novel_dev.agents.setting_extractor import SettingExtractorAgent
 from novel_dev.agents.style_profiler import StyleProfilerAgent, StyleProfile, StyleConfig
 from novel_dev.agents.profile_merger import ProfileMerger
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.services.entity_service import EntityService
@@ -26,6 +27,7 @@ from novel_dev.schemas.brainstorm_workspace import (
 logger = logging.getLogger(__name__)
 
 SETTING_MERGE_RETRY_LIMIT = 2
+APPROVE_ENTITY_BATCH_SIZE = 25
 
 AUTO_APPLY_FIELDS = {
     "appearance",
@@ -93,6 +95,7 @@ class ExtractionService:
         self.style_agent = StyleProfilerAgent()
         self.merger = ProfileMerger()
         self.doc_repo = DocumentRepository(session)
+        self.domain_repo = KnowledgeDomainRepository(session)
         self.pending_repo = PendingExtractionRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.entity_svc = EntityService(session, embedding_service)
@@ -482,6 +485,24 @@ class ExtractionService:
             version=next_version,
         )
 
+    async def _create_domain_setting_document(
+        self,
+        *,
+        novel_id: str,
+        domain_name: str,
+        doc_type: str,
+        title: str,
+        content: str,
+    ) -> NovelDocument:
+        return await self.doc_repo.create(
+            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type=f"domain_{doc_type}",
+            title=f"{domain_name} / {title}",
+            content=content,
+            version=1,
+        )
+
     async def merge_existing_library_duplicates(self, novel_id: str) -> list[NovelDocument]:
         grouped_docs: dict[tuple[str, str], list[NovelDocument]] = {}
         for doc_type in MERGEABLE_LIBRARY_DOC_TYPES:
@@ -563,20 +584,30 @@ class ExtractionService:
             "summary": "，".join(summary_parts) if summary_parts else "无实体变更",
         }
 
-    async def _apply_entity_diff(self, novel_id: str, entity_diff: dict, field_resolutions: Optional[List[dict]] = None) -> list[dict]:
+    async def _apply_entity_diff(
+        self,
+        novel_id: str,
+        entity_diff: dict,
+        field_resolutions: Optional[List[dict]] = None,
+        applied_entity_ids: Optional[list[str]] = None,
+    ) -> list[dict]:
         entity_name = entity_diff.get("entity_name", "unknown")
         entity_type = entity_diff.get("entity_type", "other")
         resolution_log: list[dict] = []
         if entity_diff.get("operation") == "create":
             initial_state = {change["field"]: change.get("new_value") for change in entity_diff.get("field_changes", [])}
             initial_state["name"] = entity_name
+            entity_id = f"ent_{uuid.uuid4().hex[:8]}"
             await self.entity_svc.create_entity(
-                entity_id=f"ent_{uuid.uuid4().hex[:8]}",
+                entity_id=entity_id,
                 entity_type=entity_type,
                 name=entity_name,
                 novel_id=novel_id,
                 initial_state=initial_state,
+                use_llm_for_classification=False,
             )
+            if applied_entity_ids is not None:
+                applied_entity_ids.append(entity_id)
             for change in entity_diff.get("field_changes", []):
                 resolution_log.append({
                     "entity_type": entity_type,
@@ -633,12 +664,272 @@ class ExtractionService:
             applied = True
             resolution_log.append({"entity_type": entity_type, "entity_name": entity_name, "field": field, "action": "auto_apply", "applied": True})
         if applied:
-            await self.entity_svc.update_state(entity_id, merged_state, diff_summary={"merged_from_pending": True})
+            await self.entity_svc.update_state_from_import(entity_id, merged_state, diff_summary={"merged_from_pending": True})
+            if applied_entity_ids is not None:
+                applied_entity_ids.append(entity_id)
         return resolution_log
 
-    async def process_upload(self, novel_id: str, filename: str, content: str) -> PendingExtraction:
+    async def _apply_entity_diffs_in_batches(
+        self,
+        novel_id: str,
+        pending_id: str,
+        entity_diffs: list[dict],
+        *,
+        field_resolutions: Optional[List[dict]] = None,
+        batch_size: int = APPROVE_ENTITY_BATCH_SIZE,
+    ) -> dict[str, Any]:
+        total = len(entity_diffs)
+        result: dict[str, Any] = {
+            "field_resolutions": [],
+            "entity_batches": [],
+            "entity_failures": [],
+            "entity_classification_batches": [],
+            "entity_total": total,
+            "entity_applied": 0,
+            "batch_size": batch_size,
+        }
+        if not total:
+            return result
+
+        log_service.add_log(
+            novel_id,
+            "ExtractionService",
+            f"开始批量写入实体: {total} 个，每批 {batch_size} 个",
+            event="agent.progress",
+            status="started",
+            node="approve_entities",
+            task="approve_pending",
+            metadata={"pending_id": pending_id, "entity_total": total, "batch_size": batch_size},
+        )
+
+        for start in range(0, total, batch_size):
+            batch = entity_diffs[start:start + batch_size]
+            batch_index = start // batch_size + 1
+            batch_log = {
+                "batch_index": batch_index,
+                "start": start + 1,
+                "end": start + len(batch),
+                "total": total,
+                "applied": 0,
+                "failed": 0,
+            }
+            applied_entity_ids: list[str] = []
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"写入实体批次 {batch_index}: {batch_log['start']}-{batch_log['end']}/{total}",
+                event="agent.progress",
+                status="started",
+                node="approve_entities_batch",
+                task="approve_pending",
+                metadata={**batch_log, "pending_id": pending_id},
+            )
+
+            for entity_diff in batch:
+                entity_name = entity_diff.get("entity_name", "unknown")
+                entity_type = entity_diff.get("entity_type", "other")
+                try:
+                    field_logs = await self._apply_entity_diff(
+                        novel_id,
+                        entity_diff,
+                        field_resolutions=field_resolutions,
+                        applied_entity_ids=applied_entity_ids,
+                    )
+                    result["field_resolutions"].extend(field_logs)
+                    result["entity_applied"] += 1
+                    batch_log["applied"] += 1
+                except Exception as exc:
+                    failure = {
+                        "entity_type": entity_type,
+                        "entity_name": entity_name,
+                        "operation": entity_diff.get("operation"),
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                    result["entity_failures"].append(failure)
+                    batch_log["failed"] += 1
+                    log_service.add_log(
+                        novel_id,
+                        "ExtractionService",
+                        f"实体写入失败: {entity_type}/{entity_name}: {exc}",
+                        level="error",
+                        event="agent.progress",
+                        status="failed",
+                        node="approve_entity",
+                        task="approve_pending",
+                        metadata={**failure, "pending_id": pending_id},
+                    )
+
+            await self.session.flush()
+            if applied_entity_ids:
+                unique_entity_ids = list(dict.fromkeys(applied_entity_ids))
+                log_service.add_log(
+                    novel_id,
+                    "ExtractionService",
+                    f"批量分类实体批次 {batch_index}: {len(unique_entity_ids)} 个",
+                    event="agent.progress",
+                    status="started",
+                    node="entity_classify_batch",
+                    task="approve_pending",
+                    metadata={"pending_id": pending_id, "batch_index": batch_index, "entity_count": len(unique_entity_ids)},
+                )
+                classification_result = await self.entity_svc.classify_entities_batch(unique_entity_ids)
+                result["entity_classification_batches"].append({
+                    "batch_index": batch_index,
+                    **classification_result,
+                })
+                log_service.add_log(
+                    novel_id,
+                    "ExtractionService",
+                    f"实体批量分类完成 {batch_index}: {classification_result.get('updated', 0)}/{classification_result.get('total', 0)}",
+                    event="agent.progress",
+                    status="succeeded",
+                    node="entity_classify_batch",
+                    task="approve_pending",
+                    metadata={"pending_id": pending_id, "batch_index": batch_index, **classification_result},
+                )
+            result["entity_batches"].append(dict(batch_log))
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"实体批次 {batch_index} 完成: 成功 {batch_log['applied']}，失败 {batch_log['failed']}",
+                event="agent.progress",
+                status="succeeded" if batch_log["failed"] == 0 else "failed",
+                node="approve_entities_batch",
+                task="approve_pending",
+                metadata={**batch_log, "pending_id": pending_id},
+            )
+
+        return result
+
+    def _build_domain_entity_diffs(self, raw_result: dict, *, domain_id: str, domain_name: str) -> list[dict[str, Any]]:
+        proposed_entities: list[tuple[str, dict[str, Any]]] = []
+        for char in raw_result.get("character_profiles", []):
+            proposed_entities.append(("character", dict(char)))
+        for faction in self._normalize_setting_entities(raw_result.get("factions")):
+            proposed_entities.append(("faction", dict(faction)))
+        for location in self._normalize_setting_entities(raw_result.get("locations")):
+            proposed_entities.append(("location", dict(location)))
+        for item in raw_result.get("important_items", []):
+            proposed_entities.append(("item", dict(item)))
+
+        entity_diffs: list[dict[str, Any]] = []
+        for entity_type, data in proposed_entities:
+            entity_name = str(data.get("name") or "").strip()
+            if not entity_name:
+                continue
+            local_state = {
+                **data,
+                "_knowledge_usage": "domain",
+                "_knowledge_domain_id": domain_id,
+                "_knowledge_domain_name": domain_name,
+            }
+            entity_diffs.append({
+                "entity_type": entity_type,
+                "entity_name": entity_name,
+                "operation": "create",
+                "field_changes": [
+                    {
+                        "field": key,
+                        "label": key,
+                        "old_value": "",
+                        "new_value": value,
+                    }
+                    for key, value in local_state.items()
+                    if value not in (None, "")
+                ],
+            })
+        return entity_diffs
+
+    async def _approve_knowledge_domain_pending(
+        self,
+        pe: PendingExtraction,
+        *,
+        domain,
+        field_resolutions: Optional[List[dict]] = None,
+    ) -> tuple[list[NovelDocument], dict[str, Any]]:
+        raw = pe.raw_result or {}
+        domain_name = domain.name if domain else "局部规则域"
+        docs: list[NovelDocument] = []
+        mappings = [
+            ("worldview", "worldview", "世界观"),
+            ("power_system", "setting", "修炼体系"),
+            ("factions", "setting", "势力格局"),
+            ("locations", "setting", "地点设定"),
+            ("plot_synopsis", "synopsis", "剧情梗概"),
+        ]
+        for key, doc_type, title in mappings:
+            val = raw.get(key)
+            if not val:
+                continue
+            docs.append(await self._create_domain_setting_document(
+                novel_id=pe.novel_id,
+                domain_name=domain_name,
+                doc_type=doc_type,
+                title=title,
+                content=self._format_setting_document_value(key, val),
+            ))
+
+        chars = raw.get("character_profiles", [])
+        if chars:
+            text = "\n".join(f"{c.get('name')}: {c.get('identity')} {c.get('personality')}" for c in chars)
+            docs.append(await self._create_domain_setting_document(
+                novel_id=pe.novel_id,
+                domain_name=domain_name,
+                doc_type="concept",
+                title="人物设定",
+                content=text,
+            ))
+
+        items = raw.get("important_items", [])
+        if items:
+            text = "\n".join(f"{i.get('name')}: {i.get('description')}" for i in items)
+            docs.append(await self._create_domain_setting_document(
+                novel_id=pe.novel_id,
+                domain_name=domain_name,
+                doc_type="concept",
+                title="物品设定",
+                content=text,
+            ))
+
+        entity_result = await self._apply_entity_diffs_in_batches(
+            pe.novel_id,
+            pe.id,
+            self._build_domain_entity_diffs(raw, domain_id=domain.id if domain else "", domain_name=domain_name),
+            field_resolutions=field_resolutions,
+        )
+        resolution_result: dict[str, Any] = {
+            "field_resolutions": [],
+            "knowledge_usage": "domain",
+            "domain_id": domain.id if domain else None,
+            "domain_name": domain_name,
+            "isolated_from_global_library": True,
+            "local_document_ids": [doc.id for doc in docs],
+        }
+        resolution_result.update(entity_result)
+        if domain:
+            source_doc_ids = list(domain.source_doc_ids or [])
+            for doc_id in [pe.id, *resolution_result["local_document_ids"]]:
+                if doc_id not in source_doc_ids:
+                    source_doc_ids.append(doc_id)
+            await self.domain_repo.update(domain, source_doc_ids=source_doc_ids)
+        return docs, resolution_result
+
+
+    async def process_upload(
+        self,
+        novel_id: str,
+        filename: str,
+        content: str,
+        *,
+        force_setting: bool = False,
+    ) -> PendingExtraction:
         log_service.add_log(novel_id, "ExtractionService", f"处理上传文件: {filename}")
-        payload = await self._build_pending_payload_from_content(novel_id, filename, content)
+        payload = await self._build_pending_payload_from_content(
+            novel_id,
+            filename,
+            content,
+            force_setting=force_setting,
+        )
         if payload.extraction_type == "setting":
             proposed_entity_count = len(payload.proposed_entities or [])
             log_service.add_log(
@@ -668,9 +959,16 @@ class ExtractionService:
         novel_id: str,
         filename: str,
         content: str,
+        *,
+        force_setting: bool = False,
     ) -> None:
         log_service.add_log(novel_id, "ExtractionService", f"开始后台提取: {filename}")
-        payload = await self._build_pending_payload_from_content(novel_id, filename, content)
+        payload = await self._build_pending_payload_from_content(
+            novel_id,
+            filename,
+            content,
+            force_setting=force_setting,
+        )
         await self.pending_repo.update_payload(
             pe_id,
             extraction_type=payload.extraction_type,
@@ -702,12 +1000,33 @@ class ExtractionService:
         novel_id: str,
         filename: str,
         content: str,
+        *,
+        force_setting: bool = False,
     ) -> PendingExtractionPayload:
-        classification = await self.classifier.classify(filename, content, novel_id)
+        if force_setting:
+            classification = FileClassificationResult(
+                file_type="setting",
+                confidence=1.0,
+                reason="用户选择局部生效规则域，跳过文件分类并按设定资料处理",
+            )
+            log_service.add_log(
+                novel_id,
+                "ExtractionService",
+                f"跳过文件分类，按设定资料导入: {filename}",
+                event="agent.progress",
+                status="succeeded",
+                node="file_classify",
+                task="classify_file",
+                metadata={"force_setting": True},
+            )
+        else:
+            classification = await self.classifier.classify(filename, content, novel_id)
 
         if classification.file_type == "setting":
             extracted = await self.setting_agent.extract(content, novel_id)
             raw_result = extracted.model_dump()
+            if force_setting:
+                raw_result["_knowledge_usage"] = "domain"
             proposed_entities = []
             for c in extracted.character_profiles:
                 proposed_entities.append({"type": "character", "name": c.name, "data": c.model_dump()})
@@ -977,6 +1296,21 @@ class ExtractionService:
         docs: List[NovelDocument] = []
         resolution_result = {"field_resolutions": []}
         if pe.extraction_type == "setting":
+            domain = await self._get_knowledge_domain_for_pending(pe)
+            if domain:
+                docs, resolution_result = await self._approve_knowledge_domain_pending(
+                    pe,
+                    domain=domain,
+                    field_resolutions=field_resolutions,
+                )
+                await self.pending_repo.update_status(pe_id, "approved", resolution_result=resolution_result)
+                log_service.add_log(
+                    pe.novel_id,
+                    "ExtractionService",
+                    f"规则域资料审核通过，生成 {len(docs)} 份局部文档，写入 {resolution_result.get('entity_applied', 0)} 个局部实体: {pe.source_filename or pe.id}",
+                )
+                return docs
+
             raw = pe.raw_result
             mappings = [
                 ("worldview", "worldview", "世界观"),
@@ -1022,10 +1356,13 @@ class ExtractionService:
             diff_result = pe.diff_result
             if not diff_result:
                 diff_result = await self._build_setting_diff(pe.novel_id, raw)
-            for entity_diff in diff_result.get("entity_diffs", []):
-                resolution_result["field_resolutions"].extend(
-                    await self._apply_entity_diff(pe.novel_id, entity_diff, field_resolutions=field_resolutions)
-                )
+            entity_result = await self._apply_entity_diffs_in_batches(
+                pe.novel_id,
+                pe_id,
+                diff_result.get("entity_diffs", []),
+                field_resolutions=field_resolutions,
+            )
+            resolution_result.update(entity_result)
 
         else:
             latest = await self.doc_repo.get_latest_by_type(pe.novel_id, "style_profile")
@@ -1063,6 +1400,16 @@ class ExtractionService:
         log_service.add_log(pe.novel_id, "ExtractionService", f"审核通过，生成 {len(docs)} 份文档")
         return docs
 
+    async def _get_knowledge_domain_for_pending(self, pe: PendingExtraction):
+        raw_result = pe.raw_result or {}
+        domains = await self.domain_repo.list_by_novel(pe.novel_id, include_disabled=True)
+        matched = next((domain for domain in domains if pe.id in (domain.source_doc_ids or [])), None)
+        if matched:
+            return matched
+        if raw_result.get("_knowledge_usage") == "domain":
+            return next((domain for domain in domains if domain.name in (pe.source_filename or "")), None)
+        return None
+
     async def reject_pending(self, pe_id: str) -> bool:
         pe = await self.pending_repo.get_by_id(pe_id)
         if not pe or pe.status != "pending":
@@ -1072,14 +1419,18 @@ class ExtractionService:
             log_service.add_log(pe.novel_id, "ExtractionService", f"已拒绝并丢弃待审核记录: {pe.source_filename or pe.id}")
         return deleted
 
-    async def delete_failed_pending(self, pe_id: str) -> bool:
+    async def delete_cancelable_pending(self, pe_id: str) -> bool:
         pe = await self.pending_repo.get_by_id(pe_id)
-        if not pe or pe.status != "failed":
+        if not pe or pe.status not in {"failed", "processing"}:
             return False
         deleted = await self.pending_repo.delete(pe_id)
         if deleted:
-            log_service.add_log(pe.novel_id, "ExtractionService", f"已删除失败记录: {pe.source_filename or pe.id}")
+            action = "取消导入" if pe.status == "processing" else "删除失败记录"
+            log_service.add_log(pe.novel_id, "ExtractionService", f"{action}: {pe.source_filename or pe.id}")
         return deleted
+
+    async def delete_failed_pending(self, pe_id: str) -> bool:
+        return await self.delete_cancelable_pending(pe_id)
 
     async def get_active_style_profile(self, novel_id: str) -> Optional[NovelDocument]:
         state = await self.state_repo.get_state(novel_id)

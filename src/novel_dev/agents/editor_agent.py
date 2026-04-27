@@ -1,4 +1,3 @@
-import asyncio
 import re
 from typing import List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,7 +7,8 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
 from novel_dev.services.embedding_service import EmbeddingService
-from novel_dev.services.log_service import log_service
+from novel_dev.services.flow_control_service import FlowControlService
+from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
@@ -33,6 +33,7 @@ class EditorAgent:
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
 
+    @logged_agent_step("EditorAgent", "精修章节", node="edit", task="polish")
     async def polish(self, novel_id: str, chapter_id: str):
         log_service.add_log(novel_id, "EditorAgent", f"开始精修章节: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
@@ -84,7 +85,9 @@ class EditorAgent:
 
         last_idx = len(beats) - 1
         polished_beats = []
+        flow_control = FlowControlService(self.session)
         for idx, beat_text in enumerate(beats):
+            await flow_control.raise_if_cancelled(novel_id)
             score_entry = beat_scores[idx] if idx < len(beat_scores) else {}
             scores = score_entry.get("scores", {})
             beat_level_issues = score_entry.get("issues", []) or []
@@ -104,21 +107,30 @@ class EditorAgent:
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
             if needs_rewrite:
                 log_service.add_log(novel_id, "EditorAgent", f"改写第 {idx + 1} 个节拍 ({len(beat_text)} 字)")
-                polished = await self._rewrite_beat(
-                    beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
-                )
+                async with agent_step(
+                    novel_id,
+                    "EditorAgent",
+                    f"改写第 {idx + 1} 个节拍",
+                    node="polish_beat",
+                    task="polish_beat",
+                    metadata={"beat_index": idx, "source_words": len(beat_text)},
+                ):
+                    polished = await self._rewrite_beat(
+                        beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                    )
                 log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍改写完成 ({len(polished)} 字)")
             else:
                 log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍无需改写")
                 polished = beat_text
             polished_beats.append(polished)
+            await flow_control.raise_if_cancelled(novel_id)
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
         log_service.add_log(novel_id, "EditorAgent", f"精修完成，总字数: {len(polished_text)}")
         if self.embedding_service:
             try:
-                asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
+                await self.embedding_service.index_chapter(chapter_id)
             except Exception as exc:
                 log_service.add_log(novel_id, "EditorAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")

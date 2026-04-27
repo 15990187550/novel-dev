@@ -5,6 +5,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.db.models import (
+    AgentLog,
     BrainstormWorkspace,
     Chapter,
     Entity,
@@ -12,6 +13,8 @@ from novel_dev.db.models import (
     EntityRelationship,
     EntityVersion,
     Foreshadowing,
+    KnowledgeDomain,
+    KnowledgeDomainUsage,
     NovelDocument,
     NovelState,
     OutlineMessage,
@@ -49,6 +52,8 @@ class NovelDeletionService:
         await self.session.execute(delete(Foreshadowing).where(Foreshadowing.novel_id == novel_id))
         await self.session.execute(delete(Chapter).where(Chapter.novel_id == novel_id))
         await self.session.execute(delete(NovelDocument).where(NovelDocument.novel_id == novel_id))
+        await self.session.execute(delete(KnowledgeDomainUsage).where(KnowledgeDomainUsage.novel_id == novel_id))
+        await self.session.execute(delete(KnowledgeDomain).where(KnowledgeDomain.novel_id == novel_id))
         await self.session.execute(
             delete(OutlineSession).where(OutlineSession.novel_id == novel_id)
         )
@@ -58,6 +63,7 @@ class NovelDeletionService:
         await self.session.execute(
             delete(PendingExtraction).where(PendingExtraction.novel_id == novel_id)
         )
+        await self.session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
         await self.session.execute(delete(Entity).where(Entity.novel_id == novel_id))
         await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))
         await self.session.execute(delete(NovelState).where(NovelState.novel_id == novel_id))

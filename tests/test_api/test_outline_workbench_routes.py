@@ -126,6 +126,72 @@ async def test_submit_outline_workbench_feedback_returns_updated_assistant_messa
 
 
 @pytest.mark.asyncio
+async def test_submit_outline_workbench_releases_transaction_before_optimization(
+    async_session,
+    test_client,
+    monkeypatch,
+):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=2,
+        estimated_total_chapters=20,
+        estimated_total_words=60000,
+    )
+    await director.save_checkpoint(
+        "n_outline_submit_short_tx",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+    await async_session.commit()
+
+    async def fake_optimize(self, **kwargs):
+        assert self.session.in_transaction() is False
+        return {
+            "content": "已根据反馈更新《第一卷》卷纲，共 1 章。",
+            "result_snapshot": VolumePlan(
+                volume_id="vol_1",
+                volume_number=1,
+                title="第一卷",
+                summary="卷一摘要",
+                total_chapters=1,
+                estimated_total_words=3000,
+                chapters=[
+                    VolumeBeat(
+                        chapter_id="ch_1",
+                        chapter_number=1,
+                        title="第一章",
+                        summary="开篇",
+                        target_word_count=3000,
+                        target_mood="tense",
+                        beats=[BeatPlan(summary="B1", target_mood="tense")],
+                    )
+                ],
+            ).model_dump(),
+            "conversation_summary": "摘要",
+            "setting_update_summary": None,
+        }
+
+    monkeypatch.setattr(OutlineWorkbenchService, "_optimize_outline", fake_optimize)
+
+    async with test_client as client:
+        resp = await client.post(
+            "/api/novels/n_outline_submit_short_tx/outline_workbench/submit",
+            json={
+                "outline_type": "volume",
+                "outline_ref": "vol_1",
+                "content": "压紧第一幕节奏。",
+            },
+        )
+
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
 async def test_submit_outline_workbench_feedback_returns_confirmation_question_for_missing_brainstorm_synopsis(async_session, test_client):
     director = NovelDirector(session=async_session)
     synopsis = SynopsisData(

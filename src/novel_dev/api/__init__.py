@@ -10,6 +10,11 @@ app = FastAPI()
 app.include_router(router)
 app.include_router(config_router)
 
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
+
 WEB_DIR = os.path.join(os.path.dirname(__file__), "..", "web")
 DIST_DIR = os.path.join(WEB_DIR, "dist")
 SERVE_DIR = DIST_DIR if os.path.isdir(DIST_DIR) else WEB_DIR
@@ -26,11 +31,17 @@ if os.path.isdir(assets_dir):
 
 @app.get("/")
 async def serve_index():
-    return FileResponse(os.path.join(SERVE_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(SERVE_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Not found")
-    return FileResponse(os.path.join(SERVE_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(SERVE_DIR, "index.html"),
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )

@@ -50,3 +50,12 @@ class OutlineSubmitResponse(BaseModel):
     last_result_snapshot: Optional[dict[str, Any]] = None
     conversation_summary: Optional[str] = None
     setting_update_summary: Optional[dict[str, int]] = None
+
+
+class OutlineClearContextResponse(BaseModel):
+    session_id: str
+    outline_type: str
+    outline_ref: str
+    deleted_messages: int = 0
+    conversation_summary: Optional[str] = None
+    last_result_snapshot: Optional[dict[str, Any]] = None

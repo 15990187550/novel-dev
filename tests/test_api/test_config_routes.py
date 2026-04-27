@@ -41,6 +41,24 @@ async def test_save_llm_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_save_llm_config_reloads_runtime_factory(tmp_path, monkeypatch):
+    config_path = tmp_path / "llm_config.yaml"
+    from novel_dev.config import Settings
+    settings = Settings(llm_config_path=str(config_path))
+    reload_calls = []
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setattr("novel_dev.api.config_routes.llm_factory", type("Factory", (), {"reload": lambda self: reload_calls.append(True)})())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/config/llm", json={"config": {"defaults": {"timeout": 45}}})
+        assert resp.status_code == 200
+        assert resp.json()["saved"] is True
+        assert resp.json()["reloaded"] is True
+        assert reload_calls == [True]
+
+
+@pytest.mark.asyncio
 async def test_get_env_config(monkeypatch):
     from novel_dev.config import Settings
     settings = Settings()

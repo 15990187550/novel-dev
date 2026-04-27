@@ -1,4 +1,3 @@
-import asyncio
 import json
 import re
 from typing import List, Optional
@@ -9,7 +8,8 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
-from novel_dev.services.log_service import log_service
+from novel_dev.services.flow_control_service import FlowControlService
+from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.embedding_service import EmbeddingService
 
 
@@ -29,6 +29,7 @@ class WriterAgent:
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
 
+    @logged_agent_step("WriterAgent", "写作章节草稿", node="draft", task="write")
     async def write(self, novel_id: str, context: ChapterContext, chapter_id: str) -> DraftMetadata:
         log_service.add_log(novel_id, "WriterAgent", f"开始写章节草稿: {context.chapter_plan.title}")
         state = await self.state_repo.get_state(novel_id)
@@ -45,6 +46,22 @@ class WriterAgent:
 
         progress = checkpoint.get("drafting_progress", {})
         start_idx = progress.get("beat_index", 0)
+        rewrite_plan = checkpoint.get("draft_rewrite_plan") or {}
+        if rewrite_plan:
+            log_service.add_log(
+                novel_id,
+                "WriterAgent",
+                "检测到评审退回重写计划，按问题反馈重新生成草稿",
+                event="agent.progress",
+                status="started",
+                node="draft_rewrite",
+                task="write",
+                metadata={
+                    "rewrite_all": bool(rewrite_plan.get("rewrite_all")),
+                    "overall": rewrite_plan.get("overall"),
+                    "summary_feedback": rewrite_plan.get("summary_feedback"),
+                },
+            )
 
         raw_draft = ""
         beat_coverage = []
@@ -78,16 +95,18 @@ class WriterAgent:
                         if fs.content in inner and fs.id not in embedded_foreshadowings:
                             embedded_foreshadowings.append(fs.id)
 
+        flow_control = FlowControlService(self.session)
         for idx, beat in enumerate(context.chapter_plan.beats):
             if idx < start_idx:
                 continue
+            await flow_control.raise_if_cancelled(novel_id)
             is_last = (idx == total_beats - 1)
             last_beat_text = inner_beats[-1] if inner_beats else ""
             log_service.add_log(novel_id, "WriterAgent", f"生成第 {idx + 1}/{total_beats} 个节拍: {beat.summary[:50]}...")
 
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
-                idx, total_beats, is_last, novel_id,
+                idx, total_beats, is_last, novel_id, rewrite_plan,
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
@@ -102,6 +121,8 @@ class WriterAgent:
                     total_beats,
                     is_last,
                     None,
+                    novel_id,
+                    rewrite_plan,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -123,6 +144,8 @@ class WriterAgent:
                     total_beats,
                     is_last,
                     self_check,
+                    novel_id,
+                    rewrite_plan,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -163,6 +186,7 @@ class WriterAgent:
                 current_chapter_id=state.current_chapter_id,
             )
             await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
+            await flow_control.raise_if_cancelled(novel_id)
 
         clean_text = _strip_anchors(raw_draft)
         total_words = len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
@@ -176,12 +200,13 @@ class WriterAgent:
 
         if self.embedding_service:
             try:
-                asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
+                await self.embedding_service.index_chapter(chapter_id)
             except Exception as exc:
                 log_service.add_log(novel_id, "WriterAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "drafted")
 
         checkpoint["draft_metadata"] = metadata.model_dump()
+        checkpoint.pop("draft_rewrite_plan", None)
         await self.director.save_checkpoint(
             novel_id,
             phase=Phase.REVIEWING,
@@ -203,10 +228,11 @@ class WriterAgent:
         total: int = 1,
         is_last: bool = False,
         novel_id: str = "",
+        rewrite_plan: dict | None = None,
     ) -> str:
         system_prompt = self._build_system_prompt(context, is_last)
         context_msg = self._build_context_message(
-            beat, context, relay_history, last_beat_text, idx, total, is_last
+            beat, context, relay_history, last_beat_text, idx, total, is_last, rewrite_plan
         )
         retrieval_msg = await self._build_retrieval_message(beat, context, novel_id, idx)
 
@@ -223,7 +249,15 @@ class WriterAgent:
         from novel_dev.llm import llm_factory
         client = llm_factory.get("WriterAgent", task="generate_beat")
         config = llm_factory._resolve_config("WriterAgent", "generate_beat")
-        response = await client.acomplete(messages, config)
+        async with agent_step(
+            novel_id,
+            "WriterAgent",
+            f"生成第 {idx + 1}/{total} 个节拍正文",
+            node="generate_beat",
+            task="generate_beat",
+            metadata={"beat_index": idx, "total_beats": total},
+        ):
+            response = await client.acomplete(messages, config)
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -240,6 +274,7 @@ class WriterAgent:
         self, beat: BeatPlan, context: ChapterContext,
         relay_history: list, last_beat_text: str,
         idx: int, total: int, is_last: bool,
+        rewrite_plan: dict | None = None,
     ) -> str:
         """Layer 2: Narrative context. Chapter plan + relays + recent beat text."""
         from novel_dev.schemas.context import NarrativeRelay
@@ -249,7 +284,7 @@ class WriterAgent:
             parts.append(f"### 前情回顾\n{context.previous_chapter_summary}")
 
         if context.worldview_summary:
-            parts.append(f"### 世界观约束\n{context.worldview_summary[:600]}")
+            parts.append("### 世界观约束\n已加载到章节上下文；正文必须遵守检索到的设定与 guardrails，不要自行改写核心设定。")
 
         if context.location_context:
             location_lines = []
@@ -270,6 +305,7 @@ class WriterAgent:
             parts.append(f"### 近期时间线\n{timeline_text}")
 
         beat_context = self._beat_context(context, idx)
+        target_words = self._beat_target_word_count(context, total, beat)
 
         if beat_context and beat_context.guardrails:
             guardrail_text = "\n".join(f"- {item}" for item in beat_context.guardrails[:8])
@@ -325,6 +361,11 @@ class WriterAgent:
             marker = "→ " if i == idx else "  "
             plan_lines.append(f"{marker}节拍{i+1}: {b.summary}")
         parts.append("### 章节计划\n" + "\n".join(plan_lines))
+        parts.append(f"### 当前节拍目标字数\n约 {target_words} 字，允许 ±20%，不要明显缩水或灌水。")
+
+        rewrite_focus = self._rewrite_focus_for_beat(rewrite_plan or {}, idx)
+        if rewrite_focus:
+            parts.append("### 本轮重写重点\n" + rewrite_focus)
 
         if relay_history:
             relay_text = "\n".join(
@@ -340,6 +381,44 @@ class WriterAgent:
         parts.append(f"### 当前节拍{position}\n{beat.model_dump_json()}")
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _beat_target_word_count(context: ChapterContext, total: int, beat: BeatPlan | None = None) -> int:
+        if beat and beat.target_word_count:
+            return max(1, beat.target_word_count)
+        total_beats = max(1, total)
+        target = context.chapter_plan.target_word_count or 0
+        return max(1, round(target / total_beats)) if target else 800
+
+    @staticmethod
+    def _rewrite_focus_for_beat(rewrite_plan: dict, beat_idx: int) -> str:
+        if not rewrite_plan:
+            return ""
+        beat_issues = rewrite_plan.get("beat_issues") or []
+        current = None
+        if isinstance(beat_issues, list):
+            current = next((item for item in beat_issues if item.get("beat_index") == beat_idx), None)
+        elif isinstance(beat_issues, dict):
+            current = beat_issues.get(beat_idx) or beat_issues.get(str(beat_idx))
+        issues = (current or {}).get("issues") or []
+        lines = []
+        if rewrite_plan.get("summary_feedback"):
+            lines.append(f"- 整体反馈: {rewrite_plan.get('summary_feedback')}")
+        for issue in (rewrite_plan.get("global_issues") or [])[:3]:
+            if not isinstance(issue, dict):
+                continue
+            dim = issue.get("dim") or "global"
+            problem = issue.get("problem") or ""
+            suggestion = issue.get("suggestion") or ""
+            lines.append(f"- [全局/{dim}] {problem} -> {suggestion}")
+        for issue in issues[:6]:
+            if not isinstance(issue, dict):
+                continue
+            dim = issue.get("dim") or "issue"
+            problem = issue.get("problem") or ""
+            suggestion = issue.get("suggestion") or ""
+            lines.append(f"- [{dim}] {problem} -> {suggestion}")
+        return "\n".join(line for line in lines if line.strip())
 
     def _fallback_retrieval(self, beat: BeatPlan, context: ChapterContext, beat_idx: int | None = None) -> str:
         if beat_idx is not None:
@@ -453,19 +532,17 @@ class WriterAgent:
         contradictions = []
 
         if beat_context:
-            normalized = inner.replace("\n", "")
-            is_very_short = len(normalized) < 40
-            for entity in beat_context.entities[:1]:
-                if entity.name and entity.name not in normalized and is_very_short:
+            normalized = self._normalize_for_check(inner)
+            for entity in beat_context.entities:
+                if not self._entity_represented(entity, normalized, beat):
                     missing_entities.append(entity.name)
-            for fs in beat_context.foreshadowings[:1]:
+            for fs in beat_context.foreshadowings:
                 if (
                     fs.role_in_chapter == "embed"
                     and fs.target_beat_index == beat_idx
                     and fs.content
                     and fs.content in beat.foreshadowings_to_embed
-                    and fs.content not in normalized
-                    and len(normalized) < 30
+                    and not self._foreshadowing_represented(fs, normalized)
                 ):
                     missing_foreshadowings.append(fs.content)
 
@@ -476,6 +553,49 @@ class WriterAgent:
             contradictions=contradictions,
             needs_rewrite=needs_rewrite,
         )
+
+    @staticmethod
+    def _normalize_for_check(text: str) -> str:
+        return re.sub(r"\s+", "", text or "")
+
+    @classmethod
+    def _entity_represented(cls, entity, normalized_text: str, beat: BeatPlan) -> bool:
+        names = [entity.name, *(getattr(entity, "aliases", []) or [])]
+        if any(name and cls._normalize_for_check(name) in normalized_text for name in names):
+            return True
+        is_planned_entity = entity.name in beat.key_entities or (entity.name and entity.name in beat.summary)
+        if not is_planned_entity:
+            return True
+        return len(normalized_text) >= 35 and cls._has_contextual_reference(normalized_text)
+
+    @staticmethod
+    def _has_contextual_reference(normalized_text: str) -> bool:
+        references = (
+            "他", "她", "其", "此人", "这人", "那人", "那位", "这位",
+            "少年", "少女", "青年", "男子", "女子", "老人", "师兄", "师姐", "师弟", "师妹",
+        )
+        return any(ref in normalized_text for ref in references)
+
+    @classmethod
+    def _foreshadowing_represented(cls, fs, normalized_text: str) -> bool:
+        content = cls._normalize_for_check(fs.content)
+        if content and content in normalized_text:
+            return True
+        surface_hint = cls._normalize_for_check(getattr(fs, "surface_hint", "") or "")
+        if surface_hint and (surface_hint in normalized_text or cls._text_overlap(surface_hint, normalized_text) >= 0.55):
+            return True
+        return bool(content) and cls._text_overlap(content, normalized_text) >= 0.55
+
+    @staticmethod
+    def _text_overlap(needle: str, haystack: str) -> float:
+        needle_chars = {
+            ch for ch in needle
+            if not ch.isspace() and ch not in "，。！？；：、,.!?;:（）()[]【】“”\"'"
+        }
+        if not needle_chars:
+            return 0.0
+        haystack_chars = set(haystack)
+        return len(needle_chars & haystack_chars) / len(needle_chars)
 
     async def _generate_relay(
         self,
@@ -488,7 +608,7 @@ class WriterAgent:
     ) -> "NarrativeRelay":
         """Generate narrative state snapshot after a beat is written."""
         from novel_dev.schemas.context import NarrativeRelay
-        from novel_dev.agents._llm_helpers import call_and_parse
+        from novel_dev.agents._llm_helpers import call_and_parse_model
 
         beat_context = self._beat_context(context, beat_idx)
         guardrails = beat_context.guardrails if beat_context else []
@@ -510,9 +630,9 @@ class WriterAgent:
             "- next_beat_hook 要服务下一节拍目标，不要凭空发明新主线。\n"
             "JSON:"
         )
-        return await call_and_parse(
+        return await call_and_parse_model(
             "WriterAgent", "generate_relay", prompt,
-            NarrativeRelay.model_validate_json, max_retries=2, novel_id=novel_id,
+            NarrativeRelay, max_retries=2, novel_id=novel_id,
         )
 
     def _build_style_guide_block(self, context: ChapterContext) -> str:
@@ -550,7 +670,7 @@ class WriterAgent:
             "- **开场多样性**:禁止以『清晨/黄昏/夜幕/阳光透过』等套路环境描写起笔,"
             "用动作、对话、具象物件或反常细节切入。\n"
             f"{hook_clause}"
-            "- **字数**:按节拍 target_word_count 估算,允许 ±20%。\n"
+            "- **字数**:按用户消息中的当前节拍目标字数写作,允许 ±20%。\n"
             "- **伏笔**:pending_foreshadowings 中标注 role_in_chapter=embed 的条目,"
             "请自然嵌入文本(不要点破,不要写成注解)。\n"
         )
@@ -566,11 +686,13 @@ class WriterAgent:
         total: int = 1,
         is_last: bool = False,
         self_check: BeatSelfCheck | None = None,
+        novel_id: str = "",
+        rewrite_plan: dict | None = None,
     ) -> str:
         system_prompt = self._build_system_prompt(context, is_last)
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
-            idx, total, is_last,
+            idx, total, is_last, rewrite_plan,
         )
         fix_block = ""
         if self_check and self_check.needs_rewrite:
@@ -595,5 +717,13 @@ class WriterAgent:
         from novel_dev.llm import llm_factory
         client = llm_factory.get("WriterAgent", task="rewrite_beat")
         config = llm_factory._resolve_config("WriterAgent", "rewrite_beat")
-        response = await client.acomplete(messages, config)
+        async with agent_step(
+            novel_id,
+            "WriterAgent",
+            f"重写第 {idx + 1}/{total} 个节拍",
+            node="rewrite_beat",
+            task="rewrite_beat",
+            metadata={"beat_index": idx, "total_beats": total},
+        ):
+            response = await client.acomplete(messages, config)
         return _strip_anchors(response.text).strip()

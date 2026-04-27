@@ -15,7 +15,7 @@ describe('outline workbench helpers', () => {
           outline_type: 'volume',
           outline_ref: 'vol_1',
           title: '第一卷',
-          status: 'missing',
+          status: 'needs_revision',
         },
       ],
       currentItem: {
@@ -39,7 +39,7 @@ describe('outline workbench helpers', () => {
         outlineRef: 'vol_1',
         itemId: 'volume:vol_1',
         isCurrent: true,
-        statusLabel: '待创建',
+        statusLabel: '需人工处理',
       },
     ])
   })

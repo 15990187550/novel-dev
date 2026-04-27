@@ -50,7 +50,7 @@ class EntityService:
             system_needs_review=classification.system_needs_review,
         )
 
-    async def _refresh_entity_artifacts(self, entity_id: str) -> None:
+    async def _refresh_entity_artifacts(self, entity_id: str, *, use_llm_for_classification: bool = True) -> None:
         entity = await self.entity_repo.get_by_id(entity_id)
         if not entity:
             return
@@ -65,6 +65,7 @@ class EntityService:
                 entity_name=entity.name,
                 latest_state=latest_state,
                 relationships=relationships,
+                use_llm=use_llm_for_classification,
             )
             await self._persist_classification(entity_id, classification)
         except Exception as exc:
@@ -84,16 +85,58 @@ class EntityService:
             except Exception as exc:
                 logger.warning("entity_search_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
 
+    async def classify_entities_batch(self, entity_ids: list[str]) -> dict:
+        entities_by_id = {}
+        payload: list[dict[str, Any]] = []
+        for entity_id in entity_ids:
+            entity = await self.entity_repo.get_by_id(entity_id)
+            if not entity:
+                continue
+            latest_state = await self.get_latest_state(entity_id) or {}
+            relationships = await self.relationship_repo.list_by_source(entity_id, novel_id=entity.novel_id) if entity.novel_id else []
+            entities_by_id[entity_id] = entity
+            payload.append({
+                "entity_id": entity_id,
+                "entity_type": entity.type,
+                "entity_name": entity.name,
+                "latest_state": latest_state,
+                "relationships": relationships,
+            })
+
+        if not payload:
+            return {"total": 0, "updated": 0}
+
+        novel_id = next((entity.novel_id for entity in entities_by_id.values() if entity.novel_id), "")
+        classifications = await self.classification_service.classify_batch(novel_id, payload)
+        updated = 0
+        for entity_payload, classification in zip(payload, classifications):
+            await self._persist_classification(entity_payload["entity_id"], classification)
+            updated += 1
+
+        if self.embedding_service:
+            for entity_id in entity_ids:
+                try:
+                    await self.embedding_service.index_entity(entity_id)
+                    if hasattr(self.embedding_service, "index_entity_search"):
+                        await self.embedding_service.index_entity_search(entity_id)
+                except Exception as exc:
+                    logger.warning("entity_index_trigger_failed", extra={"entity_id": entity_id, "error": str(exc)})
+
+        return {"total": len(payload), "updated": updated}
+
     async def reclassify_entities_for_novel(self, novel_id: str) -> dict:
         entities = await self.entity_repo.list_by_novel(novel_id)
+        batch_size = 25
         updated = 0
-        for entity in entities:
-            await self._refresh_entity_artifacts(entity.id)
-            updated += 1
+        for start in range(0, len(entities), batch_size):
+            batch = entities[start:start + batch_size]
+            result = await self.classify_entities_batch([entity.id for entity in batch])
+            updated += int(result.get("updated") or 0)
         return {
             "novel_id": novel_id,
             "total": len(entities),
             "updated": updated,
+            "batch_size": batch_size,
         }
 
     async def create_entity(
@@ -104,6 +147,7 @@ class EntityService:
         chapter_id: Optional[str] = None,
         novel_id: Optional[str] = None,
         initial_state: Optional[dict] = None,
+        use_llm_for_classification: bool = True,
     ) -> Entity:
         entity = await self.entity_repo.create(entity_id, entity_type, name, chapter_id, novel_id)
         state = initial_state.copy() if initial_state else {}
@@ -113,7 +157,7 @@ class EntityService:
             state["name"] = name
         await self.version_repo.create(entity_id, 1, state, chapter_id=chapter_id, diff_summary={"created": True})
         await self.entity_repo.update_version(entity_id, 1)
-        await self._refresh_entity_artifacts(entity_id)
+        await self._refresh_entity_artifacts(entity_id, use_llm_for_classification=use_llm_for_classification)
         return entity
 
     async def create_or_update_entity(
@@ -143,6 +187,20 @@ class EntityService:
         ver = await self.version_repo.create(entity_id, new_version, new_state, chapter_id=chapter_id, diff_summary=diff_summary)
         await self.entity_repo.update_version(entity_id, new_version)
         await self._refresh_entity_artifacts(entity_id)
+        return ver
+
+    async def update_state_from_import(
+        self,
+        entity_id: str,
+        new_state: dict,
+        chapter_id: Optional[str] = None,
+        diff_summary: Optional[dict] = None,
+    ):
+        latest = await self.version_repo.get_latest(entity_id)
+        new_version = (latest.version + 1) if latest else 1
+        ver = await self.version_repo.create(entity_id, new_version, new_state, chapter_id=chapter_id, diff_summary=diff_summary)
+        await self.entity_repo.update_version(entity_id, new_version)
+        await self._refresh_entity_artifacts(entity_id, use_llm_for_classification=False)
         return ver
 
     async def get_latest_state(self, entity_id: str) -> Optional[dict]:

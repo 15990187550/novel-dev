@@ -45,8 +45,17 @@
             </div>
 
             <div class="flex flex-wrap items-center justify-end gap-2">
-              <span class="app-chip">
+              <span class="app-chip app-chip--editable">
                 {{ novelStore.novelTitle || '未选择小说' }}
+                <button
+                  v-if="novelStore.novelId"
+                  type="button"
+                  class="app-chip__edit"
+                  title="修改小说名称"
+                  @click="renameNovel"
+                >
+                  修改
+                </button>
               </span>
               <span v-if="novelStore.currentPhaseLabel" class="app-chip">
                 {{ novelStore.currentPhaseLabel }}
@@ -57,6 +66,15 @@
               >
                 {{ novelStore.novelState.current_volume_id }} / {{ novelStore.novelState.current_chapter_id || '未进入章节' }}
               </span>
+              <button
+                v-if="novelStore.shouldShowStopFlow"
+                type="button"
+                class="app-stop-flow-button"
+                :disabled="novelStore.stoppingFlow"
+                @click="novelStore.stopCurrentFlow()"
+              >
+                {{ novelStore.stoppingFlow ? '停止中...' : novelStore.stopFlowLabel }}
+              </button>
               <DarkModeToggle />
             </div>
           </header>
@@ -77,14 +95,22 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { useNovelStore } from '@/stores/novel.js'
+import { useRealtimeLog } from '@/composables/useRealtimeLog.js'
 import NovelSelector from '@/components/NovelSelector.vue'
 import DarkModeToggle from '@/components/DarkModeToggle.vue'
 
 const route = useRoute()
 const novelStore = useNovelStore()
+const novelIdRef = computed(() => novelStore.novelId)
+const { logs: appLogs } = useRealtimeLog(novelIdRef)
+
+watch(appLogs, (logs) => {
+  novelStore.syncFlowActivityFromLogs(logs)
+}, { deep: true })
 
 const menuItems = [
   { path: '/dashboard', label: '仪表盘', eyebrow: 'Overview', detail: '总览项目状态、风险、建议动作与实时更新。' },
@@ -108,4 +134,46 @@ function isMenuActive(path) {
     ? route.path === path
     : route.path === path || route.path.startsWith(`${path}/`)
 }
+
+async function renameNovel() {
+  if (!novelStore.novelId) return
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新的小说名称', '修改小说名称', {
+      confirmButtonText: '保存',
+      cancelButtonText: '取消',
+      inputValue: novelStore.novelTitle,
+      inputValidator: (value) => Boolean(String(value || '').trim()) || '小说名称不能为空',
+    })
+    const title = String(value || '').trim()
+    if (!title || title === novelStore.novelTitle) return
+    await novelStore.updateNovelTitle(title)
+    ElMessage.success('小说名称已更新')
+  } catch {
+    // User cancelled.
+  }
+}
 </script>
+
+<style scoped>
+.app-chip--editable {
+  gap: 0.45rem;
+  padding-right: 0.35rem;
+}
+
+.app-chip__edit {
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 0.12rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #475569;
+  transition: border-color 0.16s ease, color 0.16s ease, background 0.16s ease;
+}
+
+.app-chip__edit:hover {
+  border-color: rgba(20, 184, 166, 0.45);
+  background: rgba(240, 253, 250, 0.9);
+  color: #0f766e;
+}
+</style>

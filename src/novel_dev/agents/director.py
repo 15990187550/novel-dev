@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.db.models import NovelState
-from novel_dev.services.log_service import log_service
+from novel_dev.services.log_service import logged_agent_step, log_service
 
 
 class Phase(str, Enum):
@@ -64,6 +64,7 @@ class NovelDirector:
             raise RuntimeError("NovelDirector requires a session to resume")
         return await self.state_repo.get_state(novel_id)
 
+    @logged_agent_step("NovelDirector", "自动推进流程", node="advance", task="advance")
     async def advance(self, novel_id: str) -> NovelState:
         state = await self.resume(novel_id)
         if not state:
@@ -75,7 +76,7 @@ class NovelDirector:
 
         if current == Phase.BRAINSTORMING:
             from novel_dev.repositories.document_repo import DocumentRepository
-            docs = await DocumentRepository(self.session).get_by_type(novel_id, "synopsis")
+            docs = await DocumentRepository(self.session).get_current_by_type(novel_id, "synopsis")
             if not docs:
                 log_service.add_log(novel_id, "NovelDirector", "synopsis 未生成", level="error")
                 raise ValueError("Synopsis not generated yet. Call POST /brainstorm first.")
@@ -133,6 +134,7 @@ class NovelDirector:
             log_service.add_log(novel_id, "NovelDirector", f"无法从 {current.value} 自动推进", level="error")
             raise ValueError(f"Cannot auto-advance from {current}")
 
+    @logged_agent_step("NovelDirector", "运行归档流程", node="librarian", task="run_librarian")
     async def run_librarian(self, novel_id: str) -> NovelState:
         state = await self.resume(novel_id)
         if not state:
@@ -242,6 +244,12 @@ class NovelDirector:
         for idx, ch_plan in enumerate(chapters):
             if ch_plan.get("chapter_id") == current_chapter_id and idx + 1 < len(chapters):
                 next_plan = chapters[idx + 1]
+                from novel_dev.repositories.chapter_repo import ChapterRepository
+                await ChapterRepository(self.session).ensure_from_plan(
+                    novel_id,
+                    state.current_volume_id,
+                    next_plan,
+                )
                 checkpoint["current_chapter_plan"] = next_plan
                 log_service.add_log(novel_id, "NovelDirector", f"进入下一章: {next_plan.get('title')}")
                 return await self.save_checkpoint(

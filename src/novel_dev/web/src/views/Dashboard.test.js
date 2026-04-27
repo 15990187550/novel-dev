@@ -87,6 +87,7 @@ describe('Dashboard', () => {
           DashboardVolumeSummary: DashboardVolumeSummaryStub,
           DashboardNextActions: DashboardNextActionsStub,
           DashboardInsights: DashboardInsightsStub,
+          ElButton: { template: '<button><slot /></button>' },
         },
       },
     })

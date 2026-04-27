@@ -5,8 +5,18 @@ import { useNovelStore } from '@/stores/novel.js'
 import VolumePlan from './VolumePlan.vue'
 
 const outlineDetailPanelStub = {
+  name: 'OutlineDetailPanel',
   props: ['createAction', 'detail'],
-  template: '<div class="outline-detail-panel-stub">{{ createAction?.loading ? "创建中..." : (detail?.emptyDescription || createAction?.disabledReason || createAction?.label || "") }}</div>',
+  template: `
+    <div class="outline-detail-panel-stub">
+      {{ createAction?.loading ? "创建中..." : (detail?.emptyDescription || createAction?.disabledReason || createAction?.label || "") }}
+      <section v-for="section in detail?.sections || []" :key="section.title">
+        <h3>{{ section.title }}</h3>
+        <p v-for="item in section.items" :key="item">{{ item }}</p>
+        <button v-if="section.detailItems?.length">查看详情</button>
+      </section>
+    </div>
+  `,
 }
 
 const outlineConversationStub = {
@@ -184,6 +194,80 @@ describe('VolumePlan', () => {
     await flushPromises()
     expect(secondWrapper.text()).toContain('对话已禁用')
     expect(secondWrapper.text()).toContain('创建中')
+  })
+
+  it('keeps outline workbench busy while volume planning action is running', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'volume_planning'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.loadingActions.volume_plan = true
+    store.outlineWorkbench.items = [
+      {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+        itemId: 'synopsis:synopsis',
+        key: 'synopsis:synopsis',
+        title: '总纲',
+        status: 'ready',
+        statusLabel: '已完成',
+        summary: '总纲摘要',
+      },
+    ]
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: outlineConversationStub,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('生成中')
+    expect(wrapper.text()).toContain('对话已禁用')
+  })
+
+  it('shows a precise stop flow button only while outline generation is running', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.stopCurrentFlow = vi.fn().mockResolvedValue()
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.findAll('button').some((button) => button.text().includes('停止生成大纲'))).toBe(false)
+
+    store.outlineWorkbench.submitting = true
+    await flushPromises()
+
+    const stopButton = wrapper.findAll('button').find((button) => button.text().includes('停止生成大纲'))
+    expect(stopButton).toBeTruthy()
+    await stopButton.trigger('click')
+    expect(store.stopCurrentFlow).toHaveBeenCalledTimes(1)
   })
 
   it('renders brainstorm workspace confirmation and setting drafts', async () => {
@@ -454,6 +538,186 @@ describe('VolumePlan', () => {
 
     await submitButton.trigger('click')
     expect(store.submitBrainstormWorkspace).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders synopsis volume outline contracts in detail panel', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'volume_planning'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.outlineWorkbench.items = [
+      {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+        key: 'synopsis:synopsis',
+        title: '总纲',
+        status: 'ready',
+      },
+    ]
+    store.synopsisData = {
+      title: '道照诸天',
+      logline: '陆照争夺超脱路径。',
+      core_conflict: '陆照 vs 轮回空间',
+      estimated_volumes: 2,
+      estimated_total_chapters: 60,
+      volume_outlines: [
+        {
+          volume_number: 1,
+          title: '轮回初醒',
+          main_goal: '夺回第一枚道印',
+          main_conflict: '陆照 vs 轮回使者',
+          climax: '夺印成功',
+          hook_to_next: '第二枚道印现世',
+        },
+      ],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: outlineDetailPanelStub,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('卷级总览')
+    expect(wrapper.text()).toContain('第 1 卷《轮回初醒》')
+    expect(wrapper.text()).toContain('夺回第一枚道印')
+    expect(wrapper.text()).toContain('查看详情')
+
+    const detail = wrapper.findComponent(outlineDetailPanelStub).props('detail')
+    const volumeOverview = detail.sections.find((section) => section.title === '卷级总览')
+    expect(volumeOverview.items[0]).not.toContain('第二枚道印现世')
+    expect(volumeOverview.detailItems[0]).toContain('第二枚道印现世')
+  })
+
+  it('renders milestone summaries with detail entries in synopsis detail panel', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'volume_planning'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.outlineWorkbench.items = [
+      {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+        key: 'synopsis:synopsis',
+        title: '总纲',
+        status: 'ready',
+      },
+    ]
+    store.synopsisData = {
+      title: '道照诸天',
+      milestones: [
+        {
+          act: '第一幕',
+          summary: '陆照在轮回试炼里发现道印线索，并意识到师门旧案与轮回空间有关。',
+          consequence: '他决定主动进入下一场试炼追查真相。',
+        },
+      ],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: outlineDetailPanelStub,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    const detail = wrapper.findComponent(outlineDetailPanelStub).props('detail')
+    const milestones = detail.sections.find((section) => section.title === '关键剧情里程碑')
+    expect(milestones.items[0]).toContain('第一幕：陆照在轮回试炼里发现道印线索')
+    expect(milestones.items[0]).not.toContain('主动进入下一场试炼')
+    expect(milestones.detailItems[0]).toContain('主动进入下一场试炼')
+  })
+
+  it('renders review status and score details for failed auto revise volume outlines', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'volume_planning'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.items = [
+      {
+        outline_type: 'volume',
+        outline_ref: 'vol_1',
+        itemId: 'volume:vol_1',
+        key: 'volume:vol_1',
+        title: '第 1 卷',
+        status: 'needs_revision',
+        statusLabel: '需人工处理',
+        summary: '卷纲初稿',
+      },
+    ]
+    store.outlineWorkbench.selection = {
+      outline_type: 'volume',
+      outline_ref: 'vol_1',
+    }
+    store.outlineWorkbench.lastResultSnapshot = {
+      volume_id: 'vol_1',
+      volume_number: 1,
+      title: '第 1 卷',
+      summary: '卷纲初稿',
+      total_chapters: 1,
+      estimated_total_words: 3000,
+      chapters: [],
+      review_status: {
+        status: 'revise_failed',
+        reason: '自动修订失败: parse failed',
+        score: {
+          overall: 50,
+          outline_fidelity: 60,
+          character_plot_alignment: 55,
+          hook_distribution: 40,
+          foreshadowing_management: 70,
+          chapter_hooks: 45,
+          page_turning: 50,
+          summary_feedback: '爽点不足',
+        },
+      },
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('需人工处理')
+    expect(wrapper.text()).toContain('自动修订失败')
+    expect(wrapper.text()).toContain('parse failed')
+    expect(wrapper.text()).toContain('评分明细')
+    expect(wrapper.text()).toContain('整体评分：50')
+    expect(wrapper.text()).toContain('评审意见：爽点不足')
   })
 
   it('uses conversation generation instead of a separate create button for missing brainstorm synopsis', async () => {

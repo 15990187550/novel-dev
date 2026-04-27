@@ -1,9 +1,9 @@
 import json
 import math
 import uuid
-from typing import Optional
+from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from novel_dev.schemas.outline import (
     VolumePlan,
@@ -20,14 +20,24 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.agents._llm_helpers import call_and_parse_model
-from novel_dev.services.log_service import log_service
+from novel_dev.agents._llm_helpers import call_and_parse_model, coerce_to_str_list, coerce_to_text
+from novel_dev.services.flow_control_service import FlowControlService
+from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
+from novel_dev.services.domain_activation_service import DomainActivationService
 
 
 class VolumeChapterSkeleton(BaseModel):
     chapter_number: int
+    chapter_id: str = ""
     title: str
     summary: str
+
+    @staticmethod
+    def build_chapter_id(volume_number: int | str | None, chapter_number: int | str) -> str:
+        if volume_number is None or volume_number == "":
+            return f"ch_{chapter_number}"
+        return f"vol_{volume_number}_ch_{chapter_number}"
 
     @model_validator(mode="before")
     @classmethod
@@ -35,13 +45,24 @@ class VolumeChapterSkeleton(BaseModel):
         if not isinstance(value, dict):
             return value
         normalized = dict(value)
-        if "title" not in normalized and "chapter_title" in normalized:
-            normalized["title"] = normalized["chapter_title"]
         if "summary" not in normalized:
             for legacy_key in ("description", "chapter_summary", "content"):
                 if legacy_key in normalized:
                     normalized["summary"] = normalized[legacy_key]
                     break
+        if "title" not in normalized:
+            if "chapter_title" in normalized:
+                normalized["title"] = normalized["chapter_title"]
+            else:
+                summary = coerce_to_text(normalized.get("summary")).strip()
+                fallback = summary[:18].rstrip("。！？.!?，,；;、 ")
+                chapter_number = normalized.get("chapter_number") or normalized.get("number") or normalized.get("index")
+                normalized["title"] = fallback or (f"第{chapter_number}章" if chapter_number else "未命名章节")
+        if not normalized.get("chapter_id"):
+            chapter_number = normalized.get("chapter_number") or normalized.get("number") or normalized.get("index")
+            volume_number = normalized.get("volume_number")
+            if chapter_number is not None:
+                normalized["chapter_id"] = cls.build_chapter_id(volume_number, chapter_number)
         return normalized
 
 
@@ -77,11 +98,202 @@ class VolumePlanBlueprint(BaseModel):
             )
         if "total_chapters" not in normalized:
             normalized["total_chapters"] = normalized.get("chapter_count") or len(normalized.get("chapters") or [])
+        entity_highlights = normalized.get("entity_highlights")
+        if isinstance(entity_highlights, list):
+            normalized["entity_highlights"] = {"general": [str(item) for item in entity_highlights]}
+        elif isinstance(entity_highlights, str):
+            normalized["entity_highlights"] = {"general": [entity_highlights]}
+        chapters = normalized.get("chapters")
+        if isinstance(chapters, list):
+            normalized_chapters = []
+            for index, item in enumerate(chapters, start=1):
+                if isinstance(item, dict):
+                    item = dict(item)
+                    item.setdefault("chapter_number", index)
+                    item.setdefault("volume_number", normalized["volume_number"])
+                    item.setdefault(
+                        "chapter_id",
+                        VolumeChapterSkeleton.build_chapter_id(normalized["volume_number"], item["chapter_number"]),
+                    )
+                normalized_chapters.append(item)
+            normalized["chapters"] = normalized_chapters
         return normalized
+
+    @field_validator("entity_highlights", mode="before")
+    @classmethod
+    def _coerce_entity_highlights(cls, value: Any) -> dict[str, list[str]]:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            return {str(key): coerce_to_str_list(item) for key, item in value.items()}
+        return {"general": coerce_to_str_list(value)}
+
+    @field_validator("relationship_highlights", mode="before")
+    @classmethod
+    def _coerce_relationship_highlights(cls, value: Any) -> list[str]:
+        return coerce_to_str_list(value)
+
+
+class VolumeChapterPatch(BaseModel):
+    chapter_number: int
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    target_word_count: Optional[int] = None
+    target_mood: Optional[str] = None
+    key_entities: Optional[list[str]] = None
+    foreshadowings_to_embed: Optional[list[str]] = None
+    foreshadowings_to_recover: Optional[list[str]] = None
+    beats: Optional[list[BeatPlan]] = None
+
+    @field_validator("title", "summary", "target_mood", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
+    @field_validator("key_entities", "foreshadowings_to_embed", "foreshadowings_to_recover", mode="before")
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> list[str]:
+        return coerce_to_str_list(value)
+
+
+class VolumePlanPatch(BaseModel):
+    title: Optional[str] = None
+    summary: Optional[str] = None
+    estimated_total_words: Optional[int] = None
+    entity_highlights: Optional[dict[str, list[str]]] = None
+    relationship_highlights: Optional[list[str]] = None
+    chapter_patches: list[VolumeChapterPatch] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_full_plan_payload(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "chapter_patches" not in normalized and isinstance(normalized.get("chapters"), list):
+            normalized["chapter_patches"] = normalized["chapters"]
+        entity_highlights = normalized.get("entity_highlights")
+        if isinstance(entity_highlights, list):
+            normalized["entity_highlights"] = {"general": [str(item) for item in entity_highlights]}
+        elif isinstance(entity_highlights, str):
+            normalized["entity_highlights"] = {"general": [entity_highlights]}
+        return normalized
+
+    @field_validator("title", "summary", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
+    @field_validator("relationship_highlights", mode="before")
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> list[str]:
+        return coerce_to_str_list(value)
+
+    @field_validator("entity_highlights", mode="before")
+    @classmethod
+    def _coerce_entity_highlights(cls, value: Any) -> dict[str, list[str]]:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            return {str(key): coerce_to_str_list(item) for key, item in value.items()}
+        return {"general": coerce_to_str_list(value)}
+
+
+class VolumePlanSemanticJudgement(BaseModel):
+    passed: bool = True
+    hard_conflicts: list[str] = Field(default_factory=list)
+    soft_warnings: list[str] = Field(default_factory=list)
+    repair_suggestions: list[str] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "hard_conflicts" not in normalized:
+            for legacy_key in ("conflicts", "fatal_issues", "violations"):
+                if legacy_key in normalized:
+                    normalized["hard_conflicts"] = normalized[legacy_key]
+                    break
+        if "soft_warnings" not in normalized and "warnings" in normalized:
+            normalized["soft_warnings"] = normalized["warnings"]
+        if "repair_suggestions" not in normalized:
+            for legacy_key in ("suggestions", "fixes", "recommendations"):
+                if legacy_key in normalized:
+                    normalized["repair_suggestions"] = normalized[legacy_key]
+                    break
+        if "passed" not in normalized:
+            normalized["passed"] = not bool(coerce_to_str_list(normalized.get("hard_conflicts")))
+        return normalized
+
+    @field_validator("hard_conflicts", "soft_warnings", "repair_suggestions", mode="before")
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> list[str]:
+        return coerce_to_str_list(value)
+
+
+class VolumeBeatExpansion(BaseModel):
+    chapter_id: str = ""
+    chapter_number: Optional[int] = None
+    title: str = ""
+    summary: str = ""
+    target_word_count: int = 3000
+    target_mood: str = "tense"
+    key_entities: list[str] = Field(default_factory=list)
+    foreshadowings_to_embed: list[str] = Field(default_factory=list)
+    foreshadowings_to_recover: list[str] = Field(default_factory=list)
+    beats: list[BeatPlan] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        chapter_number = normalized.get("chapter_number") or normalized.get("number") or normalized.get("index")
+        if chapter_number is not None and "chapter_number" not in normalized:
+            normalized["chapter_number"] = chapter_number
+        if "chapter_id" not in normalized and chapter_number is not None:
+            volume_number = normalized.get("volume_number")
+            normalized["chapter_id"] = VolumeChapterSkeleton.build_chapter_id(volume_number, chapter_number)
+        if "summary" not in normalized:
+            for legacy_key in ("description", "chapter_summary", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "target_word_count" not in normalized:
+            for legacy_key in ("word_count", "estimated_words", "target_words"):
+                if legacy_key in normalized:
+                    normalized["target_word_count"] = normalized[legacy_key]
+                    break
+        if "target_mood" not in normalized:
+            for legacy_key in ("mood", "tone", "emotion"):
+                if legacy_key in normalized:
+                    normalized["target_mood"] = normalized[legacy_key]
+                    break
+        if "foreshadowings_to_recover" not in normalized:
+            for legacy_key in ("planned_foreshadowings", "required_foreshadowings", "recover_foreshadowings"):
+                if legacy_key in normalized:
+                    normalized["foreshadowings_to_recover"] = normalized[legacy_key]
+                    break
+        return normalized
+
+    @field_validator("chapter_id", "title", "summary", "target_mood", mode="before")
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
+    @field_validator("key_entities", "foreshadowings_to_embed", "foreshadowings_to_recover", mode="before")
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> list[str]:
+        return coerce_to_str_list(value)
 
 
 class VolumePlannerAgent:
     MAX_AUTOREVISE_CHAPTERS = 18
+    CONSTRAINT_SOURCE_DOC_TYPES = ("worldview", "setting", "concept", "synopsis")
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -93,7 +305,14 @@ class VolumePlannerAgent:
         self.timeline_repo = TimelineRepository(session)
         self.foreshadowing_repo = ForeshadowingRepository(session)
         self.director = NovelDirector(session)
+        self.constraint_builder = NarrativeConstraintBuilder()
+        self.domain_activation_service = DomainActivationService(session)
 
+    async def _release_connection_before_external_call(self) -> None:
+        if self.session.in_transaction():
+            await self.session.commit()
+
+    @logged_agent_step("VolumePlannerAgent", "生成分卷规划", node="volume_plan", task="plan")
     async def plan(self, novel_id: str, volume_number: Optional[int] = None) -> VolumePlan:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成分卷规划")
         state = await self.state_repo.get_state(novel_id)
@@ -116,8 +335,9 @@ class VolumePlannerAgent:
         log_service.add_log(novel_id, "VolumePlannerAgent", f"规划第 {volume_number} 卷")
 
         world_snapshot = await self._load_world_snapshot(novel_id) if volume_number > 1 else None
+        await self._release_connection_before_external_call()
         volume_plan = await self._generate_volume_plan(synopsis, volume_number, world_snapshot, novel_id)
-        plan_context = self._build_plan_context(synopsis, world_snapshot)
+        plan_context = await self._build_plan_context(synopsis, world_snapshot, novel_id, volume_number)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         skip_full_revise = len(volume_plan.chapters) > self.MAX_AUTOREVISE_CHAPTERS
@@ -140,28 +360,54 @@ class VolumePlannerAgent:
             log_service.add_log(novel_id, "VolumePlannerAgent", f"评分未通过，开始第 {attempt} 次修订")
             if attempt >= 3:
                 log_service.add_log(novel_id, "VolumePlannerAgent", "已达最大修订次数", level="error")
+                checkpoint["current_volume_plan"] = self._build_reviewed_volume_plan_payload(
+                    volume_plan,
+                    score=score,
+                    status="revise_failed",
+                    reason="已达最大自动修订次数，请在大纲工作台人工调整。",
+                    attempt=attempt,
+                )
+                checkpoint.pop("current_chapter_plan", None)
                 await self.director.save_checkpoint(
                     novel_id,
                     phase=Phase.VOLUME_PLANNING,
                     checkpoint_data=checkpoint,
-                    volume_id=state.current_volume_id,
-                    chapter_id=state.current_chapter_id,
+                    volume_id=volume_plan.volume_id,
+                    chapter_id=None,
                 )
-                raise RuntimeError("Max volume plan attempts exceeded")
-            volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), plan_context, novel_id)
+                return volume_plan
+            try:
+                volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), plan_context, novel_id)
+            except RuntimeError as exc:
+                log_service.add_log(novel_id, "VolumePlannerAgent", f"自动修订失败，已保留当前卷纲: {exc}", level="error")
+                checkpoint["current_volume_plan"] = self._build_reviewed_volume_plan_payload(
+                    volume_plan,
+                    score=score,
+                    status="revise_failed",
+                    reason=f"自动修订失败: {exc}",
+                    attempt=attempt,
+                )
+                checkpoint.pop("current_chapter_plan", None)
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.VOLUME_PLANNING,
+                    checkpoint_data=checkpoint,
+                    volume_id=volume_plan.volume_id,
+                    chapter_id=None,
+                )
+                return volume_plan
 
-        checkpoint["current_volume_plan"] = volume_plan.model_dump()
+        checkpoint["current_volume_plan"] = self._build_reviewed_volume_plan_payload(
+            volume_plan,
+            score=score,
+            status="accepted" if self._is_acceptable(score) else "needs_manual_review",
+            reason="卷纲评分通过。" if self._is_acceptable(score) else "大卷纲已跳过自动整卷修订，请在大纲工作台继续细化章节。",
+            attempt=attempt + 1,
+        )
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
         checkpoint["volume_plan_attempt_count"] = 0
+        await self._persist_volume_plan_artifacts(novel_id, volume_plan)
         log_service.add_log(novel_id, "VolumePlannerAgent", f"分卷规划完成: {volume_plan.title}，共 {len(volume_plan.chapters)} 章")
-
-        await self.doc_repo.create(
-            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
-            novel_id=novel_id,
-            doc_type="volume_plan",
-            title=f"{volume_plan.title}",
-            content=volume_plan.model_dump_json(),
-        )
 
         await self.director.save_checkpoint(
             novel_id,
@@ -174,6 +420,17 @@ class VolumePlannerAgent:
 
         return volume_plan
 
+    async def _persist_volume_plan_artifacts(self, novel_id: str, volume_plan: VolumePlan) -> None:
+        for chapter_plan in volume_plan.chapters:
+            await self.chapter_repo.ensure_from_plan(novel_id, volume_plan.volume_id, chapter_plan)
+        await self.doc_repo.create(
+            doc_id=f"doc_{uuid.uuid4().hex[:8]}",
+            novel_id=novel_id,
+            doc_type="volume_plan",
+            title=f"{volume_plan.title}",
+            content=volume_plan.model_dump_json(),
+        )
+
     # Overall 只要及格,但关键维度(爽点分布、人物与情节契合)必须达标,否则是"虚高"。
     OVERALL_THRESHOLD = 75
     KEY_DIM_THRESHOLDS = {
@@ -181,9 +438,11 @@ class VolumePlannerAgent:
         "character_plot_alignment": 75,
         "page_turning": 70,
     }
-    CHAPTER_BATCH_SIZE = 8
+    CHAPTER_BATCH_SIZE = 4
 
-    def _suggest_volume_chapter_range(self, synopsis: SynopsisData) -> tuple[int, int]:
+    def _suggest_volume_chapter_range(self, synopsis: SynopsisData, target_chapters: Optional[int] = None) -> tuple[int, int]:
+        if target_chapters:
+            return target_chapters, target_chapters
         estimated_volumes = max(1, synopsis.estimated_volumes or 1)
         estimated_total_chapters = max(1, synopsis.estimated_total_chapters or 1)
         rough_chapters_per_volume = math.ceil(estimated_total_chapters / estimated_volumes)
@@ -225,6 +484,24 @@ class VolumePlannerAgent:
         )
         return "\n".join(lines)
 
+    def _build_reviewed_volume_plan_payload(
+        self,
+        plan: VolumePlan,
+        *,
+        score: VolumeScoreResult,
+        status: str,
+        reason: str,
+        attempt: int,
+    ) -> dict[str, Any]:
+        payload = plan.model_dump()
+        payload["review_status"] = {
+            "status": status,
+            "reason": reason,
+            "attempt": attempt,
+            "score": score.model_dump(),
+        }
+        return payload
+
     def _infer_volume_number(self, checkpoint: dict, state) -> int:
         if state.current_volume_id and state.current_volume_id.startswith("vol_"):
             try:
@@ -233,17 +510,53 @@ class VolumePlannerAgent:
                 pass
         return 1
 
-    def _build_plan_context(self, synopsis: SynopsisData, world_snapshot: Optional[dict]) -> str:
+    async def _build_plan_context(
+        self,
+        synopsis: SynopsisData,
+        world_snapshot: Optional[dict],
+        novel_id: str = "",
+        volume_number: Optional[int] = None,
+    ) -> str:
         synopsis_text = synopsis.model_dump_json()[:12000]
+        constraint_block = ""
+        if volume_number is not None:
+            source_text = await self._load_constraint_source_text(novel_id)
+            constraint = await self.domain_activation_service.build_context(
+                novel_id=novel_id,
+                synopsis=synopsis,
+                volume_number=volume_number,
+                source_text=source_text,
+                world_snapshot=world_snapshot,
+            )
+            constraint_block = "\n\n" + constraint.to_prompt_block()
         if not world_snapshot:
-            return f"### 大纲数据\n{synopsis_text}"
+            return f"### 大纲数据\n{synopsis_text}{constraint_block}"
         return (
             f"### 大纲数据\n{synopsis_text}\n\n"
             "### 前卷世界状态快照\n"
             f"活跃人物:\n{world_snapshot.get('entities', '无')}\n"
             f"未回收伏笔:\n{world_snapshot.get('foreshadowings', '无')}\n"
             f"已推进时间线:\n{world_snapshot.get('timeline', '无')}"
+            f"{constraint_block}"
         )
+
+    def _build_volume_contract_context(self, synopsis: SynopsisData, volume_number: int) -> str:
+        outlines = list(synopsis.volume_outlines or [])
+        if not outlines:
+            return "### 本卷总纲契约\n无明确卷级契约，请从总纲整体推导，但不要偏离核心冲突。"
+
+        def dump_contract(label: str, number: int) -> str:
+            match = next((item for item in outlines if item.volume_number == number), None)
+            if not match:
+                return ""
+            return f"### {label}\n{match.model_dump_json()}"
+
+        blocks = [
+            dump_contract("上一卷契约", volume_number - 1),
+            dump_contract("本卷总纲契约(必须优先遵守)", volume_number),
+            dump_contract("下一卷契约(仅用于衔接铺垫)", volume_number + 1),
+        ]
+        return "\n\n".join(block for block in blocks if block)
 
     def _build_score_plan_snapshot(self, plan: VolumePlan) -> str:
         snapshot = {
@@ -268,52 +581,177 @@ class VolumePlannerAgent:
         return json.dumps(snapshot, ensure_ascii=False)
 
     async def _generate_volume_plan(
-        self, synopsis: SynopsisData, volume_number: int, world_snapshot: Optional[dict] = None, novel_id: str = ""
+        self,
+        synopsis: SynopsisData,
+        volume_number: int,
+        world_snapshot: Optional[dict] = None,
+        novel_id: str = "",
+        generation_instruction: str = "",
+        target_chapters: Optional[int] = None,
     ) -> VolumePlan:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成卷纲")
-        MAX_CHARS = 12000
+        MAX_CHARS = 8000
         truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
-        chapter_range = self._suggest_volume_chapter_range(synopsis)
+        chapter_range = self._suggest_volume_chapter_range(synopsis, target_chapters=target_chapters)
+        volume_contract_block = self._build_volume_contract_context(synopsis, volume_number)
+        source_text = await self._load_constraint_source_text(novel_id)
+        constraint_context = await self.domain_activation_service.build_context(
+            novel_id=novel_id,
+            synopsis=synopsis,
+            volume_number=volume_number,
+            source_text=source_text,
+            world_snapshot=world_snapshot,
+        )
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "已构建第 "
+            f"{volume_number} 卷叙事约束包: "
+            f"规则域[{self._join_log_names(constraint_context.active_domains)}], "
+            f"片段[{self._join_log_names(constraint_context.source_snippets)}]",
+            event="agent.progress",
+            status="succeeded",
+            node="volume_constraints",
+            task="build_active_constraint_context",
+            metadata={
+                "volume_number": volume_number,
+                "active_domains": constraint_context.active_domains,
+                "source_snippets": constraint_context.source_snippets[:12],
+                "source_snippet_count": len(constraint_context.source_snippets),
+                "current_scope": constraint_context.current_scope[:12],
+                "allowed_conflicts": constraint_context.allowed_conflicts[:12],
+                "foreshadow_only": constraint_context.foreshadow_only[:12],
+                "forbidden_now": constraint_context.forbidden_now[:12],
+                "power_ladder": constraint_context.power_ladder[:12],
+                "knowledge_boundaries": constraint_context.knowledge_boundaries[:12],
+                "executable_constraints": [
+                    item.to_prompt_line() for item in constraint_context.executable_constraints[:12]
+                ],
+            },
+        )
+        constraint_block = constraint_context.to_prompt_block()
 
         world_block = ""
         if world_snapshot:
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                "卷纲使用前卷世界状态快照: "
+                f"实体[{self._snapshot_preview(world_snapshot.get('entities'))}], "
+                f"伏笔[{self._snapshot_preview(world_snapshot.get('foreshadowings'))}], "
+                f"时间线[{self._snapshot_preview(world_snapshot.get('timeline'))}]",
+                event="agent.progress",
+                status="succeeded",
+                node="volume_world_snapshot",
+                task="generate_volume_plan",
+                metadata={
+                    "entities_preview": self._snapshot_preview(world_snapshot.get("entities"), limit=500),
+                    "foreshadowings_preview": self._snapshot_preview(world_snapshot.get("foreshadowings"), limit=500),
+                    "timeline_preview": self._snapshot_preview(world_snapshot.get("timeline"), limit=500),
+                },
+            )
             world_block = (
                 "\n\n### 前卷世界状态快照(本卷规划必须与以下事实一致,不得与之矛盾)\n"
                 f"活跃人物:\n{world_snapshot.get('entities', '无')}\n"
                 f"未回收伏笔(本卷内应考虑回收部分):\n{world_snapshot.get('foreshadowings', '无')}\n"
                 f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
             )
+        instruction_block = (
+            "\n\n### 本次重新生成要求\n"
+            f"{generation_instruction.strip()[:1200]}\n"
+            "必须按以上要求重新生成完整卷纲,不要沿用旧卷纲结构。"
+            if generation_instruction.strip()
+            else ""
+        )
+
+        scale_rule = (
+            f"1. total_chapters 必须等于 {target_chapters} 章，chapters 数组也必须恰好包含 {target_chapters} 项。\n"
+            if target_chapters
+            else f"1. total_chapters 必须控制在 {chapter_range[0]}-{chapter_range[1]} 章之间。\n"
+        )
 
         prompt = (
             "你是一位小说分卷规划专家。请根据以下大纲数据,"
-            "生成一个完整的分卷规划 VolumePlan,返回严格符合 VolumePlan Schema 的 JSON。\n"
+            "只生成卷纲骨架 VolumePlanBlueprint，返回严格符合 VolumePlanBlueprint Schema 的 JSON。\n"
+            "不要返回 VolumePlan，不要返回 beats，不要展开章节细节。\n"
             "## 结构要求\n"
-            "1. 每章给出有意义的标题和摘要,不用『第X章』这类占位符。\n"
-            "2. 每章拆分为 2-4 个节拍(beats),每个节拍用『谁做什么导致什么后果』的形式描述,"
-            "让后续 Writer 能据此展开。\n"
-            "3. 章节之间保持因果连贯,平均每 2-3 章安排 1 个能改变处境的冲突点/悬念点。\n"
-            "4. 每章最后一个 beat 安排悬念、反转、情绪爆点或赌注升级之一,作为章末钩子,"
-            "避免平淡收束。\n"
-            "5. 本卷整体规划出 1 个卷级高潮和 1 个卷末钩子,为下一卷铺垫。\n"
-            "6. foreshadowings_to_embed 与 foreshadowings_to_recover 在章节之间要形成呼应,"
-            "埋下的伏笔在合理章节内给出回收线索。\n"
-            "7. 估算字数合理。\n\n"
+            "1. 只输出卷级字段和 chapters 骨架，每章只保留 chapter_number/title/summary。\n"
+            "2. 每章给出有意义的标题和摘要，不用『第X章』这类占位符。\n"
+            "3. 章节之间保持因果连贯，平均每 2-3 章安排 1 个冲突点/悬念点。\n"
+            "4. 本卷整体规划出 1 个卷级高潮和 1 个卷末钩子，但只体现在 chapter summary 的推进里。\n"
+            "5. entity_highlights 与 relationship_highlights 只保留最关键的 3-5 条，能省则省。\n"
+            "6. 估算字数合理。\n\n"
+            "## 叙事约束\n"
+            "1. 必须遵守 ActiveConstraintContext 的当前阶段边界。\n"
+            "1.1 必须遵守“可执行设定约束”；hard/sequence 约束中的节点必须在章节摘要中按顺序体现。\n"
+            "2. 高阶敌人、终局真相、后续世界/体系若未在本卷允许范围内，只能写成伏笔、残痕、传闻、代理人或异常现象。\n"
+            "3. 缺少设定依据时不得硬编关键事实，应保守降级为待确认线索。\n"
+            "4. 不得重新引入用户已删除或未批准的旧设定。\n\n"
+            "5. 境界、功法层级、势力层级等专有层级名称必须逐字来自总纲、当前设定或 ActiveConstraintContext；"
+            "不得按通用修仙套路自造如“某某三层/七层”等未提供层级。\n\n"
             "## 输出规模限制\n"
-            f"1. total_chapters 必须控制在 {chapter_range[0]}-{chapter_range[1]} 章之间。\n"
+            f"{scale_rule}"
             "2. 这是单卷可执行规划,不要试图一次覆盖整部小说的全部章节。\n"
-            "3. 每章 summary 控制在 40-80 字,每个 beat 控制在 18-40 字。\n"
-            "4. beats 保持 2-3 个即可,优先保证完整 JSON 和章节因果链。\n\n"
+            "3. 每章 summary 控制在 25-50 字，优先写主线推进与章末悬念。\n"
+            "4. 不要返回 beats、target_word_count、target_mood、foreshadowings 字段。\n"
+            "5. 优先保证 JSON 完整，不要输出解释，不要输出 Markdown。\n\n"
             f"大纲数据:\n{truncated_synopsis}\n\n"
+            f"{volume_contract_block}\n\n"
+            f"{constraint_block}\n\n"
             f"当前卷号:{volume_number}"
             f"{world_block}"
+            f"{instruction_block}"
         )
+        await self._release_connection_before_external_call()
         blueprint = await call_and_parse_model(
             "VolumePlannerAgent", "generate_volume_plan", prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+        )
+        if target_chapters and len(blueprint.chapters) != target_chapters:
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                f"卷纲章节数不符合用户要求: 返回 {len(blueprint.chapters)} 章，要求 {target_chapters} 章，开始强约束重试",
+                level="warning",
+                event="agent.progress",
+                status="failed",
+                node="volume_plan_scale",
+                task="generate_volume_plan",
+                metadata={"returned_chapters": len(blueprint.chapters), "target_chapters": target_chapters},
+            )
+            retry_prompt = (
+                f"{prompt}\n\n"
+                "### 纠错要求\n"
+                f"上一次返回了 {len(blueprint.chapters)} 章，不符合用户要求。"
+                f"这一次必须生成恰好 {target_chapters} 个 chapters 骨架，"
+                f"chapter_number 从 1 连续到 {target_chapters}，不得少于或多于。"
+            )
+            await self._release_connection_before_external_call()
+            blueprint = await call_and_parse_model(
+                "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+            )
+            if len(blueprint.chapters) != target_chapters:
+                raise ValueError(
+                    f"generate_volume_plan returned {len(blueprint.chapters)} chapters, expected {target_chapters}"
+                )
+        blueprint = await self._repair_blueprint_constraint_violations(
+            blueprint=blueprint,
+            base_prompt=prompt,
+            constraint_context=constraint_context,
+            novel_id=novel_id,
+            target_chapters=target_chapters,
+        )
+        blueprint = await self._repair_blueprint_semantic_conflicts(
+            blueprint=blueprint,
+            base_prompt=prompt,
+            constraint_context=constraint_context,
+            novel_id=novel_id,
+            target_chapters=target_chapters,
         )
         detailed_chapters = await self._expand_volume_plan_batches(
             blueprint,
             synopsis,
             world_snapshot=world_snapshot,
+            constraint_block=constraint_block,
             novel_id=novel_id,
         )
         result = VolumePlan(
@@ -330,6 +768,247 @@ class VolumePlannerAgent:
         log_service.add_log(novel_id, "VolumePlannerAgent", f"卷纲生成完成: {result.title}")
         return result
 
+    async def _repair_blueprint_constraint_violations(
+        self,
+        *,
+        blueprint: VolumePlanBlueprint,
+        base_prompt: str,
+        constraint_context: ActiveConstraintContext,
+        novel_id: str,
+        target_chapters: Optional[int],
+    ) -> VolumePlanBlueprint:
+        violations = self._validate_blueprint_constraints(blueprint, constraint_context)
+        if not violations:
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                "卷纲设定约束校验通过",
+                event="agent.progress",
+                status="succeeded",
+                node="volume_constraint_validation",
+                task="validate_volume_plan_constraints",
+                metadata={
+                    "volume_number": blueprint.volume_number,
+                    "checked_constraints": len(constraint_context.executable_constraints),
+                },
+            )
+            return blueprint
+
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲设定约束校验失败，开始强约束修正: " + "；".join(violations[:6]),
+            level="warning",
+            event="agent.progress",
+            status="failed",
+            node="volume_constraint_validation",
+            task="validate_volume_plan_constraints",
+            metadata={
+                "volume_number": blueprint.volume_number,
+                "violations": violations,
+                "checked_constraints": len(constraint_context.executable_constraints),
+            },
+        )
+        chapter_rule = (
+            f"必须仍然生成恰好 {target_chapters} 个 chapters。"
+            if target_chapters
+            else "必须保持 total_chapters 与 chapters 数组规模符合原输出规模要求。"
+        )
+        retry_prompt = (
+            f"{base_prompt}\n\n"
+            "### 设定约束校验失败，必须重写卷纲骨架\n"
+            f"{chapter_rule}\n"
+            "以下 hard 约束违反了设定，必须修正：\n"
+            + "\n".join(f"- {item}" for item in violations)
+            + "\n修正要求：缺失的设定节点必须落实到具体章节 title 或 summary 中，顺序必须符合设定链；"
+            "不要只在卷摘要里罗列。仍然只返回 VolumePlanBlueprint JSON。"
+        )
+        await self._release_connection_before_external_call()
+        repaired = await call_and_parse_model(
+            "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+        )
+        if target_chapters and len(repaired.chapters) != target_chapters:
+            raise ValueError(
+                f"generate_volume_plan constraint repair returned {len(repaired.chapters)} chapters, expected {target_chapters}"
+            )
+        remaining = self._validate_blueprint_constraints(repaired, constraint_context)
+        if remaining:
+            raise ValueError("generate_volume_plan violates setting constraints after repair: " + "；".join(remaining[:8]))
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲设定约束修正完成",
+            event="agent.progress",
+            status="succeeded",
+            node="volume_constraint_validation",
+            task="validate_volume_plan_constraints",
+            metadata={"volume_number": repaired.volume_number},
+        )
+        return repaired
+
+    def _validate_blueprint_constraints(
+        self,
+        blueprint: VolumePlanBlueprint,
+        constraint_context: ActiveConstraintContext,
+    ) -> list[str]:
+        violations: list[str] = []
+        for constraint in constraint_context.executable_constraints:
+            if constraint.priority != "hard" or constraint.constraint_type != "sequence" or len(constraint.terms) < 2:
+                continue
+            positions: list[int] = []
+            missing: list[str] = []
+            for term in constraint.terms:
+                position = self._find_constraint_term_position(term, blueprint)
+                if position < 0:
+                    missing.append(term)
+                else:
+                    positions.append(position)
+            if missing:
+                violations.append(f"{constraint.title} 缺失必经节点: {', '.join(missing)}")
+                continue
+            if positions != sorted(positions):
+                violations.append(f"{constraint.title} 必经节点顺序错误: {' -> '.join(constraint.terms)}")
+        return violations
+
+    def _find_constraint_term_position(self, term: str, blueprint: VolumePlanBlueprint) -> int:
+        candidates = [term, *self.constraint_builder._term_aliases(term)]
+        for index, chapter in enumerate(blueprint.chapters):
+            chapter_text = f"{chapter.title}\n{chapter.summary}"
+            if any(candidate and candidate in chapter_text for candidate in candidates):
+                return index
+        return -1
+
+    async def _repair_blueprint_semantic_conflicts(
+        self,
+        *,
+        blueprint: VolumePlanBlueprint,
+        base_prompt: str,
+        constraint_context: ActiveConstraintContext,
+        novel_id: str,
+        target_chapters: Optional[int],
+    ) -> VolumePlanBlueprint:
+        judgement = await self._judge_blueprint_semantic_conflicts(
+            blueprint=blueprint,
+            constraint_context=constraint_context,
+            novel_id=novel_id,
+        )
+        if judgement.passed or not judgement.hard_conflicts:
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                "卷纲语义设定裁判通过" + (f"，软警告 {len(judgement.soft_warnings)} 条" if judgement.soft_warnings else ""),
+                event="agent.progress",
+                status="succeeded",
+                node="volume_semantic_judge",
+                task="judge_volume_plan_semantics",
+                metadata=judgement.model_dump(),
+            )
+            return blueprint
+
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲语义设定裁判失败，开始修正: " + "；".join(judgement.hard_conflicts[:6]),
+            level="warning",
+            event="agent.progress",
+            status="failed",
+            node="volume_semantic_judge",
+            task="judge_volume_plan_semantics",
+            metadata=judgement.model_dump(),
+        )
+        chapter_rule = (
+            f"必须仍然生成恰好 {target_chapters} 个 chapters。"
+            if target_chapters
+            else "必须保持 total_chapters 与 chapters 数组规模符合原输出规模要求。"
+        )
+        retry_prompt = (
+            f"{base_prompt}\n\n"
+            "### LLM 语义设定裁判失败，必须重写卷纲骨架\n"
+            f"{chapter_rule}\n"
+            "以下是必须修复的 hard 设定冲突：\n"
+            + "\n".join(f"- {item}" for item in judgement.hard_conflicts)
+            + "\n以下是修复建议：\n"
+            + "\n".join(f"- {item}" for item in judgement.repair_suggestions[:8])
+            + "\n修正要求：不得与设定事实、阶段边界、伏笔限制、人物/势力关系冲突；"
+            "如果信息不足，降级为传闻、残痕、误判或待确认线索。仍然只返回 VolumePlanBlueprint JSON。"
+        )
+        await self._release_connection_before_external_call()
+        repaired = await call_and_parse_model(
+            "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+        )
+        if target_chapters and len(repaired.chapters) != target_chapters:
+            raise ValueError(
+                f"generate_volume_plan semantic repair returned {len(repaired.chapters)} chapters, expected {target_chapters}"
+            )
+        remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
+        if remaining_hard:
+            raise ValueError("generate_volume_plan violates setting constraints after semantic repair: " + "；".join(remaining_hard[:8]))
+        second_judgement = await self._judge_blueprint_semantic_conflicts(
+            blueprint=repaired,
+            constraint_context=constraint_context,
+            novel_id=novel_id,
+        )
+        if not second_judgement.passed and second_judgement.hard_conflicts:
+            raise ValueError(
+                "generate_volume_plan semantic conflicts remain after repair: "
+                + "；".join(second_judgement.hard_conflicts[:8])
+            )
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲语义设定修正完成",
+            event="agent.progress",
+            status="succeeded",
+            node="volume_semantic_judge",
+            task="judge_volume_plan_semantics",
+            metadata=second_judgement.model_dump(),
+        )
+        return repaired
+
+    async def _judge_blueprint_semantic_conflicts(
+        self,
+        *,
+        blueprint: VolumePlanBlueprint,
+        constraint_context: ActiveConstraintContext,
+        novel_id: str,
+    ) -> VolumePlanSemanticJudgement:
+        judge_constraints = [
+            item
+            for item in constraint_context.executable_constraints
+            if item.constraint_type == "fact"
+        ]
+        if not judge_constraints:
+            return VolumePlanSemanticJudgement(passed=True, confidence=1.0)
+
+        constraints = "\n".join(
+            f"- {item.to_prompt_line()}" for item in judge_constraints[:16]
+        )
+        prompt = (
+            "你是小说设定一致性裁判。请判断卷纲骨架是否语义上违反设定约束。\n"
+            "只返回严格符合 VolumePlanSemanticJudgement Schema 的 JSON。\n\n"
+            "## 判断重点\n"
+            "1. 事实冲突：人物身份、势力关系、法宝归属、地点归属是否写反或无依据改写。\n"
+            "2. 阶段越界：当前卷只能伏笔的高阶敌人/世界/能力，是否被写成正面冲突或已解决事件。\n"
+            "3. 能力不匹配：主角当前阶段是否完成设定上不可能完成的事。\n"
+            "4. 关系错乱：关系变化是否缺少过程，是否与既有设定直接矛盾。\n"
+            "5. 旧设定复活：是否重新引入已删除或未批准设定。\n\n"
+            "## 裁判标准\n"
+            "- 如果只是传闻、梦兆、残影、误判、远景伏笔，且没有造成实际正面交锋或结论，可以通过或给 soft_warnings。\n"
+            "- 只有明确违反 hard 设定、越级正面展开、事实写反、能力跳跃时，才放入 hard_conflicts。\n"
+            "- repair_suggestions 必须具体到如何降级、替换或补过程。\n\n"
+            f"### 可执行设定约束\n{constraints}\n\n"
+            f"### 当前卷纲骨架\n{blueprint.model_dump_json()[:12000]}"
+        )
+        await self._release_connection_before_external_call()
+        return await call_and_parse_model(
+            "VolumePlannerAgent",
+            "judge_volume_plan_semantics",
+            prompt,
+            VolumePlanSemanticJudgement,
+            max_retries=2,
+            novel_id=novel_id,
+        )
+
     async def _expand_volume_plan_batches(
         self,
         blueprint: VolumePlanBlueprint,
@@ -337,10 +1016,13 @@ class VolumePlannerAgent:
         *,
         world_snapshot: Optional[dict],
         novel_id: str,
+        constraint_block: str = "",
     ) -> list[VolumeBeat]:
         chapters: list[VolumeBeat] = []
         skeletons = blueprint.chapters
+        flow_control = FlowControlService(self.session)
         for start in range(0, len(skeletons), self.CHAPTER_BATCH_SIZE):
+            await flow_control.raise_if_cancelled(novel_id)
             batch = skeletons[start:start + self.CHAPTER_BATCH_SIZE]
             start_no = batch[0].chapter_number
             end_no = batch[-1].chapter_number
@@ -350,17 +1032,56 @@ class VolumePlannerAgent:
                 synopsis,
                 batch,
                 world_snapshot=world_snapshot,
+                constraint_block=constraint_block,
             )
+            await self._release_connection_before_external_call()
             batch_result = await call_and_parse_model(
                 "VolumePlannerAgent",
                 "expand_volume_plan_batch",
                 prompt,
-                list[VolumeBeat],
+                list[VolumeBeatExpansion],
                 max_retries=3,
                 novel_id=novel_id,
             )
-            chapters.extend(batch_result)
+            chapters.extend(self._complete_expanded_batch(batch_result, batch))
+            await flow_control.raise_if_cancelled(novel_id)
         return chapters
+
+    def _complete_expanded_batch(
+        self,
+        expansions: list[VolumeBeatExpansion],
+        skeletons: list[VolumeChapterSkeleton],
+    ) -> list[VolumeBeat]:
+        if len(expansions) != len(skeletons):
+            raise ValueError(f"expand_volume_plan_batch returned {len(expansions)} chapters, expected {len(skeletons)}")
+
+        expected_numbers = [chapter.chapter_number for chapter in skeletons]
+        resolved_numbers = [
+            expansion.chapter_number if expansion.chapter_number is not None else skeletons[index].chapter_number
+            for index, expansion in enumerate(expansions)
+        ]
+        if len(set(resolved_numbers)) != len(resolved_numbers):
+            raise ValueError(f"expand_volume_plan_batch returned duplicate chapter_number values: {resolved_numbers}")
+        if set(resolved_numbers) != set(expected_numbers):
+            missing_numbers = sorted(set(expected_numbers) - set(resolved_numbers))
+            unexpected_numbers = sorted(set(resolved_numbers) - set(expected_numbers))
+            raise ValueError(
+                f"expand_volume_plan_batch returned chapter_number mismatch: "
+                f"missing {missing_numbers}, unexpected {unexpected_numbers}, expected {expected_numbers}"
+            )
+
+        skeleton_by_number = {chapter.chapter_number: chapter for chapter in skeletons}
+        completed_by_number: dict[int, VolumeBeat] = {}
+        for index, expansion in enumerate(expansions):
+            chapter_number = resolved_numbers[index]
+            skeleton = skeleton_by_number[chapter_number]
+            payload = expansion.model_dump()
+            payload["chapter_number"] = chapter_number
+            payload["chapter_id"] = payload.get("chapter_id") or skeleton.chapter_id
+            payload["title"] = payload.get("title") or skeleton.title
+            payload["summary"] = payload.get("summary") or skeleton.summary
+            completed_by_number[chapter_number] = VolumeBeat.model_validate(payload)
+        return [completed_by_number[number] for number in expected_numbers]
 
     def _build_volume_plan_batch_prompt(
         self,
@@ -369,10 +1090,12 @@ class VolumePlannerAgent:
         batch: list[VolumeChapterSkeleton],
         *,
         world_snapshot: Optional[dict],
+        constraint_block: str = "",
     ) -> str:
         batch_payload = [
             {
                 "chapter_number": chapter.chapter_number,
+                "chapter_id": VolumeChapterSkeleton.build_chapter_id(blueprint.volume_number, chapter.chapter_number),
                 "title": chapter.title,
                 "summary": chapter.summary,
             }
@@ -387,21 +1110,74 @@ class VolumePlannerAgent:
                 f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
             )
         return (
-            "你是一位小说分卷规划专家。请根据给定的卷纲骨架，补全一批章节的详细 VolumeBeat 数组。"
-            "只返回合法 JSON 数组，每一项必须符合 VolumeBeat Schema。\n"
+            "你是一位小说分卷规划专家。请根据给定的卷纲骨架，补全一批章节的详细 VolumeBeatExpansion 数组。"
+            "只返回合法 JSON 数组，每一项补全章节细节即可。\n"
             "要求:\n"
             "1. 只扩展本批章节，不要返回其他章节。\n"
             "2. 每章保留 chapter_number/title/summary 主线含义一致。\n"
-            "3. chapter_id 使用 ch_<chapter_number>。\n"
+            f"3. chapter_id 必须逐项使用本批待扩展章节提供的 chapter_id，格式为 vol_{blueprint.volume_number}_ch_<chapter_number>。\n"
             "4. target_word_count 给出合理整数；target_mood 用简短英文或中文短语。\n"
             "5. 每章 2-3 个 beats，每个 beat 只写 summary 和 target_mood，必要时补 key_entities / foreshadowings_to_embed。\n"
             "6. 章节之间必须形成因果推进，最后一个 beat 要有章末钩子。\n"
-            "7. 不要输出 Markdown，不要解释。\n\n"
+            f"7. 本批最多 {self.CHAPTER_BATCH_SIZE} 章，优先保证 JSON 完整，不要扩写成长段正文。\n"
+            "8. 必须遵守 ActiveConstraintContext，不要把只能伏笔的高阶内容写成本批正面冲突。\n"
+            "9. 境界、功法层级、势力层级等专有层级名称必须逐字来自整卷骨架、整体大纲或 ActiveConstraintContext；"
+            "不得自行补写不存在的层级编号或通用修仙境界。\n"
+            "10. 不要输出 Markdown，不要解释。\n\n"
             f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
             f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
+            f"{constraint_block}\n\n"
             f"### 本批待扩展章节\n{json.dumps(batch_payload, ensure_ascii=False)}"
             f"{world_block}"
         )
+
+    async def _load_constraint_source_text(self, novel_id: str) -> str:
+        if not novel_id:
+            return ""
+        try:
+            docs = []
+            for doc_type in self.CONSTRAINT_SOURCE_DOC_TYPES:
+                docs.extend(await self.doc_repo.get_current_by_type(novel_id, doc_type))
+            if docs:
+                log_service.add_log(
+                    novel_id,
+                    "VolumePlannerAgent",
+                    "卷纲叙事约束来源: "
+                    + self._join_log_names([f"{doc.doc_type}/{doc.title} v{doc.version}" for doc in docs]),
+                    event="agent.progress",
+                    status="succeeded",
+                    node="volume_context_sources",
+                    task="load_constraint_source_text",
+                    metadata={
+                        "documents": [
+                            {
+                                "id": doc.id,
+                                "type": doc.doc_type,
+                                "title": doc.title,
+                                "version": doc.version,
+                            }
+                            for doc in docs
+                        ],
+                        "document_count": len(docs),
+                    },
+                )
+            return "\n\n".join(f"[{doc.doc_type}] {doc.title}\n{doc.content}" for doc in docs)[:10000]
+        except Exception as exc:
+            log_service.add_log(novel_id, "VolumePlannerAgent", f"叙事约束来源加载失败: {exc}", level="warning")
+            return ""
+
+    @staticmethod
+    def _join_log_names(values: list[str], limit: int = 6) -> str:
+        cleaned = [str(value).strip() for value in values if str(value or "").strip()]
+        if not cleaned:
+            return "无"
+        suffix = f" 等{len(cleaned)}项" if len(cleaned) > limit else ""
+        return "、".join(cleaned[:limit]) + suffix
+
+    @staticmethod
+    def _snapshot_preview(value, limit: int = 120) -> str:
+        text = str(value or "无").strip()
+        return text[:limit] if text else "无"
 
     async def _load_world_snapshot(self, novel_id: str) -> dict:
         """为跨卷延续加载世界状态快照:活跃实体、未回收伏笔、近期时间线。"""
@@ -444,6 +1220,7 @@ class VolumePlannerAgent:
             "严格 JSON，summary_feedback 控制在 300 字内，指出最需要改的 2-3 点。"
             f"\n\n### VolumePlan\n{self._build_score_plan_snapshot(plan)}"
         )
+        await self._release_connection_before_external_call()
         result = await call_and_parse_model(
             "VolumePlannerAgent", "score_volume_plan", prompt, VolumeScoreResult, max_retries=3, novel_id=novel_id
         )
@@ -453,17 +1230,58 @@ class VolumePlannerAgent:
     async def _revise_volume_plan(self, plan: VolumePlan, feedback: str, plan_context: str = "", novel_id: str = "") -> VolumePlan:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始修订卷纲")
         prompt = (
-            "你是一个小说分卷规划专家。请根据以下 VolumePlan、原始规划上下文与评审反馈进行修正，"
-            "返回严格符合 VolumePlan Schema 的 JSON。"
+            "你是一个小说分卷规划专家。请根据以下 VolumePlan、原始规划上下文与评审反馈进行局部修正，"
+            "返回严格符合 VolumePlanPatch Schema 的 JSON。\n\n"
+            "要求:\n"
+            "1. 只返回需要修改的字段，不要重写整卷 VolumePlan。\n"
+            "2. chapter_patches 只包含需要修改的章节，使用 chapter_number 定位。\n"
+            "3. 不要新增、删除、重排章节；不要返回 total_chapters、volume_id、volume_number。\n"
+            "4. beats 只有在该章节拍确实需要替换时才返回完整新 beats。"
             f"\n\n### 当前 VolumePlan\n{plan.model_dump_json()}"
             f"\n\n### 原始规划上下文\n{plan_context}"
             f"\n\n### 反馈\n{feedback}"
         )
-        result = await call_and_parse_model(
-            "VolumePlannerAgent", "revise_volume_plan", prompt, VolumePlan, max_retries=3, novel_id=novel_id
+        await self._release_connection_before_external_call()
+        patch = await call_and_parse_model(
+            "VolumePlannerAgent", "revise_volume_plan", prompt, VolumePlanPatch, max_retries=3, novel_id=novel_id
         )
+        result = self._apply_volume_plan_patch(plan, patch)
         log_service.add_log(novel_id, "VolumePlannerAgent", "卷纲修订完成")
         return result
+
+    def _apply_volume_plan_patch(self, plan: VolumePlan, patch: VolumePlanPatch) -> VolumePlan:
+        payload = plan.model_dump()
+        for field in (
+            "title",
+            "summary",
+            "estimated_total_words",
+            "entity_highlights",
+            "relationship_highlights",
+        ):
+            value = getattr(patch, field)
+            if value is not None:
+                payload[field] = value
+
+        chapters_by_number = {
+            chapter.get("chapter_number"): chapter
+            for chapter in payload.get("chapters", [])
+        }
+        for chapter_patch in patch.chapter_patches:
+            chapter_payload = chapters_by_number.get(chapter_patch.chapter_number)
+            if chapter_payload is None:
+                log_service.add_log(
+                    "",
+                    "VolumePlannerAgent",
+                    f"忽略不存在的章节补丁: chapter_number={chapter_patch.chapter_number}",
+                    level="warning",
+                )
+                continue
+            patch_payload = chapter_patch.model_dump(exclude_none=True)
+            patch_payload.pop("chapter_number", None)
+            chapter_payload.update(patch_payload)
+
+        payload["total_chapters"] = len(payload.get("chapters", []))
+        return VolumePlan.model_validate(payload)
 
     def _extract_chapter_plan(self, volume_beat: VolumeBeat) -> dict:
         """Extract chapter plan from VolumeBeat without mutating input."""

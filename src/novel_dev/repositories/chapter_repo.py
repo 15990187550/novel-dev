@@ -1,5 +1,5 @@
 import math
-from typing import Optional, List
+from typing import Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
 
@@ -20,9 +20,17 @@ class ChapterRepository:
             return 0.0
         return dot / (norm_a * norm_b)
 
-    async def create(self, chapter_id: str, volume_id: str, chapter_number: int, title: Optional[str] = None) -> Chapter:
+    async def create(
+        self,
+        chapter_id: str,
+        volume_id: str,
+        chapter_number: int,
+        title: Optional[str] = None,
+        novel_id: Optional[str] = None,
+    ) -> Chapter:
         ch = Chapter(
             id=chapter_id,
+            novel_id=novel_id,
             volume_id=volume_id,
             chapter_number=chapter_number,
             title=title,
@@ -30,6 +38,45 @@ class ChapterRepository:
         self.session.add(ch)
         await self.session.flush()
         return ch
+
+    async def ensure_from_plan(self, novel_id: str, volume_id: str, chapter_plan: Any) -> Chapter:
+        if hasattr(chapter_plan, "model_dump"):
+            plan = chapter_plan.model_dump()
+        else:
+            plan = dict(chapter_plan or {})
+
+        chapter_id = plan.get("chapter_id")
+        if not chapter_id:
+            raise ValueError("chapter_plan missing chapter_id")
+
+        existing = await self.get_by_id(chapter_id)
+        if existing:
+            changed = False
+            if novel_id and existing.novel_id != novel_id:
+                existing.novel_id = novel_id
+                changed = True
+            if volume_id and existing.volume_id != volume_id:
+                existing.volume_id = volume_id
+                changed = True
+            chapter_number = int(plan.get("chapter_number") or existing.chapter_number or 1)
+            if existing.chapter_number != chapter_number:
+                existing.chapter_number = chapter_number
+                changed = True
+            title = plan.get("title")
+            if title and existing.title != title:
+                existing.title = title
+                changed = True
+            if changed:
+                await self.session.flush()
+            return existing
+
+        return await self.create(
+            chapter_id=chapter_id,
+            volume_id=volume_id,
+            chapter_number=int(plan.get("chapter_number") or 1),
+            title=plan.get("title"),
+            novel_id=novel_id,
+        )
 
     async def get_by_id(self, chapter_id: str) -> Optional[Chapter]:
         result = await self.session.execute(select(Chapter).where(Chapter.id == chapter_id))

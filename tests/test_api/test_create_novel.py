@@ -7,6 +7,7 @@ from sqlalchemy import select
 from novel_dev.api import routes
 from novel_dev.api.routes import router, get_session
 from novel_dev.db.models import (
+    AgentLog,
     BrainstormWorkspace,
     Chapter,
     Entity,
@@ -41,7 +42,9 @@ async def test_create_novel(async_session):
             assert resp.status_code == 201
             data = resp.json()
             assert data["novel_id"].startswith("novel-")
+            assert data["title"] == "测试小说"
             assert data["current_phase"] == "brainstorming"
+            assert data["checkpoint_data"]["novel_title"] == "测试小说"
             assert data["checkpoint_data"]["synopsis_data"]["title"] == "测试小说"
             assert data["checkpoint_data"]["synopsis_data"]["estimated_volumes"] == 1
             assert data["current_volume_id"] is None
@@ -62,6 +65,40 @@ async def test_create_novel_empty_title(async_session):
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/novels", json={"title": "  "})
             assert resp.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_update_novel_title_is_separate_from_synopsis_title(async_session):
+    novel_id = "n_title_update"
+
+    async def override():
+        yield async_session
+
+    async_session.add(
+        NovelState(
+            novel_id=novel_id,
+            current_phase="volume_planning",
+            checkpoint_data={
+                "novel_title": "旧项目名",
+                "synopsis_data": {"title": "总纲标题"},
+            },
+        )
+    )
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.patch(f"/api/novels/{novel_id}", json={"title": "新项目名"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["title"] == "新项目名"
+            assert data["checkpoint_data"]["novel_title"] == "新项目名"
+            assert data["checkpoint_data"]["synopsis_data"]["title"] == "总纲标题"
     finally:
         app.dependency_overrides.clear()
 
@@ -103,6 +140,7 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
             status="pending",
             raw_result={},
         ),
+        AgentLog(novel_id=novel_id, agent="TestAgent", message="待删除日志", level="info"),
     ])
     await async_session.flush()
     async_session.add(EntityVersion(entity_id="e1", version=1, state={}))
@@ -135,6 +173,7 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
             OutlineSession,
             BrainstormWorkspace,
             PendingExtraction,
+            AgentLog,
         ):
             result = await async_session.execute(
                 select(model).where(model.novel_id == novel_id)

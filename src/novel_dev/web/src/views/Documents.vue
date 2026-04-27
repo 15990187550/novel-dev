@@ -58,6 +58,43 @@
           </div>
         </div>
 
+        <div class="mt-4 rounded-2xl border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-700 dark:bg-gray-900/50">
+          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">资料用途</div>
+          <div class="mt-3 grid gap-3 md:grid-cols-2">
+            <button
+              type="button"
+              class="documents-import-mode"
+              :class="{ 'documents-import-mode--active': knowledgeUsage === 'auto' }"
+              @click="knowledgeUsage = 'auto'"
+            >
+              <span class="documents-import-mode__title">全局生效资料</span>
+              <span class="documents-import-mode__desc">适合本书核心设定、主角、金手指、总体世界观、文风样本；批准后默认参与全书生成。</span>
+            </button>
+            <button
+              type="button"
+              class="documents-import-mode"
+              :class="{ 'documents-import-mode--active': knowledgeUsage === 'domain' }"
+              @click="knowledgeUsage = 'domain'"
+            >
+              <span class="documents-import-mode__title">局部生效规则域</span>
+              <span class="documents-import-mode__desc">适合某个原著、世界、地图、阶段或修炼体系；先未绑定入库，后续按卷/章节动态激活。</span>
+            </button>
+          </div>
+          <div v-if="knowledgeUsage === 'domain'" class="mt-3 max-w-xl">
+            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400">
+              局部规则域名称
+            </label>
+            <el-input
+              v-model="domainName"
+              size="small"
+              placeholder="例如：完美世界 / 遮天 / 一世之尊"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              不需要指定第几卷，系统会在总纲生成后建议绑定范围。
+            </p>
+          </div>
+        </div>
+
         <div class="mt-4 flex flex-wrap items-center gap-2">
           <input ref="fileInput" type="file" accept=".txt,.md,text/plain,text/markdown" multiple @change="onFileChange" class="text-sm" />
           <el-button type="primary" :loading="uploading" @click="upload">上传</el-button>
@@ -115,83 +152,93 @@
               <div class="text-xs text-gray-500 dark:text-gray-400">{{ group.items.length }} 份</div>
             </div>
             <div class="space-y-3">
-              <details
+              <article
                 v-for="item in group.items"
                 :key="item.id"
-                class="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/50 p-3"
-                open
+                class="documents-library-card rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/50 p-4"
               >
-                <summary class="cursor-pointer list-none">
-                  <div class="flex flex-wrap items-center justify-between gap-2">
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0">
                     <div class="font-medium text-gray-900 dark:text-gray-100">{{ item.title || group.label }}</div>
-                    <div class="flex items-center gap-2">
-                      <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(item.updated_at) }}</div>
-                      <button
-                        type="button"
-                        class="documents-library-card__edit"
-                        title="编辑资料"
-                        aria-label="编辑资料"
-                        @click.prevent.stop="openLibraryEditor(item, group.label)"
-                      >
-                        编辑
-                      </button>
+                    <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      v{{ item.version || 1 }} · {{ formatTimestamp(item.updated_at) }}
                     </div>
                   </div>
-                </summary>
-                <pre class="mt-3 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ item.content }}</pre>
-              </details>
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      class="documents-library-card__edit"
+                      @click="openLibraryDetail(item, group.label)"
+                    >
+                      查看详情
+                    </button>
+                    <button
+                      type="button"
+                      class="documents-library-card__edit"
+                      title="编辑资料"
+                      aria-label="编辑资料"
+                      @click="openLibraryEditor(item, group.label)"
+                    >
+                      编辑
+                    </button>
+                  </div>
+                </div>
+                <p class="mt-3 line-clamp-3 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
+                  {{ summarizeContent(item.content) }}
+                </p>
+              </article>
             </div>
           </section>
 
           <section v-if="styleProfiles.length" class="space-y-3">
             <div class="flex items-center justify-between">
               <div class="font-semibold text-gray-900 dark:text-gray-100">文风档案</div>
-              <div class="text-xs text-gray-500 dark:text-gray-400">
-                当前生效版本：{{ activeStyleVersionText }}
+              <div class="flex items-center gap-2">
+                <div class="text-xs text-gray-500 dark:text-gray-400">
+                  当前生效版本：{{ activeStyleVersionText }}
+                </div>
+                <button
+                  type="button"
+                  class="documents-library-card__edit"
+                  @click="openStyleVersions"
+                >
+                  查看更多版本
+                </button>
               </div>
             </div>
             <div class="space-y-3">
               <div
-                v-for="profile in styleProfiles"
-                :key="profile.id"
+                v-if="activeStyleProfile"
+                :key="activeStyleProfile.id"
                 class="rounded-xl border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/50 p-4"
               >
                 <div class="flex flex-wrap items-center justify-between gap-3">
                   <div class="flex items-center gap-2">
-                    <div class="font-medium text-gray-900 dark:text-gray-100">版本 v{{ profile.version }}</div>
-                    <el-tag v-if="profile.is_active" size="small" type="success">当前生效</el-tag>
-                    <el-tag v-else size="small" type="info">历史版本</el-tag>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">当前文风版本 v{{ activeStyleProfile.version }}</div>
+                    <el-tag size="small" type="success">当前生效</el-tag>
                   </div>
                   <div class="flex items-center gap-2">
-                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(profile.updated_at) }}</div>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(activeStyleProfile.updated_at) }}</div>
                     <button
                       type="button"
                       class="documents-library-card__edit"
                       title="编辑资料"
                       aria-label="编辑资料"
-                      @click="openLibraryEditor(profile, '文风档案')"
+                      @click="openLibraryEditor(activeStyleProfile, '文风档案')"
                     >
                       编辑
                     </button>
-                    <el-button
-                      v-if="!profile.is_active"
-                      size="small"
-                      :loading="rollingBackVersion === profile.version"
-                      @click="activateStyleVersion(profile.version)"
-                    >
-                      {{ rollingBackVersion === profile.version ? '切换中...' : '设为当前版本' }}
-                    </el-button>
                   </div>
                 </div>
 
                 <div class="mt-3 rounded-xl bg-white dark:bg-gray-800 p-3 border border-gray-200 dark:border-gray-700">
                   <div class="text-xs uppercase tracking-wide text-gray-400">Style Guide</div>
-                  <div class="mt-2 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ profile.content }}</div>
+                  <div class="mt-2 line-clamp-4 whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-200">{{ activeStyleProfile.content }}</div>
                 </div>
 
-                <div v-if="styleSummaryItems(profile).length" class="mt-3 grid gap-3 md:grid-cols-3 text-sm">
+                <div v-if="styleSummaryItems(activeStyleProfile).length" class="mt-3 grid gap-3 md:grid-cols-3 text-sm">
                   <div
-                    v-for="item in styleSummaryItems(profile)"
+                    v-for="item in styleSummaryItems(activeStyleProfile)"
                     :key="item.label"
                     class="rounded-xl border border-gray-200 dark:border-gray-700 p-3"
                   >
@@ -200,21 +247,96 @@
                   </div>
                 </div>
 
-                <details class="mt-3 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-3">
-                  <summary class="cursor-pointer list-none font-medium text-sm text-gray-700 dark:text-gray-200">
-                    查看完整风格配置
-                  </summary>
-                  <pre class="mt-3 whitespace-pre-wrap text-xs text-gray-600 dark:text-gray-300">{{ formatJson(profile.style_config || {}) }}</pre>
-                </details>
+                <div class="mt-3 flex justify-end">
+                  <button type="button" class="documents-library-card__edit" @click="openLibraryDetail(activeStyleProfile, '文风档案')">
+                    查看完整文风
+                  </button>
+                </div>
               </div>
             </div>
           </section>
         </div>
       </div>
 
-      <div v-if="store.pendingDocs.length" class="surface-card documents-pending p-5">
+      <div class="surface-card p-5">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 class="font-bold">规则域</h3>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+              原著、世界、体系资料默认不全局生效；生成卷纲时会按关键词和绑定范围动态激活。
+            </p>
+          </div>
+          <el-button size="small" :loading="knowledgeDomainsLoading" @click="fetchKnowledgeDomains">刷新</el-button>
+        </div>
+
+        <div v-if="knowledgeDomainsLoading" class="mt-4 text-sm text-gray-500 dark:text-gray-400">加载规则域中...</div>
+        <el-empty v-else-if="!knowledgeDomains.length" description="暂无规则域。导入时选择“局部生效规则域”可创建。" />
+        <div v-else class="mt-4 grid gap-3 lg:grid-cols-2">
+          <article
+            v-for="domain in knowledgeDomains"
+            :key="domain.id"
+            class="rounded-2xl border border-gray-200 bg-gray-50/80 p-4 dark:border-gray-700 dark:bg-gray-900/50"
+          >
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div class="font-semibold text-gray-900 dark:text-gray-100">{{ domain.name }}</div>
+                <div class="mt-1 flex flex-wrap gap-2 text-xs">
+                  <el-tag size="small" :type="domain.is_active ? 'success' : 'info'">{{ domain.is_active ? '启用' : '禁用' }}</el-tag>
+                  <el-tag size="small" type="info">{{ domainStatusLabel(domain.scope_status) }}</el-tag>
+                  <el-tag size="small" type="warning">{{ activationModeLabel(domain.activation_mode) }}</el-tag>
+                </div>
+              </div>
+              <div class="flex items-center gap-2">
+                <el-button
+                  v-if="firstSuggestedVolume(domain)"
+                  size="small"
+                  plain
+                  @click="confirmSuggestedDomain(domain)"
+                >
+                  确认用于{{ firstSuggestedVolume(domain) }}
+                </el-button>
+                <el-button
+                  v-if="domain.is_active"
+                  size="small"
+                  type="danger"
+                  plain
+                  @click="disableDomain(domain)"
+                >
+                  禁用
+                </el-button>
+              </div>
+            </div>
+            <div class="mt-3 text-sm text-gray-600 dark:text-gray-300">
+              <span class="font-medium text-gray-800 dark:text-gray-100">关键词：</span>
+              {{ domainKeywordSummary(domain) }}
+            </div>
+            <div class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              <span class="font-medium text-gray-800 dark:text-gray-100">建议范围：</span>
+              {{ scopeSummary(domain.suggested_scopes) || '暂无' }}
+            </div>
+            <div class="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              <span class="font-medium text-gray-800 dark:text-gray-100">已确认：</span>
+              {{ scopeSummary(domain.confirmed_scopes) || '暂无' }}
+            </div>
+            <div v-if="domainRuleSummary(domain)" class="mt-3 rounded-xl border border-gray-200 bg-white p-3 text-sm text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+              {{ domainRuleSummary(domain) }}
+            </div>
+            <div class="mt-3 flex justify-end">
+              <button
+                type="button"
+                class="documents-library-card__edit"
+                @click="openDomainDetail(domain)"
+              >
+                查看详情
+              </button>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div v-if="importRecordRows.length" class="surface-card documents-pending p-5">
         <h3 class="font-bold mb-3">导入审核记录</h3>
-        <el-table :data="store.pendingDocs" class="documents-pending-table">
+        <el-table :data="importRecordRows" class="documents-pending-table">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
           <el-table-column label="类型">
             <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
@@ -225,7 +347,9 @@
           <el-table-column label="变更摘要" min-width="220">
             <template #default="{ row }">{{ row.diff_result?.summary || row.error_message || '-' }}</template>
           </el-table-column>
-          <el-table-column prop="created_at" label="创建时间" />
+          <el-table-column label="创建时间">
+            <template #default="{ row }">{{ formatTimestamp(row.created_at) }}</template>
+          </el-table-column>
           <el-table-column label="操作" width="220">
             <template #default="{ row }">
               <div class="documents-pending-table__actions flex gap-2">
@@ -270,6 +394,17 @@
                 >
                   {{ deletingPendingId === row.id ? '删除中...' : '删除' }}
                 </el-button>
+                <el-button
+                  v-if="row.status === 'processing'"
+                  size="small"
+                  type="warning"
+                  plain
+                  :loading="deletingPendingId === row.id"
+                  :disabled="!!deletingPendingId && deletingPendingId !== row.id"
+                  @click="cancelProcessingRecord(row.id)"
+                >
+                  {{ deletingPendingId === row.id ? '取消中...' : '取消' }}
+                </el-button>
               </div>
             </template>
           </el-table-column>
@@ -288,7 +423,7 @@
           <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
             <div><span class="font-bold">类型：</span>{{ extractionTypeLabel(selectedDoc.extraction_type, selectedDoc.status) }}</div>
             <div><span class="font-bold">状态：</span>{{ statusLabel(selectedDoc.status) }}</div>
-            <div><span class="font-bold">创建时间：</span>{{ selectedDoc.created_at }}</div>
+            <div><span class="font-bold">创建时间：</span>{{ formatTimestamp(selectedDoc.created_at) }}</div>
           </div>
 
           <el-alert
@@ -548,6 +683,118 @@
       </el-dialog>
 
       <el-dialog
+        v-model="libraryDetailVisible"
+        :title="libraryDetailTitle"
+        width="980px"
+        top="6vh"
+        append-to-body
+      >
+        <div v-if="selectedLibraryItem" class="max-h-[76vh] space-y-4 overflow-y-auto pr-2">
+          <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
+            <div>
+              <div class="font-semibold text-gray-900 dark:text-gray-100">{{ selectedLibraryItem.title || selectedLibraryLabel }}</div>
+              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ selectedLibraryLabel }} · v{{ selectedLibraryItem.version || 1 }} · {{ formatTimestamp(selectedLibraryItem.updated_at) }}
+              </div>
+            </div>
+            <button
+              type="button"
+              class="documents-library-card__edit"
+              @click="openLibraryEditor(selectedLibraryItem, selectedLibraryLabel)"
+            >
+              编辑
+            </button>
+          </div>
+          <pre class="documents-library-detail__content whitespace-pre-wrap rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm leading-7 text-gray-700 dark:border-gray-700 dark:bg-gray-900/60 dark:text-gray-200">{{ selectedLibraryItem.content }}</pre>
+
+          <div v-if="selectedLibraryItem.doc_type === 'style_profile'" class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+            <div class="font-semibold text-gray-900 dark:text-gray-100">完整风格配置</div>
+            <pre class="mt-3 whitespace-pre-wrap text-xs leading-6 text-gray-600 dark:text-gray-300">{{ formatJson(selectedLibraryItem.style_config || {}) }}</pre>
+          </div>
+        </div>
+      </el-dialog>
+
+      <el-dialog
+        v-model="domainDetailVisible"
+        title="规则域详情"
+        width="900px"
+        top="6vh"
+        append-to-body
+      >
+        <div v-if="selectedDomain" class="max-h-[76vh] space-y-4 overflow-y-auto pr-2">
+          <div class="rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
+            <div class="font-semibold text-gray-900 dark:text-gray-100">{{ selectedDomain.name }}</div>
+            <div class="mt-2 flex flex-wrap gap-2 text-xs">
+              <el-tag size="small" :type="selectedDomain.is_active ? 'success' : 'info'">{{ selectedDomain.is_active ? '启用' : '禁用' }}</el-tag>
+              <el-tag size="small" type="info">{{ domainStatusLabel(selectedDomain.scope_status) }}</el-tag>
+              <el-tag size="small" type="warning">{{ activationModeLabel(selectedDomain.activation_mode) }}</el-tag>
+            </div>
+          </div>
+          <div class="grid gap-3 md:grid-cols-2 text-sm">
+            <div class="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+              <div class="text-xs text-gray-400">关键词</div>
+              <div class="mt-1 text-gray-700 dark:text-gray-200">{{ (selectedDomain.activation_keywords || []).join('、') || '未设置' }}</div>
+            </div>
+            <div class="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+              <div class="text-xs text-gray-400">绑定范围</div>
+              <div class="mt-1 text-gray-700 dark:text-gray-200">
+                建议：{{ scopeSummary(selectedDomain.suggested_scopes) || '暂无' }}；已确认：{{ scopeSummary(selectedDomain.confirmed_scopes) || '暂无' }}
+              </div>
+            </div>
+          </div>
+          <div class="rounded-2xl border border-gray-200 p-4 dark:border-gray-700">
+            <div class="font-semibold text-gray-900 dark:text-gray-100">完整规则</div>
+            <pre class="mt-3 whitespace-pre-wrap text-sm leading-7 text-gray-700 dark:text-gray-200">{{ formatJson(selectedDomain.rules || {}) }}</pre>
+          </div>
+        </div>
+      </el-dialog>
+
+      <el-dialog
+        v-model="styleVersionsVisible"
+        title="文风版本"
+        width="980px"
+        top="6vh"
+        append-to-body
+      >
+        <div v-if="styleVersionsVisible" class="max-h-[76vh] space-y-3 overflow-y-auto pr-2">
+          <div
+            v-for="profile in styleProfiles"
+            :key="profile.id"
+            class="rounded-xl border border-gray-200 bg-gray-50/70 p-4 dark:border-gray-700 dark:bg-gray-900/50"
+          >
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div class="flex items-center gap-2">
+                <div class="font-medium text-gray-900 dark:text-gray-100">版本 v{{ profile.version }}</div>
+                <el-tag v-if="profile.is_active" size="small" type="success">当前生效</el-tag>
+                <el-tag v-else size="small" type="info">历史版本</el-tag>
+              </div>
+              <div class="flex items-center gap-2">
+                <div class="text-xs text-gray-500 dark:text-gray-400">{{ formatTimestamp(profile.updated_at) }}</div>
+                <button type="button" class="documents-library-card__edit" @click="openLibraryDetail(profile, '文风档案')">
+                  查看详情
+                </button>
+                <button type="button" class="documents-library-card__edit" @click="openLibraryEditor(profile, '文风档案')">
+                  编辑
+                </button>
+                <el-button
+                  v-if="!profile.is_active"
+                  size="small"
+                  :loading="rollingBackVersion === profile.version"
+                  @click="activateStyleVersion(profile.version)"
+                >
+                  {{ rollingBackVersion === profile.version ? '切换中...' : '设为当前版本' }}
+                </el-button>
+              </div>
+            </div>
+
+            <div class="mt-3 line-clamp-3 whitespace-pre-wrap rounded-xl border border-gray-200 bg-white p-3 text-sm leading-6 text-gray-700 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-200">
+              {{ profile.content }}
+            </div>
+          </div>
+        </div>
+      </el-dialog>
+
+      <el-dialog
         v-model="libraryEditorVisible"
         :title="libraryEditorTitle"
         width="880px"
@@ -590,6 +837,7 @@ import {
   rollbackStyleProfile,
 } from '@/api.js'
 import { ElMessage } from 'element-plus'
+import { formatBeijingDateTime } from '@/utils/time.js'
 
 const DOCUMENT_POLL_INTERVAL_MS = 2000
 const LIBRARY_GROUPS = [
@@ -603,6 +851,11 @@ const store = useNovelStore()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
+const knowledgeUsage = ref('auto')
+const domainName = ref('')
+const knowledgeDomainsLoading = ref(false)
+const domainDetailVisible = ref(false)
+const selectedDomain = ref(null)
 const detailVisible = ref(false)
 const selectedDoc = ref(null)
 const conflictSelections = reactive({})
@@ -614,6 +867,10 @@ let draftFieldEscapeListenerAttached = false
 const libraryItems = ref([])
 const libraryLoading = ref(false)
 const rollingBackVersion = ref(null)
+const libraryDetailVisible = ref(false)
+const selectedLibraryItem = ref(null)
+const selectedLibraryLabel = ref('')
+const styleVersionsVisible = ref(false)
 const libraryEditorVisible = ref(false)
 const libraryEditorTarget = ref(null)
 const libraryEditorContent = ref('')
@@ -653,18 +910,36 @@ const diffGroups = computed(() => {
 })
 
 const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.field_resolutions || [])
-const hasProcessingDocs = computed(() => (store.pendingDocs || []).some((doc) => doc.status === 'processing'))
+const importRecordRows = computed(() => {
+  const docs = store.pendingDocs || []
+  const rank = { processing: 0, pending: 1, failed: 2, approved: 3, rejected: 4 }
+  return [...docs].sort((left, right) => {
+    const leftRank = rank[left.status] ?? 9
+    const rightRank = rank[right.status] ?? 9
+    if (leftRank !== rightRank) return leftRank - rightRank
+    return String(right.created_at || '').localeCompare(String(left.created_at || ''))
+  })
+})
+const activeImportDocs = computed(() => (
+  importRecordRows.value.filter((doc) => ['processing', 'pending', 'failed'].includes(doc.status))
+))
+const hasProcessingDocs = computed(() => activeImportDocs.value.some((doc) => doc.status === 'processing'))
 const pendingReviewCount = computed(() => (
-  (store.pendingDocs || []).filter((doc) => doc.status === 'pending' || doc.status === 'processing').length
+  activeImportDocs.value.filter((doc) => doc.status === 'pending' || doc.status === 'processing').length
 ))
 const isApprovingSelectedDoc = computed(() => !!selectedDoc.value?.id && approvingPendingId.value === selectedDoc.value.id)
 const mergeResolvingCount = computed(() => Object.keys(resolvingMergeKeys).length)
 const hasLibraryContent = computed(() => libraryItems.value.length > 0)
 const styleProfiles = computed(() => libraryItems.value.filter((item) => item.doc_type === 'style_profile'))
+const activeStyleProfile = computed(() => styleProfiles.value.find((item) => item.is_active) || styleProfiles.value[0] || null)
 const activeStyleVersionText = computed(() => {
-  const active = styleProfiles.value.find((item) => item.is_active)
-  return active ? `v${active.version}` : '未设置'
+  return activeStyleProfile.value ? `v${activeStyleProfile.value.version}` : '未设置'
 })
+const libraryDetailTitle = computed(() => {
+  if (!selectedLibraryItem.value) return '资料详情'
+  return `${selectedLibraryLabel.value || '资料'}详情`
+})
+const knowledgeDomains = computed(() => store.knowledgeDomains || [])
 const libraryEditorTitle = computed(() => {
   const target = libraryEditorTarget.value
   if (!target) return '编辑资料'
@@ -747,10 +1022,7 @@ function resolutionActionLabel(action) {
 }
 
 function formatTimestamp(value) {
-  if (!value) return '-'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', { hour12: false })
+  return formatBeijingDateTime(value)
 }
 
 function formatJson(value) {
@@ -762,6 +1034,12 @@ function formatValue(value) {
   if (value == null || value === '') return ''
   if (typeof value === 'string') return value
   return JSON.stringify(value, null, 2)
+}
+
+function summarizeContent(value, maxLength = 180) {
+  const text = formatValue(value).replace(/\s+/g, ' ').trim()
+  if (!text) return '暂无内容'
+  return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
 
 function normalizeDraftFieldValue(value) {
@@ -831,6 +1109,21 @@ function showDetail(doc) {
   initializeConflictSelections(doc)
   cancelDraftFieldEdit()
   detailVisible.value = true
+}
+
+function openLibraryDetail(item, groupLabel = '') {
+  selectedLibraryItem.value = item
+  selectedLibraryLabel.value = groupLabel
+  libraryDetailVisible.value = true
+}
+
+function openDomainDetail(domain) {
+  selectedDomain.value = domain
+  domainDetailVisible.value = true
+}
+
+function openStyleVersions() {
+  styleVersionsVisible.value = true
 }
 
 function openLibraryEditor(item, groupLabel = '') {
@@ -1042,15 +1335,91 @@ async function upload() {
   if (!selectedFiles.value.length) return
   uploading.value = true
   try {
-    uploadSummary.value = await uploadDocumentsBatch(store.novelId, selectedFiles.value, 3)
+    const items = selectedFiles.value.map((file) => ({
+      ...file,
+      ...(knowledgeUsage.value === 'domain'
+        ? {
+            knowledge_usage: 'domain',
+            domain_name: domainName.value.trim() || file.filename.replace(/\.(txt|md)$/i, ''),
+            activation_mode: 'auto',
+          }
+        : {}),
+    }))
+    uploadSummary.value = await uploadDocumentsBatch(store.novelId, items, 3)
     const accepted = uploadSummary.value.accepted ?? uploadSummary.value.succeeded ?? 0
     ElMessage.success(`导入任务已提交：${accepted} 个`)
-    await Promise.all([store.fetchDocuments(), fetchLibrary()])
+    await Promise.all([store.fetchDocuments(), fetchLibrary(), fetchKnowledgeDomains()])
   } finally {
     uploading.value = false
     selectedFiles.value = []
     if (fileInput.value) fileInput.value.value = ''
   }
+}
+
+function domainStatusLabel(status) {
+  const labels = {
+    draft: '草稿',
+    unbound: '未绑定',
+    suggested: '建议绑定',
+    confirmed: '已确认',
+    used: '已使用',
+    revised: '已编辑',
+    disabled: '已禁用',
+  }
+  return labels[status] || status || '未绑定'
+}
+
+function activationModeLabel(mode) {
+  const labels = {
+    auto: '自动激活',
+    manual: '手动激活',
+    always: '全局生效',
+    disabled: '禁用',
+  }
+  return labels[mode] || mode || '自动激活'
+}
+
+function scopeLabel(scope) {
+  if (!scope?.scope_ref) return ''
+  if (scope.scope_type === 'volume') return `${scope.scope_ref.replace(/^vol_/, '第')}卷`
+  return scope.scope_ref
+}
+
+function scopeSummary(scopes = []) {
+  return scopes.map(scopeLabel).filter(Boolean).join('、')
+}
+
+function firstSuggestedVolume(domain) {
+  const scope = (domain.suggested_scopes || []).find((item) => item.scope_type === 'volume')
+  return scopeLabel(scope)
+}
+
+function domainKeywordSummary(domain) {
+  const keywords = domain.activation_keywords || []
+  if (!keywords.length) return '未设置'
+  const suffix = keywords.length > 4 ? ` 等 ${keywords.length} 个` : ''
+  return `${keywords.slice(0, 4).join('、')}${suffix}`
+}
+
+async function confirmSuggestedDomain(domain) {
+  const scope = (domain.suggested_scopes || []).find((item) => item.scope_type === 'volume')
+  if (!scope) return
+  await store.confirmKnowledgeDomainScope(domain.id, [scope.scope_ref], 'volume')
+  ElMessage.success('规则域绑定已确认')
+}
+
+async function disableDomain(domain) {
+  await store.disableKnowledgeDomain(domain.id)
+  ElMessage.success('规则域已禁用')
+}
+
+function domainRuleSummary(domain) {
+  const rules = domain.rules || {}
+  const forbidden = rules.forbidden_now || []
+  const foreshadow = rules.foreshadow_only || []
+  if (forbidden.length) return `禁止：${summarizeContent(forbidden.slice(0, 2).join('；'), 42)}`
+  if (foreshadow.length) return `只能伏笔：${summarizeContent(foreshadow.slice(0, 2).join('；'), 42)}`
+  return ''
 }
 
 async function approve(id) {
@@ -1107,6 +1476,22 @@ async function removeFailedRecord(id) {
   }
 }
 
+async function cancelProcessingRecord(id) {
+  if (deletingPendingId.value) return
+  deletingPendingId.value = id
+  try {
+    await deletePendingDoc(store.novelId, id)
+    ElMessage.success('已取消导入')
+    if (selectedDoc.value?.id === id) {
+      detailVisible.value = false
+      selectedDoc.value = null
+    }
+    await store.fetchDocuments()
+  } finally {
+    deletingPendingId.value = ''
+  }
+}
+
 async function activateStyleVersion(version) {
   if (!store.novelId || rollingBackVersion.value) return
   rollingBackVersion.value = version
@@ -1122,10 +1507,22 @@ async function activateStyleVersion(version) {
 function fetchIfReady() {
   if (!store.novelId) {
     libraryItems.value = []
+    store.knowledgeDomains = []
     return
   }
   store.fetchDocuments()
   fetchLibrary()
+  fetchKnowledgeDomains()
+}
+
+async function fetchKnowledgeDomains() {
+  if (!store.novelId) return
+  knowledgeDomainsLoading.value = true
+  try {
+    await store.fetchKnowledgeDomains(true)
+  } finally {
+    knowledgeDomainsLoading.value = false
+  }
 }
 
 function stopDocumentPolling() {
@@ -1184,6 +1581,40 @@ watch(editingDraftField, (value) => {
   --el-fill-color-blank: transparent;
   border-radius: 1.1rem;
   overflow: hidden;
+}
+
+.documents-import-mode {
+  display: flex;
+  min-height: 5.25rem;
+  flex-direction: column;
+  gap: 0.45rem;
+  border-radius: 1rem;
+  border: 1px solid var(--app-border);
+  background: var(--app-surface);
+  padding: 0.95rem 1rem;
+  text-align: left;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.documents-import-mode:hover {
+  transform: translateY(-1px);
+  border-color: rgba(20, 184, 166, 0.6);
+}
+
+.documents-import-mode--active {
+  border-color: rgba(20, 184, 166, 0.85);
+  box-shadow: 0 0 0 3px rgba(20, 184, 166, 0.14);
+}
+
+.documents-import-mode__title {
+  font-weight: 800;
+  color: var(--app-text);
+}
+
+.documents-import-mode__desc {
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--app-text-soft);
 }
 
 .documents-pending-table :deep(.el-table__inner-wrapper::before),

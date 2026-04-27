@@ -1,5 +1,26 @@
 <template>
   <div class="space-y-3">
+    <el-alert
+      v-if="store.autoRunLastResult?.stopped_reason === 'failed'"
+      type="error"
+      :closable="false"
+      show-icon
+      title="自动写章失败"
+      :description="autoRunFailureDescription"
+    />
+    <el-alert
+      v-else-if="store.autoRunJob && ['queued', 'running'].includes(store.autoRunJob.status)"
+      type="info"
+      :closable="false"
+      show-icon
+      title="自动写章任务已提交"
+      :description="autoRunJobDescription"
+    >
+      <template #default>
+        <el-button size="small" plain @click="store.refreshAutoRunJob()">刷新任务</el-button>
+      </template>
+    </el-alert>
+
     <!-- 脑暴区域 -->
     <div v-if="store.novelState.current_phase === 'brainstorming'" class="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
       <div class="flex items-center justify-between mb-3">
@@ -72,7 +93,25 @@ Claude Code 会先输出给人看的 Markdown，再用 JSON 块输出供系统�
         </el-button>
         <el-icon v-if="idx < pipelineSteps.length - 1" class="text-gray-300 dark:text-gray-600"><ArrowRight /></el-icon>
       </template>
+      <el-button
+        v-if="store.canAutoRunChapter"
+        type="primary"
+        plain
+        :loading="store.loadingActions['auto_chapter']"
+        @click="store.executeAction('auto_chapter')"
+      >
+        自动写一章
+      </el-button>
       <el-button :loading="store.loadingActions['export']" @click="store.executeAction('export')">导出小说</el-button>
+      <el-button
+        v-if="store.shouldShowStopFlow"
+        type="danger"
+        plain
+        :loading="store.stoppingFlow"
+        @click="store.stopCurrentFlow()"
+      >
+        {{ store.stopFlowLabel }}
+      </el-button>
     </div>
   </div>
 </template>
@@ -94,6 +133,20 @@ const pipelineSteps = computed(() => [
   { key: 'advance', label: '推进', enabled: store.canAdvance, phase: 'reviewing' },
   { key: 'librarian', label: '归档', enabled: store.canLibrarian, phase: 'librarian' },
 ])
+
+const autoRunFailureDescription = computed(() => {
+  const result = store.autoRunLastResult || {}
+  const parts = []
+  if (result.failed_phase) parts.push(`阶段: ${result.failed_phase}`)
+  if (result.failed_chapter_id) parts.push(`章节: ${result.failed_chapter_id}`)
+  if (result.error) parts.push(`错误: ${result.error}`)
+  return parts.join(' | ')
+})
+
+const autoRunJobDescription = computed(() => {
+  const job = store.autoRunJob || {}
+  return `任务: ${job.job_id || '-'} | 状态: ${job.status || '-'}`
+})
 
 const currentIdx = computed(() => phaseOrder.indexOf(store.novelState.current_phase))
 

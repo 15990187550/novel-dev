@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from novel_dev.agents.style_profiler import StyleProfilerAgent, StyleProfile
+from novel_dev.agents.style_profiler import StyleProfilerAgent, StyleProfile, sanitize_reference_specific_style
 from novel_dev.llm.models import LLMResponse
 
 
@@ -68,6 +68,9 @@ async def test_profile_prompt_asks_for_actionable_style_constraints():
     assert "writing_rules" in prompt
     assert "style_boundary" in prompt
     assert "不要总结剧情" in prompt
+    assert "必须去背景化" in prompt
+    assert "可以保留类型层面的写法规律" in prompt
+    assert "修仙" in prompt
 
 
 @pytest.mark.asyncio
@@ -109,3 +112,39 @@ async def test_profile_coerces_text_and_string_list_fields():
     assert result.style_config.perspective == "main: limited"
     assert result.style_config.tone == "intense\ndark"
     assert "前期: 克制" in result.style_config.evolution_notes
+
+
+def test_sanitize_style_profile_genericizes_reference_specific_background_but_keeps_genre_style():
+    source_text = "萧炎来到乌坦城，加入云岚宗后修炼焚诀，在斗气大陆追寻异火。"
+    profile = StyleProfile(
+        style_guide="玄幻升级流节奏快。萧炎在乌坦城的成长线要保留。",
+        style_config={
+            "information_reveal": {
+                "method": "修仙/玄幻类境界信息渐进揭露",
+                "bad": "围绕云岚宗和斗气大陆展开说明",
+            },
+            "scene_preferences": {
+                "combat": "用境界压迫和资源争夺制造爽点",
+                "乌坦城": "保留地名氛围",
+            },
+            "vocabulary_preferences": ["修仙", "玄幻", "云岚宗压迫", "境界突破"],
+            "writing_rules": ["保留玄幻升级流的阶段性爽点", "不要复用萧炎、乌坦城、云岚宗等专名"],
+            "style_boundary": ["不要照搬斗气大陆设定", "不要丢失修仙品类的境界层次感"],
+        },
+    )
+
+    sanitized = sanitize_reference_specific_style(profile, source_text)
+    dumped = sanitized.model_dump_json()
+
+    assert "修仙" in dumped
+    assert "玄幻" in dumped
+    assert "境界" in dumped
+    assert "角色" in dumped
+    assert "城镇地域" in dumped
+    assert "宗门势力" in dumped
+    assert "修炼世界" in dumped
+    assert "萧炎" not in dumped
+    assert "乌坦城" not in dumped
+    assert "云岚宗" not in dumped
+    assert "斗气大陆" not in dumped
+    assert "玄幻升级流节奏快" in dumped

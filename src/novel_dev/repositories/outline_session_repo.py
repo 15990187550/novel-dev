@@ -32,23 +32,11 @@ class OutlineSessionRepository:
         outline_ref: str,
         status: str = "pending",
     ) -> OutlineSession:
-        cached_session = self._find_cached_session(novel_id, outline_type, outline_ref)
-        if cached_session is not None:
-            return cached_session
-
-        with self.session.no_autoflush:
-            result = await self.session.execute(
-                select(OutlineSession).where(
-                    OutlineSession.novel_id == novel_id,
-                    OutlineSession.outline_type == outline_type,
-                    OutlineSession.outline_ref == outline_ref,
-                )
-            )
-        existing_session = result.scalar_one_or_none()
-        if existing_session is not None and (
-            existing_session in self.session.deleted or inspect(existing_session).deleted
-        ):
-            existing_session = None
+        existing_session = await self.get_existing(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+        )
         if existing_session is not None:
             return existing_session
 
@@ -76,6 +64,31 @@ class OutlineSessionRepository:
                 )
             existing_session = result.scalar_one()
             return existing_session
+
+    async def get_existing(
+        self,
+        novel_id: str,
+        outline_type: str,
+        outline_ref: str,
+    ) -> Optional[OutlineSession]:
+        cached_session = self._find_cached_session(novel_id, outline_type, outline_ref)
+        if cached_session is not None:
+            return cached_session
+
+        with self.session.no_autoflush:
+            result = await self.session.execute(
+                select(OutlineSession).where(
+                    OutlineSession.novel_id == novel_id,
+                    OutlineSession.outline_type == outline_type,
+                    OutlineSession.outline_ref == outline_ref,
+                )
+            )
+        existing_session = result.scalar_one_or_none()
+        if existing_session is not None and (
+            existing_session in self.session.deleted or inspect(existing_session).deleted
+        ):
+            return None
+        return existing_session
 
     async def get_by_id(self, session_id: str) -> Optional[OutlineSession]:
         result = await self.session.execute(select(OutlineSession).where(OutlineSession.id == session_id))

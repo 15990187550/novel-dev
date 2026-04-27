@@ -1,4 +1,3 @@
-import asyncio
 import logging
 from typing import Optional
 
@@ -27,7 +26,7 @@ class ChapterService:
         await self.repo.update_text(chapter_id, raw_draft=raw_draft, polished_text=polished_text)
         if self.embedding_service and polished_text:
             try:
-                asyncio.create_task(self.embedding_service.index_chapter(chapter_id))
+                await self.embedding_service.index_chapter(chapter_id)
             except Exception as exc:
                 logger.warning("chapter_index_trigger_failed", extra={"chapter_id": chapter_id, "error": str(exc)})
 

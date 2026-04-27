@@ -3,6 +3,7 @@ import logging
 import re
 import uuid
 from typing import Optional
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.schemas.librarian import (
@@ -29,8 +30,8 @@ from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
-from novel_dev.services.log_service import log_service
-from novel_dev.agents._llm_helpers import call_and_parse, call_and_parse_model
+from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.agents._llm_helpers import call_and_parse_model
 
 
 def _parse_soft_state_json(text: str) -> dict:
@@ -48,6 +49,45 @@ def _parse_soft_state_json(text: str) -> dict:
         except json.JSONDecodeError:
             pass
     return {}
+
+
+class SoftStateUpdate(EntityUpdate):
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "entity_id" not in normalized:
+            normalized["entity_id"] = normalized.get("name", "")
+        if "state" not in normalized:
+            normalized["state"] = {}
+        if "diff_summary" not in normalized:
+            normalized["diff_summary"] = {"source": "soft_state_pass"}
+        return normalized
+
+
+class SoftStateRelationship(NewRelationship):
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value):
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "source_entity_id" not in normalized:
+            normalized["source_entity_id"] = normalized.get("source", "")
+        if "target_entity_id" not in normalized:
+            normalized["target_entity_id"] = normalized.get("target", "")
+        if "relation_type" not in normalized:
+            normalized["relation_type"] = normalized.get("type", "unspecified")
+        if "meta" not in normalized:
+            normalized["meta"] = {}
+        return normalized
+
+
+class SoftStateExtraction(BaseModel):
+    character_updates: list[SoftStateUpdate] = Field(default_factory=list)
+    new_relationships: list[SoftStateRelationship] = Field(default_factory=list)
 
 
 class LibrarianAgent:
@@ -117,36 +157,24 @@ class LibrarianAgent:
         """返回 (character_updates, new_relationships) 补充列表。失败时返回空以不影响硬事实抽取。"""
         prompt = self._build_soft_state_prompt(polished_text, primary)
 
-        def parser(text: str) -> dict:
-            return _parse_soft_state_json(text)
-
         try:
-            payload = await call_and_parse(
+            payload = await call_and_parse_model(
                 "LibrarianAgent", "extract_relationships", prompt,
-                parser, max_retries=2, novel_id=novel_id
+                SoftStateExtraction, max_retries=2, novel_id=novel_id
             )
-            updates_raw = payload.get("character_updates", []) or []
-            rels_raw = payload.get("new_relationships", []) or []
+            updates_raw = payload.character_updates
+            rels_raw = payload.new_relationships
             updates = []
             for u in updates_raw:
                 try:
-                    updates.append(EntityUpdate(
-                        entity_id=u.get("entity_id") or u.get("name", ""),
-                        state=u.get("state", {}) or {},
-                        diff_summary=u.get("diff_summary", {}) or {"source": "soft_state_pass"},
-                    ))
+                    updates.append(u)
                 except Exception as exc:
                     log_service.add_log(novel_id, "LibrarianAgent", f"软状态更新解析失败: {exc}", level="warning")
                     continue
             rels = []
             for r in rels_raw:
                 try:
-                    rels.append(NewRelationship(
-                        source_entity_id=r.get("source_entity_id") or r.get("source", ""),
-                        target_entity_id=r.get("target_entity_id") or r.get("target", ""),
-                        relation_type=r.get("relation_type") or r.get("type", "unspecified"),
-                        meta=r.get("meta") or {},
-                    ))
+                    rels.append(r)
                 except Exception as exc:
                     log_service.add_log(novel_id, "LibrarianAgent", f"软状态关系解析失败: {exc}", level="warning")
                     continue
@@ -156,6 +184,7 @@ class LibrarianAgent:
             log_service.add_log(novel_id, "LibrarianAgent", f"软状态提取失败: {exc}", level="warning")
             return [], []
 
+    @logged_agent_step("LibrarianAgent", "提取世界状态", node="librarian_extract", task="extract")
     async def extract(self, novel_id: str, chapter_id: str, polished_text: str) -> ExtractionResult:
         log_service.add_log(novel_id, "LibrarianAgent", f"开始提取世界状态: {chapter_id}")
         context = await self._load_context(novel_id, chapter_id)
@@ -241,6 +270,7 @@ class LibrarianAgent:
             new_relationships=new_relationships,
         )
 
+    @logged_agent_step("LibrarianAgent", "持久化世界状态", node="librarian_persist", task="persist")
     async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
         log_service.add_log(novel_id, "LibrarianAgent", f"开始持久化提取结果: {chapter_id}")
         timeline_repo = TimelineRepository(self.session)

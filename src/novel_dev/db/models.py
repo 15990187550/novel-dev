@@ -44,7 +44,7 @@ class Entity(Base):
     created_at_chapter_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
-    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1536), nullable=True)
+    vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
     system_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     system_group_id: Mapped[Optional[str]] = mapped_column(ForeignKey("entity_groups.id"), nullable=True)
     manual_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -174,6 +174,45 @@ class Chapter(Base):
     vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
 
 
+class GenerationJob(Base):
+    __tablename__ = "generation_jobs"
+    __table_args__ = (
+        Index("ix_generation_jobs_novel_type_status", "novel_id", "job_type", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    job_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="queued")
+    request_payload: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    result_payload: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    started_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class AgentLog(Base):
+    __tablename__ = "agent_logs"
+    __table_args__ = (
+        Index("ix_agent_logs_novel_timestamp", "novel_id", "timestamp"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(TIMESTAMP, nullable=False, default=datetime.utcnow)
+    agent: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    level: Mapped[str] = mapped_column(Text, nullable=False, default="info")
+    event: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    node: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    task: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+
+
 class NovelDocument(Base):
     __tablename__ = "novel_documents"
 
@@ -185,6 +224,45 @@ class NovelDocument(Base):
     vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1024), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KnowledgeDomain(Base):
+    __tablename__ = "knowledge_domains"
+    __table_args__ = (
+        Index("ix_knowledge_domains_novel_status", "novel_id", "scope_status", "is_active"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    domain_type: Mapped[str] = mapped_column(Text, nullable=False, default="global_story")
+    scope_status: Mapped[str] = mapped_column(Text, nullable=False, default="unbound")
+    activation_mode: Mapped[str] = mapped_column(Text, nullable=False, default="auto")
+    activation_keywords: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    rules: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    source_doc_ids: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    suggested_scopes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confirmed_scopes: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    confidence: Mapped[str] = mapped_column(Text, nullable=False, default="low")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class KnowledgeDomainUsage(Base):
+    __tablename__ = "knowledge_domain_usages"
+    __table_args__ = (
+        Index("ix_knowledge_domain_usages_novel_scope", "novel_id", "scope_type", "scope_ref"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    domain_id: Mapped[str] = mapped_column(ForeignKey("knowledge_domains.id"), nullable=False)
+    scope_type: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    matched_keywords: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    usage_reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
 
 
 class OutlineSession(Base):

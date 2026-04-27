@@ -2,6 +2,7 @@ const STATUS_LABELS = {
   ready: '可编辑',
   active: '进行中',
   missing: '待创建',
+  needs_revision: '需人工处理',
 }
 
 function isValidOutlineItem(item) {

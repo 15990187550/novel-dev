@@ -86,6 +86,53 @@ async def test_list_entities_collapses_normalized_aliases(async_session):
 
 
 @pytest.mark.asyncio
+async def test_list_entities_keeps_global_and_domain_entities_separate(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("e_global", "character", "张小凡", novel_id="n_scope")
+    await repo.create("e_domain_zhuxian", "character", "张小凡", novel_id="n_scope")
+    await repo.create("e_domain_zhetian", "character", "张小凡", novel_id="n_scope")
+    await version_repo.create("e_global", 1, {"name": "张小凡", "identity": "全局占位"})
+    await version_repo.create("e_domain_zhuxian", 1, {
+        "name": "张小凡",
+        "identity": "草庙村少年",
+        "_knowledge_usage": "domain",
+        "_knowledge_domain_id": "domain_zhuxian",
+        "_knowledge_domain_name": "诛仙",
+    })
+    await version_repo.create("e_domain_zhetian", 1, {
+        "name": "张小凡",
+        "identity": "遮天同名角色",
+        "_knowledge_usage": "domain",
+        "_knowledge_domain_id": "domain_zhetian",
+        "_knowledge_domain_name": "遮天",
+    })
+    for entity_id in ("e_global", "e_domain_zhuxian", "e_domain_zhetian"):
+        await repo.update_version(entity_id, 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_scope/entities")
+            assert resp.status_code == 200
+            items = resp.json()["items"]
+            assert len(items) == 3
+            by_id = {item["entity_id"]: item for item in items}
+            assert by_id["e_global"]["knowledge_usage"] == "global"
+            assert by_id["e_domain_zhuxian"]["knowledge_usage"] == "domain"
+            assert by_id["e_domain_zhuxian"]["knowledge_domain_name"] == "诛仙"
+            assert by_id["e_domain_zhetian"]["knowledge_domain_name"] == "遮天"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_get_entity(async_session):
     async def override():
         yield async_session
@@ -295,7 +342,7 @@ async def test_update_entity_classification_allows_group_only_override(async_ses
 
 
 @pytest.mark.asyncio
-async def test_reclassify_entities_for_novel(async_session):
+async def test_reclassify_entities_for_novel(async_session, monkeypatch):
     async def override():
         yield async_session
 
@@ -313,12 +360,48 @@ async def test_reclassify_entities_for_novel(async_session):
     await async_session.commit()
 
     try:
+        from novel_dev.agents.entity_classifier import (
+            EntityClassificationBatchItem,
+            EntityClassificationBatchResult,
+            EntityClassifierAgent,
+        )
+
+        async def fail_single_classify(*args, **kwargs):
+            raise AssertionError("full reclassify should use batch classifier")
+
+        batch_calls = []
+
+        async def classify_batch(self, *, entities, novel_id=""):
+            batch_calls.append([entity["entity_name"] for entity in entities])
+            return EntityClassificationBatchResult(
+                items=[
+                    EntityClassificationBatchItem(
+                        index=0,
+                        category="人物",
+                        group_name="主角阵营",
+                        confidence=0.94,
+                        reason="batch test",
+                    ),
+                    EntityClassificationBatchItem(
+                        index=1,
+                        category="法宝神兵",
+                        group_name="特殊法宝",
+                        confidence=0.93,
+                        reason="batch test",
+                    ),
+                ]
+            )
+
+        monkeypatch.setattr(EntityClassifierAgent, "classify", fail_single_classify)
+        monkeypatch.setattr(EntityClassifierAgent, "classify_batch", classify_batch)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             resp = await client.post("/api/novels/n_reclassify/entities/reclassify")
             assert resp.status_code == 200
             data = resp.json()
             assert data["total"] == 2
             assert data["updated"] == 2
+            assert data["batch_size"] == 25
+            assert batch_calls == [["陆照", "昆仑镜"]]
 
             list_resp = await client.get("/api/novels/n_reclassify/entities")
             assert list_resp.status_code == 200

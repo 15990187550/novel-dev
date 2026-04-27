@@ -56,6 +56,59 @@ class TestBuildContextMessage:
         )
         assert "Test" in result
         assert "开场" in result
+        assert "当前节拍目标字数" in result
+
+    def test_includes_rewrite_plan_for_current_beat(self):
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(
+                chapter_number=1,
+                title="Test",
+                target_word_count=2000,
+                beats=[
+                    BeatPlan(summary="开场", target_mood="压抑"),
+                    BeatPlan(summary="冲突", target_mood="紧张"),
+                ],
+            )
+        )
+        rewrite_plan = {
+            "beat_issues": {
+                1: {
+                    "issues": [
+                        {"dim": "plot_tension", "problem": "冲突不足", "suggestion": "增加追兵逼近"}
+                    ]
+                }
+            }
+        }
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._build_context_message(
+            ctx.chapter_plan.beats[1], ctx, [], "", 1, 2, False, rewrite_plan
+        )
+        assert "本轮重写重点" in result
+        assert "冲突不足" in result
+        assert "增加追兵逼近" in result
+
+    def test_rewrite_focus_includes_global_issues_without_other_beat_issues(self):
+        rewrite_plan = {
+            "summary_feedback": "整体需要更紧",
+            "global_issues": [
+                {"dim": "plot_tension", "problem": "全章冲突不足", "suggestion": "提高主线压力"}
+            ],
+            "beat_issues": [
+                {"beat_index": 0, "issues": [{"dim": "humanity", "problem": "第一节拍生硬", "suggestion": "补动作"}]},
+                {"beat_index": 1, "issues": [{"dim": "readability", "problem": "第二节拍绕", "suggestion": "缩短句子"}]},
+            ],
+        }
+        result = WriterAgent._rewrite_focus_for_beat(rewrite_plan, 0)
+        assert "全章冲突不足" in result
+        assert "第一节拍生硬" in result
+        assert "第二节拍绕" not in result
+
+    def test_beat_target_word_count_prefers_beat_specific_target(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑", target_word_count=1200)
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat])
+        )
+        assert WriterAgent._beat_target_word_count(ctx, 1, beat) == 1200
 
     def test_includes_relay_history(self):
         ctx = _make_context()
@@ -168,7 +221,7 @@ class TestSchemaCompatibility:
 
 
 class TestSelfCheck:
-    def test_self_check_does_not_misfire_on_normal_length_text(self):
+    def test_self_check_marks_missing_required_entity_when_no_reference_exists(self):
         beat = BeatPlan(summary="开场", target_mood="压抑", key_entities=["秦风"], foreshadowings_to_embed=["玉佩发热"])
         ctx = _make_context(
             chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
@@ -186,6 +239,52 @@ class TestSelfCheck:
                             target_beat_index=0,
                         )
                     ],
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        text = "山风贴着石壁慢慢往前卷，洞口的天色被云层压得极低，滴水声在黑暗里反复回荡。这样的静默持续了很久，直到远处传来碎石滚落的轻响。"
+        result = agent._self_check_beat(text, beat, ctx, 0)
+        assert result.needs_rewrite is True
+        assert "秦风" in result.missing_entities
+        assert "玉佩发热" in result.missing_foreshadowings
+
+    def test_self_check_allows_alias_and_natural_foreshadowing_surface(self):
+        beat = BeatPlan(summary="秦风察觉玉佩异动", target_mood="压抑", key_entities=["秦风"], foreshadowings_to_embed=["玉佩发热"])
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤", aliases=["秦师兄"])],
+                    foreshadowings=[
+                        ForeshadowingContext(
+                            id="fs1",
+                            content="玉佩发热",
+                            role_in_chapter="embed",
+                            related_entity_names=["秦风"],
+                            target_beat_index=0,
+                            surface_hint="掌心玉佩温热",
+                        )
+                    ],
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        text = "秦师兄扶着石壁停下脚步，掌心玉佩忽然温热了一瞬。他没有声张，只把指节慢慢收紧，继续听着洞外的风声。"
+        result = agent._self_check_beat(text, beat, ctx, 0)
+        assert result.needs_rewrite is False
+
+    def test_self_check_allows_pronoun_reference_in_normal_length_text(self):
+        beat = BeatPlan(summary="秦风穿过山洞", target_mood="压抑", key_entities=["秦风"])
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat]),
+            beat_contexts=[
+                BeatContext(
+                    beat_index=0,
+                    beat=beat,
+                    entities=[EntityState(entity_id="e1", name="秦风", type="character", current_state="受伤")],
                 )
             ],
         )

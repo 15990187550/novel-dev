@@ -9,6 +9,8 @@ from novel_dev.agents.setting_extractor import (
     LocationInfo,
     CharacterProfile,
     ImportantItem,
+    MAX_PARALLEL_EXTRACT_CHUNKS,
+    _split_text_into_chunks,
 )
 from novel_dev.llm.models import LLMResponse
 
@@ -175,19 +177,24 @@ async def test_extract_long_text_splits_and_merges_results():
     )
 
     mock_client = AsyncMock()
+    long_text = ("# 第一部分\n" + ("设定说明\n" * 1800) + "# 第二部分\n" + ("更多设定\n" * 1800))
+    chunks = _split_text_into_chunks(long_text)
+    responses = [first, second]
+
     mock_client.acomplete.side_effect = [
-        LLMResponse(text=first.model_dump_json()),
-        LLMResponse(text=second.model_dump_json()),
+        LLMResponse(text=responses[index % len(responses)].model_dump_json())
+        for index in range(len(chunks))
     ]
 
-    long_text = ("# 第一部分\n" + ("设定说明\n" * 1800) + "# 第二部分\n" + ("更多设定\n" * 1800))
 
     with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = SettingExtractorAgent()
         result = await agent.extract(long_text)
 
-    assert mock_client.acomplete.call_count == 2
+    assert mock_client.acomplete.call_count == len(chunks)
+    assert len(chunks) > 2
+    assert MAX_PARALLEL_EXTRACT_CHUNKS == 2
     assert "真实界是万界中心" in result.worldview
     assert "诸天万界依附真实界" in result.worldview
     assert [item.name for item in result.factions] == ["玄天宗", "大雷音寺"]

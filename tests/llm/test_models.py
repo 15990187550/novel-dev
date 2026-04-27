@@ -1,6 +1,6 @@
 import pytest
 from pydantic import ValidationError
-from novel_dev.llm.models import ChatMessage, LLMResponse, TokenUsage, TaskConfig, RetryConfig
+from novel_dev.llm.models import ChatMessage, LLMResponse, StructuredOutputConfig, TokenUsage, TaskConfig, RetryConfig
 
 def test_chat_message_creation():
     msg = ChatMessage(role="user", content="hello")
@@ -35,6 +35,25 @@ def test_task_config_fallback_recursive():
     assert outer.fallback is not None
     assert outer.fallback.provider == "openai"
     assert outer.fallback.model == "gpt-4"
+
+def test_task_config_accepts_structured_output():
+    cfg = TaskConfig(
+        provider="anthropic",
+        model="claude-opus-4-6",
+        structured_output=StructuredOutputConfig(
+            mode="anthropic_tool",
+            schema_name="emit_payload",
+            tool_choice="auto",
+        ),
+    )
+    assert cfg.structured_output.mode == "anthropic_tool"
+    assert cfg.structured_output.tool_choice == "auto"
+    assert cfg.structured_output.fallback_to_text is True
+
+def test_llm_response_with_structured_payload():
+    resp = LLMResponse(text="", structured_payload={"answer": 42}, finish_reason="tool_use")
+    assert resp.structured_payload == {"answer": 42}
+    assert resp.finish_reason == "tool_use"
 
 def test_invalid_chat_message_role():
     with pytest.raises(ValidationError):

@@ -1,7 +1,7 @@
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.db.models import OutlineMessage
@@ -39,3 +39,10 @@ class OutlineMessageRepository:
             .limit(limit)
         )
         return result.scalars().all()
+
+    async def delete_by_session(self, session_id: str) -> int:
+        result = await self.session.execute(
+            delete(OutlineMessage).where(OutlineMessage.session_id == session_id)
+        )
+        await self.session.flush()
+        return int(result.rowcount or 0)

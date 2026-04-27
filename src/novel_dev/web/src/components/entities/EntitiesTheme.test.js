@@ -1,6 +1,8 @@
 import { defineComponent, h, inject, provide } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import EntityDetailPanel from './EntityDetailPanel.vue'
 import EntityGroupTable from './EntityGroupTable.vue'
 import EntityTree from './EntityTree.vue'
@@ -99,6 +101,13 @@ const simpleStubs = {
 }
 
 describe('entities theme classes', () => {
+  it('defines light entity tokens and dark-mode overrides', () => {
+    const css = fs.readFileSync(path.resolve(__dirname, '../../style.css'), 'utf8')
+
+    expect(css).toMatch(/\.entities-theme\s*{[\s\S]*--entities-panel-bg:\s*rgba\(255,\s*255,\s*255,/)
+    expect(css).toMatch(/html\.dark\s+\.entities-theme\s*{[\s\S]*--entities-panel-bg:\s*rgba\(11,\s*20,\s*35,/)
+  })
+
   it('applies themed surface class to entity tree', () => {
     const wrapper = mount(EntityTree, {
       props: {

@@ -10,6 +10,7 @@ from novel_dev.llm.models import (
     EmbeddingConfig,
     LLMResponse,
     RetryConfig,
+    StructuredOutputConfig,
     TaskConfig,
     TokenUsage,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "EmbeddingConfig",
     "LLMResponse",
     "RetryConfig",
+    "StructuredOutputConfig",
     "TaskConfig",
     "TokenUsage",
     "BaseEmbedder",

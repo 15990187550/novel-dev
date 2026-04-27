@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildChapterSummary,
+  buildScoreSummary,
   buildDataSummary,
   buildRecentUpdates,
   buildRecommendedActions,
@@ -55,6 +56,50 @@ describe('dashboard summary helpers', () => {
     expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-2'])
     expect(summary.chapters[0].isCurrent).toBe(true)
     expect(summary.stats.total).toBe(2)
+  })
+
+  it('buildScoreSummary keeps only scored chapters and averages radar dimensions', () => {
+    const summary = buildScoreSummary([
+      {
+        chapter_id: 'ch-1',
+        chapter_number: 1,
+        title: '第一章',
+        summary: '开篇试炼',
+        score_overall: 80,
+        score_breakdown: {
+          plot_tension: { score: 90, comment: '钩子明确' },
+          characterization: 70,
+        },
+        review_feedback: { summary_feedback: '节奏可用' },
+      },
+      {
+        chapter_id: 'ch-2',
+        chapter_number: 2,
+        title: '第二章',
+        score_overall: null,
+        score_breakdown: {},
+      },
+      {
+        chapter_id: 'ch-3',
+        chapter_number: 3,
+        title: '第三章',
+        score_overall: 90,
+        score_breakdown: {
+          plot_tension: 70,
+          characterization: { score: 90 },
+        },
+      },
+    ])
+
+    expect(summary.chapters.map((chapter) => chapter.chapter_id)).toEqual(['ch-1', 'ch-3'])
+    expect(summary.chapters[0]).toMatchObject({
+      displayScore: 80,
+      scoreDetail: '节奏可用',
+    })
+    expect(summary.scores).toEqual({
+      plot_tension: 80,
+      characterization: 80,
+    })
   })
 
   it('buildDataSummary aggregates entity, timeline, foreshadowing and pending document counts', () => {

@@ -136,6 +136,11 @@ function collectEntities(node) {
   return (node.children || []).flatMap(child => collectEntities(child))
 }
 
+function countGroupNodes(node) {
+  if (!node || node.nodeType === 'entity') return 0
+  return (node.nodeType === 'group' ? 1 : 0) + (node.children || []).reduce((total, child) => total + countGroupNodes(child), 0)
+}
+
 const entityTreeNodeCount = computed(() => countTreeNodes(store.entityTree))
 const selectedNode = computed(() => store.selectedEntityNode)
 const workspaceMode = computed(() =>
@@ -155,8 +160,7 @@ const workspaceItems = computed(() => {
 const workspaceGroupCount = computed(() => {
   const node = selectedNode.value
   if (!node || node.nodeType === 'entity') return 0
-  if (node.nodeType === 'group') return 1
-  return (node.children || []).filter(child => child.nodeType === 'group').length
+  return countGroupNodes(node)
 })
 const workspaceTotalCount = computed(() => workspaceItems.value.length)
 const graphScope = computed(() => {

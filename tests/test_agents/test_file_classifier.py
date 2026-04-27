@@ -19,3 +19,27 @@ async def test_classify_setting():
 
     assert classification.file_type == "setting"
     assert classification.confidence == 0.95
+
+
+@pytest.mark.asyncio
+async def test_classify_full_novel_text_as_style_sample_without_llm():
+    mock_client = AsyncMock()
+
+    novel_text = "\n".join(
+        [
+            "第一章 少年游",
+            "孟奇睁开眼时，只觉得耳畔钟声悠远。",
+            "他低声道：这是什么地方？",
+            "第二章 江湖夜雨",
+            "长街尽头有人拔刀，刀光映得雨幕发白。",
+        ]
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        classifier = FileClassifier()
+        classification = await classifier.classify("《一世之尊》-+爱潜水的乌贼.txt", novel_text)
+
+    assert classification.file_type == "style_sample"
+    assert classification.confidence >= 0.9
+    mock_client.acomplete.assert_not_called()

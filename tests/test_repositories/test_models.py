@@ -1,6 +1,6 @@
 import pytest
 
-from novel_dev.db.models import Entity, EntityVersion, Chapter, NovelState, PendingExtraction
+from novel_dev.db.models import AgentLog, Entity, EntityVersion, Chapter, GenerationJob, NovelDocument, NovelState, PendingExtraction
 
 
 def test_entity_table_name():
@@ -15,8 +15,23 @@ def test_chapter_table_name():
     assert Chapter.__tablename__ == "chapters"
 
 
+def test_persistent_vector_embeddings_match_configured_dimension():
+    assert Entity.__table__.c.vector_embedding.type.dimensions == 1024
+    assert Entity.__table__.c.search_vector_embedding.type.dimensions == 1024
+    assert Chapter.__table__.c.vector_embedding.type.dimensions == 1024
+    assert NovelDocument.__table__.c.vector_embedding.type.dimensions == 1024
+
+
 def test_novel_state_table_name():
     assert NovelState.__tablename__ == "novel_state"
+
+
+def test_generation_job_table_name():
+    assert GenerationJob.__tablename__ == "generation_jobs"
+
+
+def test_agent_log_table_name():
+    assert AgentLog.__tablename__ == "agent_logs"
 
 
 @pytest.mark.asyncio

@@ -14,6 +14,15 @@
       >
         优化中
       </span>
+      <button
+        v-else-if="messages.length || hasContext"
+        type="button"
+        class="outline-conversation-clear rounded-full px-3 py-1 text-xs font-medium transition disabled:cursor-not-allowed"
+        :disabled="disabled"
+        @click="clearContext"
+      >
+        清空上下文
+      </button>
     </div>
 
     <div class="outline-conversation-log mt-4 max-h-80 space-y-3 overflow-auto rounded-2xl border p-4">
@@ -101,9 +110,13 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  hasContext: {
+    type: Boolean,
+    default: false,
+  },
 })
 
-const emit = defineEmits(['submit-feedback'])
+const emit = defineEmits(['submit-feedback', 'clear-context'])
 
 const draft = ref('')
 
@@ -129,6 +142,17 @@ function submit() {
   emit('submit-feedback', content)
   draft.value = ''
 }
+
+function clearContext() {
+  if (props.disabled || props.submitting) return
+  emit('clear-context')
+}
+
+function setDraft(value) {
+  draft.value = String(value || '')
+}
+
+defineExpose({ setDraft })
 </script>
 
 <style scoped>
@@ -201,6 +225,20 @@ function submit() {
 }
 
 .outline-conversation-submit:disabled {
+  opacity: 0.5;
+}
+
+.outline-conversation-clear {
+  border: 1px solid color-mix(in srgb, #ef4444 34%, transparent);
+  background: color-mix(in srgb, #ef4444 8%, var(--app-surface));
+  color: color-mix(in srgb, #ef4444 72%, var(--app-text));
+}
+
+.outline-conversation-clear:hover:not(:disabled) {
+  background: color-mix(in srgb, #ef4444 14%, var(--app-surface));
+}
+
+.outline-conversation-clear:disabled {
   opacity: 0.5;
 }
 </style>

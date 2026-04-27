@@ -2,6 +2,8 @@ import pytest
 
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.schemas.outline import VolumeBeat
+from novel_dev.schemas.context import BeatPlan
 
 
 @pytest.mark.asyncio
@@ -46,3 +48,78 @@ async def test_update_fast_review(async_session):
     ch = await repo.get_by_id("c3")
     assert ch.fast_review_score == 92
     assert ch.fast_review_feedback["word_count_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_ensure_from_plan_creates_chapter_record(async_session):
+    repo = ChapterRepository(async_session)
+    plan = VolumeBeat(
+        chapter_id="ch_plan_1",
+        chapter_number=1,
+        title="Plan Chapter",
+        summary="章摘要",
+        target_word_count=3000,
+        target_mood="tense",
+        beats=[BeatPlan(summary="B1", target_mood="tense")],
+    )
+
+    chapter = await repo.ensure_from_plan("novel_plan", "vol_plan", plan)
+
+    assert chapter.id == "ch_plan_1"
+    assert chapter.novel_id == "novel_plan"
+    assert chapter.volume_id == "vol_plan"
+    assert chapter.chapter_number == 1
+    assert chapter.title == "Plan Chapter"
+    assert chapter.status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_ensure_from_plan_updates_plan_fields_and_preserves_content(async_session):
+    repo = ChapterRepository(async_session)
+    plan = {
+        "chapter_id": "ch_plan_2",
+        "chapter_number": 2,
+        "title": "Original Plan Title",
+        "target_word_count": 3000,
+        "beats": [{"summary": "B1", "target_mood": "tense"}],
+    }
+    await repo.ensure_from_plan("novel_plan", "vol_plan", plan)
+    await repo.update_text("ch_plan_2", raw_draft="draft", polished_text="polished")
+    await repo.update_scores("ch_plan_2", 88, {"plot": {"score": 88}}, {"summary": "ok"})
+    await repo.update_status("ch_plan_2", "archived")
+
+    updated = await repo.ensure_from_plan(
+        "novel_plan",
+        "vol_plan",
+        {**plan, "title": "Changed Plan Title", "chapter_number": 99},
+    )
+
+    assert updated.chapter_number == 99
+    assert updated.title == "Changed Plan Title"
+    assert updated.raw_draft == "draft"
+    assert updated.polished_text == "polished"
+    assert updated.score_overall == 88
+    assert updated.status == "archived"
+
+
+@pytest.mark.asyncio
+async def test_ensure_from_plan_does_not_cross_volume_when_ids_are_unique(async_session):
+    repo = ChapterRepository(async_session)
+
+    first = await repo.ensure_from_plan(
+        "novel_plan",
+        "vol_1",
+        {"chapter_id": "vol_1_ch_1", "chapter_number": 1, "title": "第一卷第一章"},
+    )
+    second = await repo.ensure_from_plan(
+        "novel_plan",
+        "vol_2",
+        {"chapter_id": "vol_2_ch_1", "chapter_number": 1, "title": "第二卷第一章"},
+    )
+
+    assert first.id == "vol_1_ch_1"
+    assert second.id == "vol_2_ch_1"
+    assert first.volume_id == "vol_1"
+    assert second.volume_id == "vol_2"
+    assert [chapter.id for chapter in await repo.list_by_volume("vol_1")] == ["vol_1_ch_1"]
+    assert [chapter.id for chapter in await repo.list_by_volume("vol_2")] == ["vol_2_ch_1"]

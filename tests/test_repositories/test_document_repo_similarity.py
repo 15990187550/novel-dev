@@ -40,6 +40,21 @@ async def test_similarity_search_with_doc_type_filter(async_session):
 
 
 @pytest.mark.asyncio
+async def test_similarity_search_uses_latest_document_version_per_title(async_session):
+    repo = DocumentRepository(async_session)
+    old_doc = NovelDocument(id="doc_old", novel_id="n1", doc_type="setting", title="势力格局",
+        content="old", vector_embedding=[1.0, 0.0], version=1)
+    new_doc = NovelDocument(id="doc_new", novel_id="n1", doc_type="setting", title="势力格局",
+        content="new", vector_embedding=[0.0, 1.0], version=2)
+    async_session.add_all([old_doc, new_doc])
+    await async_session.flush()
+
+    results = await repo.similarity_search("n1", [1.0, 0.0], limit=5)
+
+    assert [item.doc_id for item in results] == ["doc_new"]
+
+
+@pytest.mark.asyncio
 async def test_similarity_search_no_vectors_returns_empty(async_session):
     repo = DocumentRepository(async_session)
     results = await repo.similarity_search("n1", [1.0, 0.0], limit=5)

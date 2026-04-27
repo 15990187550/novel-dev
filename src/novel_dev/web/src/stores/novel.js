@@ -22,6 +22,36 @@ const ENTITY_TYPE_LABELS = {
 }
 
 const CATEGORY_ORDER = ['人物', '势力', '功法', '法宝神兵', '天材地宝', '其他']
+const FLOW_ACTION_KEYS = ['brainstorm', 'volume_plan', 'context', 'draft', 'advance', 'librarian', 'auto_chapter']
+const FLOW_ACTION_LABELS = {
+  brainstorm: '停止脑暴',
+  volume_plan: '停止生成大纲',
+  context: '停止准备上下文',
+  draft: '停止写作草稿',
+  advance: '停止推进流程',
+  librarian: '停止归档',
+  auto_chapter: '停止自动写章',
+}
+const FLOW_TASK_LABELS = {
+  brainstorm: '停止脑暴',
+  generate_synopsis: '停止生成大纲',
+  revise_synopsis: '停止生成大纲',
+  revise_synopsis_with_feedback: '停止生成大纲',
+  generate_volume_plan: '停止生成大纲',
+  revise_volume_plan: '停止生成大纲',
+  expand_volume_plan_batch: '停止生成大纲',
+  plan: '停止生成大纲',
+  context: '停止准备上下文',
+  prepare_context: '停止准备上下文',
+  draft: '停止写作草稿',
+  write: '停止写作草稿',
+  write_chapter: '停止写作草稿',
+  advance: '停止推进流程',
+  librarian: '停止归档',
+  auto_run: '停止自动写章',
+}
+const FLOW_STARTED_STATUSES = new Set(['started', 'llm_call'])
+const FLOW_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'stopped', 'cancelled', 'canceled', 'completed', 'stop_requested'])
 
 const TYPE_TO_CATEGORY = {
   character: '人物',
@@ -46,6 +76,7 @@ const createOutlineWorkbenchState = () => ({
   state: 'idle',
   error: '',
   submitting: false,
+  reviewing: false,
   creatingKey: '',
   items: [],
   selection: null,
@@ -117,6 +148,28 @@ const getEffectiveGroupSlug = (entity) => {
   return entity.system_group_slug || 'ungrouped'
 }
 
+const getEntityScope = (entity) => {
+  const usage = entity.knowledge_usage || entity.latest_state?._knowledge_usage
+  if (usage !== 'domain') {
+    return {
+      id: 'scope:global',
+      label: '全局实体',
+      scopeType: 'global',
+      domainId: null,
+      domainName: null,
+    }
+  }
+  const domainId = entity.knowledge_domain_id || entity.latest_state?._knowledge_domain_id || 'unknown'
+  const domainName = normalizeLabel(entity.knowledge_domain_name || entity.latest_state?._knowledge_domain_name, '未命名规则域')
+  return {
+    id: `scope:domain:${domainId}`,
+    label: domainName,
+    scopeType: 'domain',
+    domainId,
+    domainName,
+  }
+}
+
 const createEntityNode = (entity) => ({
   id: `entity:${entity.entity_id}`,
   label: normalizeLabel(entity.name, '未命名实体'),
@@ -126,7 +179,7 @@ const createEntityNode = (entity) => ({
   children: [],
 })
 
-const buildEntityTreeFromEntities = (entities = []) => {
+const buildEntityCategoryNodes = (entities = [], scopeId = '') => {
   const categoryBuckets = new Map()
   for (const entity of entities) {
     const category = getEffectiveCategory(entity)
@@ -162,7 +215,7 @@ const buildEntityTreeFromEntities = (entities = []) => {
             .sort((left, right) => normalizeLabel(left.name, '').localeCompare(normalizeLabel(right.name, ''), 'zh-Hans-CN'))
             .map(createEntityNode)
           return {
-            id: `group:${category}:${group.groupSlug}`,
+            id: `${scopeId}:group:${category}:${group.groupSlug}`,
             label: normalizeLabel(group.label, '未分组'),
             nodeType: 'group',
             category,
@@ -174,7 +227,7 @@ const buildEntityTreeFromEntities = (entities = []) => {
         })
 
       return {
-      id: `category:${category}`,
+      id: `${scopeId}:category:${category}`,
       label: category,
       nodeType: 'category',
       category,
@@ -182,6 +235,40 @@ const buildEntityTreeFromEntities = (entities = []) => {
       needsReviewCount: groups.reduce((total, group) => total + group.needsReviewCount, 0),
       children: groups,
     }
+    })
+}
+
+const buildEntityTreeFromEntities = (entities = []) => {
+  const scopeBuckets = new Map()
+  for (const entity of entities) {
+    const scope = getEntityScope(entity)
+    if (!scopeBuckets.has(scope.id)) {
+      scopeBuckets.set(scope.id, {
+        ...scope,
+        entities: [],
+      })
+    }
+    scopeBuckets.get(scope.id).entities.push(entity)
+  }
+
+  return [...scopeBuckets.values()]
+    .sort((left, right) => {
+      if (left.scopeType !== right.scopeType) return left.scopeType === 'global' ? -1 : 1
+      return normalizeLabel(left.label, '').localeCompare(normalizeLabel(right.label, ''), 'zh-Hans-CN')
+    })
+    .map((scope) => {
+      const children = buildEntityCategoryNodes(scope.entities, scope.id)
+      return {
+        id: scope.id,
+        label: scope.scopeType === 'global' ? '全局实体' : `规则域：${scope.label}`,
+        nodeType: 'scope',
+        scopeType: scope.scopeType,
+        domainId: scope.domainId,
+        domainName: scope.domainName,
+        entityCount: scope.entities.length,
+        needsReviewCount: children.reduce((total, category) => total + category.needsReviewCount, 0),
+        children,
+      }
     })
 }
 
@@ -254,6 +341,24 @@ const findEntityNodeById = (nodes = [], entityId) => {
   return null
 }
 
+const flowKeyFromLog = (log = {}) => [
+  log.agent || '',
+  log.node || '',
+  log.task || '',
+].join(':')
+
+const resolveFlowLabelFromLog = (log = {}) => {
+  const task = log.task || log.node || ''
+  if (FLOW_TASK_LABELS[task]) return FLOW_TASK_LABELS[task]
+  const message = log.message || ''
+  if (message.includes('大纲') || message.includes('卷纲') || message.includes('总纲')) return '停止生成大纲'
+  if (message.includes('脑暴')) return '停止脑暴'
+  if (message.includes('上下文')) return '停止准备上下文'
+  if (message.includes('草稿') || message.includes('写作')) return '停止写作草稿'
+  if (message.includes('归档')) return '停止归档'
+  return '停止当前流程'
+}
+
 export const useNovelStore = defineStore('novel', {
   state: () => ({
     novelId: '',
@@ -277,16 +382,31 @@ export const useNovelStore = defineStore('novel', {
     spacelines: [],
     foreshadowings: [],
     pendingDocs: [],
+    knowledgeDomains: [],
     pendingDocActions: createPendingDocActionState(),
     outlineWorkbench: createOutlineWorkbenchState(),
     brainstormWorkspace: createBrainstormWorkspaceState(),
     loadingActions: {},
+    flowActivity: {
+      active: false,
+      label: '',
+      updatedAt: '',
+    },
+    autoRunJob: null,
+    autoRunLastResult: null,
+    stoppingFlow: false,
     dashboardPanels: createDashboardPanels(),
     dashboardLastUpdated: '',
   }),
 
   getters: {
-    novelTitle: (s) => s.novelState.checkpoint_data?.synopsis_data?.title || s.novelId || '未选择小说',
+    novelTitle: (s) => (
+      s.novelState.title
+      || s.novelState.checkpoint_data?.novel_title
+      || s.novelState.checkpoint_data?.title
+      || s.novelId
+      || '未选择小说'
+    ),
     currentPhaseLabel: (s) => PHASE_LABELS[s.novelState.current_phase] || s.novelState.current_phase || '-',
     currentVolumeChapter: (s) => {
       const v = s.novelState.current_volume_id || '-'
@@ -299,6 +419,25 @@ export const useNovelStore = defineStore('novel', {
     canDraft: (s) => s.novelState.current_phase === 'drafting',
     canAdvance: (s) => ['reviewing', 'editing', 'fast_reviewing'].includes(s.novelState.current_phase),
     canLibrarian: (s) => s.novelState.current_phase === 'librarian',
+    canAutoRunChapter: (s) => ['context_preparation', 'drafting', 'reviewing', 'editing', 'fast_reviewing', 'librarian'].includes(s.novelState.current_phase),
+    hasRunningFlowAction: (s) => FLOW_ACTION_KEYS.some(key => Boolean(s.loadingActions?.[key])),
+    shouldShowStopFlow: (s) => (
+      Boolean(s.novelId)
+      && (
+        FLOW_ACTION_KEYS.some(key => Boolean(s.loadingActions?.[key]))
+        || Boolean(s.outlineWorkbench.submitting)
+        || Boolean(s.outlineWorkbench.creatingKey)
+        || Boolean(s.brainstormWorkspace.submitting)
+        || Boolean(s.flowActivity.active)
+      )
+    ),
+    stopFlowLabel: (s) => {
+      const activeKey = FLOW_ACTION_KEYS.find(key => Boolean(s.loadingActions?.[key]))
+      if (activeKey && FLOW_ACTION_LABELS[activeKey]) return FLOW_ACTION_LABELS[activeKey]
+      if (s.outlineWorkbench.submitting || s.outlineWorkbench.creatingKey) return '停止生成大纲'
+      if (s.brainstormWorkspace.submitting) return '停止脑暴'
+      return s.flowActivity.label || '停止当前流程'
+    },
   },
 
   actions: {
@@ -350,6 +489,10 @@ export const useNovelStore = defineStore('novel', {
       this.outlineWorkbench = createOutlineWorkbenchState()
       this.brainstormWorkspace = createBrainstormWorkspaceState()
       this.loadingActions = {}
+      this.flowActivity = { active: false, label: '', updatedAt: '' }
+      this.autoRunJob = null
+      this.autoRunLastResult = null
+      this.stoppingFlow = false
       this.resetDashboardSupplemental()
     },
 
@@ -357,6 +500,17 @@ export const useNovelStore = defineStore('novel', {
       this.novelId = novelId
       this.resetDashboardSupplemental()
       await this.refreshState()
+    },
+
+    async updateNovelTitle(title) {
+      if (!this.novelId) return null
+      const updated = await api.updateNovel(this.novelId, title)
+      this.novelState = {
+        ...this.novelState,
+        ...updated,
+        checkpoint_data: updated.checkpoint_data || this.novelState.checkpoint_data || {},
+      }
+      return updated
     },
 
     async refreshState() {
@@ -427,9 +581,13 @@ export const useNovelStore = defineStore('novel', {
       this.syncCurrentChapter()
     },
 
-    async executeAction(actionType) {
+    async executeAction(actionType, options = {}) {
       this.loadingActions[actionType] = true
       try {
+        const shouldRefreshDashboard = false
+        if (actionType === 'auto_chapter') {
+          this.autoRunLastResult = null
+        }
         switch (actionType) {
           case 'brainstorm': await api.brainstorm(this.novelId); break
           case 'volume_plan': await api.planVolume(this.novelId); break
@@ -441,12 +599,77 @@ export const useNovelStore = defineStore('novel', {
             break
           case 'advance': await api.advance(this.novelId); break
           case 'librarian': await api.runLibrarian(this.novelId); break
+          case 'auto_chapter':
+            this.autoRunJob = await api.autoRunChapters(this.novelId, {
+              max_chapters: Number.isFinite(Number(options.max_chapters)) ? Math.max(1, Math.floor(Number(options.max_chapters))) : 1,
+              stop_at_volume_end: options.stop_at_volume_end ?? true,
+            })
+            break
           case 'export': await api.exportNovel(this.novelId); break
         }
         await this.loadNovel(this.novelId)
+        if (shouldRefreshDashboard) {
+          await this.loadDashboardSupplemental()
+        }
+      } catch (error) {
+        if (actionType === 'auto_chapter') {
+          const detail = error?.response?.data?.detail
+          if (detail && typeof detail === 'object') {
+            this.autoRunLastResult = detail
+            await this.loadNovel(this.novelId)
+          }
+        }
+        throw error
       } finally {
         this.loadingActions[actionType] = false
       }
+    },
+
+    async refreshAutoRunJob() {
+      if (!this.novelId || !this.autoRunJob?.job_id) return
+      const job = await api.getGenerationJob(this.novelId, this.autoRunJob.job_id)
+      this.autoRunJob = job
+      const result = job.result_payload
+      if (result && result.stopped_reason === 'failed') {
+        this.autoRunLastResult = result
+      }
+      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
+        await this.refreshState()
+      }
+    },
+
+    async stopCurrentFlow() {
+      if (!this.novelId) return
+      this.stoppingFlow = true
+      try {
+        await api.stopCurrentFlow(this.novelId)
+        await this.refreshState()
+        this.flowActivity = { active: false, label: '', updatedAt: new Date().toISOString() }
+      } finally {
+        this.stoppingFlow = false
+      }
+    },
+
+    syncFlowActivityFromLogs(logs = []) {
+      const activeByKey = new Map()
+      for (const log of logs || []) {
+        if (!log?.status) continue
+        const key = flowKeyFromLog(log)
+        if (!key.trim()) continue
+        if (FLOW_STARTED_STATUSES.has(log.status)) {
+          activeByKey.set(key, {
+            label: resolveFlowLabelFromLog(log),
+            updatedAt: log.timestamp || '',
+          })
+        } else if (FLOW_TERMINAL_STATUSES.has(log.status)) {
+          activeByKey.delete(key)
+        }
+      }
+
+      const active = Array.from(activeByKey.values()).pop()
+      this.flowActivity = active
+        ? { active: true, label: active.label, updatedAt: active.updatedAt }
+        : { active: false, label: '', updatedAt: this.flowActivity.updatedAt }
     },
 
     async fetchEntities() {
@@ -555,6 +778,32 @@ export const useNovelStore = defineStore('novel', {
     async fetchDocuments() {
       const pending = await api.getPendingDocs(this.novelId).catch(() => ({ items: [] }))
       this.pendingDocs = pending.items || []
+    },
+
+    async fetchKnowledgeDomains(includeDisabled = true) {
+      if (!this.novelId) {
+        this.knowledgeDomains = []
+        return
+      }
+      const result = await api.getKnowledgeDomains(this.novelId, includeDisabled).catch(() => ({ items: [] }))
+      this.knowledgeDomains = result.items || []
+    },
+
+    async confirmKnowledgeDomainScope(domainId, scopeRefs, scopeType = 'volume') {
+      if (!this.novelId || !domainId) return null
+      const result = await api.confirmKnowledgeDomainScope(this.novelId, domainId, {
+        scope_type: scopeType,
+        scope_refs: scopeRefs,
+      })
+      await this.fetchKnowledgeDomains(true)
+      return result.item
+    },
+
+    async disableKnowledgeDomain(domainId) {
+      if (!this.novelId || !domainId) return null
+      const result = await api.disableKnowledgeDomain(this.novelId, domainId)
+      await this.fetchKnowledgeDomains(true)
+      return result.item
     },
 
     async saveSynopsis(content) {
@@ -700,6 +949,42 @@ export const useNovelStore = defineStore('novel', {
         await this.refreshOutlineWorkbench(refreshSelection)
       } finally {
         this.outlineWorkbench.submitting = false
+      }
+    },
+
+    async clearOutlineContext() {
+      if (!this.novelId) return
+      const selection = this.outlineWorkbench.selection || {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+      }
+      this.outlineWorkbench.error = ''
+      await api.clearOutlineContext(this.novelId, {
+        outline_type: selection.outline_type,
+        outline_ref: selection.outline_ref,
+      })
+      this.outlineWorkbench.messages = []
+      this.outlineWorkbench.conversationSummary = ''
+      this.outlineWorkbench.lastResultSnapshot = null
+      await this.refreshOutlineWorkbench(selection)
+    },
+
+    async reviewCurrentOutline() {
+      if (!this.novelId) return
+      const selection = this.outlineWorkbench.selection || {
+        outline_type: 'synopsis',
+        outline_ref: 'synopsis',
+      }
+      this.outlineWorkbench.reviewing = true
+      this.outlineWorkbench.error = ''
+      try {
+        await api.reviewOutline(this.novelId, {
+          outline_type: selection.outline_type,
+          outline_ref: selection.outline_ref,
+        })
+        await this.refreshOutlineWorkbench(selection)
+      } finally {
+        this.outlineWorkbench.reviewing = false
       }
     },
 

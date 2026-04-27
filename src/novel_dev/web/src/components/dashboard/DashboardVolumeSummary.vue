@@ -10,12 +10,12 @@
 
     <div class="dashboard-volume-summary__grid">
       <div class="dashboard-volume-summary__panel">
-        <h3 class="dashboard-volume-summary__panel-title">章节进度</h3>
-        <ChapterProgressGantt :chapters="chapters" />
+        <h3 class="dashboard-volume-summary__panel-title">章节评分</h3>
+        <ChapterProgressGantt :chapters="chapters" mode="score" />
       </div>
 
       <div class="dashboard-volume-summary__panel">
-        <h3 class="dashboard-volume-summary__panel-title">评分雷达</h3>
+        <h3 class="dashboard-volume-summary__panel-title">总评分雷达</h3>
         <ScoreRadar :scores="scores" />
       </div>
     </div>
@@ -33,4 +33,3 @@ defineProps({
   scores: { type: Object, default: () => ({}) },
 })
 </script>
-

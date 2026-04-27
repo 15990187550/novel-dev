@@ -75,6 +75,99 @@ class PlotMilestone(BaseModel):
         return coerce_to_text(value)
 
 
+class SynopsisVolumeOutline(BaseModel):
+    volume_number: int
+    title: str
+    summary: str
+    narrative_role: str = ""
+    main_goal: str = ""
+    main_conflict: str = ""
+    start_state: str = ""
+    end_state: str = ""
+    climax: str = ""
+    hook_to_next: str = ""
+    key_entities: List[str] = Field(default_factory=list)
+    relationship_shifts: List[str] = Field(default_factory=list)
+    foreshadowing_setup: List[str] = Field(default_factory=list)
+    foreshadowing_payoff: List[str] = Field(default_factory=list)
+    target_chapter_range: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        volume_number = normalized.get("volume_number") or normalized.get("number") or normalized.get("index")
+        if volume_number is not None and "volume_number" not in normalized:
+            normalized["volume_number"] = volume_number
+        if "title" not in normalized:
+            for legacy_key in ("volume_title", "name"):
+                if legacy_key in normalized:
+                    normalized["title"] = normalized[legacy_key]
+                    break
+        if "title" not in normalized:
+            summary = coerce_to_text(normalized.get("summary")).strip()
+            fallback_title = summary[:18].rstrip("。！？.!?，,；;、 ")
+            normalized["title"] = fallback_title or f"第{normalized.get('volume_number') or '?'}卷"
+        if "summary" not in normalized:
+            for legacy_key in ("description", "volume_summary", "content"):
+                if legacy_key in normalized:
+                    normalized["summary"] = normalized[legacy_key]
+                    break
+        if "summary" not in normalized:
+            normalized["summary"] = normalized.get("title") or f"第{normalized.get('volume_number') or '?'}卷规划待补充"
+        if "main_goal" not in normalized:
+            for legacy_key in ("goal", "volume_goal", "arc_goal"):
+                if legacy_key in normalized:
+                    normalized["main_goal"] = normalized[legacy_key]
+                    break
+        if "main_conflict" not in normalized:
+            for legacy_key in ("conflict", "core_conflict"):
+                if legacy_key in normalized:
+                    normalized["main_conflict"] = normalized[legacy_key]
+                    break
+        if "climax" not in normalized:
+            for legacy_key in ("climax_event", "volume_climax"):
+                if legacy_key in normalized:
+                    normalized["climax"] = normalized[legacy_key]
+                    break
+        if "hook_to_next" not in normalized:
+            for legacy_key in ("hook", "next_hook", "ending_hook"):
+                if legacy_key in normalized:
+                    normalized["hook_to_next"] = normalized[legacy_key]
+                    break
+        return normalized
+
+    @field_validator(
+        "title",
+        "summary",
+        "narrative_role",
+        "main_goal",
+        "main_conflict",
+        "start_state",
+        "end_state",
+        "climax",
+        "hook_to_next",
+        "target_chapter_range",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_text_fields(cls, value: Any) -> str:
+        return coerce_to_text(value)
+
+    @field_validator(
+        "key_entities",
+        "relationship_shifts",
+        "foreshadowing_setup",
+        "foreshadowing_payoff",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_string_list_fields(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
+
+
 class SynopsisData(BaseModel):
     title: str
     logline: str
@@ -85,8 +178,53 @@ class SynopsisData(BaseModel):
     estimated_volumes: int
     estimated_total_chapters: int
     estimated_total_words: int
+    volume_outlines: List[SynopsisVolumeOutline] = Field(default_factory=list)
     entity_highlights: dict[str, List[str]] = Field(default_factory=dict)
     relationship_highlights: List[str] = Field(default_factory=list)
+    review_status: Optional[dict[str, Any]] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_fields(cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        if "title" not in normalized:
+            for legacy_key in ("name", "synopsis_title", "story_title"):
+                if legacy_key in normalized:
+                    normalized["title"] = normalized[legacy_key]
+                    break
+        if "title" not in normalized:
+            logline = coerce_to_text(normalized.get("logline")).strip()
+            fallback = logline[:24].rstrip("。！？.!?，,；;、 ")
+            normalized["title"] = fallback or "未命名总纲"
+        volume_outlines = normalized.get("volume_outlines")
+        if isinstance(volume_outlines, dict):
+            volume_outlines = list(volume_outlines.values())
+        if isinstance(volume_outlines, list):
+            normalized_outlines = []
+            for index, item in enumerate(volume_outlines, start=1):
+                if not isinstance(item, dict):
+                    item = {"summary": item}
+                outline = dict(item)
+                if "volume_number" not in outline:
+                    outline["volume_number"] = outline.get("number") or outline.get("index") or index
+                if "summary" not in outline:
+                    for legacy_key in ("description", "volume_summary", "content", "main_goal", "goal"):
+                        if legacy_key in outline:
+                            outline["summary"] = outline[legacy_key]
+                            break
+                if "title" not in outline:
+                    summary = coerce_to_text(outline.get("summary")).strip()
+                    fallback_title = summary[:18].rstrip("。！？.!?，,；;、 ")
+                    outline["title"] = outline.get("volume_title") or outline.get("name") or fallback_title or f"第{outline['volume_number']}卷"
+                if "summary" not in outline:
+                    outline["summary"] = outline.get("title") or f"第{outline['volume_number']}卷规划待补充"
+                normalized_outlines.append(outline)
+            normalized["volume_outlines"] = normalized_outlines
+        elif volume_outlines is not None:
+            normalized["volume_outlines"] = []
+        return normalized
 
     @field_validator("title", "logline", "core_conflict", mode="before")
     @classmethod
@@ -96,6 +234,20 @@ class SynopsisData(BaseModel):
     @field_validator("themes", mode="before")
     @classmethod
     def _coerce_string_list_fields(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
+
+    @field_validator("entity_highlights", mode="before")
+    @classmethod
+    def _coerce_entity_highlights(cls, value: Any) -> dict[str, List[str]]:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            return {str(key): coerce_to_str_list(item) for key, item in value.items()}
+        return {"general": coerce_to_str_list(value)}
+
+    @field_validator("relationship_highlights", mode="before")
+    @classmethod
+    def _coerce_relationship_highlights(cls, value: Any) -> List[str]:
         return coerce_to_str_list(value)
 
 
@@ -169,6 +321,7 @@ class VolumePlan(BaseModel):
     chapters: List[VolumeBeat] = Field(default_factory=list)
     entity_highlights: dict[str, List[str]] = Field(default_factory=dict)
     relationship_highlights: List[str] = Field(default_factory=list)
+    review_status: Optional[dict[str, Any]] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -216,6 +369,20 @@ class VolumePlan(BaseModel):
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)
+
+    @field_validator("entity_highlights", mode="before")
+    @classmethod
+    def _coerce_entity_highlights(cls, value: Any) -> dict[str, List[str]]:
+        if value is None or value == "":
+            return {}
+        if isinstance(value, dict):
+            return {str(key): coerce_to_str_list(item) for key, item in value.items()}
+        return {"general": coerce_to_str_list(value)}
+
+    @field_validator("relationship_highlights", mode="before")
+    @classmethod
+    def _coerce_relationship_highlights(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
 
 
 class SynopsisScoreResult(BaseModel):

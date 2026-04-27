@@ -2,14 +2,15 @@ import json
 import logging
 import re
 
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.schemas.review import FastReviewReport
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.llm.models import ChatMessage
-from novel_dev.services.log_service import log_service
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.services.log_service import logged_agent_step, log_service
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,12 @@ AI_FLAVOR_KEYWORDS = (
     "然而", "与此同时", "不知不觉", "恍然大悟", "油然而生", "涌上心头",
     "心头一震", "心中暗暗", "万分", "无比地", "令人难以忘怀",
 )
+
+
+class FastReviewLLMCheck(BaseModel):
+    consistency_fixed: bool = True
+    beat_cohesion_ok: bool = True
+    notes: list[str] = Field(default_factory=list)
 
 
 def _count_ai_flavor(text: str) -> int:
@@ -87,7 +94,7 @@ class FastReviewAgent:
 
     async def _llm_check_consistency_and_cohesion(
         self, polished: str, raw: str, chapter_context: dict, novel_id: str = ""
-    ) -> dict:
+    ) -> FastReviewLLMCheck:
         prompt = (
             "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
             "检查两点并返回严格 JSON:\n"
@@ -100,14 +107,23 @@ class FastReviewAgent:
             f"### 精修文本\n{polished}\n\n"
             "请返回 JSON:"
         )
-        from novel_dev.llm import llm_factory
-        client = llm_factory.get("FastReviewAgent", task="fast_review_check")
-        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-        result = _parse_review_json(response.text)
+        result = await call_and_parse_model(
+            "FastReviewAgent",
+            "fast_review_check",
+            prompt,
+            FastReviewLLMCheck,
+            max_retries=2,
+            novel_id=novel_id,
+        )
         if novel_id:
-            log_service.add_log(novel_id, "FastReviewAgent", f"LLM 一致性检查: consistency={result.get('consistency_fixed')}, cohesion={result.get('beat_cohesion_ok')}")
+            log_service.add_log(
+                novel_id,
+                "FastReviewAgent",
+                f"LLM 一致性检查: consistency={result.consistency_fixed}, cohesion={result.beat_cohesion_ok}",
+            )
         return result
 
+    @logged_agent_step("FastReviewAgent", "快速评审章节", node="fast_review", task="review")
     async def review(self, novel_id: str, chapter_id: str) -> FastReviewReport:
         log_service.add_log(novel_id, "FastReviewAgent", f"开始快速评审: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
@@ -145,9 +161,9 @@ class FastReviewAgent:
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
         }
         llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
-        consistency_fixed = llm_result.get("consistency_fixed", True)
-        beat_cohesion_ok = llm_result.get("beat_cohesion_ok", True)
-        notes = llm_result.get("notes", [])
+        consistency_fixed = llm_result.consistency_fixed
+        beat_cohesion_ok = llm_result.beat_cohesion_ok
+        notes = list(llm_result.notes)
 
         if not word_count_ok:
             notes.append("字数偏离目标超过10%")

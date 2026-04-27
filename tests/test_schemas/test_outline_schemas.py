@@ -6,6 +6,7 @@ from novel_dev.schemas.outline import (
     VolumeScoreResult,
     CharacterArc,
     PlotMilestone,
+    SynopsisVolumeOutline,
 )
 from novel_dev.schemas.context import BeatPlan
 
@@ -80,6 +81,65 @@ def test_default_lists():
     assert data.themes == []
     assert data.character_arcs == []
     assert data.milestones == []
+    assert data.volume_outlines == []
+
+
+def test_synopsis_volume_outline_accepts_contract_aliases():
+    outline = SynopsisVolumeOutline.model_validate({
+        "number": 2,
+        "volume_title": "破局卷",
+        "description": "主角从被动逃亡转为主动布局。",
+        "goal": "夺回主动权",
+        "conflict": "主角 vs 追猎者",
+        "climax_event": "反杀追猎首领",
+        "hook": "幕后真凶露面",
+        "key_entities": "主角",
+        "relationship_shifts": {"师徒": "从猜疑到托付"},
+    })
+
+    assert outline.volume_number == 2
+    assert outline.title == "破局卷"
+    assert outline.main_goal == "夺回主动权"
+    assert outline.main_conflict == "主角 vs 追猎者"
+    assert outline.climax == "反杀追猎首领"
+    assert outline.hook_to_next == "幕后真凶露面"
+    assert outline.key_entities == ["主角"]
+    assert outline.relationship_shifts == ["师徒: 从猜疑到托付"]
+
+
+def test_synopsis_data_backfills_incomplete_volume_outlines():
+    data = SynopsisData.model_validate({
+        "title": "道照诸天",
+        "logline": "陆照争夺超脱路径。",
+        "core_conflict": "陆照 vs 轮回空间",
+        "estimated_volumes": 2,
+        "estimated_total_chapters": 60,
+        "estimated_total_words": 180000,
+        "volume_outlines": [
+            {"main_goal": "夺回第一枚道印", "main_conflict": "陆照 vs 轮回使者"},
+            "道庭介入，陆照被迫离开旧地。",
+        ],
+    })
+
+    assert data.volume_outlines[0].volume_number == 1
+    assert data.volume_outlines[0].title == "夺回第一枚道印"
+    assert data.volume_outlines[0].summary == "夺回第一枚道印"
+    assert data.volume_outlines[1].volume_number == 2
+    assert data.volume_outlines[1].title == "道庭介入，陆照被迫离开旧地"
+    assert data.volume_outlines[1].summary == "道庭介入，陆照被迫离开旧地。"
+
+
+def test_synopsis_volume_outline_backfills_missing_title_from_summary():
+    outline = SynopsisVolumeOutline.model_validate({
+        "volume_number": 1,
+        "summary": "陆照踏入修行世界并卷入传承争夺。",
+        "main_goal": "获得道经认可",
+        "main_conflict": "陆照 vs 追杀者",
+        "target_chapter_range": "1-50",
+    })
+
+    assert outline.title == "陆照踏入修行世界并卷入传承争夺"
+    assert outline.summary == "陆照踏入修行世界并卷入传承争夺。"
 
 
 def test_synopsis_data_accepts_legacy_llm_field_names():

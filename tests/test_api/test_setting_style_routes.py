@@ -6,6 +6,7 @@ from novel_dev.llm.exceptions import LLMTimeoutError
 
 from novel_dev.api.routes import router, get_session
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.services.extraction_service import ExtractionService
 
@@ -45,8 +46,102 @@ async def test_upload_setting_and_approve(async_session):
 
             resp4 = await client.get("/api/novels/n1/documents/pending")
             matched_after = next(item for item in resp4.json()["items"] if item["id"] == pe_id)
+            assert matched_after["status"] == "approved"
             assert matched_after["resolution_result"] is not None
             assert matched_after["resolution_result"]["field_resolutions"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_domain_upload_skips_file_classifier(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    async def fail_classify(*args, **kwargs):
+        raise AssertionError("domain import should skip FileClassifier")
+
+    monkeypatch.setattr("novel_dev.agents.file_classifier.FileClassifier.classify", fail_classify)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={
+                    "filename": "完美世界.md",
+                    "content": "完美世界规则域：境界体系、地图、禁止高原诡异提前正面登场。",
+                    "knowledge_usage": "domain",
+                    "domain_name": "完美世界",
+                },
+            )
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["extraction_type"] == "setting"
+            assert data["knowledge_domain"]["name"] == "完美世界"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_domain_upload_approval_writes_local_docs_and_entities_without_global_merge(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    async def fail_merge(*args, **kwargs):
+        raise AssertionError("domain import approval should not merge global library documents")
+
+    monkeypatch.setattr(ExtractionService, "_request_setting_document_merge", fail_merge)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={
+                    "filename": "完美世界.md",
+                    "content": "世界观：完美世界。人物：石昊。规则：高原诡异只能作为远期伏笔。",
+                    "knowledge_usage": "domain",
+                    "domain_name": "完美世界",
+                },
+            )
+            assert resp.status_code == 200
+            pending_id = resp.json()["id"]
+
+            approve_resp = await client.post(
+                "/api/novels/n1/documents/pending/approve",
+                json={"pending_id": pending_id},
+            )
+            assert approve_resp.status_code == 200
+            approved_docs = approve_resp.json()["documents"]
+            assert approved_docs
+            assert all(item["doc_type"].startswith("domain_") for item in approved_docs)
+            assert all(item["title"].startswith("完美世界 / ") for item in approved_docs)
+
+            doc_repo = DocumentRepository(async_session)
+            global_docs = []
+            for doc_type in ("worldview", "setting", "synopsis", "concept"):
+                global_docs.extend(await doc_repo.get_by_type("n1", doc_type))
+            assert global_docs == []
+            domain_docs = []
+            for doc_type in ("domain_worldview", "domain_setting", "domain_synopsis", "domain_concept"):
+                domain_docs.extend(await doc_repo.get_by_type("n1", doc_type))
+            assert {doc.id for doc in domain_docs} == {item["id"] for item in approved_docs}
+
+            entities = await EntityRepository(async_session).list_by_novel("n1")
+            assert entities
+            latest_states = {
+                entity.name: await ExtractionService(async_session).entity_svc.get_latest_state(entity.id)
+                for entity in entities
+            }
+            assert all(state["_knowledge_usage"] == "domain" for state in latest_states.values())
+            assert all(state["_knowledge_domain_name"] == "完美世界" for state in latest_states.values())
+
+            pending_resp = await client.get("/api/novels/n1/documents/pending")
+            matched = next(item for item in pending_resp.json()["items"] if item["id"] == pending_id)
+            assert matched["status"] == "approved"
+            assert matched["resolution_result"]["isolated_from_global_library"] is True
+            assert matched["resolution_result"]["local_document_ids"]
     finally:
         app.dependency_overrides.clear()
 
@@ -356,6 +451,47 @@ async def test_delete_failed_pending_rejects_non_failed(async_session):
 
 
 @pytest.mark.asyncio
+async def test_delete_processing_pending_cancels_import(async_session):
+    async def override():
+        yield async_session
+    repo = PendingExtractionRepository(async_session)
+    await repo.create(
+        pe_id="pe_processing1",
+        novel_id="n1",
+        source_filename="long.md",
+        extraction_type="processing",
+        raw_result={},
+        status="processing",
+    )
+    await async_session.commit()
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            delete_resp = await client.delete("/api/novels/n1/documents/pending/pe_processing1")
+            assert delete_resp.status_code == 204
+
+            pending_after = await client.get("/api/novels/n1/documents/pending")
+            assert all(item["id"] != "pe_processing1" for item in pending_after.json()["items"])
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_missing_pending_is_idempotent(async_session):
+    async def override():
+        yield async_session
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            delete_resp = await client.delete("/api/novels/n1/documents/pending/pe_missing")
+            assert delete_resp.status_code == 204
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_approve_with_field_resolutions(async_session):
     async def override():
         yield async_session
@@ -385,6 +521,109 @@ async def test_approve_with_field_resolutions(async_session):
             matched = next(item for item in resp3.json()["items"] if item["id"] == pe_id)
             assert matched["resolution_result"] is not None
             assert matched["resolution_result"]["field_resolutions"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_approve_large_setting_records_entity_batches(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    characters = [
+        {"name": f"角色{i}", "identity": f"身份{i}"}
+        for i in range(60)
+    ]
+    entity_diffs = [
+        {
+            "entity_type": "character",
+            "entity_name": item["name"],
+            "operation": "create",
+            "field_changes": [
+                {"field": "identity", "label": "身份", "old_value": "", "new_value": item["identity"]},
+            ],
+        }
+        for item in characters
+    ]
+    repo = PendingExtractionRepository(async_session)
+    await repo.create(
+        pe_id="pe_large_batch",
+        novel_id="n1",
+        source_filename="large.md",
+        extraction_type="setting",
+        status="pending",
+        raw_result={
+            "worldview": "大世界",
+            "power_system": "",
+            "factions": [],
+            "locations": [],
+            "character_profiles": characters,
+            "important_items": [],
+            "plot_synopsis": "",
+        },
+        proposed_entities=[
+            {"type": "character", "name": item["name"], "data": item}
+            for item in characters
+        ],
+        diff_result={
+            "summary": "60 个新增实体",
+            "document_changes": [],
+            "entity_diffs": entity_diffs,
+        },
+    )
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        from novel_dev.agents.entity_classifier import (
+            EntityClassificationBatchItem,
+            EntityClassificationBatchResult,
+            EntityClassifierAgent,
+        )
+
+        async def fail_llm_classification(*args, **kwargs):
+            raise AssertionError("import approval should not classify every entity with LLM")
+
+        batch_calls = []
+
+        async def classify_batch(self, *, entities, novel_id=""):
+            batch_calls.append(len(entities))
+            return EntityClassificationBatchResult(
+                items=[
+                    EntityClassificationBatchItem(
+                        index=index,
+                        category="人物",
+                        group_name="主角阵营",
+                        confidence=0.91,
+                        reason="batch test",
+                    )
+                    for index, _entity in enumerate(entities)
+                ]
+            )
+
+        monkeypatch.setattr(EntityClassifierAgent, "classify", fail_llm_classification)
+        monkeypatch.setattr(EntityClassifierAgent, "classify_batch", classify_batch)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/pending/approve",
+                json={"pending_id": "pe_large_batch"},
+            )
+            assert resp.status_code == 200
+
+            pending_resp = await client.get("/api/novels/n1/documents/pending")
+            matched = next(item for item in pending_resp.json()["items"] if item["id"] == "pe_large_batch")
+            result = matched["resolution_result"]
+            assert result["entity_total"] == 60
+            assert result["entity_applied"] == 60
+            assert len(result["entity_batches"]) == 3
+            assert result["entity_classification_batches"] == [
+                {"batch_index": 1, "total": 25, "updated": 25},
+                {"batch_index": 2, "total": 25, "updated": 25},
+                {"batch_index": 3, "total": 10, "updated": 10},
+            ]
+            assert result["entity_failures"] == []
+            assert batch_calls == [25, 25, 10]
     finally:
         app.dependency_overrides.clear()
 

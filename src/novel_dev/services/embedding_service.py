@@ -2,6 +2,7 @@ import logging
 from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import SQLAlchemyError
 
 from novel_dev.db.models import Chapter, Entity, NovelDocument
 from novel_dev.llm.embedder import BaseEmbedder
@@ -68,8 +69,7 @@ class EmbeddingService:
             doc_id,
         ):
             return
-        doc.vector_embedding = vector
-        await self.session.flush()
+        await self._store_vector(doc, "vector_embedding", vector, "document_embedding_store_failed", doc_id)
 
     async def search_similar(
         self,
@@ -79,6 +79,13 @@ class EmbeddingService:
         doc_type_filter: Optional[str] = None,
     ) -> list[SimilarDocument]:
         query_vector = await self.generate_embedding(query_text)
+        if not self._vector_dimensions_match(
+            NovelDocument.__table__.c.vector_embedding,
+            query_vector,
+            "document_query_embedding_dimension_mismatch",
+            novel_id,
+        ):
+            return []
         repo = DocumentRepository(self.session)
         return await repo.similarity_search(
             novel_id, query_vector, limit, doc_type_filter
@@ -91,6 +98,13 @@ class EmbeddingService:
         limit: int = 5,
         doc_type_filter: Optional[str] = None,
     ) -> list[SimilarDocument]:
+        if not self._vector_dimensions_match(
+            NovelDocument.__table__.c.vector_embedding,
+            query_vector,
+            "document_query_vector_dimension_mismatch",
+            novel_id,
+        ):
+            return []
         repo = DocumentRepository(self.session)
         return await repo.similarity_search(
             novel_id, query_vector, limit, doc_type_filter
@@ -117,8 +131,7 @@ class EmbeddingService:
             entity_id,
         ):
             return
-        entity.vector_embedding = vector
-        await self.session.flush()
+        await self._store_vector(entity, "vector_embedding", vector, "entity_embedding_store_failed", entity_id)
 
     async def index_entity_search(self, entity_id: str) -> None:
         entity_repo = EntityRepository(self.session)
@@ -141,9 +154,13 @@ class EmbeddingService:
             entity_id,
         ):
             return
-        entity.search_document = text
-        entity.search_vector_embedding = vector
-        await self.session.flush()
+        try:
+            async with self.session.begin_nested():
+                entity.search_document = text
+                entity.search_vector_embedding = vector
+                await self.session.flush()
+        except SQLAlchemyError as exc:
+            logger.warning("entity_search_embedding_store_failed", extra={"entity_id": entity_id, "error": str(exc)})
 
     @staticmethod
     def _flatten_entity_state(name: str, entity_type: str, state: dict) -> str:
@@ -182,6 +199,13 @@ class EmbeddingService:
         type_filter: Optional[str] = None,
     ) -> list[SimilarDocument]:
         query_vector = await self.generate_embedding(query_text)
+        if not self._vector_dimensions_match(
+            Entity.__table__.c.vector_embedding,
+            query_vector,
+            "entity_query_embedding_dimension_mismatch",
+            novel_id,
+        ):
+            return []
         repo = EntityRepository(self.session)
         return await repo.similarity_search(novel_id, query_vector, limit, type_filter)
 
@@ -207,8 +231,15 @@ class EmbeddingService:
             chapter_id,
         ):
             return
-        ch.vector_embedding = vector
-        await self.session.flush()
+        await self._store_vector(ch, "vector_embedding", vector, "chapter_embedding_store_failed", chapter_id)
+
+    async def _store_vector(self, model, attr: str, vector: list[float], label: str, record_id: str) -> None:
+        try:
+            async with self.session.begin_nested():
+                setattr(model, attr, vector)
+                await self.session.flush()
+        except SQLAlchemyError as exc:
+            logger.warning(label, extra={"record_id": record_id, "error": str(exc)})
 
     async def search_similar_chapters(
         self,
@@ -217,5 +248,12 @@ class EmbeddingService:
         limit: int = 3,
     ) -> list[SimilarDocument]:
         query_vector = await self.generate_embedding(query_text)
+        if not self._vector_dimensions_match(
+            Chapter.__table__.c.vector_embedding,
+            query_vector,
+            "chapter_query_embedding_dimension_mismatch",
+            novel_id,
+        ):
+            return []
         repo = ChapterRepository(self.session)
         return await repo.similarity_search(novel_id, query_vector, limit)

@@ -31,9 +31,7 @@ function toArray(value) {
 }
 
 function parseTime(value) {
-  if (!value) return 0
-  const parsed = Date.parse(value)
-  return Number.isFinite(parsed) ? parsed : 0
+  return timestampMs(value)
 }
 
 function normalizeNumber(value) {
@@ -61,6 +59,60 @@ function statusLabel(status) {
     default:
       return '待处理'
   }
+}
+
+function scoreValue(value) {
+  if (value && typeof value === 'object') return normalizeNumber(value.score)
+  return normalizeNumber(value)
+}
+
+function hasScore(chapter) {
+  if (chapter?.score_overall != null && chapter.score_overall !== '' && Number.isFinite(Number(chapter.score_overall))) return true
+  return Object.values(chapter?.score_breakdown || {}).some((value) => scoreValue(value) > 0)
+}
+
+function scoreDetail(chapter) {
+  const feedback = chapter?.review_feedback
+  if (typeof feedback === 'string') return feedback
+  if (feedback?.summary_feedback) return feedback.summary_feedback
+  if (feedback?.feedback) return feedback.feedback
+  if (chapter?.summary) return chapter.summary
+  return ''
+}
+
+function buildScoreSummary(chapters = []) {
+  const scoredChapters = toArray(chapters)
+    .filter(hasScore)
+    .map((chapter) => ({
+      ...chapter,
+      displayScore: chapter?.score_overall != null && chapter.score_overall !== '' && Number.isFinite(Number(chapter.score_overall))
+        ? normalizeNumber(chapter.score_overall)
+        : Math.round(
+          Object.values(chapter?.score_breakdown || {})
+            .map(scoreValue)
+            .filter((value) => value > 0)
+            .reduce((sum, value, _, values) => sum + value / values.length, 0)
+        ),
+      scoreDetail: scoreDetail(chapter),
+    }))
+
+  const totals = {}
+  const counts = {}
+  for (const chapter of scoredChapters) {
+    for (const [key, value] of Object.entries(chapter.score_breakdown || {})) {
+      const score = scoreValue(value)
+      if (score <= 0) continue
+      totals[key] = (totals[key] || 0) + score
+      counts[key] = (counts[key] || 0) + 1
+    }
+  }
+
+  const scores = {}
+  for (const [key, total] of Object.entries(totals)) {
+    scores[key] = Math.round(total / counts[key])
+  }
+
+  return { chapters: scoredChapters, scores }
 }
 
 function buildChapterSummary({ chapters = [], volumePlan = null, currentChapterId = null, currentChapter = null } = {}) {
@@ -304,9 +356,11 @@ function buildStatusCards({
 
 export {
   buildChapterSummary,
+  buildScoreSummary,
   buildDataSummary,
   buildRecentUpdates,
   buildRecommendedActions,
   buildRiskItems,
   buildStatusCards,
 }
+import { timestampMs } from '@/utils/time.js'

@@ -31,17 +31,29 @@ vi.mock('axios', () => ({
 
 import {
   brainstorm,
+  advance,
+  autoRunChapters,
+  draftChapter,
+  getGenerationJob,
   getSynopsis,
   getBrainstormWorkspace,
   getVolumePlan,
   getOutlineWorkbench,
   getOutlineWorkbenchMessages,
   planVolume,
+  prepareContext,
+  runLibrarian,
   startBrainstormWorkspace,
+  stopCurrentFlow,
   deleteEntity,
   submitBrainstormWorkspace,
   submitOutlineFeedback,
+  updateNovel,
   updateEntity,
+  getKnowledgeDomains,
+  confirmKnowledgeDomainScope,
+  clearLogs,
+  disableKnowledgeDomain,
 } from '@/api.js'
 
 describe('outline workbench api', () => {
@@ -121,6 +133,12 @@ describe('outline workbench api', () => {
     })
   })
 
+  it('updates novel title', async () => {
+    await expect(updateNovel('novel-1', '新标题')).resolves.toEqual({ ok: true })
+
+    expect(mockPatch).toHaveBeenCalledWith('/novels/novel-1', { title: '新标题' })
+  })
+
   it('updates and deletes entities through dedicated endpoints', async () => {
     const payload = {
       name: '林风',
@@ -138,6 +156,24 @@ describe('outline workbench api', () => {
     expect(mockDelete).toHaveBeenCalledWith('/novels/novel-1/entities/e1')
   })
 
+  it('requests knowledge domain endpoints', async () => {
+    await expect(getKnowledgeDomains('novel-1', true)).resolves.toEqual({ ok: true })
+    await expect(confirmKnowledgeDomainScope('novel-1', 'domain-1', {
+      scope_type: 'volume',
+      scope_refs: ['vol_2'],
+    })).resolves.toEqual({ ok: true })
+    await expect(disableKnowledgeDomain('novel-1', 'domain-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains', {
+      params: { include_disabled: true },
+    })
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains/domain-1/confirm_scope', {
+      scope_type: 'volume',
+      scope_refs: ['vol_2'],
+    })
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains/domain-1/disable')
+  })
+
   it('uses a long timeout for brainstorm and volume planning requests', async () => {
     await expect(brainstorm('novel-1')).resolves.toEqual({ ok: true })
     await expect(planVolume('novel-1', 3)).resolves.toEqual({ ok: true })
@@ -150,5 +186,50 @@ describe('outline workbench api', () => {
     }, {
       timeout: 180000,
     })
+  })
+
+  it('uses a long timeout for chapter generation flow requests', async () => {
+    await expect(prepareContext('novel-1', 'ch-1')).resolves.toEqual({ ok: true })
+    await expect(draftChapter('novel-1', 'ch-1')).resolves.toEqual({ ok: true })
+    await expect(advance('novel-1')).resolves.toEqual({ ok: true })
+    await expect(runLibrarian('novel-1')).resolves.toEqual({ ok: true })
+    await expect(autoRunChapters('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenNthCalledWith(1, '/novels/novel-1/chapters/ch-1/context', null, {
+      timeout: 180000,
+    })
+    expect(mockPost).toHaveBeenNthCalledWith(2, '/novels/novel-1/chapters/ch-1/draft', null, {
+      timeout: 180000,
+    })
+    expect(mockPost).toHaveBeenNthCalledWith(3, '/novels/novel-1/advance', null, {
+      timeout: 180000,
+    })
+    expect(mockPost).toHaveBeenNthCalledWith(4, '/novels/novel-1/librarian', null, {
+      timeout: 180000,
+    })
+    expect(mockPost).toHaveBeenNthCalledWith(5, '/novels/novel-1/chapters/auto-run', {
+      max_chapters: 1,
+      stop_at_volume_end: true,
+    }, {
+      timeout: 180000,
+    })
+  })
+
+  it('requests generation job status', async () => {
+    await expect(getGenerationJob('novel-1', 'job-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/generation_jobs/job-1')
+  })
+
+  it('clears persisted logs for the current novel', async () => {
+    await expect(clearLogs('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockDelete).toHaveBeenCalledWith('/novels/novel-1/logs')
+  })
+
+  it('requests current flow stop endpoint', async () => {
+    await expect(stopCurrentFlow('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/flow/stop')
   })
 })

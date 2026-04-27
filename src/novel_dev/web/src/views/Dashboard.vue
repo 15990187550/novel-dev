@@ -16,13 +16,24 @@
 
     <DashboardStatusCards :panels="statusCards" />
 
-    <DashboardNextActions :actions="recommendedActions" @action="handleAction" />
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <DashboardNextActions class="flex-1" :actions="recommendedActions" @action="handleAction" />
+      <el-button
+        v-if="store.shouldShowStopFlow"
+        type="danger"
+        plain
+        :loading="store.stoppingFlow"
+        @click="store.stopCurrentFlow()"
+      >
+        {{ store.stopFlowLabel }}
+      </el-button>
+    </div>
 
     <div class="dashboard-detail-stack space-y-6">
       <DashboardVolumeSummary
-        :chapters="chapterSummary.chapters"
-        :scores="currentChapterScores"
-        title="卷进度与评分"
+        :chapters="scoreSummary.chapters"
+        :scores="scoreSummary.scores"
+        title="章节评分与总评"
         :subtitle="volumeSubtitle"
       />
 
@@ -48,8 +59,10 @@ import DashboardStatusCards from '@/components/dashboard/DashboardStatusCards.vu
 import DashboardVolumeSummary from '@/components/dashboard/DashboardVolumeSummary.vue'
 import DashboardNextActions from '@/components/dashboard/DashboardNextActions.vue'
 import DashboardInsights from '@/components/dashboard/DashboardInsights.vue'
+import { formatBeijingDateTime } from '@/utils/time.js'
 import {
   buildChapterSummary,
+  buildScoreSummary,
   buildDataSummary,
   buildRecentUpdates,
   buildRecommendedActions,
@@ -95,6 +108,8 @@ const chapterSummary = computed(() => buildChapterSummary({
   currentChapter: store.currentChapter,
 }))
 
+const scoreSummary = computed(() => buildScoreSummary(chapterSummary.value.chapters))
+
 const dataSummary = computed(() => buildDataSummary({
   entities: store.entities,
   timelines: store.timelines,
@@ -123,8 +138,6 @@ const riskItems = computed(() => buildRiskItems({
   currentPhase: store.novelState.current_phase,
   logs: logs.value,
 }))
-
-const currentChapterScores = computed(() => store.currentChapter?.score_breakdown || {})
 
 const quickLinks = computed(() => ([
   { label: '章节', route: '/chapters', detail: '查看当前章节与进度' },
@@ -190,8 +203,7 @@ function stopAutoRefresh() {
 }
 
 function formatTime(value) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString('zh-CN')
+  return formatBeijingDateTime(value)
 }
 
 async function handleAction(actionKey) {

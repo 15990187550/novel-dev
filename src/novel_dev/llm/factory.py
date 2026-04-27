@@ -28,14 +28,14 @@ class RetryableDriver(BaseDriver):
         self,
         inner: BaseDriver,
         retry_config: RetryConfig,
-        config: TaskConfig,
+        config: Optional[TaskConfig] = None,
         usage_tracker: Optional[UsageTracker] = None,
         agent: Optional[str] = None,
         task: Optional[str] = None,
     ):
         self.inner = inner
         self.retry_config = retry_config
-        self.config = config
+        self.config = config or TaskConfig(provider="test", model="test")
         self.usage_tracker = usage_tracker
         self.agent = agent
         self.task = task
@@ -87,6 +87,10 @@ class LLMFactory:
                 return yaml.safe_load(f) or {}
         except FileNotFoundError:
             return {}
+
+    def reload(self) -> None:
+        self._config = self._load_yaml(self.settings.llm_config_path)
+        self._cache.clear()
 
     def _build_task_config(self, raw: dict) -> TaskConfig:
         if isinstance(raw, TaskConfig):
@@ -151,9 +155,15 @@ class LLMFactory:
             return config["api_key"]
 
         if provider == "anthropic":
-            return self.settings.anthropic_api_key
+            key = self.settings.anthropic_api_key
+            if not key:
+                raise LLMConfigError("Missing anthropic_api_key")
+            return key
         elif provider == "minimax":
-            return self.settings.minimax_api_key
+            key = self.settings.minimax_api_key
+            if not key:
+                raise LLMConfigError("Missing minimax_api_key")
+            return key
         elif provider == "openai_compatible":
             return self._resolve_openai_compatible_key(base_url)
         else:

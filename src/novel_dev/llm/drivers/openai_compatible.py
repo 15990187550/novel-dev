@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional, Union
 
 from openai import AsyncOpenAI
@@ -28,18 +29,38 @@ class OpenAICompatibleDriver(BaseDriver):
         else:
             msgs = [{"role": m.role, "content": m.content} for m in messages]
 
+        request_kwargs = {
+            "model": config.model,
+            "messages": msgs,
+            "temperature": config.temperature,
+            "max_tokens": config.max_tokens,
+            "timeout": config.timeout,
+        }
+        if config.response_tool_name and config.response_json_schema:
+            request_kwargs["tools"] = [{
+                "type": "function",
+                "function": {
+                    "name": config.response_tool_name,
+                    "description": "Return the requested structured payload.",
+                    "parameters": config.response_json_schema,
+                },
+            }]
+            request_kwargs["tool_choice"] = {"type": "function", "function": {"name": config.response_tool_name}}
+
         try:
-            resp = await self.client.chat.completions.create(
-                model=config.model,
-                messages=msgs,
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-                timeout=config.timeout,
-            )
+            resp = await self.client.chat.completions.create(**request_kwargs)
         except Exception as exc:
             raise self._map_exception(exc) from exc
 
-        content = resp.choices[0].message.content or ""
+        choice = resp.choices[0]
+        message = choice.message
+        content = message.content or ""
+        structured_payload = None
+        tool_calls = getattr(message, "tool_calls", None) or []
+        if config.response_tool_name and tool_calls:
+            arguments = getattr(tool_calls[0].function, "arguments", "")
+            if arguments:
+                structured_payload = json.loads(arguments)
         usage = None
         if resp.usage:
             usage = TokenUsage(
@@ -47,7 +68,15 @@ class OpenAICompatibleDriver(BaseDriver):
                 completion_tokens=resp.usage.completion_tokens,
                 total_tokens=resp.usage.total_tokens,
             )
-        return LLMResponse(text=content, usage=usage)
+        finish_reason = getattr(choice, "finish_reason", None)
+        if not isinstance(finish_reason, str):
+            finish_reason = None
+        return LLMResponse(
+            text=content,
+            usage=usage,
+            structured_payload=structured_payload,
+            finish_reason=finish_reason,
+        )
 
     def _map_exception(self, exc: Exception) -> Exception:
         import openai

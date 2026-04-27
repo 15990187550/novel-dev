@@ -15,6 +15,7 @@ function createDeferred() {
 
 vi.mock('@/api.js', () => ({
   getNovelState: vi.fn(),
+  updateNovel: vi.fn(),
   getArchiveStats: vi.fn(),
   getChapters: vi.fn(),
   getSynopsis: vi.fn(),
@@ -27,10 +28,15 @@ vi.mock('@/api.js', () => ({
   getPendingDocs: vi.fn(),
   getOutlineWorkbench: vi.fn(),
   getOutlineWorkbenchMessages: vi.fn(),
+  clearOutlineContext: vi.fn(),
+  reviewOutline: vi.fn(),
   getBrainstormWorkspace: vi.fn(),
   startBrainstormWorkspace: vi.fn(),
   submitBrainstormWorkspace: vi.fn(),
   submitOutlineFeedback: vi.fn(),
+  autoRunChapters: vi.fn(),
+  stopCurrentFlow: vi.fn(),
+  getGenerationJob: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -60,6 +66,42 @@ describe('novel store dashboard loading', () => {
     expect(store.dashboardLastUpdated).toBeTruthy()
   })
 
+  it('builds separate entity tree scopes for global and each knowledge domain', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.getEntities).mockResolvedValue({
+      items: [
+        { entity_id: 'global-xf', name: '张小凡', type: 'character', knowledge_usage: 'global' },
+        {
+          entity_id: 'zhuxian-xf',
+          name: '张小凡',
+          type: 'character',
+          knowledge_usage: 'domain',
+          knowledge_domain_id: 'domain_zhuxian',
+          knowledge_domain_name: '诛仙',
+        },
+        {
+          entity_id: 'zhetian-xf',
+          name: '张小凡',
+          type: 'character',
+          knowledge_usage: 'domain',
+          knowledge_domain_id: 'domain_zhetian',
+          knowledge_domain_name: '遮天',
+        },
+      ],
+    })
+    vi.mocked(api.getEntityRelationships).mockResolvedValue({ items: [] })
+
+    await store.fetchEntities()
+
+    expect(store.entityTree.map((node) => node.label)).toEqual(['全局实体', '规则域：遮天', '规则域：诛仙'])
+    expect(store.entityTree.map((node) => node.entityCount)).toEqual([1, 1, 1])
+    const zhuxianNode = store.entityTree.find((node) => node.label === '规则域：诛仙')
+    const zhetianNode = store.entityTree.find((node) => node.label === '规则域：遮天')
+    expect(zhuxianNode.children[0].children[0].children[0].entityId).toBe('zhuxian-xf')
+    expect(zhetianNode.children[0].children[0].children[0].entityId).toBe('zhetian-xf')
+  })
+
   it('skips volume plan request when the checkpoint has no current volume plan', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -81,6 +123,46 @@ describe('novel store dashboard loading', () => {
     expect(api.getVolumePlan).not.toHaveBeenCalled()
     expect(store.volumePlan).toBeNull()
     expect(store.synopsisData).toEqual({ title: '道照诸天' })
+  })
+
+  it('uses explicit novel title instead of synopsis title for display', () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState = {
+      title: '项目名',
+      checkpoint_data: {
+        novel_title: '项目名',
+        synopsis_data: { title: '总纲标题' },
+      },
+    }
+
+    expect(store.novelTitle).toBe('项目名')
+  })
+
+  it('updates novel title without changing synopsis data', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState = {
+      title: '旧项目名',
+      checkpoint_data: {
+        novel_title: '旧项目名',
+        synopsis_data: { title: '总纲标题' },
+      },
+    }
+    vi.mocked(api.updateNovel).mockResolvedValue({
+      novel_id: 'novel-1',
+      title: '新项目名',
+      checkpoint_data: {
+        novel_title: '新项目名',
+        synopsis_data: { title: '总纲标题' },
+      },
+    })
+
+    await store.updateNovelTitle('新项目名')
+
+    expect(api.updateNovel).toHaveBeenCalledWith('novel-1', '新项目名')
+    expect(store.novelTitle).toBe('新项目名')
+    expect(store.novelState.checkpoint_data.synopsis_data.title).toBe('总纲标题')
   })
 
   it('marks a failed supplemental panel as error and clears its stale data', async () => {
@@ -908,5 +990,203 @@ describe('novel store dashboard loading', () => {
       outline_ref: 'synopsis',
     })
     expect(store.brainstormWorkspace.data).toBeNull()
+  })
+
+  it('stopCurrentFlow requests backend stop and refreshes state', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.flowActivity = { active: true, label: '停止生成大纲', updatedAt: '2026-04-25T00:00:00Z' }
+    store.refreshState = vi.fn().mockResolvedValue()
+    vi.mocked(api.stopCurrentFlow).mockResolvedValue({ stop_requested: true })
+
+    await store.stopCurrentFlow()
+
+    expect(api.stopCurrentFlow).toHaveBeenCalledWith('novel-1')
+    expect(store.refreshState).toHaveBeenCalledTimes(1)
+    expect(store.flowActivity.active).toBe(false)
+    expect(store.stoppingFlow).toBe(false)
+  })
+
+  it('executeAction starts an auto-run generation job without waiting for chapter completion', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.loadNovel = vi.fn().mockResolvedValue()
+    store.loadDashboardSupplemental = vi.fn().mockResolvedValue()
+    vi.mocked(api.autoRunChapters).mockResolvedValue({
+      job_id: 'job-1',
+      status: 'queued',
+      job_type: 'chapter_auto_run',
+    })
+
+    await store.executeAction('auto_chapter')
+
+    expect(api.autoRunChapters).toHaveBeenCalledWith('novel-1', {
+      max_chapters: 1,
+      stop_at_volume_end: true,
+    })
+    expect(store.autoRunJob).toEqual({
+      job_id: 'job-1',
+      status: 'queued',
+      job_type: 'chapter_auto_run',
+    })
+    expect(store.loadNovel).toHaveBeenCalledWith('novel-1')
+    expect(store.loadDashboardSupplemental).not.toHaveBeenCalled()
+    expect(store.loadingActions.auto_chapter).toBe(false)
+  })
+
+  it('executeAction starts configurable continuous chapter auto-run jobs', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.loadNovel = vi.fn().mockResolvedValue()
+    vi.mocked(api.autoRunChapters).mockResolvedValue({
+      job_id: 'job-2',
+      status: 'queued',
+      job_type: 'chapter_auto_run',
+    })
+
+    await store.executeAction('auto_chapter', {
+      max_chapters: 12,
+      stop_at_volume_end: false,
+    })
+
+    expect(api.autoRunChapters).toHaveBeenCalledWith('novel-1', {
+      max_chapters: 12,
+      stop_at_volume_end: false,
+    })
+    expect(store.autoRunJob.job_id).toBe('job-2')
+    expect(store.loadingActions.auto_chapter).toBe(false)
+  })
+
+  it('refreshAutoRunJob stores completed failure payload for display', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.autoRunJob = { job_id: 'job-1', status: 'running' }
+    vi.mocked(api.getGenerationJob).mockResolvedValue({
+      job_id: 'job-1',
+      status: 'failed',
+      result_payload: {
+        stopped_reason: 'failed',
+        failed_phase: 'drafting',
+        failed_chapter_id: 'ch-1',
+        error: 'draft exploded',
+      },
+    })
+
+    await store.refreshAutoRunJob()
+
+    expect(api.getGenerationJob).toHaveBeenCalledWith('novel-1', 'job-1')
+    expect(store.autoRunJob.status).toBe('failed')
+    expect(store.autoRunLastResult.error).toBe('draft exploded')
+  })
+
+  it('executeAction stores structured auto-run failure details', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.loadNovel = vi.fn().mockResolvedValue()
+    store.loadDashboardSupplemental = vi.fn().mockResolvedValue()
+    const error = new Error('Request failed')
+    error.response = {
+      status: 422,
+      data: {
+        detail: {
+          novel_id: 'novel-1',
+          current_phase: 'context_preparation',
+          current_chapter_id: 'ch-1',
+          completed_chapters: [],
+          stopped_reason: 'failed',
+          failed_phase: 'context_preparation',
+          failed_chapter_id: 'ch-1',
+          error: 'context exploded',
+        },
+      },
+    }
+    vi.mocked(api.autoRunChapters).mockRejectedValue(error)
+
+    await expect(store.executeAction('auto_chapter')).rejects.toThrow('Request failed')
+
+    expect(store.autoRunLastResult).toEqual(error.response.data.detail)
+    expect(store.loadNovel).toHaveBeenCalledWith('novel-1')
+    expect(store.loadDashboardSupplemental).not.toHaveBeenCalled()
+    expect(store.loadingActions.auto_chapter).toBe(false)
+  })
+
+  it('derives stop flow visibility and label from local running actions', () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    expect(store.shouldShowStopFlow).toBe(false)
+
+    store.loadingActions.volume_plan = true
+
+    expect(store.shouldShowStopFlow).toBe(true)
+    expect(store.stopFlowLabel).toBe('停止生成大纲')
+  })
+
+  it('restores running flow state from replayed logs after refresh', () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    store.syncFlowActivityFromLogs([
+      {
+        timestamp: '2026-04-25T00:00:00Z',
+        agent: 'VolumePlannerAgent',
+        status: 'started',
+        node: 'volume_plan',
+        task: 'generate_volume_plan',
+        message: '开始生成卷纲',
+      },
+    ])
+
+    expect(store.shouldShowStopFlow).toBe(true)
+    expect(store.stopFlowLabel).toBe('停止生成大纲')
+
+    store.syncFlowActivityFromLogs([
+      {
+        timestamp: '2026-04-25T00:00:00Z',
+        agent: 'VolumePlannerAgent',
+        status: 'started',
+        node: 'volume_plan',
+        task: 'generate_volume_plan',
+        message: '开始生成卷纲',
+      },
+      {
+        timestamp: '2026-04-25T00:01:00Z',
+        agent: 'VolumePlannerAgent',
+        status: 'succeeded',
+        node: 'volume_plan',
+        task: 'generate_volume_plan',
+        message: '卷纲生成完成',
+      },
+    ])
+
+    expect(store.shouldShowStopFlow).toBe(false)
+  })
+
+  it('clears current outline context and refreshes workbench', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.outlineWorkbench.messages = [{ id: 'm1', content: '旧意见' }]
+    store.outlineWorkbench.conversationSummary = '旧摘要'
+    store.outlineWorkbench.lastResultSnapshot = { title: '旧快照' }
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    vi.mocked(api.clearOutlineContext).mockResolvedValue({ deleted_messages: 1 })
+
+    await store.clearOutlineContext()
+
+    expect(api.clearOutlineContext).toHaveBeenCalledWith('novel-1', {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
+    expect(store.outlineWorkbench.messages).toEqual([])
+    expect(store.outlineWorkbench.conversationSummary).toBe('')
+    expect(store.outlineWorkbench.lastResultSnapshot).toBeNull()
+    expect(store.refreshOutlineWorkbench).toHaveBeenCalledWith({
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    })
   })
 })

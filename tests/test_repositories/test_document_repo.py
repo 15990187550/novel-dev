@@ -19,6 +19,21 @@ async def test_document_crud(async_session):
 
 
 @pytest.mark.asyncio
+async def test_get_by_type_returns_all_versions_but_current_returns_latest_per_title(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "setting", "势力格局", "旧内容 魔佛一脉", version=1)
+    await repo.create("d2", "n1", "setting", "势力格局", "新内容", version=2)
+    await repo.create("d3", "n1", "setting", "修炼体系", "体系内容", version=1)
+
+    all_docs = await repo.get_by_type("n1", "setting")
+    current_docs = await repo.get_current_by_type("n1", "setting")
+
+    assert {doc.id for doc in all_docs} == {"d1", "d2", "d3"}
+    assert {doc.id for doc in current_docs} == {"d2", "d3"}
+    assert all("魔佛" not in (doc.content or "") for doc in current_docs)
+
+
+@pytest.mark.asyncio
 async def test_get_latest_by_type(async_session):
     repo = DocumentRepository(async_session)
     await repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)

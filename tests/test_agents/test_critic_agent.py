@@ -110,6 +110,49 @@ async def test_review_fail_low_score(async_session):
     state = await director.resume("novel_crit_fail")
     assert state.current_phase == Phase.DRAFTING.value
     assert state.checkpoint_data["draft_attempt_count"] == 1
+    assert state.checkpoint_data["drafting_progress"] == {
+        "beat_index": 0,
+        "total_beats": 1,
+        "current_word_count": 0,
+    }
+    assert "relay_history" not in state.checkpoint_data
+    assert state.checkpoint_data["draft_rewrite_plan"]["rewrite_all"] is True
+    assert state.checkpoint_data["draft_rewrite_plan"]["beat_issues"][0]["issues"]
+
+
+def test_rewrite_plan_keeps_global_issues_separate_from_beat_issues():
+    score_result = ScoreResult(
+        overall=55,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=50, comment="节奏拖沓"),
+            DimensionScore(name="characterization", score=70, comment="尚可"),
+            DimensionScore(name="readability", score=70, comment="尚可"),
+            DimensionScore(name="consistency", score=70, comment="尚可"),
+            DimensionScore(name="humanity", score=70, comment="尚可"),
+        ],
+        summary_feedback="整体需要重写",
+        per_dim_issues=[
+            {"dim": "plot_tension", "problem": "全章冲突不足", "suggestion": "提高主线压力"},
+        ],
+    )
+    beat_scores = [
+        {
+            "beat_index": 1,
+            "scores": {"humanity": 50},
+            "issues": [{"dim": "humanity", "problem": "第二节拍对白生硬", "suggestion": "改成动作带情绪"}],
+        }
+    ]
+
+    plan = CriticAgent.__new__(CriticAgent)._build_draft_rewrite_plan(
+        score_result,
+        beat_scores,
+        beat_count=3,
+        rewrite_all=True,
+    )
+
+    assert plan["global_issues"][0]["problem"] == "全章冲突不足"
+    assert plan["beat_issues"][0]["issues"] == []
+    assert plan["beat_issues"][1]["issues"][0]["problem"] == "第二节拍对白生硬"
 
 
 @pytest.mark.asyncio

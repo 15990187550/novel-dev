@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any, Optional
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
@@ -14,6 +15,7 @@ from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
 from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardMergePayload
 from novel_dev.schemas.outline import SynopsisData, VolumePlan
 from novel_dev.schemas.outline_workbench import (
+    OutlineClearContextResponse,
     OutlineContextWindow,
     OutlineMessagesResponse,
     OutlineItemSummary,
@@ -38,6 +40,9 @@ class SuggestionCardUpdateEnvelope(BaseModel):
 
 
 class OutlineWorkbenchService:
+    _REGENERATE_INTENT = "regenerate"
+    _REVISE_INTENT = "revise"
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.novel_state_repo = NovelStateRepository(session)
@@ -45,6 +50,10 @@ class OutlineWorkbenchService:
         self.outline_session_repo = OutlineSessionRepository(session)
         self.outline_message_repo = OutlineMessageRepository(session)
         self.workspace_service = BrainstormWorkspaceService(session)
+
+    async def _release_connection_before_external_call(self) -> None:
+        if self.session.in_transaction():
+            await self.session.commit()
 
     async def build_workbench(
         self,
@@ -62,23 +71,32 @@ class OutlineWorkbenchService:
                 await self.workspace_service.get_workspace_payload(novel_id)
             ).outline_drafts
 
-        outline_session = await self.outline_session_repo.get_or_create(
+        outline_session = await self.outline_session_repo.get_existing(
             novel_id=novel_id,
             outline_type=outline_type,
             outline_ref=outline_ref,
-            status="active",
         )
-        context_window = await self._build_context_window(
-            outline_session.id,
-            outline_type=outline_type,
-            outline_ref=outline_ref,
-            workspace_outline_drafts=workspace_outline_drafts,
-        )
+        if outline_session is not None:
+            context_window = await self._build_context_window(
+                outline_session.id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                workspace_outline_drafts=workspace_outline_drafts,
+            )
+            session_id = outline_session.id
+        else:
+            context_window = self._build_empty_context_window(
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                checkpoint_data=state.checkpoint_data or {},
+                workspace_outline_drafts=workspace_outline_drafts,
+            )
+            session_id = ""
         return OutlineWorkbenchPayload(
             novel_id=novel_id,
             outline_type=outline_type,
             outline_ref=outline_ref,
-            session_id=outline_session.id,
+            session_id=session_id,
             outline_items=self.build_outline_items(
                 state.checkpoint_data or {},
                 workspace_outline_drafts=workspace_outline_drafts,
@@ -117,12 +135,13 @@ class OutlineWorkbenchService:
         estimated_volumes = synopsis_data.get("estimated_volumes") or volume_number or 0
 
         if volume_number:
+            review_status = volume_plan.get("review_status") or {}
             items.append(
                 OutlineItemSummary(
                     outline_type="volume",
                     outline_ref=f"vol_{volume_number}",
                     title=volume_plan.get("title") or f"第{volume_number}卷",
-                    status="ready",
+                    status="needs_revision" if review_status.get("status") == "revise_failed" else "ready",
                     summary=volume_plan.get("summary"),
                 )
             )
@@ -213,17 +232,65 @@ class OutlineWorkbenchService:
                 setting_update_summary=None,
             )
 
-        optimize_result = await self._optimize_outline(
-            novel_id=novel_id,
-            outline_type=outline_type,
-            outline_ref=outline_ref,
-            feedback=feedback,
-            context_window=context_window,
+        await self._release_connection_before_external_call()
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "开始处理大纲反馈",
+            event="agent.progress",
+            status="started",
+            node="outline_feedback",
+            task="submit_outline_feedback",
+            metadata={
+                "outline_type": outline_type,
+                "outline_ref": outline_ref,
+                "feedback_chars": len(feedback or ""),
+            },
         )
+        try:
+            optimize_result = await self._optimize_outline(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                feedback=feedback,
+                context_window=context_window,
+            )
+        except Exception as exc:
+            log_service.add_log(
+                novel_id,
+                "OutlineWorkbenchService",
+                f"大纲反馈处理失败: {exc}",
+                level="error",
+                event="agent.progress",
+                status="failed",
+                node="outline_feedback",
+                task="submit_outline_feedback",
+                metadata={
+                    "outline_type": outline_type,
+                    "outline_ref": outline_ref,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            raise
 
         outline_session.status = "active"
         outline_session.last_result_snapshot = optimize_result.get("result_snapshot")
         outline_session.conversation_summary = optimize_result.get("conversation_summary")
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "大纲反馈结果已生成,开始保存",
+            event="agent.progress",
+            status="started",
+            node="outline_persist",
+            task="persist_outline_feedback_result",
+            metadata={
+                "outline_type": outline_type,
+                "outline_ref": outline_ref,
+                "has_result_snapshot": bool(optimize_result.get("result_snapshot")),
+                "setting_updates": len(optimize_result.get("setting_draft_updates") or []),
+            },
+        )
         assistant_message = await self.outline_message_repo.create(
             session_id=outline_session.id,
             role="assistant",
@@ -262,6 +329,20 @@ class OutlineWorkbenchService:
                 result_snapshot=optimize_result.get("result_snapshot"),
             )
         await self.session.commit()
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "大纲反馈处理完成",
+            event="agent.progress",
+            status="succeeded",
+            node="outline_feedback",
+            task="submit_outline_feedback",
+            metadata={
+                "outline_type": outline_type,
+                "outline_ref": outline_ref,
+                "message_id": assistant_message.id,
+            },
+        )
         return OutlineSubmitResponse(
             session_id=outline_session.id,
             assistant_message=self._serialize_message(assistant_message),
@@ -286,6 +367,98 @@ class OutlineWorkbenchService:
                 await self.workspace_service.get_workspace_payload(novel_id)
             ).outline_drafts
 
+        outline_session = await self.outline_session_repo.get_existing(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+        )
+        if outline_session is not None:
+            context_window = await self._build_context_window(
+                outline_session.id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                workspace_outline_drafts=workspace_outline_drafts,
+            )
+            session_id = outline_session.id
+        else:
+            context_window = self._build_empty_context_window(
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                checkpoint_data=state.checkpoint_data or {},
+                workspace_outline_drafts=workspace_outline_drafts,
+            )
+            session_id = ""
+        return OutlineMessagesResponse(
+            session_id=session_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            last_result_snapshot=context_window.last_result_snapshot,
+            conversation_summary=context_window.conversation_summary,
+            recent_messages=context_window.recent_messages,
+        )
+
+    async def clear_context(
+        self,
+        *,
+        novel_id: str,
+        outline_type: str,
+        outline_ref: str,
+    ) -> OutlineClearContextResponse:
+        state = await self.novel_state_repo.get_state(novel_id)
+        if state is None:
+            raise ValueError(f"Novel state not found: {novel_id}")
+
+        outline_session = await self.outline_session_repo.get_or_create(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            status="active",
+        )
+        deleted_messages = await self.outline_message_repo.delete_by_session(outline_session.id)
+        outline_session.conversation_summary = None
+        outline_session.last_result_snapshot = None
+        outline_session.status = "active"
+        await self.session.commit()
+
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "已清空当前大纲对话上下文",
+            event="agent.progress",
+            status="succeeded",
+            node="outline_context",
+            task="clear_outline_context",
+            metadata={
+                "outline_type": outline_type,
+                "outline_ref": outline_ref,
+                "deleted_messages": deleted_messages,
+            },
+        )
+        return OutlineClearContextResponse(
+            session_id=outline_session.id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            deleted_messages=deleted_messages,
+            conversation_summary=outline_session.conversation_summary,
+            last_result_snapshot=outline_session.last_result_snapshot,
+        )
+
+    async def review_outline(
+        self,
+        *,
+        novel_id: str,
+        outline_type: str,
+        outline_ref: str,
+    ) -> dict[str, Any]:
+        state = await self.novel_state_repo.get_state(novel_id)
+        if state is None:
+            raise ValueError(f"Novel state not found: {novel_id}")
+
+        workspace_outline_drafts = None
+        if self._is_brainstorming_phase(state.current_phase):
+            workspace_outline_drafts = (
+                await self.workspace_service.get_workspace_payload(novel_id)
+            ).outline_drafts
         outline_session = await self.outline_session_repo.get_or_create(
             novel_id=novel_id,
             outline_type=outline_type,
@@ -298,13 +471,68 @@ class OutlineWorkbenchService:
             outline_ref=outline_ref,
             workspace_outline_drafts=workspace_outline_drafts,
         )
-        return OutlineMessagesResponse(
-            session_id=outline_session.id,
+        snapshot = (
+            context_window.last_result_snapshot
+            or self._get_workspace_snapshot(workspace_outline_drafts, outline_type, outline_ref)
+            or self._get_checkpoint_snapshot(state.checkpoint_data or {}, outline_type, outline_ref)
+        )
+        if not snapshot:
+            raise ValueError("Outline snapshot not found")
+
+        reviewed_snapshot = await self._review_result_snapshot(
+            novel_id=novel_id,
             outline_type=outline_type,
-            outline_ref=outline_ref,
-            last_result_snapshot=context_window.last_result_snapshot,
-            conversation_summary=context_window.conversation_summary,
-            recent_messages=context_window.recent_messages,
+            result_snapshot=snapshot,
+        )
+        outline_session.last_result_snapshot = reviewed_snapshot
+        if self._is_brainstorming_phase(state.current_phase):
+            await self.workspace_service.save_outline_draft(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                result_snapshot=reviewed_snapshot,
+            )
+        else:
+            await self._write_result_snapshot(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                outline_ref=outline_ref,
+                result_snapshot=reviewed_snapshot,
+            )
+        await self.session.commit()
+        return {
+            "session_id": outline_session.id,
+            "outline_type": outline_type,
+            "outline_ref": outline_ref,
+            "result_snapshot": reviewed_snapshot,
+            "review_status": reviewed_snapshot.get("review_status"),
+        }
+
+    def _build_empty_context_window(
+        self,
+        *,
+        outline_type: str,
+        outline_ref: str,
+        checkpoint_data: Optional[dict[str, Any]] = None,
+        workspace_outline_drafts: Optional[dict[str, dict[str, Any]]] = None,
+    ) -> OutlineContextWindow:
+        last_result_snapshot = None
+        if workspace_outline_drafts is not None:
+            last_result_snapshot = self._get_workspace_snapshot(
+                workspace_outline_drafts,
+                outline_type,
+                outline_ref,
+            )
+        if last_result_snapshot is None:
+            last_result_snapshot = self._get_checkpoint_snapshot(
+                checkpoint_data or {},
+                outline_type,
+                outline_ref,
+            )
+        return OutlineContextWindow(
+            last_result_snapshot=last_result_snapshot,
+            conversation_summary=None,
+            recent_messages=[],
         )
 
     async def _build_context_window(
@@ -359,18 +587,48 @@ class OutlineWorkbenchService:
                 await self.workspace_service.get_workspace_payload(novel_id)
             ).outline_drafts
 
+        await self._release_connection_before_external_call()
+        intent = self._classify_feedback_intent(feedback)
+        if outline_type == "volume" and self._extract_requested_chapter_count(feedback):
+            intent = self._REGENERATE_INTENT
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            f"大纲反馈意图识别: {intent}",
+            event="agent.progress",
+            status="succeeded",
+            node="outline_intent",
+            task="classify_outline_feedback_intent",
+            metadata={
+                "outline_type": outline_type,
+                "outline_ref": outline_ref,
+                "intent": intent,
+                "feedback_chars": len(feedback or ""),
+            },
+        )
+
         if outline_type == "synopsis":
-            result = await self._optimize_synopsis(
-                novel_id=novel_id,
-                checkpoint=checkpoint,
-                feedback=feedback,
-                context_window=context_window,
-                workspace_snapshot=self._get_workspace_snapshot(
-                    workspace_outline_drafts,
-                    "synopsis",
-                    "synopsis",
-                ),
+            synopsis_snapshot = self._get_workspace_snapshot(
+                workspace_outline_drafts,
+                "synopsis",
+                "synopsis",
             )
+            if intent == self._REGENERATE_INTENT:
+                result = await self._regenerate_synopsis(
+                    novel_id=novel_id,
+                    checkpoint=checkpoint,
+                    feedback=feedback,
+                    context_window=context_window,
+                    workspace_snapshot=synopsis_snapshot,
+                )
+            else:
+                result = await self._optimize_synopsis(
+                    novel_id=novel_id,
+                    checkpoint=checkpoint,
+                    feedback=feedback,
+                    context_window=context_window,
+                    workspace_snapshot=synopsis_snapshot,
+                )
         elif outline_type == "volume":
             result = await self._optimize_volume(
                 novel_id=novel_id,
@@ -388,9 +646,17 @@ class OutlineWorkbenchService:
                     outline_type,
                     outline_ref,
                 ),
+                regenerate=intent == self._REGENERATE_INTENT,
             )
         else:
             raise ValueError(f"Unsupported outline type: {outline_type}")
+
+        if result.get("result_snapshot"):
+            result["result_snapshot"] = await self._review_result_snapshot(
+                novel_id=novel_id,
+                outline_type=outline_type,
+                result_snapshot=result["result_snapshot"],
+            )
 
         is_brainstorming = self._is_brainstorming_phase(state.current_phase)
         setting_suggestion_card_updates: list[dict[str, Any]] = result.get(
@@ -442,6 +708,38 @@ class OutlineWorkbenchService:
             return normalized
         return None
 
+    async def _review_result_snapshot(
+        self,
+        *,
+        novel_id: str,
+        outline_type: str,
+        result_snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        if outline_type == "synopsis":
+            synopsis = SynopsisData.model_validate(result_snapshot)
+            score = await BrainstormAgent(self.session)._score_synopsis(synopsis, novel_id)
+            payload = synopsis.model_dump()
+            payload["review_status"] = {
+                "status": "accepted" if BrainstormAgent(self.session)._is_acceptable(score) else "needs_revision",
+                "reason": "总纲评分通过。" if BrainstormAgent(self.session)._is_acceptable(score) else "总纲存在未达标维度，建议按优化建议继续修订。",
+                "score": score.model_dump(),
+                "optimization_suggestion": BrainstormAgent(self.session)._build_score_feedback(score),
+            }
+            return payload
+        if outline_type == "volume":
+            plan = VolumePlan.model_validate(result_snapshot)
+            planner = VolumePlannerAgent(self.session)
+            score = await planner._generate_score(plan, novel_id)
+            payload = plan.model_dump()
+            payload["review_status"] = {
+                "status": "accepted" if planner._is_acceptable(score) else "needs_revision",
+                "reason": "卷纲评分通过。" if planner._is_acceptable(score) else "卷纲存在未达标维度，建议按优化建议继续修订。",
+                "score": score.model_dump(),
+                "optimization_suggestion": planner._build_revise_feedback(score),
+            }
+            return payload
+        return result_snapshot
+
     async def _build_suggestion_card_updates(
         self,
         *,
@@ -467,6 +765,7 @@ class OutlineWorkbenchService:
             f"### 最近对话\n{self._format_recent_messages(context_window) or '无'}\n\n"
             f"### 用户最新意见\n{feedback}"
         )
+        await self._release_connection_before_external_call()
         updates = await call_and_parse_model(
             "OutlineWorkbenchService",
             "build_suggestion_card_updates",
@@ -516,6 +815,7 @@ class OutlineWorkbenchService:
                 current_volume_id = volume_plan.volume_id
                 if volume_plan.chapters:
                     current_chapter_id = volume_plan.chapters[0].chapter_id
+                await VolumePlannerAgent(self.session)._persist_volume_plan_artifacts(novel_id, volume_plan)
 
         await self.novel_state_repo.save_checkpoint(
             novel_id=novel_id,
@@ -553,8 +853,36 @@ class OutlineWorkbenchService:
             raise ValueError("Synopsis not found")
 
         current_synopsis = SynopsisData.model_validate(current_snapshot)
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "开始根据反馈修订总纲",
+            event="agent.progress",
+            status="started",
+            node="synopsis_revision",
+            task="revise_synopsis_with_feedback",
+            metadata={
+                "title": current_synopsis.title,
+                "feedback_chars": len(feedback or ""),
+                "estimated_volumes": current_synopsis.estimated_volumes,
+                "volume_outlines": len(current_synopsis.volume_outlines),
+            },
+        )
         source_text = await self._load_brainstorm_source_text(novel_id)
         recent_messages = self._format_recent_messages(context_window)
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "总纲修订上下文已准备",
+            event="agent.progress",
+            status="succeeded",
+            node="synopsis_context",
+            task="prepare_synopsis_revision_context",
+            metadata={
+                "source_chars": len(source_text or ""),
+                "recent_message_chars": len(recent_messages or ""),
+            },
+        )
         prompt = (
             "你是一位小说总纲修订专家。请根据当前 SynopsisData、用户最新修改意见、历史会话摘要和参考设定，"
             "返回严格符合 SynopsisData Schema 的 JSON。要求：\n"
@@ -566,7 +894,7 @@ class OutlineWorkbenchService:
             "只允许以下顶层字段,禁止输出任何额外字段:\n"
             '{"title","logline","core_conflict","themes","character_arcs","milestones",'
             '"estimated_volumes","estimated_total_chapters","estimated_total_words",'
-            '"entity_highlights","relationship_highlights"}\n'
+            '"volume_outlines","entity_highlights","relationship_highlights"}\n'
             "- title: 字符串\n"
             "- logline: 字符串\n"
             "- core_conflict: 字符串\n"
@@ -576,6 +904,10 @@ class OutlineWorkbenchService:
             "- estimated_volumes: 整数\n"
             "- estimated_total_chapters: 整数\n"
             "- estimated_total_words: 整数\n"
+            "- volume_outlines: 数组,长度必须等于 estimated_volumes；每项只包含 "
+            "volume_number/title/summary/narrative_role/main_goal/main_conflict/start_state/end_state/"
+            "climax/hook_to_next/key_entities/relationship_shifts/foreshadowing_setup/"
+            "foreshadowing_payoff/target_chapter_range。它是每卷方向契约,不是完整卷纲,禁止写 chapters 或 beats\n"
             "- entity_highlights: 对象,可选键包括 characters / factions / locations / items,值均为字符串数组\n"
             "- relationship_highlights: 字符串数组,每项描述一个关键关系推进\n"
             "禁止使用旧字段: character / arc / turning_points / name / description / chapter_range。\n"
@@ -587,6 +919,7 @@ class OutlineWorkbenchService:
             f"### 用户最新意见\n{feedback}\n\n"
             f"### 参考设定\n{source_text[:4000] or '无'}"
         )
+        await self._release_connection_before_external_call()
         revised = await call_and_parse_model(
             "BrainstormAgent",
             "revise_synopsis_with_feedback",
@@ -598,10 +931,136 @@ class OutlineWorkbenchService:
             novel_id,
             "OutlineWorkbenchService",
             f"已根据反馈修订总纲，预计总章数 {revised.estimated_total_chapters}",
+            event="agent.progress",
+            status="succeeded",
+            node="synopsis_revision",
+            task="revise_synopsis_with_feedback",
+            metadata={
+                "title": revised.title,
+                "estimated_volumes": revised.estimated_volumes,
+                "estimated_total_chapters": revised.estimated_total_chapters,
+                "volume_outlines": len(revised.volume_outlines),
+            },
         )
         return {
             "content": self._build_synopsis_result_message(current_synopsis, revised),
             "result_snapshot": revised.model_dump(),
+            "setting_draft_updates": [],
+        }
+
+    async def _regenerate_synopsis(
+        self,
+        *,
+        novel_id: str,
+        checkpoint: dict[str, Any],
+        feedback: str,
+        context_window: OutlineContextWindow,
+        workspace_snapshot: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        current_snapshot = (
+            context_window.last_result_snapshot
+            or workspace_snapshot
+            or checkpoint.get("synopsis_data")
+        )
+        current_synopsis = SynopsisData.model_validate(current_snapshot) if current_snapshot else None
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "识别为重写生成总纲,开始重新生成并替换旧版",
+            event="agent.progress",
+            status="started",
+            node="synopsis_regeneration",
+            task="generate_synopsis",
+            metadata={
+                "feedback_chars": len(feedback or ""),
+                "previous_title": current_synopsis.title if current_synopsis else None,
+            },
+        )
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "准备总纲重写上下文",
+            event="agent.progress",
+            status="started",
+            node="synopsis_regeneration_context",
+            task="prepare_synopsis_regeneration_context",
+            metadata={
+                "has_previous_snapshot": current_synopsis is not None,
+                "recent_messages": len(context_window.recent_messages),
+            },
+        )
+        source_text = await self._load_brainstorm_source_text(novel_id)
+        recent_messages = self._format_recent_messages(context_window)
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "总纲重写上下文已准备,即将调用模型",
+            event="agent.progress",
+            status="succeeded",
+            node="synopsis_regeneration_context",
+            task="prepare_synopsis_regeneration_context",
+            metadata={
+                "source_chars": len(source_text or ""),
+                "recent_message_chars": len(recent_messages or ""),
+                "previous_title": current_synopsis.title if current_synopsis else None,
+            },
+        )
+        previous_scale = (
+            "无"
+            if current_synopsis is None
+            else (
+                f"旧标题: {current_synopsis.title}\n"
+                f"旧预估卷数: {current_synopsis.estimated_volumes}\n"
+                f"旧预估总章数: {current_synopsis.estimated_total_chapters}\n"
+                f"旧预估总字数: {current_synopsis.estimated_total_words}"
+            )
+        )
+        combined_text = (
+            "### 用户本次重写生成要求\n"
+            f"{feedback}\n\n"
+            "### 历史对话摘要\n"
+            f"{context_window.conversation_summary or '无'}\n\n"
+            "### 最近对话\n"
+            f"{recent_messages or '无'}\n\n"
+            "### 旧版规模参考(只可参考规模,禁止继承旧版剧情、人物、势力、地点、物品)\n"
+            f"{previous_scale}\n\n"
+            "### 参考设定\n"
+            f"{source_text or '无'}"
+        )
+        await self._release_connection_before_external_call()
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            "调用模型重新生成总纲",
+            event="agent.progress",
+            status="started",
+            node="synopsis_regeneration_llm",
+            task="generate_synopsis",
+            metadata={"prompt_chars": len(combined_text)},
+        )
+        regenerated = await BrainstormAgent(self.session)._generate_synopsis(combined_text, novel_id)
+        log_service.add_log(
+            novel_id,
+            "OutlineWorkbenchService",
+            f"已重新生成总纲并准备替换旧版: {regenerated.title}",
+            event="agent.progress",
+            status="succeeded",
+            node="synopsis_regeneration",
+            task="generate_synopsis",
+            metadata={
+                "title": regenerated.title,
+                "estimated_volumes": regenerated.estimated_volumes,
+                "estimated_total_chapters": regenerated.estimated_total_chapters,
+                "volume_outlines": len(regenerated.volume_outlines),
+            },
+        )
+        return {
+            "content": (
+                f"已按你的要求重新生成总纲并替换旧版："
+                f"《{regenerated.title}》，预计 {regenerated.estimated_volumes} 卷、"
+                f"{regenerated.estimated_total_chapters} 章。"
+            ),
+            "result_snapshot": regenerated.model_dump(),
             "setting_draft_updates": [],
         }
 
@@ -615,6 +1074,7 @@ class OutlineWorkbenchService:
         context_window: OutlineContextWindow,
         workspace_synopsis_snapshot: Optional[dict[str, Any]] = None,
         workspace_plan_snapshot: Optional[dict[str, Any]] = None,
+        regenerate: bool = False,
     ) -> dict[str, Any]:
         synopsis_payload = workspace_synopsis_snapshot or checkpoint.get("synopsis_data")
         if not synopsis_payload:
@@ -627,13 +1087,60 @@ class OutlineWorkbenchService:
 
         planner = VolumePlannerAgent(self.session)
         world_snapshot = await planner._load_world_snapshot(novel_id) if volume_number > 1 else None
-        plan_context = planner._build_plan_context(synopsis, world_snapshot)
+        plan_context = await planner._build_plan_context(synopsis, world_snapshot, novel_id, volume_number)
+        await self._release_connection_before_external_call()
 
         current_plan_payload = context_window.last_result_snapshot or workspace_plan_snapshot
         if not current_plan_payload:
             persisted_plan = checkpoint.get("current_volume_plan")
             if persisted_plan and self._outline_ref_matches_volume_data(outline_ref, persisted_plan):
                 current_plan_payload = persisted_plan
+
+        if regenerate:
+            previous_title = None
+            if current_plan_payload:
+                previous_title = VolumePlan.model_validate(current_plan_payload).title
+            log_service.add_log(
+                novel_id,
+                "OutlineWorkbenchService",
+                f"识别为重写生成第 {volume_number} 卷卷纲,开始重新生成并替换旧版",
+                event="agent.progress",
+                status="started",
+                node="volume_regeneration",
+                task="generate_volume_plan",
+                metadata={
+                    "volume_number": volume_number,
+                    "feedback_chars": len(feedback or ""),
+                    "previous_title": previous_title,
+                },
+            )
+            regenerated = await planner._generate_volume_plan(
+                synopsis,
+                volume_number,
+                world_snapshot,
+                novel_id,
+                generation_instruction=feedback,
+                target_chapters=self._extract_requested_chapter_count(feedback),
+            )
+            log_service.add_log(
+                novel_id,
+                "OutlineWorkbenchService",
+                f"已重新生成 {regenerated.title}",
+                event="agent.progress",
+                status="succeeded",
+                node="volume_regeneration",
+                task="generate_volume_plan",
+                metadata={
+                    "volume_number": regenerated.volume_number,
+                    "total_chapters": regenerated.total_chapters,
+                    "estimated_total_words": regenerated.estimated_total_words,
+                },
+            )
+            return {
+                "content": f"已按你的要求重新生成并替换《{regenerated.title}》卷纲，共 {regenerated.total_chapters} 章。",
+                "result_snapshot": regenerated.model_dump(),
+                "setting_draft_updates": [],
+            }
 
         if current_plan_payload:
             current_plan = VolumePlan.model_validate(current_plan_payload)
@@ -651,6 +1158,76 @@ class OutlineWorkbenchService:
             "result_snapshot": revised.model_dump(),
             "setting_draft_updates": [],
         }
+
+    def _classify_feedback_intent(self, feedback: str) -> str:
+        text = (feedback or "").strip().lower()
+        if not text:
+            return self._REVISE_INTENT
+
+        negative_markers = (
+            "不要重写",
+            "别重写",
+            "不用重写",
+            "无需重写",
+            "不要重新生成",
+            "别重新生成",
+            "不用重新生成",
+            "无需重新生成",
+            "不要从头",
+            "别从头",
+        )
+        if any(marker in text for marker in negative_markers):
+            return self._REVISE_INTENT
+
+        regenerate_markers = (
+            "重写",
+            "重写生成",
+            "重新生成",
+            "重新写",
+            "重新规划",
+            "重新设计",
+            "重新做",
+            "重做",
+            "重来",
+            "重开",
+            "从头生成",
+            "从头规划",
+            "从头写",
+            "从零生成",
+            "从零规划",
+            "推倒重来",
+            "替换旧",
+            "替换掉旧",
+            "全新生成",
+            "全新规划",
+            "另起一版",
+            "新版本",
+            "新创建",
+            "再生成一版",
+            "再做一版",
+        )
+        if any(marker in text for marker in regenerate_markers):
+            return self._REGENERATE_INTENT
+        if self._extract_requested_chapter_count(text):
+            return self._REGENERATE_INTENT
+        return self._REVISE_INTENT
+
+    @staticmethod
+    def _extract_requested_chapter_count(feedback: str) -> Optional[int]:
+        text = (feedback or "").strip()
+        if not text:
+            return None
+        patterns = (
+            r"(?:要求|要|改成|调整为|生成|规划|扩到|扩展到|增加到|做到|约|左右)?\s*(\d{1,4})\s*章(?:左右|上下|附近|以内|以上)?",
+            r"(\d{1,4})\s*(?:章|章节)",
+        )
+        counts: list[int] = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                count = int(match.group(1))
+                if 1 <= count <= 300:
+                    counts.append(count)
+        return counts[-1] if counts else None
 
     def _is_brainstorming_phase(self, phase: Optional[str]) -> bool:
         return phase == "brainstorming"
@@ -725,6 +1302,21 @@ class OutlineWorkbenchService:
             return None
         return outline_drafts.get(f"{outline_type}:{outline_ref}")
 
+    def _get_checkpoint_snapshot(
+        self,
+        checkpoint_data: dict[str, Any],
+        outline_type: str,
+        outline_ref: str,
+    ) -> Optional[dict[str, Any]]:
+        if outline_type == "synopsis" and outline_ref == "synopsis":
+            return checkpoint_data.get("synopsis_data")
+        if outline_type != "volume":
+            return None
+        current_volume_plan = checkpoint_data.get("current_volume_plan")
+        if self._outline_ref_matches_volume_data(outline_ref, current_volume_plan):
+            return current_volume_plan
+        return None
+
     def _extract_outline_ref(self, outline_key: str) -> str:
         _, _, outline_ref = outline_key.partition(":")
         return outline_ref
@@ -779,9 +1371,9 @@ class OutlineWorkbenchService:
         )
 
     async def _load_brainstorm_source_text(self, novel_id: str) -> str:
-        docs = await self.doc_repo.get_by_type(novel_id, "worldview")
-        docs += await self.doc_repo.get_by_type(novel_id, "setting")
-        docs += await self.doc_repo.get_by_type(novel_id, "concept")
+        docs = await self.doc_repo.get_current_by_type(novel_id, "worldview")
+        docs += await self.doc_repo.get_current_by_type(novel_id, "setting")
+        docs += await self.doc_repo.get_current_by_type(novel_id, "concept")
         return "\n\n".join(f"[{doc.doc_type}] {doc.title}\n{doc.content}" for doc in docs)
 
     def _merge_conversation_summary(self, existing: Optional[str], feedback: str) -> str:

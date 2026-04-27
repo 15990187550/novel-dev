@@ -1,13 +1,26 @@
 import json
 from typing import List
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.schemas.review import ScoreResult, DimensionScore
+from novel_dev.schemas.review import ScoreResult
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.agents._llm_helpers import call_and_parse_model, call_and_parse
-from novel_dev.services.log_service import log_service
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.services.log_service import logged_agent_step, log_service
+
+
+class BeatScoreIssue(BaseModel):
+    dim: str
+    problem: str
+    suggestion: str
+
+
+class BeatScorePayload(BaseModel):
+    beat_index: int
+    scores: dict[str, int] = Field(default_factory=dict)
+    issues: List[BeatScoreIssue] = Field(default_factory=list)
 
 
 class CriticAgent:
@@ -17,6 +30,7 @@ class CriticAgent:
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
 
+    @logged_agent_step("CriticAgent", "评审章节", node="review", task="review")
     async def review(self, novel_id: str, chapter_id: str) -> ScoreResult:
         log_service.add_log(novel_id, "CriticAgent", f"开始评审章节: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
@@ -71,6 +85,18 @@ class CriticAgent:
                 log_service.add_log(novel_id, "CriticAgent", "已达最大重写次数", level="error")
                 raise RuntimeError("Max draft attempts exceeded")
             checkpoint["draft_attempt_count"] = attempt
+            checkpoint["drafting_progress"] = {
+                "beat_index": 0,
+                "total_beats": len(context_data.get("chapter_plan", {}).get("beats", [])),
+                "current_word_count": 0,
+            }
+            checkpoint.pop("relay_history", None)
+            checkpoint["draft_rewrite_plan"] = self._build_draft_rewrite_plan(
+                score_result,
+                beat_scores,
+                beat_count=len(context_data.get("chapter_plan", {}).get("beats", [])),
+                rewrite_all=True,
+            )
             await self.director.save_checkpoint(
                 novel_id,
                 phase=Phase.DRAFTING,
@@ -93,8 +119,52 @@ class CriticAgent:
 
         return score_result
 
+    def _build_draft_rewrite_plan(
+        self,
+        score_result: ScoreResult,
+        beat_scores: List[dict],
+        *,
+        beat_count: int | None = None,
+        rewrite_all: bool = False,
+    ) -> dict:
+        total_beats = max(beat_count or 0, len(beat_scores))
+        beat_issues = [{"beat_index": idx, "issues": []} for idx in range(total_beats)]
+        global_issues = []
+
+        for issue in score_result.per_dim_issues:
+            payload = issue.model_dump()
+            beat_idx = payload.get("beat_idx")
+            if isinstance(beat_idx, int) and 0 <= beat_idx < total_beats:
+                beat_issues[beat_idx]["issues"].append(payload)
+            else:
+                global_issues.append(payload)
+
+        for item in beat_scores:
+            beat_idx = item.get("beat_index")
+            if not isinstance(beat_idx, int) or not (0 <= beat_idx < total_beats):
+                continue
+            scores = item.get("scores") or {}
+            issues = item.get("issues") or []
+            for issue in issues:
+                beat_issues[beat_idx]["issues"].append(issue)
+            low_dims = [dim for dim, score in scores.items() if isinstance(score, (int, float)) and score < 70]
+            for dim in low_dims:
+                if not any(issue.get("dim") == dim for issue in beat_issues[beat_idx]["issues"] if isinstance(issue, dict)):
+                    beat_issues[beat_idx]["issues"].append({
+                        "dim": dim,
+                        "problem": f"{dim} 评分低于 70",
+                        "suggestion": "重写本节拍，优先补强该维度对应的冲突、细节或读感问题。",
+                    })
+
+        return {
+            "rewrite_all": rewrite_all,
+            "overall": score_result.overall,
+            "summary_feedback": score_result.summary_feedback,
+            "global_issues": global_issues,
+            "beat_issues": beat_issues,
+        }
+
     async def _generate_score(self, raw_draft: str, context_data: dict, novel_id: str = "") -> ScoreResult:
-        from novel_dev.llm import llm_factory
         log_service.add_log(novel_id, "CriticAgent", "开始生成章节评分")
         # Trim context to only what Critic needs, avoiding retrieval bloat
         trimmed_context = {
@@ -162,9 +232,7 @@ class CriticAgent:
         )
 
     async def _generate_beat_scores(self, context_data: dict, novel_id: str = "") -> List[dict]:
-        from novel_dev.llm import llm_factory
         log_service.add_log(novel_id, "CriticAgent", "开始生成节拍评分")
-        from novel_dev.llm import llm_factory
         beats = context_data.get("chapter_plan", {}).get("beats", [])
         if not beats:
             return []
@@ -202,6 +270,7 @@ class CriticAgent:
             f"\n章节上下文:\n{json.dumps(trimmed, ensure_ascii=False)}\n\n"
             "请评分:"
         )
-        return await call_and_parse(
-            "CriticAgent", "score_beats", prompt, json.loads, novel_id=novel_id
+        result = await call_and_parse_model(
+            "CriticAgent", "score_beats", prompt, list[BeatScorePayload], novel_id=novel_id
         )
+        return [item.model_dump() for item in result]

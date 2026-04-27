@@ -8,7 +8,48 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage, LLMResponse
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
-from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone, SynopsisScoreResult
+from novel_dev.schemas.outline import (
+    SynopsisData,
+    CharacterArc,
+    PlotMilestone,
+    SynopsisScoreResult,
+    SynopsisVolumeOutline,
+)
+
+
+def make_volume_outline(number: int) -> SynopsisVolumeOutline:
+    return SynopsisVolumeOutline(
+        volume_number=number,
+        title=f"第{number}卷",
+        summary=f"第{number}卷围绕主线推进阶段目标。",
+        narrative_role="阶段推进",
+        main_goal="完成阶段目标",
+        main_conflict="主角与阻力对抗",
+        start_state="局势初启",
+        end_state="阶段转折",
+        climax="核心冲突爆发",
+        hook_to_next="新矛盾出现",
+        key_entities=["主角"],
+        relationship_shifts=[],
+        foreshadowing_setup=[],
+        foreshadowing_payoff=[],
+        target_chapter_range=f"{(number - 1) * 30 + 1}-{number * 30}",
+    )
+
+
+def test_synopsis_data_backfills_missing_title_from_logline():
+    synopsis = SynopsisData.model_validate({
+        "logline": "道经继承者陆照在末劫前争夺超脱路径。",
+        "core_conflict": "陆照 vs 轮回空间幕后布局者",
+        "themes": ["自由意志"],
+        "character_arcs": [],
+        "milestones": [],
+        "estimated_volumes": 3,
+        "estimated_total_chapters": 90,
+        "estimated_total_words": 270000,
+    })
+
+    assert synopsis.title == "道经继承者陆照在末劫前争夺超脱路径"
 
 
 @pytest.mark.asyncio
@@ -53,6 +94,7 @@ async def test_brainstorm_success(async_session):
     mock_client = AsyncMock()
     mock_client.acomplete.side_effect = [
         LLMResponse(text=mock_synopsis.model_dump_json()),
+        LLMResponse(text=json.dumps([make_volume_outline(i).model_dump() for i in range(1, 4)], ensure_ascii=False)),
         LLMResponse(text=mock_score.model_dump_json()),
     ]
 
@@ -63,6 +105,7 @@ async def test_brainstorm_success(async_session):
 
     assert synopsis_data.title == "天玄纪元"
     assert synopsis_data.estimated_volumes == 3
+    assert len(synopsis_data.volume_outlines) == 3
 
     state = await NovelStateRepository(async_session).get_state("n_brain")
     assert state.current_phase == Phase.VOLUME_PLANNING.value
@@ -113,6 +156,7 @@ async def test_brainstorm_uses_llm_factory(async_session):
     mock_client = AsyncMock()
     mock_client.acomplete.side_effect = [
         LLMResponse(text=synopsis_json),
+        LLMResponse(text=json.dumps([make_volume_outline(i).model_dump() for i in range(1, 4)], ensure_ascii=False)),
         LLMResponse(text=score_json),
     ]
 
@@ -122,10 +166,12 @@ async def test_brainstorm_uses_llm_factory(async_session):
         result = await agent.brainstorm("n_brain2")
 
     assert result.title == "天玄纪元"
-    # self-review 会触发 generate_synopsis + score_synopsis 两次 get
+    # self-review 会触发顶层总纲、卷级概要批次、评分等模型任务
     get_tasks = [call.kwargs.get("task") or (call.args[1] if len(call.args) > 1 else None)
                  for call in mock_factory.get.call_args_list]
-    assert "generate_synopsis" in get_tasks
+    assert "generate_synopsis_top_level" in get_tasks
+    assert "generate_synopsis_volume_outlines_batch" in get_tasks
+    assert "score_synopsis" in get_tasks
 
 
 def test_synopsis_score_result_accepts_nested_scores_shape():
@@ -155,7 +201,8 @@ def test_synopsis_score_result_accepts_nested_scores_shape():
 @pytest.mark.asyncio
 async def test_generate_synopsis_prompt_explicitly_constrains_schema(async_session):
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text=SynopsisData(
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=SynopsisData(
         title="天玄纪元",
         logline="主角崛起",
         core_conflict="复仇",
@@ -165,14 +212,16 @@ async def test_generate_synopsis_prompt_explicitly_constrains_schema(async_sessi
         estimated_volumes=3,
         estimated_total_chapters=90,
         estimated_total_words=270000,
-    ).model_dump_json())
+    ).model_dump_json()),
+        LLMResponse(text=json.dumps([make_volume_outline(i).model_dump() for i in range(1, 4)], ensure_ascii=False)),
+    ]
 
     with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         agent = BrainstormAgent(async_session)
         await agent._generate_synopsis("世界观设定", "n_prompt")
 
-    prompt = mock_client.acomplete.call_args.args[0][0].content
+    prompt = mock_client.acomplete.call_args_list[0].args[0][0].content
     assert "只允许以下顶层字段" in prompt
     assert '"title"' in prompt
     assert '"logline"' in prompt
@@ -183,4 +232,14 @@ async def test_generate_synopsis_prompt_explicitly_constrains_schema(async_sessi
     assert '"estimated_volumes"' in prompt
     assert '"estimated_total_chapters"' in prompt
     assert '"estimated_total_words"' in prompt
+    assert '"volume_outlines"' in prompt
+    assert "本步骤必须是空数组" in prompt
+    assert "不要写任何卷级概要、章节列表或 beats" in prompt
     assert "禁止输出任何额外字段" in prompt
+
+    batch_prompt = mock_client.acomplete.call_args_list[1].args[0][0].content
+    assert "只生成第 1 卷到第 3 卷" in batch_prompt
+    assert "必须正好 3 项" in batch_prompt
+    assert "ActiveConstraintContext" in batch_prompt
+    assert "当前阶段可触达冲突" in batch_prompt
+    assert "高阶概念只能作为伏笔" in batch_prompt

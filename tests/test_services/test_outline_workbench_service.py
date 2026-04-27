@@ -1,14 +1,19 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from sqlalchemy import func, select
 
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
-from novel_dev.db.models import OutlineMessage
+from novel_dev.db.models import OutlineMessage, OutlineSession
 from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardMergePayload
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
+from novel_dev.repositories.chapter_repo import ChapterRepository
+from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.outline_session_repo import OutlineSessionRepository
+from novel_dev.repositories.outline_message_repo import OutlineMessageRepository
 from novel_dev.schemas.outline import SynopsisData, VolumePlan, VolumeBeat
 from novel_dev.schemas.context import BeatPlan
 from novel_dev.schemas.outline_workbench import OutlineContextWindow
@@ -85,6 +90,218 @@ async def test_build_workbench_returns_synopsis_and_missing_volume_items(async_s
     assert payload.outline_items[3].status == "missing"
     assert payload.context_window.last_result_snapshot is None
     assert payload.context_window.recent_messages == []
+
+
+@pytest.mark.asyncio
+async def test_clear_context_removes_outline_messages_summary_and_snapshot(async_session):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=1,
+        estimated_total_chapters=10,
+        estimated_total_words=30000,
+    )
+    await director.save_checkpoint(
+        "n_clear_context",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+    session_repo = OutlineSessionRepository(async_session)
+    message_repo = OutlineMessageRepository(async_session)
+    outline_session = await session_repo.get_or_create(
+        novel_id="n_clear_context",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="active",
+    )
+    outline_session.conversation_summary = "旧摘要"
+    outline_session.last_result_snapshot = {"title": "旧快照"}
+    await message_repo.create(outline_session.id, "user", "feedback", "旧意见")
+    await message_repo.create(outline_session.id, "assistant", "result", "旧结果")
+    await async_session.commit()
+
+    service = OutlineWorkbenchService(async_session)
+    result = await service.clear_context(
+        novel_id="n_clear_context",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+    )
+
+    assert result.deleted_messages == 2
+    assert result.conversation_summary is None
+    assert result.last_result_snapshot is None
+
+    messages = await service.get_messages(
+        novel_id="n_clear_context",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+    )
+    assert messages.recent_messages == []
+    assert messages.conversation_summary is None
+    assert messages.last_result_snapshot is None
+
+
+@pytest.mark.asyncio
+async def test_build_workbench_does_not_create_session_when_only_viewing(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_workbench_readonly",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "九霄行",
+                "logline": "主角逆势而上",
+                "core_conflict": "家仇与天命相撞",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 30,
+                "estimated_total_words": 90000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    payload = await OutlineWorkbenchService(async_session).build_workbench(
+        novel_id="n_workbench_readonly",
+        outline_type="volume",
+        outline_ref="vol_1",
+    )
+
+    assert payload.session_id == ""
+    session_count = await async_session.scalar(
+        select(func.count())
+        .select_from(OutlineSession)
+        .where(
+            OutlineSession.novel_id == "n_workbench_readonly",
+            OutlineSession.outline_type == "volume",
+            OutlineSession.outline_ref == "vol_1",
+        )
+    )
+    assert session_count == 0
+
+
+@pytest.mark.asyncio
+async def test_build_workbench_marks_failed_volume_revision_and_exposes_review_snapshot(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_workbench_review_failed",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "九霄行",
+                "logline": "主角逆势而上",
+                "core_conflict": "家仇与天命相撞",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            },
+            "current_volume_plan": {
+                "volume_id": "vol_1",
+                "volume_number": 1,
+                "title": "第一卷",
+                "summary": "卷纲初稿",
+                "total_chapters": 1,
+                "estimated_total_words": 3000,
+                "chapters": [],
+                "review_status": {
+                    "status": "revise_failed",
+                    "reason": "自动修订失败",
+                    "score": {"overall": 50},
+                },
+            },
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    payload = await OutlineWorkbenchService(async_session).build_workbench(
+        novel_id="n_workbench_review_failed",
+        outline_type="volume",
+        outline_ref="vol_1",
+    )
+
+    volume_item = next(item for item in payload.outline_items if item.outline_ref == "vol_1")
+    assert volume_item.status == "needs_revision"
+    assert payload.context_window.last_result_snapshot["review_status"]["score"]["overall"] == 50
+
+
+@pytest.mark.asyncio
+async def test_write_volume_snapshot_persists_chapters_and_volume_document(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_write_volume_snapshot",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "九霄行",
+                "logline": "主角逆势而上",
+                "core_conflict": "家仇与天命相撞",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 2,
+                "estimated_total_words": 6000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+    volume_plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷一摘要",
+        total_chapters=2,
+        estimated_total_words=6000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="照见旧碑",
+                summary="陆照发现古碑异动。",
+                target_word_count=3000,
+                target_mood="mysterious",
+                beats=[BeatPlan(summary="旧碑裂开。", target_mood="mysterious")],
+            ),
+            VolumeBeat(
+                chapter_id="ch_2",
+                chapter_number=2,
+                title="山门问罪",
+                summary="长老会借机发难。",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="长老发难。", target_mood="tense")],
+            ),
+        ],
+    )
+
+    await OutlineWorkbenchService(async_session)._write_result_snapshot(
+        novel_id="n_write_volume_snapshot",
+        outline_type="volume",
+        outline_ref="vol_1",
+        result_snapshot=volume_plan.model_dump(),
+    )
+
+    state = await director.resume("n_write_volume_snapshot")
+    assert state.checkpoint_data["current_volume_plan"]["title"] == "第一卷"
+    assert state.current_volume_id == "vol_1"
+    assert state.current_chapter_id == "ch_1"
+    chapters = await ChapterRepository(async_session).list_by_volume("vol_1")
+    assert [chapter.id for chapter in chapters] == ["ch_1", "ch_2"]
+    docs = await DocumentRepository(async_session).get_by_type("n_write_volume_snapshot", "volume_plan")
+    assert len(docs) == 1
+    assert docs[0].title == "第一卷"
 
 
 @pytest.mark.asyncio
@@ -291,6 +508,67 @@ async def test_submit_feedback_updates_synopsis_checkpoint(async_session, monkey
 
 
 @pytest.mark.asyncio
+async def test_submit_feedback_regenerates_synopsis_when_rewrite_intent(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    old_synopsis = SynopsisData(
+        title="旧总纲",
+        logline="旧主线",
+        core_conflict="旧冲突",
+        estimated_volumes=2,
+        estimated_total_chapters=80,
+        estimated_total_words=240000,
+    )
+    await director.save_checkpoint(
+        "n_synopsis_regenerate",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": old_synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    monkeypatch.setattr(
+        service,
+        "_optimize_synopsis",
+        AsyncMock(side_effect=AssertionError("rewrite intent should not use revise")),
+    )
+    monkeypatch.setattr(service, "_load_brainstorm_source_text", AsyncMock(return_value="世界设定"))
+
+    captured = {}
+
+    async def fake_generate_synopsis(self, combined_text, novel_id):
+        captured["combined_text"] = combined_text
+        captured["novel_id"] = novel_id
+        return SynopsisData(
+            title="新总纲",
+            logline="新主线",
+            core_conflict="新冲突",
+            estimated_volumes=4,
+            estimated_total_chapters=1300,
+            estimated_total_words=3900000,
+        )
+
+    monkeypatch.setattr(BrainstormAgent, "_generate_synopsis", fake_generate_synopsis)
+
+    response = await service.submit_feedback(
+        novel_id="n_synopsis_regenerate",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="重写生成 1300 左右的大纲，替换掉旧版",
+    )
+
+    state = await service.novel_state_repo.get_state("n_synopsis_regenerate")
+    assert state is not None
+    assert state.checkpoint_data["synopsis_data"]["title"] == "新总纲"
+    assert state.checkpoint_data["synopsis_data"]["estimated_total_chapters"] == 1300
+    assert response.last_result_snapshot["title"] == "新总纲"
+    assert "重写生成 1300 左右的大纲" in captured["combined_text"]
+    assert "旧版规模参考" in captured["combined_text"]
+    assert "旧预估总章数: 80" in captured["combined_text"]
+    assert "旧主线" not in captured["combined_text"]
+
+
+@pytest.mark.asyncio
 async def test_optimize_synopsis_prompt_explicitly_constrains_schema(async_session):
     service = OutlineWorkbenchService(async_session)
     checkpoint = {
@@ -453,7 +731,10 @@ async def test_optimize_volume_preserves_highlight_fields_in_result_snapshot(asy
 
     monkeypatch.setattr(VolumePlannerAgent, "_generate_volume_plan", fake_generate_volume_plan)
     monkeypatch.setattr(VolumePlannerAgent, "_revise_volume_plan", fake_revise_volume_plan)
-    monkeypatch.setattr(VolumePlannerAgent, "_build_plan_context", lambda *args, **kwargs: "plan context")
+    async def fake_build_plan_context(*args, **kwargs):
+        return "plan context"
+
+    monkeypatch.setattr(VolumePlannerAgent, "_build_plan_context", fake_build_plan_context)
 
     result = await service._optimize_volume(
         novel_id="n_volume_highlights",
@@ -465,6 +746,166 @@ async def test_optimize_volume_preserves_highlight_fields_in_result_snapshot(asy
 
     assert result["result_snapshot"]["entity_highlights"] == {"characters": ["陆照：主角"]}
     assert result["result_snapshot"]["relationship_highlights"] == ["陆照 / 苏清寒：互疑转合作"]
+
+
+@pytest.mark.asyncio
+async def test_optimize_volume_regenerates_instead_of_revising_for_rewrite_intent(async_session, monkeypatch):
+    checkpoint = {
+        "synopsis_data": {
+            "title": "道照诸天",
+            "logline": "陆照求道",
+            "core_conflict": "陆照 vs 玄天道庭",
+            "themes": ["求道"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 100,
+            "estimated_total_words": 300000,
+        }
+    }
+    existing_plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="旧第一卷",
+        summary="旧摘要",
+        total_chapters=10,
+        estimated_total_words=100000,
+        chapters=[],
+    )
+    service = OutlineWorkbenchService(async_session)
+    captured = {}
+
+    async def fake_generate_volume_plan(
+        self,
+        synopsis,
+        volume_number,
+        world_snapshot=None,
+        novel_id="",
+        generation_instruction="",
+        target_chapters=None,
+    ):
+        captured["generation_instruction"] = generation_instruction
+        captured["target_chapters"] = target_chapters
+        return VolumePlan(
+            volume_id="vol_1",
+            volume_number=volume_number,
+            title="新第一卷",
+            summary="新摘要",
+            total_chapters=12,
+            estimated_total_words=120000,
+            chapters=[],
+        )
+
+    async def fake_revise_volume_plan(*args, **kwargs):
+        raise AssertionError("rewrite intent should not use revise")
+
+    monkeypatch.setattr(VolumePlannerAgent, "_generate_volume_plan", fake_generate_volume_plan)
+    monkeypatch.setattr(VolumePlannerAgent, "_revise_volume_plan", fake_revise_volume_plan)
+    async def fake_build_plan_context(*args, **kwargs):
+        return "plan context"
+
+    monkeypatch.setattr(VolumePlannerAgent, "_build_plan_context", fake_build_plan_context)
+
+    result = await service._optimize_volume(
+        novel_id="n_volume_regenerate",
+        outline_ref="vol_1",
+        checkpoint=checkpoint,
+        feedback="重新生成第一卷卷纲，替换旧版",
+        context_window=OutlineContextWindow(last_result_snapshot=existing_plan.model_dump()),
+        regenerate=True,
+    )
+
+    assert result["result_snapshot"]["title"] == "新第一卷"
+    assert result["result_snapshot"]["total_chapters"] == 12
+    assert captured["generation_instruction"] == "重新生成第一卷卷纲，替换旧版"
+    assert captured["target_chapters"] is None
+
+
+@pytest.mark.asyncio
+async def test_optimize_volume_regenerates_with_requested_chapter_count(async_session, monkeypatch):
+    checkpoint = {
+        "synopsis_data": {
+            "title": "道照诸天",
+            "logline": "陆照求道",
+            "core_conflict": "陆照 vs 玄天道庭",
+            "themes": ["求道"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 100,
+            "estimated_total_words": 300000,
+        }
+    }
+    existing_plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="旧第一卷",
+        summary="旧摘要",
+        total_chapters=24,
+        estimated_total_words=100000,
+        chapters=[],
+    )
+    service = OutlineWorkbenchService(async_session)
+    captured = {}
+
+    async def fake_generate_volume_plan(
+        self,
+        synopsis,
+        volume_number,
+        world_snapshot=None,
+        novel_id="",
+        generation_instruction="",
+        target_chapters=None,
+    ):
+        captured["generation_instruction"] = generation_instruction
+        captured["target_chapters"] = target_chapters
+        return VolumePlan(
+            volume_id="vol_1",
+            volume_number=volume_number,
+            title="新第一卷",
+            summary="新摘要",
+            total_chapters=target_chapters or 24,
+            estimated_total_words=180000,
+            chapters=[],
+        )
+
+    async def fake_revise_volume_plan(*args, **kwargs):
+        raise AssertionError("chapter count changes must regenerate instead of revise")
+
+    monkeypatch.setattr(VolumePlannerAgent, "_generate_volume_plan", fake_generate_volume_plan)
+    monkeypatch.setattr(VolumePlannerAgent, "_revise_volume_plan", fake_revise_volume_plan)
+
+    async def fake_build_plan_context(*args, **kwargs):
+        return "plan context"
+
+    monkeypatch.setattr(VolumePlannerAgent, "_build_plan_context", fake_build_plan_context)
+
+    result = await service._optimize_volume(
+        novel_id="n_volume_scale",
+        outline_ref="vol_1",
+        checkpoint=checkpoint,
+        feedback="24章不够，要60章",
+        context_window=OutlineContextWindow(last_result_snapshot=existing_plan.model_dump()),
+        regenerate=True,
+    )
+
+    assert result["result_snapshot"]["total_chapters"] == 60
+    assert captured["generation_instruction"] == "24章不够，要60章"
+    assert captured["target_chapters"] == 60
+
+
+def test_classify_feedback_intent_detects_regenerate_and_negation(async_session):
+    service = OutlineWorkbenchService(async_session)
+
+    assert service._classify_feedback_intent("重写生成 1300 左右的大纲") == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent("重写 1300 左右的大纲") == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent("重新规划总纲，每一卷边界要更清晰") == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent("重新做一版第一卷卷纲") == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent("推倒重来，另起一版") == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent("第一卷要求60章左右") == service._REGENERATE_INTENT
+    assert service._extract_requested_chapter_count("24章不够，要60章") == 60
+    assert service._classify_feedback_intent("不要重写，只补强第二卷冲突") == service._REVISE_INTENT
+    assert service._classify_feedback_intent("细化每一卷的境界提升") == service._REVISE_INTENT
 
 
 @pytest.mark.asyncio
@@ -740,6 +1181,49 @@ async def test_get_messages_uses_workspace_snapshot_during_brainstorming(async_s
         "estimated_total_words": 300000,
     }
     assert response.recent_messages == []
+
+
+@pytest.mark.asyncio
+async def test_get_messages_does_not_create_session_when_only_viewing(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_messages_readonly",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "九霄行",
+                "logline": "主角逆势而上",
+                "core_conflict": "家仇与天命相撞",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    response = await OutlineWorkbenchService(async_session).get_messages(
+        novel_id="n_messages_readonly",
+        outline_type="volume",
+        outline_ref="vol_1",
+    )
+
+    assert response.session_id == ""
+    assert response.recent_messages == []
+    session_count = await async_session.scalar(
+        select(func.count())
+        .select_from(OutlineSession)
+        .where(
+            OutlineSession.novel_id == "n_messages_readonly",
+            OutlineSession.outline_type == "volume",
+            OutlineSession.outline_ref == "vol_1",
+        )
+    )
+    assert session_count == 0
 
 
 @pytest.mark.asyncio

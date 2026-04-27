@@ -48,4 +48,17 @@ describe('OutlineConversation', () => {
     expect(wrapper.text()).toContain('优化中')
     expect(wrapper.text()).toContain('发送中...')
   })
+
+  it('emits clear-context when clearing conversation context', async () => {
+    const wrapper = mount(OutlineConversation, {
+      props: {
+        messages: [{ id: 'm1', role: 'user', content: '旧意见' }],
+        submitting: false,
+      },
+    })
+
+    await wrapper.get('.outline-conversation-clear').trigger('click')
+
+    expect(wrapper.emitted('clear-context')?.[0]).toEqual([])
+  })
 })

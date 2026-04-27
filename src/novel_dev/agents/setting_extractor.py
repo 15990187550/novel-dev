@@ -1,12 +1,14 @@
+import asyncio
 from typing import List, Union
 
 from pydantic import BaseModel, Field, field_validator
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
-from novel_dev.services.log_service import log_service
+from novel_dev.services.log_service import logged_agent_step, log_service
 
 
-MAX_SINGLE_EXTRACT_CHARS = 12000
+MAX_SINGLE_EXTRACT_CHARS = 8000
+MAX_PARALLEL_EXTRACT_CHUNKS = 2
 
 
 class CharacterProfile(BaseModel):
@@ -268,9 +270,27 @@ class SettingExtractorAgent:
             f"文档内容：\n\n{text}"
         )
 
-    async def _extract_chunk(self, text: str, novel_id: str = "") -> ExtractedSetting:
+    async def _extract_chunk(
+        self,
+        text: str,
+        novel_id: str = "",
+        *,
+        chunk_index: int = 1,
+        total_chunks: int = 1,
+    ) -> ExtractedSetting:
+        if novel_id and total_chunks > 1:
+            log_service.add_log(
+                novel_id,
+                "SettingExtractorAgent",
+                f"开始提取设定分段 {chunk_index}/{total_chunks}，长度: {len(text)} 字",
+                event="agent.progress",
+                status="started",
+                node="setting_extract_chunk",
+                task="extract_setting",
+                metadata={"chunk_index": chunk_index, "total_chunks": total_chunks, "chars": len(text)},
+            )
         prompt = self._build_prompt(text)
-        return await call_and_parse_model(
+        result = await call_and_parse_model(
             "SettingExtractorAgent",
             "extract_setting",
             prompt,
@@ -278,6 +298,26 @@ class SettingExtractorAgent:
             max_retries=3,
             novel_id=novel_id,
         )
+        if novel_id and total_chunks > 1:
+            log_service.add_log(
+                novel_id,
+                "SettingExtractorAgent",
+                f"设定分段 {chunk_index}/{total_chunks} 提取完成",
+                event="agent.progress",
+                status="succeeded",
+                node="setting_extract_chunk",
+                task="extract_setting",
+                metadata={
+                    "chunk_index": chunk_index,
+                    "total_chunks": total_chunks,
+                    "chars": len(text),
+                    "factions": len(result.factions),
+                    "locations": len(result.locations),
+                    "characters": len(result.character_profiles),
+                    "items": len(result.important_items),
+                },
+            )
+        return result
 
     def _merge_results(self, parts: list[ExtractedSetting]) -> ExtractedSetting:
         worldview = ""
@@ -307,6 +347,7 @@ class SettingExtractorAgent:
             plot_synopsis=plot_synopsis,
         )
 
+    @logged_agent_step("SettingExtractorAgent", "提取设定", node="setting_extract", task="extract_setting")
     async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
         if novel_id:
             log_service.add_log(
@@ -320,12 +361,36 @@ class SettingExtractorAgent:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                f"长文档分段提取: {len(chunks)} 段",
+                f"长文档分段提取: {len(chunks)} 段，并发 {min(MAX_PARALLEL_EXTRACT_CHUNKS, len(chunks))} 路",
+                event="agent.progress",
+                status="started",
+                node="setting_extract_split",
+                task="extract_setting",
+                metadata={
+                    "total_chunks": len(chunks),
+                    "max_chunk_chars": MAX_SINGLE_EXTRACT_CHARS,
+                    "parallelism": min(MAX_PARALLEL_EXTRACT_CHUNKS, len(chunks)),
+                    "chunk_lengths": [len(chunk) for chunk in chunks],
+                },
             )
 
-        extracted_parts = []
-        for chunk in chunks:
-            extracted_parts.append(await self._extract_chunk(chunk, novel_id))
+        if len(chunks) == 1:
+            extracted_parts = [await self._extract_chunk(chunks[0], novel_id)]
+        else:
+            semaphore = asyncio.Semaphore(MAX_PARALLEL_EXTRACT_CHUNKS)
+
+            async def extract_limited(index: int, chunk: str) -> ExtractedSetting:
+                async with semaphore:
+                    return await self._extract_chunk(
+                        chunk,
+                        novel_id,
+                        chunk_index=index + 1,
+                        total_chunks=len(chunks),
+                    )
+
+            extracted_parts = await asyncio.gather(
+                *(extract_limited(index, chunk) for index, chunk in enumerate(chunks))
+            )
 
         result = extracted_parts[0] if len(extracted_parts) == 1 else self._merge_results(extracted_parts)
         if novel_id:

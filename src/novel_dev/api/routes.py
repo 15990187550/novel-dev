@@ -1,14 +1,14 @@
 import asyncio
 import json
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
-from novel_dev.db.models import EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
+from novel_dev.db.models import AgentLog, EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
@@ -26,14 +26,26 @@ from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
-from novel_dev.schemas.outline_workbench import OutlineMessagesResponse
+from novel_dev.schemas.outline_workbench import OutlineClearContextResponse, OutlineMessagesResponse
 from novel_dev.schemas.brainstorm_workspace import (
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
 )
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
+from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
+from novel_dev.services.chapter_generation_service import AutoRunChaptersRequest
+from novel_dev.repositories.generation_job_repo import GenerationJobRepository
+from novel_dev.services.generation_job_service import CHAPTER_AUTO_RUN_JOB, schedule_generation_job
+from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
+from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
+from novel_dev.schemas.knowledge_domain import (
+    ConfirmDomainScopeRequest,
+    KnowledgeDomainCreate,
+    KnowledgeDomainUpdate,
+    serialize_knowledge_domain,
+)
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 import re
@@ -43,7 +55,26 @@ router = APIRouter()
 document_upload_tasks: set[asyncio.Task] = set()
 
 
+async def _raise_flow_cancelled(session: AsyncSession, novel_id: str):
+    log_service.add_log(
+        novel_id,
+        "FlowControl",
+        "流程已停止",
+        level="warning",
+        event="flow.stop",
+        status="stopped",
+        node="flow_control",
+        task="stop",
+    )
+    await session.commit()
+    raise HTTPException(status_code=409, detail="流程已停止")
+
+
 class CreateNovelRequest(BaseModel):
+    title: str
+
+
+class UpdateNovelRequest(BaseModel):
     title: str
 
 
@@ -66,6 +97,11 @@ class OutlineWorkbenchSubmitRequest(BaseModel):
     outline_type: str
     outline_ref: str
     content: str = Field(min_length=1)
+
+
+class OutlineWorkbenchSelectionRequest(BaseModel):
+    outline_type: str
+    outline_ref: str
 
 
 class RejectPendingRequest(BaseModel):
@@ -342,6 +378,21 @@ def _normalize_aliases(value: Any) -> list[str]:
     return []
 
 
+def _entity_scope_from_state(state: Optional[dict]) -> dict[str, Any]:
+    state = state or {}
+    if state.get("_knowledge_usage") != "domain":
+        return {
+            "knowledge_usage": "global",
+            "knowledge_domain_id": None,
+            "knowledge_domain_name": None,
+        }
+    return {
+        "knowledge_usage": "domain",
+        "knowledge_domain_id": state.get("_knowledge_domain_id"),
+        "knowledge_domain_name": state.get("_knowledge_domain_name"),
+    }
+
+
 async def get_session():
     async with async_session_maker() as session:
         yield session
@@ -358,13 +409,21 @@ async def list_novels(session: AsyncSession = Depends(get_session)):
         "items": [
             {
                 "novel_id": r.novel_id,
-                "title": (r.checkpoint_data or {}).get("synopsis_data", {}).get("title") or r.novel_id,
+                "title": _get_novel_display_title(r.novel_id, r.checkpoint_data or {}),
                 "current_phase": r.current_phase,
                 "last_updated": r.last_updated.isoformat() if r.last_updated else None,
             }
             for r in rows
         ]
     }
+
+
+def _get_novel_display_title(novel_id: str, checkpoint_data: dict[str, Any]) -> str:
+    return (
+        checkpoint_data.get("novel_title")
+        or checkpoint_data.get("title")
+        or novel_id
+    )
 
 
 def _generate_novel_id(title: str) -> str:
@@ -396,6 +455,7 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
         raise HTTPException(status_code=500, detail="无法生成唯一的小说 ID，请重试")
 
     checkpoint_data = {
+        "novel_title": title,
         "synopsis_data": {
             "title": title,
             "logline": "",
@@ -422,6 +482,7 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
 
     return {
         "novel_id": state.novel_id,
+        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
@@ -438,6 +499,35 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
         raise HTTPException(status_code=404, detail="Novel state not found")
     return {
         "novel_id": state.novel_id,
+        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
+        "current_phase": state.current_phase,
+        "current_volume_id": state.current_volume_id,
+        "current_chapter_id": state.current_chapter_id,
+        "checkpoint_data": state.checkpoint_data,
+        "last_updated": state.last_updated.isoformat(),
+    }
+
+
+@router.patch("/api/novels/{novel_id}")
+async def update_novel(novel_id: str, req: UpdateNovelRequest, session: AsyncSession = Depends(get_session)):
+    title = req.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="标题不能为空")
+
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    checkpoint_data = dict(state.checkpoint_data or {})
+    checkpoint_data["novel_title"] = title
+    state.checkpoint_data = checkpoint_data
+    await session.commit()
+    await session.refresh(state)
+
+    return {
+        "novel_id": state.novel_id,
+        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
@@ -466,8 +556,10 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
     for ent in entities:
         row = await _serialize_entity_payload(session, ent)
         row["latest_state"] = states.get(ent.id)
+        row.update(_entity_scope_from_state(row["latest_state"]))
         row["aliases"] = _normalize_aliases(row["latest_state"].get("aliases") if row["latest_state"] else None)
-        key = (ent.type, EntityRepository.normalize_name(ent.name) or ent.name)
+        scope_key = row["knowledge_domain_id"] if row["knowledge_usage"] == "domain" else "global"
+        key = (scope_key, ent.type, EntityRepository.normalize_name(ent.name) or ent.name)
         grouped.setdefault(key, []).append(row)
 
     items = []
@@ -579,6 +671,7 @@ async def get_entity(novel_id: str, entity_id: str, session: AsyncSession = Depe
         raise HTTPException(status_code=404, detail="Entity not found")
     payload = await _serialize_entity_payload(session, entity)
     payload["latest_state"] = state
+    payload.update(_entity_scope_from_state(state))
     payload["aliases"] = _normalize_aliases(state.get("aliases") if state else None)
     return payload
 
@@ -855,6 +948,11 @@ async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_sessi
             "summary": pc.get("summary"),
             "status": ch.status if ch else "pending",
             "word_count": word_count,
+            "score_overall": ch.score_overall if ch else None,
+            "score_breakdown": ch.score_breakdown if ch else {},
+            "review_feedback": ch.review_feedback if ch else {},
+            "fast_review_score": ch.fast_review_score if ch else None,
+            "fast_review_feedback": ch.fast_review_feedback if ch else {},
         })
     return {"items": items}
 
@@ -905,6 +1003,9 @@ async def export_chapter(novel_id: str, chapter_id: str, session: AsyncSession =
 class UploadRequest(BaseModel):
     filename: str
     content: str
+    knowledge_usage: str | None = None
+    domain_name: str | None = None
+    activation_mode: str | None = None
 
 
 class BatchUploadRequest(BaseModel):
@@ -938,7 +1039,12 @@ async def _process_upload_with_new_session(
         embedding_service = EmbeddingService(session, embedder)
         svc = ExtractionService(session, embedding_service)
         try:
-            pe = await svc.process_upload(novel_id, req.filename, req.content)
+            pe = await svc.process_upload(
+                novel_id,
+                req.filename,
+                req.content,
+                force_setting=(req.knowledge_usage or "").strip() == "domain",
+            )
             await session.commit()
             return {
                 "filename": req.filename,
@@ -975,7 +1081,31 @@ async def _complete_processing_upload_with_new_session(
         svc = ExtractionService(session, embedding_service)
         repo = PendingExtractionRepository(session)
         try:
-            await svc.complete_processing_upload(pending_id, novel_id, req.filename, req.content)
+            is_domain_import = (req.knowledge_usage or "").strip() == "domain"
+            if is_domain_import:
+                await svc.complete_processing_upload(
+                    pending_id,
+                    novel_id,
+                    req.filename,
+                    req.content,
+                    force_setting=True,
+                )
+            else:
+                await svc.complete_processing_upload(pending_id, novel_id, req.filename, req.content)
+            pending_after_extract = await repo.get_by_id(pending_id)
+            if pending_after_extract is None:
+                await session.commit()
+                return
+            if is_domain_import:
+                domain_service = KnowledgeDomainService(session)
+                draft = domain_service.create_domain_draft_from_document(
+                    name=req.domain_name or req.filename,
+                    doc_id=pending_id,
+                    content=req.content,
+                    domain_type="source_work",
+                    activation_mode=req.activation_mode or "auto",
+                )
+                await domain_service.create_domain(novel_id, draft)
             await session.commit()
         except LLMTimeoutError:
             await session.rollback()
@@ -1001,9 +1131,25 @@ async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSessi
     embedding_service = EmbeddingService(session, embedder)
     svc = ExtractionService(session, embedding_service)
     try:
-        pe = await svc.process_upload(novel_id, req.filename, req.content)
+        pe = await svc.process_upload(
+            novel_id,
+            req.filename,
+            req.content,
+            force_setting=(req.knowledge_usage or "").strip() == "domain",
+        )
     except LLMTimeoutError as exc:
         raise HTTPException(status_code=504, detail="设定提取超时，请稍后重试或切换模型") from exc
+    created_domain = None
+    if (req.knowledge_usage or "").strip() == "domain":
+        domain_service = KnowledgeDomainService(session)
+        draft = domain_service.create_domain_draft_from_document(
+            name=req.domain_name or req.filename,
+            doc_id=pe.id,
+            content=req.content,
+            domain_type="source_work",
+            activation_mode=req.activation_mode or "auto",
+        )
+        created_domain = await domain_service.create_domain(novel_id, draft)
     await session.commit()
     return {
         "id": pe.id,
@@ -1011,6 +1157,7 @@ async def upload_document(novel_id: str, req: UploadRequest, session: AsyncSessi
         "extraction_type": pe.extraction_type,
         "status": pe.status,
         "created_at": pe.created_at.isoformat(),
+        "knowledge_domain": serialize_knowledge_domain(created_domain) if created_domain else None,
     }
 
 
@@ -1093,6 +1240,80 @@ async def get_document_library(novel_id: str, session: AsyncSession = Depends(ge
     }
 
 
+@router.get("/api/novels/{novel_id}/knowledge_domains")
+async def list_knowledge_domains(
+    novel_id: str,
+    include_disabled: bool = False,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    domains = await svc.repo.list_by_novel(novel_id, include_disabled=include_disabled)
+    return {"items": [serialize_knowledge_domain(domain) for domain in domains]}
+
+
+@router.post("/api/novels/{novel_id}/knowledge_domains")
+async def create_knowledge_domain(
+    novel_id: str,
+    req: KnowledgeDomainCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    domain = await svc.create_domain(novel_id, req)
+    await session.commit()
+    return {"item": serialize_knowledge_domain(domain)}
+
+
+@router.patch("/api/novels/{novel_id}/knowledge_domains/{domain_id}")
+async def update_knowledge_domain(
+    novel_id: str,
+    domain_id: str,
+    req: KnowledgeDomainUpdate,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    try:
+        domain = await svc.update_domain(novel_id, domain_id, req)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {"item": serialize_knowledge_domain(domain)}
+
+
+@router.post("/api/novels/{novel_id}/knowledge_domains/{domain_id}/confirm_scope")
+async def confirm_knowledge_domain_scope(
+    novel_id: str,
+    domain_id: str,
+    req: ConfirmDomainScopeRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    try:
+        domain = await svc.confirm_scope(novel_id, domain_id, req.scope_type, req.scope_refs)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {"item": serialize_knowledge_domain(domain)}
+
+
+@router.post("/api/novels/{novel_id}/knowledge_domains/{domain_id}/disable")
+async def disable_knowledge_domain(
+    novel_id: str,
+    domain_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    try:
+        domain = await svc.update_domain(
+            novel_id,
+            domain_id,
+            KnowledgeDomainUpdate(is_active=False, scope_status="disabled", activation_mode="disabled"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {"item": serialize_knowledge_domain(domain)}
+
+
 @router.post("/api/novels/{novel_id}/documents/library/merge-duplicates")
 async def merge_duplicate_library_documents(novel_id: str, session: AsyncSession = Depends(get_session)):
     embedder = llm_factory.get_embedder()
@@ -1121,7 +1342,10 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
     svc = ExtractionService(session, embedding_service)
     repo = PendingExtractionRepository(session)
     pe = await repo.get_by_id(req.pending_id)
-    if not pe or pe.novel_id != novel_id:
+    if not pe:
+        await session.commit()
+        return
+    if pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
     try:
         docs = await svc.approve_pending(req.pending_id, field_resolutions=[r.model_dump() for r in req.field_resolutions])
@@ -1154,7 +1378,10 @@ async def update_pending_draft_field(
     svc = ExtractionService(session, embedding_service)
     repo = PendingExtractionRepository(session)
     pe = await repo.get_by_id(pending_id)
-    if not pe or pe.novel_id != novel_id:
+    if not pe:
+        await session.commit()
+        return
+    if pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
 
     try:
@@ -1219,11 +1446,14 @@ async def delete_failed_pending_document(novel_id: str, pending_id: str, session
     svc = ExtractionService(session, embedding_service)
     repo = PendingExtractionRepository(session)
     pe = await repo.get_by_id(pending_id)
-    if not pe or pe.novel_id != novel_id:
+    if not pe:
+        await session.commit()
+        return
+    if pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
-    deleted = await svc.delete_failed_pending(pending_id)
+    deleted = await svc.delete_cancelable_pending(pending_id)
     if not deleted:
-        raise HTTPException(status_code=409, detail="只有失败记录可以删除")
+        raise HTTPException(status_code=409, detail="只有导入中或失败记录可以删除")
     await session.commit()
 
 
@@ -1259,11 +1489,14 @@ async def prepare_chapter_context(
     chapter_id: str,
     session: AsyncSession = Depends(get_session),
 ):
+    await FlowControlService(session).clear_stop(novel_id)
     embedder = llm_factory.get_embedder()
     embedding_service = EmbeddingService(session, embedder)
     agent = ContextAgent(session, embedding_service)
     try:
         context = await agent.assemble(novel_id, chapter_id)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await session.commit()
@@ -1281,6 +1514,7 @@ async def generate_chapter_draft(
     chapter_id: str,
     session: AsyncSession = Depends(get_session),
 ):
+    await FlowControlService(session).clear_stop(novel_id)
     state_repo = NovelStateRepository(session)
     state = await state_repo.get_state(novel_id)
     if not state:
@@ -1297,6 +1531,8 @@ async def generate_chapter_draft(
     agent = WriterAgent(session, embedding_service)
     try:
         metadata = await agent.write(novel_id, context, chapter_id)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await session.commit()
@@ -1329,9 +1565,12 @@ async def get_chapter_draft(
 
 @router.post("/api/novels/{novel_id}/advance")
 async def advance_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    await FlowControlService(session).clear_stop(novel_id)
     director = NovelDirector(session)
     try:
         state = await director.advance(novel_id)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
@@ -1342,6 +1581,64 @@ async def advance_novel(novel_id: str, session: AsyncSession = Depends(get_sessi
         "current_phase": state.current_phase,
         "checkpoint_data": state.checkpoint_data,
     }
+
+
+def _generation_job_response(job) -> dict:
+    return {
+        "job_id": job.id,
+        "novel_id": job.novel_id,
+        "job_type": job.job_type,
+        "status": job.status,
+        "request_payload": job.request_payload,
+        "result_payload": job.result_payload,
+        "error_message": job.error_message,
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "started_at": job.started_at.isoformat() if job.started_at else None,
+        "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "updated_at": job.updated_at.isoformat() if job.updated_at else None,
+    }
+
+
+@router.post("/api/novels/{novel_id}/chapters/auto-run", status_code=status.HTTP_202_ACCEPTED)
+async def auto_run_chapters(
+    novel_id: str,
+    req: AutoRunChaptersRequest = AutoRunChaptersRequest(),
+    session: AsyncSession = Depends(get_session),
+):
+    await FlowControlService(session).clear_stop(novel_id)
+    state = await NovelStateRepository(session).get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    repo = GenerationJobRepository(session)
+    active = await repo.get_active(novel_id, CHAPTER_AUTO_RUN_JOB)
+    if active:
+        raise HTTPException(status_code=409, detail="Auto chapter generation is already running")
+    payload = {
+        "max_chapters": req.max_chapters,
+        "stop_at_volume_end": req.stop_at_volume_end,
+    }
+    job = await repo.create(novel_id, CHAPTER_AUTO_RUN_JOB, payload)
+    await session.commit()
+    schedule_generation_job(job.id)
+    return _generation_job_response(job)
+
+
+@router.get("/api/novels/{novel_id}/generation_jobs/{job_id}")
+async def get_generation_job(novel_id: str, job_id: str, session: AsyncSession = Depends(get_session)):
+    job = await GenerationJobRepository(session).get_by_id(job_id)
+    if not job or job.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Generation job not found")
+    return _generation_job_response(job)
+
+
+@router.post("/api/novels/{novel_id}/flow/stop")
+async def stop_current_flow(novel_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        result = await FlowControlService(session).request_stop(novel_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    await session.commit()
+    return result
 
 
 @router.get("/api/novels/{novel_id}/review")
@@ -1387,9 +1684,12 @@ class VolumePlanRequest(BaseModel):
 
 @router.post("/api/novels/{novel_id}/brainstorm")
 async def brainstorm_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
+    await FlowControlService(session).clear_stop(novel_id)
     agent = BrainstormAgent(session)
     try:
         synopsis_data = await agent.brainstorm(novel_id)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     await session.commit()
@@ -1405,9 +1705,9 @@ async def brainstorm_novel(novel_id: str, session: AsyncSession = Depends(get_se
 async def start_brainstorm(novel_id: str, session: AsyncSession = Depends(get_session)):
     doc_repo = DocumentRepository(session)
     docs = (
-        await doc_repo.get_by_type(novel_id, "worldview")
-        + await doc_repo.get_by_type(novel_id, "setting")
-        + await doc_repo.get_by_type(novel_id, "concept")
+        await doc_repo.get_current_by_type(novel_id, "worldview")
+        + await doc_repo.get_current_by_type(novel_id, "setting")
+        + await doc_repo.get_current_by_type(novel_id, "concept")
     )
     if not docs:
         raise HTTPException(status_code=400, detail="请先上传世界观或设定文档")
@@ -1440,9 +1740,9 @@ async def get_brainstorm_prompt(novel_id: str, session: AsyncSession = Depends(g
     """获取脑暴 prompt 内容（用于复制到 Claude Code）"""
     doc_repo = DocumentRepository(session)
     docs = (
-        await doc_repo.get_by_type(novel_id, "worldview")
-        + await doc_repo.get_by_type(novel_id, "setting")
-        + await doc_repo.get_by_type(novel_id, "concept")
+        await doc_repo.get_current_by_type(novel_id, "worldview")
+        + await doc_repo.get_current_by_type(novel_id, "setting")
+        + await doc_repo.get_current_by_type(novel_id, "concept")
     )
     if not docs:
         raise HTTPException(status_code=400, detail="请先上传世界观或设定文档")
@@ -1641,19 +1941,27 @@ async def import_synopsis(novel_id: str, req: ImportSynopsisRequest, session: As
 
 @router.post("/api/novels/{novel_id}/volume_plan")
 async def plan_volume(novel_id: str, req: VolumePlanRequest = VolumePlanRequest(), session: AsyncSession = Depends(get_session)):
+    await FlowControlService(session).clear_stop(novel_id)
     agent = VolumePlannerAgent(session)
     try:
         plan = await agent.plan(novel_id, volume_number=req.volume_number)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    state = await NovelStateRepository(session).get_state(novel_id)
+    current_volume_plan = (state.checkpoint_data or {}).get("current_volume_plan", {}) if state else {}
     await session.commit()
     return {
         "volume_id": plan.volume_id,
         "volume_number": plan.volume_number,
         "title": plan.title,
+        "summary": plan.summary,
         "total_chapters": plan.total_chapters,
+        "estimated_total_words": plan.estimated_total_words,
+        "review_status": current_volume_plan.get("review_status"),
         "chapters": [
             {
                 "chapter_id": ch.chapter_id,
@@ -1674,7 +1982,7 @@ async def get_synopsis(novel_id: str, session: AsyncSession = Depends(get_sessio
     if not state:
         raise HTTPException(status_code=404, detail="Novel state not found")
 
-    docs = await repo.get_by_type(novel_id, "synopsis")
+    docs = await repo.get_current_by_type(novel_id, "synopsis")
     synopsis_data = {}
     if state.checkpoint_data:
         synopsis_data = state.checkpoint_data.get("synopsis_data", {})
@@ -1757,6 +2065,7 @@ async def submit_outline_workbench(
     req: OutlineWorkbenchSubmitRequest,
     session: AsyncSession = Depends(get_session),
 ):
+    await FlowControlService(session).clear_stop(novel_id)
     service = OutlineWorkbenchService(session)
     try:
         return await service.submit_feedback(
@@ -1765,8 +2074,51 @@ async def submit_outline_workbench(
             outline_ref=req.outline_ref,
             feedback=req.content,
         )
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post(
+    "/api/novels/{novel_id}/outline_workbench/clear_context",
+    response_model=OutlineClearContextResponse,
+)
+async def clear_outline_workbench_context(
+    novel_id: str,
+    req: OutlineWorkbenchSelectionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = OutlineWorkbenchService(session)
+    try:
+        return await service.clear_context(
+            novel_id=novel_id,
+            outline_type=req.outline_type,
+            outline_ref=req.outline_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/api/novels/{novel_id}/outline_workbench/review")
+async def review_outline_workbench(
+    novel_id: str,
+    req: OutlineWorkbenchSelectionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = OutlineWorkbenchService(session)
+    try:
+        return await service.review_outline(
+            novel_id=novel_id,
+            outline_type=req.outline_type,
+            outline_ref=req.outline_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=422, detail=str(e))
 
 
 @router.post(
@@ -1818,9 +2170,12 @@ async def submit_brainstorm_workspace(
 
 @router.post("/api/novels/{novel_id}/librarian")
 async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_session)):
+    await FlowControlService(session).clear_stop(novel_id)
     director = NovelDirector(session)
     try:
         state = await director.run_librarian(novel_id)
+    except FlowCancelledError:
+        await _raise_flow_cancelled(session, novel_id)
     except ValueError as e:
         if "Novel state not found" in str(e):
             raise HTTPException(status_code=404, detail=str(e))
@@ -1876,7 +2231,7 @@ async def get_archive_stats(novel_id: str, session: AsyncSession = Depends(get_s
 async def stream_logs(novel_id: str):
     from novel_dev.services.log_service import log_service as _log_service
 
-    q = _log_service.subscribe(novel_id)
+    q = await _log_service.subscribe_with_history(novel_id)
 
     async def event_generator():
         try:
@@ -1892,3 +2247,19 @@ async def stream_logs(novel_id: str):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
     )
+
+
+@router.delete("/api/novels/{novel_id}/logs")
+async def clear_logs(novel_id: str, session: AsyncSession = Depends(get_session)):
+    state = await session.get(NovelState, novel_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    count_result = await session.execute(
+        select(func.count()).select_from(AgentLog).where(AgentLog.novel_id == novel_id)
+    )
+    deleted_count = int(count_result.scalar_one() or 0)
+    await session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
+    await session.commit()
+    log_service.clear_memory(novel_id)
+    return {"novel_id": novel_id, "deleted_count": deleted_count}

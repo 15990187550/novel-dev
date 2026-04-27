@@ -38,3 +38,51 @@ async def test_openai_compatible_acomplete_with_messages():
     call_kwargs = mock_client.chat.completions.create.call_args.kwargs
     assert call_kwargs["model"] == "kimi-k2.5"
     assert call_kwargs["messages"][0]["role"] == "system"
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_forwards_structured_tool_config():
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="{}", tool_calls=None), finish_reason="stop")],
+            usage=MagicMock(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+        )
+    )
+    driver = OpenAICompatibleDriver(client=mock_client)
+    config = TaskConfig(
+        provider="openai_compatible",
+        model="gpt-4",
+        response_tool_name="emit_payload",
+        response_json_schema={
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+            "required": ["value"],
+        },
+    )
+    await driver.acomplete("say hi", config)
+    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert call_kwargs["tools"][0]["function"]["name"] == "emit_payload"
+    assert call_kwargs["tool_choice"] == {"type": "function", "function": {"name": "emit_payload"}}
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_extracts_tool_payload():
+    tool_call = MagicMock(function=MagicMock(arguments='{"value":"ok"}'))
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content=None, tool_calls=[tool_call]), finish_reason="tool_calls")],
+            usage=MagicMock(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+        )
+    )
+    driver = OpenAICompatibleDriver(client=mock_client)
+    config = TaskConfig(
+        provider="openai_compatible",
+        model="gpt-4",
+        response_tool_name="emit_payload",
+        response_json_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+    )
+    response = await driver.acomplete("say hi", config)
+    assert response.structured_payload == {"value": "ok"}
+    assert response.finish_reason == "tool_calls"

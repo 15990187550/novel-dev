@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.repositories.entity_repo import EntityRepository
@@ -73,6 +74,22 @@ async def test_search_similar_entities(async_session):
     assert len(results) == 1
     assert results[0].doc_id == "ent_1"
     assert results[0].title == "主角"
+
+
+@pytest.mark.asyncio
+async def test_search_similar_entities_skips_wrong_dimension_query_on_postgres(async_session, monkeypatch):
+    mock_embedder = AsyncMock()
+    mock_embedder.aembed = AsyncMock(return_value=[[0.1] * 1536])
+    monkeypatch.setattr(
+        async_session,
+        "get_bind",
+        lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+    )
+
+    svc = EmbeddingService(async_session, mock_embedder)
+    results = await svc.search_similar_entities("n1", "hero", limit=3)
+
+    assert results == []
 
 
 @pytest.mark.asyncio

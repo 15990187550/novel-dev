@@ -22,6 +22,9 @@ const {
   rejectPendingMock,
   updatePendingDraftFieldMock,
   getDocumentLibraryMock,
+  getKnowledgeDomainsMock,
+  confirmKnowledgeDomainScopeMock,
+  disableKnowledgeDomainMock,
   updateLibraryDocumentMock,
   rollbackStyleProfileMock,
   successMessageMock,
@@ -32,6 +35,9 @@ const {
   rejectPendingMock: vi.fn(),
   updatePendingDraftFieldMock: vi.fn(),
   getDocumentLibraryMock: vi.fn(),
+  getKnowledgeDomainsMock: vi.fn(),
+  confirmKnowledgeDomainScopeMock: vi.fn(),
+  disableKnowledgeDomainMock: vi.fn(),
   updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
   successMessageMock: vi.fn(),
@@ -44,6 +50,9 @@ vi.mock('@/api.js', () => ({
   rejectPending: rejectPendingMock,
   updatePendingDraftField: updatePendingDraftFieldMock,
   getDocumentLibrary: getDocumentLibraryMock,
+  getKnowledgeDomains: getKnowledgeDomainsMock,
+  confirmKnowledgeDomainScope: confirmKnowledgeDomainScopeMock,
+  disableKnowledgeDomain: disableKnowledgeDomainMock,
   updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
 }))
@@ -127,6 +136,9 @@ describe('Documents', () => {
     setActivePinia(pinia)
     vi.clearAllMocks()
     getDocumentLibraryMock.mockResolvedValue({ items: [], active_style_profile_version: null })
+    getKnowledgeDomainsMock.mockResolvedValue({ items: [] })
+    confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
+    disableKnowledgeDomainMock.mockResolvedValue({ item: {} })
     rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
   })
 
@@ -183,6 +195,24 @@ describe('Documents', () => {
             },
           }),
           ElButton: ElButtonStub,
+          ElInput: defineComponent({
+            name: 'ElInputStub',
+            props: {
+              modelValue: { type: String, default: '' },
+              placeholder: { type: String, default: '' },
+              size: { type: String, default: '' },
+            },
+            emits: ['update:modelValue'],
+            setup(props, { emit }) {
+              return () => h('input', {
+                class: 'el-input-stub',
+                value: props.modelValue,
+                placeholder: props.placeholder,
+                'data-size': props.size,
+                onInput: (event) => emit('update:modelValue', event.target.value),
+              })
+            },
+          }),
           ElDialog: defineComponent({
             name: 'ElDialogStub',
             setup(_, { slots }) {
@@ -345,6 +375,209 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('短句推进')
   })
 
+  it('renders knowledge domains and confirms suggested scope', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getKnowledgeDomainsMock
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'domain-1',
+            novel_id: 'novel-1',
+            name: '完美世界',
+            domain_type: 'source_work',
+            scope_status: 'suggested',
+            activation_mode: 'auto',
+            activation_keywords: ['完美世界', '映照身'],
+            rules: { foreshadow_only: ['高原诡异只能伏笔'], forbidden_now: [] },
+            source_doc_ids: [],
+            suggested_scopes: [{ scope_type: 'volume', scope_ref: 'vol_2' }],
+            confirmed_scopes: [],
+            confidence: 'low',
+            is_active: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        items: [
+          {
+            id: 'domain-1',
+            novel_id: 'novel-1',
+            name: '完美世界',
+            domain_type: 'source_work',
+            scope_status: 'confirmed',
+            activation_mode: 'auto',
+            activation_keywords: ['完美世界', '映照身'],
+            rules: { foreshadow_only: ['高原诡异只能伏笔'], forbidden_now: [] },
+            source_doc_ids: [],
+            suggested_scopes: [{ scope_type: 'volume', scope_ref: 'vol_2' }],
+            confirmed_scopes: [{ scope_type: 'volume', scope_ref: 'vol_2' }],
+            confidence: 'low',
+            is_active: true,
+          },
+        ],
+      })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('规则域')
+    expect(wrapper.text()).toContain('完美世界')
+    expect(wrapper.text()).toContain('高原诡异只能伏笔')
+
+    const confirmButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '确认用于第2卷')
+    await confirmButton.trigger('click')
+    await flushPromises()
+
+    expect(confirmKnowledgeDomainScopeMock).toHaveBeenCalledWith('novel-1', 'domain-1', {
+      scope_type: 'volume',
+      scope_refs: ['vol_2'],
+    })
+    expect(successMessageMock).toHaveBeenCalledWith('规则域绑定已确认')
+  })
+
+  it('places the current library above knowledge domains and opens domain details', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    const longRule = `高原诡异只能作为远期伏笔，不允许在第一卷正面登场。${'需要持续保持压迫感。'.repeat(12)}`
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'world-1',
+          doc_type: 'worldview',
+          title: '世界观',
+          content: '天玄大陆，万族林立。',
+          version: 1,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+        },
+      ],
+      active_style_profile_version: null,
+    })
+    getKnowledgeDomainsMock.mockResolvedValue({
+      items: [
+        {
+          id: 'domain-1',
+          novel_id: 'novel-1',
+          name: '完美世界',
+          domain_type: 'source_work',
+          scope_status: 'suggested',
+          activation_mode: 'auto',
+          activation_keywords: ['完美世界', '映照身', '高原'],
+          rules: { foreshadow_only: [longRule], forbidden_now: [] },
+          source_doc_ids: [],
+          suggested_scopes: [{ scope_type: 'volume', scope_ref: 'vol_2' }],
+          confirmed_scopes: [],
+          confidence: 'low',
+          is_active: true,
+        },
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const sectionTitles = wrapper.findAll('h3').map((title) => title.text())
+    expect(sectionTitles.indexOf('当前资料库')).toBeLessThan(sectionTitles.indexOf('规则域'))
+    expect(wrapper.text()).toContain('只能伏笔：高原诡异只能作为远期伏笔')
+    expect(wrapper.text()).not.toContain('需要持续保持压迫感。需要持续保持压迫感。需要持续保持压迫感。')
+
+    const detailButtons = wrapper.findAll('.documents-library-card__edit').filter((button) => button.text() === '查看详情')
+    const detailButton = detailButtons[detailButtons.length - 1]
+    await detailButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain(longRule)
+  })
+
+  it('keeps long library content collapsed and opens details in a modal', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    const longSynopsis = `开篇主角被卷入宗门危机，随后一路推进。${'中段剧情铺陈。'.repeat(40)}最终揭露幕后真相。`
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'synopsis-1',
+          doc_type: 'synopsis',
+          title: '剧情概要',
+          content: longSynopsis,
+          version: 1,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+        },
+      ],
+      active_style_profile_version: null,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('开篇主角被卷入宗门危机')
+    expect(wrapper.text()).not.toContain('最终揭露幕后真相。')
+
+    const detailButton = wrapper.findAll('.documents-library-card__edit').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('最终揭露幕后真相。')
+  })
+
+  it('shows only active style profile by default and moves versions into a secondary modal', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'style-1',
+          doc_type: 'style_profile',
+          title: '{"tone":"旧"}',
+          content: '旧版文风，不应默认铺开。',
+          version: 1,
+          updated_at: '2026-04-22T00:00:00Z',
+          is_active: false,
+          style_config: { tone: '旧' },
+        },
+        {
+          id: 'style-2',
+          doc_type: 'style_profile',
+          title: '{"tone":"新"}',
+          content: '当前文风摘要。',
+          version: 2,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+          style_config: { tone: '新', writing_rules: ['短句推进'] },
+        },
+      ],
+      active_style_profile_version: 2,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('当前文风版本 v2')
+    expect(wrapper.text()).toContain('当前文风摘要。')
+    expect(wrapper.text()).not.toContain('旧版文风，不应默认铺开。')
+
+    const versionsButton = wrapper.findAll('.documents-library-card__edit').find((button) => button.text() === '查看更多版本')
+    await versionsButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('旧版文风，不应默认铺开。')
+    expect(wrapper.text()).toContain('设为当前版本')
+  })
+
   it('edits a library setting document in a modal and saves it as a new version', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -395,7 +628,7 @@ describe('Documents', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const editButton = wrapper.find('.documents-library-card__edit')
+    const editButton = wrapper.findAll('.documents-library-card__edit').find((button) => button.text() === '编辑')
     expect(editButton.exists()).toBe(true)
 
     await editButton.trigger('click')
@@ -466,8 +699,8 @@ describe('Documents', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    const editButtons = wrapper.findAll('.documents-library-card__edit')
-    await editButtons[0].trigger('click')
+    const editButton = wrapper.findAll('.documents-library-card__edit').find((button) => button.text() === '编辑')
+    await editButton.trigger('click')
     await nextTick()
 
     const textarea = wrapper.find('.documents-library-editor__textarea')
@@ -982,6 +1215,29 @@ describe('Documents', () => {
     expect(deletePendingDocMock).toHaveBeenCalledWith('novel-1', 'doc-failed')
     expect(store.fetchDocuments).toHaveBeenCalled()
     expect(successMessageMock).toHaveBeenCalledWith('已删除失败记录')
+  })
+
+  it('shows cancel for processing rows and removes the record after cancellation', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-processing', source_filename: '完美世界.md', extraction_type: 'processing', status: 'processing', created_at: '2026-04-25T07:45:00Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    deletePendingDocMock.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const cancelButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '取消')
+    expect(cancelButton).toBeTruthy()
+
+    await cancelButton.trigger('click')
+    await flushPromises()
+
+    expect(deletePendingDocMock).toHaveBeenCalledWith('novel-1', 'doc-processing')
+    expect(store.fetchDocuments).toHaveBeenCalled()
+    expect(successMessageMock).toHaveBeenCalledWith('已取消导入')
   })
 
   it('preserves conflict selections when the same document detail is reopened', async () => {

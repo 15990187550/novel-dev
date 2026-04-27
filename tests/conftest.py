@@ -49,7 +49,7 @@ def mock_llm_factory(monkeypatch):
 
     def mock_get(agent, task=None):
         from novel_dev.llm.models import LLMResponse
-        from novel_dev.agents.volume_planner import VolumePlanBlueprint
+        from novel_dev.agents.volume_planner import VolumePlanBlueprint, VolumePlanPatch
         from novel_dev.schemas.outline import VolumeScoreResult, VolumePlan, VolumeBeat
         from novel_dev.schemas.review import ScoreResult, DimensionScore
         from novel_dev.schemas.context import BeatPlan
@@ -72,14 +72,15 @@ def mock_llm_factory(monkeypatch):
                 chapter_hooks=88, page_turning=88, summary_feedback="good",
             ).model_dump_json())
         elif agent == "VolumePlannerAgent" and task == "revise_volume_plan":
-            mock_client.acomplete.return_value = LLMResponse(text=VolumePlan(
-                volume_id="vol_1", volume_number=1, title="第一卷", summary="卷总述",
-                total_chapters=1, estimated_total_words=3000,
-                chapters=[VolumeBeat(
-                    chapter_id="ch_1", chapter_number=1, title="第一章",
-                    summary="章摘要", target_word_count=3000, target_mood="tense",
-                    beats=[BeatPlan(summary="B1", target_mood="tense")],
-                )],
+            mock_client.acomplete.return_value = LLMResponse(text=VolumePlanPatch(
+                summary="卷总述",
+                chapter_patches=[
+                    {
+                        "chapter_number": 1,
+                        "summary": "章摘要",
+                        "beats": [BeatPlan(summary="B1", target_mood="tense")],
+                    }
+                ],
             ).model_dump_json())
         elif agent == "VolumePlannerAgent" and task == "expand_volume_plan_batch":
             mock_client.acomplete.return_value = LLMResponse(
@@ -91,7 +92,7 @@ def mock_llm_factory(monkeypatch):
             )
         elif agent == "WriterAgent":
             mock_client.acomplete.return_value = LLMResponse(
-                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，令人难以忘怀。"
+                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，余味悠长。"
             )
         elif agent == "CriticAgent" and task == "score_chapter":
             mock_client.acomplete.return_value = LLMResponse(text=ScoreResult(
@@ -110,7 +111,7 @@ def mock_llm_factory(monkeypatch):
                 text='[{"beat_index": 0, "scores": {"plot_tension": 80, "humanity": 80}}]'
             )
         elif agent == "EditorAgent":
-            mock_client.acomplete.return_value = LLMResponse(text="润色后的正文内容，情节更加跌宕起伏，人物形象更加丰满，场景描写更加细腻生动，令人读起来欲罢不能。")
+            mock_client.acomplete.return_value = LLMResponse(text="润色后的正文内容，情节更紧凑，人物更鲜明，场景更细腻，读感更顺畅有力自然。")
         elif agent == "FastReviewAgent":
             mock_client.acomplete.return_value = LLMResponse(
                 text='{"consistency_fixed": true, "beat_cohesion_ok": true, "notes": []}'

@@ -17,6 +17,9 @@
       <div v-for="(log, i) in visibleLogs" :key="i" class="flex gap-2 hover:bg-gray-900/50 px-1 rounded">
         <span class="text-gray-500 shrink-0">{{ formatTime(log.timestamp) }}</span>
         <span class="shrink-0 font-semibold" :style="{ color: agentColor(log.agent) }">[{{ log.agent }}]</span>
+        <span v-if="log.level" class="shrink-0 rounded border px-1 text-[11px]" :class="levelClass(log.level)">{{ log.level }}</span>
+        <span v-if="log.status" class="shrink-0 rounded border border-sky-800/70 bg-sky-950/60 px-1 text-[11px] text-sky-200">{{ log.status }}</span>
+        <span v-if="log.node" class="shrink-0 rounded border border-gray-700 bg-gray-900 px-1 text-[11px] text-gray-300">{{ log.node }}</span>
         <span class="text-gray-300">{{ log.message }}</span>
       </div>
     </div>
@@ -25,6 +28,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
+import { formatBeijingTime } from '@/utils/time.js'
 
 const props = defineProps({ logs: { type: Array, default: () => [] }, connected: { type: Boolean, default: false } })
 const emit = defineEmits(['clear'])
@@ -42,7 +46,12 @@ const visibleLogs = computed(() => filters.value.size === 0 ? props.logs : props
 function isFiltered(agent) { return filters.value.size === 0 || filters.value.has(agent) }
 function toggleFilter(agent) { filters.value.has(agent) ? filters.value.delete(agent) : filters.value.add(agent) }
 function agentColor(agent) { return colors[agent] || '#9ca3af' }
-function formatTime(ts) { return ts ? new Date(ts).toLocaleTimeString('zh-CN', { hour12: false }) : '' }
+function formatTime(ts) { return formatBeijingTime(ts) }
+function levelClass(level) {
+  if (level === 'error') return 'border-red-800/80 bg-red-950/70 text-red-200'
+  if (level === 'warning') return 'border-amber-800/80 bg-amber-950/70 text-amber-200'
+  return 'border-gray-700 bg-gray-900 text-gray-400'
+}
 function onScroll() {
   const el = logContainer.value
   if (el) autoScroll.value = el.scrollTop + el.clientHeight >= el.scrollHeight - 20

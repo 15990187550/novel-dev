@@ -1,9 +1,10 @@
 import json
 import logging
 from typing import List, Optional
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.agents._llm_helpers import call_and_parse
+from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext, ForeshadowingContext, BeatContext
 from novel_dev.schemas.similar_document import SimilarDocument
 from novel_dev.services.embedding_service import EmbeddingService
@@ -16,9 +17,16 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.services.log_service import log_service
+from novel_dev.services.log_service import logged_agent_step, log_service
 
 logger = logging.getLogger(__name__)
+
+
+class ContextNeeds(BaseModel):
+    locations: List[str] = Field(default_factory=list)
+    entities: List[str] = Field(default_factory=list)
+    time_range: dict = Field(default_factory=dict)
+    foreshadowing_keywords: List[str] = Field(default_factory=list)
 
 
 class ContextAgent:
@@ -35,6 +43,7 @@ class ContextAgent:
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
 
+    @logged_agent_step("ContextAgent", "组装章节上下文", node="context", task="assemble")
     async def assemble(self, novel_id: str, chapter_id: str) -> ChapterContext:
         log_service.add_log(novel_id, "ContextAgent", f"开始组装章节上下文: {chapter_id}")
         state = await self.state_repo.get_state(novel_id)
@@ -55,9 +64,31 @@ class ContextAgent:
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
-        log_service.add_log(novel_id, "ContextAgent", f"加载 {len(active_entities)} 个活跃实体")
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            f"加载 {len(active_entities)} 个活跃实体: {self._join_names([e.name for e in active_entities])}",
+            event="agent.progress",
+            status="succeeded",
+            node="context_active_entities",
+            task="assemble",
+            metadata={
+                "planned_entity_names": key_entity_names,
+                "active_entities": [self._entity_log_item(e) for e in active_entities],
+            },
+        )
 
         query_text = self._build_search_query(chapter_plan)
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            f"章节上下文检索 query: {query_text[:120]}",
+            event="agent.progress",
+            status="started",
+            node="context_retrieval",
+            task="assemble",
+            metadata={"query": query_text, "entity_limit": 3, "document_limit": 3, "chapter_limit": 2},
+        )
 
         # Semantic entity retrieval
         related_entities: list[EntityState] = []
@@ -80,16 +111,56 @@ class ContextAgent:
             except Exception as exc:
                 logger.warning("entity_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
                 log_service.add_log(novel_id, "ContextAgent", f"实体语义检索失败: {exc}", level="warning")
+        if related_entities:
+            log_service.add_log(
+                novel_id,
+                "ContextAgent",
+                f"语义实体命中: {self._join_names([e.name for e in related_entities])}",
+                event="agent.progress",
+                status="succeeded",
+                node="context_semantic_entities",
+                task="assemble",
+                metadata={"query": query_text, "entities": [self._entity_log_item(e) for e in related_entities]},
+            )
 
         location_context = await self._load_location_context(chapter_plan, novel_id)
         log_service.add_log(novel_id, "ContextAgent", f"地点上下文: {location_context.current}")
         timeline_events = await self._load_timeline_events(checkpoint, novel_id)
-        log_service.add_log(novel_id, "ContextAgent", f"加载 {len(timeline_events)} 条时间线事件")
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            f"加载 {len(timeline_events)} 条时间线事件: {self._join_names([str(e.get('tick')) for e in timeline_events])}",
+            event="agent.progress",
+            status="succeeded",
+            node="context_timeline",
+            task="assemble",
+            metadata={"events": timeline_events[:8]},
+        )
         pending_foreshadowings = await self._load_foreshadowings(chapter_plan, active_entities, checkpoint, novel_id)
-        log_service.add_log(novel_id, "ContextAgent", f"待回收伏笔: {len(pending_foreshadowings)} 条")
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            f"待回收伏笔: {len(pending_foreshadowings)} 条: {self._join_names([fs.content for fs in pending_foreshadowings])}",
+            event="agent.progress",
+            status="succeeded",
+            node="context_foreshadowings",
+            task="assemble",
+            metadata={"foreshadowings": [self._foreshadowing_log_item(fs) for fs in pending_foreshadowings]},
+        )
         style_profile = await self._load_style_profile(novel_id, checkpoint)
         worldview_doc = await self.doc_repo.get_latest_by_type(novel_id, "worldview")
         worldview_summary = (worldview_doc.content or "")[:2000] if worldview_doc else ""
+        if worldview_doc:
+            log_service.add_log(
+                novel_id,
+                "ContextAgent",
+                f"加载世界观文档: {worldview_doc.title} v{worldview_doc.version}",
+                event="agent.progress",
+                status="succeeded",
+                node="context_worldview",
+                task="assemble",
+                metadata={"document": self._document_row_log_item(worldview_doc)},
+            )
         prev_summary = await self._load_previous_chapter_summary(
             state.current_volume_id, chapter_plan
         )
@@ -106,6 +177,17 @@ class ContextAgent:
             except Exception as exc:
                 logger.warning("semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
                 log_service.add_log(novel_id, "ContextAgent", f"语义检索失败: {exc}", level="warning")
+        if relevant_docs:
+            log_service.add_log(
+                novel_id,
+                "ContextAgent",
+                f"语义文档命中: {self._join_names([doc.title for doc in relevant_docs])}",
+                event="agent.progress",
+                status="succeeded",
+                node="context_documents",
+                task="assemble",
+                metadata={"query": query_text, "documents": [self._similar_doc_log_item(doc) for doc in relevant_docs]},
+            )
 
         # Semantic chapter retrieval for style consistency
         similar_chapters: list[SimilarDocument] = []
@@ -121,6 +203,17 @@ class ContextAgent:
             except Exception as exc:
                 logger.warning("chapter_semantic_search_failed", extra={"novel_id": novel_id, "error": str(exc)})
                 log_service.add_log(novel_id, "ContextAgent", f"章节语义检索失败: {exc}", level="warning")
+        if similar_chapters:
+            log_service.add_log(
+                novel_id,
+                "ContextAgent",
+                f"相似章节命中: {self._join_names([doc.title for doc in similar_chapters])}",
+                event="agent.progress",
+                status="succeeded",
+                node="context_similar_chapters",
+                task="assemble",
+                metadata={"query": query_text, "chapters": [self._similar_doc_log_item(doc) for doc in similar_chapters]},
+            )
 
         guardrails = self._build_guardrails(chapter_plan, active_entities, location_context, checkpoint)
 
@@ -147,6 +240,33 @@ class ContextAgent:
             similar_chapters=similar_chapters,
             guardrails=guardrails,
             beat_contexts=beat_contexts,
+        )
+        context_source_metadata = {
+            "query": query_text,
+            "active_entities": [self._entity_log_item(e) for e in active_entities],
+            "semantic_entities": [self._entity_log_item(e) for e in related_entities],
+            "documents": [self._similar_doc_log_item(doc) for doc in relevant_docs],
+            "similar_chapters": [self._similar_doc_log_item(doc) for doc in similar_chapters],
+            "foreshadowings": [self._foreshadowing_log_item(fs) for fs in pending_foreshadowings],
+            "timeline_events": timeline_events[:8],
+            "location": location_context.model_dump(),
+            "worldview": self._document_row_log_item(worldview_doc) if worldview_doc else None,
+            "has_style_profile": bool(style_profile),
+            "has_previous_chapter_summary": bool(prev_summary),
+        }
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            "章节上下文来源: "
+            f"实体[{self._join_names([e.name for e in active_entities + related_entities])}], "
+            f"文档[{self._join_names([doc.title for doc in relevant_docs])}], "
+            f"相似章节[{self._join_names([doc.title for doc in similar_chapters])}], "
+            f"伏笔[{self._join_names([fs.content for fs in pending_foreshadowings])}]",
+            event="agent.progress",
+            status="succeeded",
+            node="context_sources",
+            task="assemble",
+            metadata=context_source_metadata,
         )
 
         checkpoint["chapter_context"] = context.model_dump()
@@ -256,15 +376,63 @@ class ContextAgent:
         for entity in entities:
             latest = await self.version_repo.get_latest(entity.id)
             state_str = str(latest.state)[:300] if latest else ""
+            state_data = latest.state if latest else {}
             result.append(
                 EntityState(
                     entity_id=entity.id,
                     name=entity.name,
                     type=entity.type,
                     current_state=state_str,
+                    aliases=state_data.get("aliases", []) if isinstance(state_data, dict) else [],
                 )
             )
         return result
+
+    @staticmethod
+    def _join_names(values: List[str], limit: int = 6) -> str:
+        cleaned = [str(value) for value in values if str(value or "").strip()]
+        if not cleaned:
+            return "无"
+        suffix = f" 等{len(cleaned)}项" if len(cleaned) > limit else ""
+        return "、".join(cleaned[:limit]) + suffix
+
+    @staticmethod
+    def _entity_log_item(entity: EntityState) -> dict:
+        return {
+            "id": entity.entity_id,
+            "name": entity.name,
+            "type": entity.type,
+            "preview": (entity.current_state or "")[:120],
+        }
+
+    @staticmethod
+    def _similar_doc_log_item(doc: SimilarDocument) -> dict:
+        return {
+            "id": doc.doc_id,
+            "type": doc.doc_type,
+            "title": doc.title,
+            "score": doc.similarity_score,
+            "preview": (doc.content_preview or "")[:120],
+        }
+
+    @staticmethod
+    def _foreshadowing_log_item(fs: ForeshadowingContext) -> dict:
+        return {
+            "id": fs.id,
+            "content": fs.content,
+            "role": fs.role_in_chapter,
+            "target_beat_index": fs.target_beat_index,
+            "related_entity_names": fs.related_entity_names,
+        }
+
+    @staticmethod
+    def _document_row_log_item(doc) -> dict:
+        return {
+            "id": doc.id,
+            "type": doc.doc_type,
+            "title": doc.title,
+            "version": doc.version,
+        }
 
     async def _analyze_context_needs(self, chapter_plan: ChapterPlan, novel_id: str = "") -> dict:
         prompt = (
@@ -283,10 +451,11 @@ class ContextAgent:
             "- foreshadowing_keywords: 用于筛选相关伏笔的关键词\n\n"
             f"章节计划：\n{chapter_plan.model_dump_json()}"
         )
-        return await call_and_parse(
+        result = await call_and_parse_model(
             "ContextAgent", "analyze_context_needs", prompt,
-            json.loads, max_retries=3, novel_id=novel_id
+            ContextNeeds, max_retries=3, novel_id=novel_id
         )
+        return result.model_dump()
 
     async def _load_location_context(
         self, chapter_plan: ChapterPlan, novel_id: str
@@ -330,6 +499,25 @@ class ContextAgent:
             for fs in all_foreshadowings
             if any(kw in fs.content for kw in keywords) or not keywords
         ]
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            "场景上下文查询: "
+            f"地点[{self._join_names(location_names)}], "
+            f"实体[{self._join_names(entity_names)}], "
+            f"时间线 {len(timeline_events)} 条, 伏笔 {len(pending_fs)} 条",
+            event="agent.progress",
+            status="succeeded",
+            node="context_scene_query",
+            task="build_scene_context",
+            metadata={
+                "needs": needs,
+                "matched_locations": [{"id": loc.id, "name": loc.name} for loc in locations],
+                "matched_entities": [{"name": item["name"], "type": item["type"]} for item in entity_states],
+                "timeline_events": timeline_events[:8],
+                "foreshadowings": pending_fs[:8],
+            },
+        )
 
         prompt = (
             "你是一位导演，正在为下一幕戏撰写场景说明。请根据以下所有信息，"
@@ -352,9 +540,9 @@ class ContextAgent:
             f"近期时间线：{json.dumps(timeline_events, ensure_ascii=False)}\n"
             f"待回收伏笔：{json.dumps(pending_fs, ensure_ascii=False)}\n"
         )
-        return await call_and_parse(
+        return await call_and_parse_model(
             "ContextAgent", "build_scene_context", prompt,
-            LocationContext.model_validate_json, max_retries=3, novel_id=novel_id
+            LocationContext, max_retries=3, novel_id=novel_id
         )
 
     async def _load_timeline_events(self, checkpoint: dict, novel_id: str) -> List[dict]:

@@ -73,7 +73,7 @@ const emit = defineEmits(['update:searchQuery', 'search', 'reset', 'select'])
 const treeProps = { label: 'label', children: 'children' }
 const defaultExpandedKeys = computed(() =>
   props.nodes
-    .filter(node => node.nodeType === 'category')
+    .filter(node => node.nodeType === 'scope' || node.nodeType === 'category')
     .map(node => node.id)
 )
 
@@ -87,13 +87,14 @@ function nodeLabelClass(node) {
 }
 
 function nodeBadge(node) {
+  if (node.nodeType === 'scope') return `${node.entityCount || 0} 个实体`
   if (node.nodeType === 'category') return `${node.entityCount || 0} 个实体`
   if (node.nodeType === 'group') return `${node.entityCount || (node.children || []).length} 个实体`
   return node.entityId ? '实体' : ''
 }
 
 function nodeHint(node) {
-  if ((node.nodeType === 'category' || node.nodeType === 'group') && node.needsReviewCount) {
+  if ((node.nodeType === 'scope' || node.nodeType === 'category' || node.nodeType === 'group') && node.needsReviewCount) {
     return `待确认 ${node.needsReviewCount}`
   }
   if (node.nodeType === 'entity' && node.data?.classification_status === 'manual_override') return '覆盖'
@@ -102,6 +103,7 @@ function nodeHint(node) {
 }
 
 function nodeSubtitle(node) {
+  if (node.nodeType === 'scope') return node.scopeType === 'domain' ? '局部规则域' : '全局资料'
   if (node.nodeType === 'category') return `一级分类 · ${(node.children || []).length} 个分组`
   if (node.nodeType === 'group') return '二级分组'
   if (node.nodeType === 'entity') return ''

@@ -36,12 +36,23 @@
           左侧切换总纲与各卷卷纲，右侧查看当前版本并继续通过对话优化。
         </p>
       </div>
-      <span
-        v-if="isWorkbenchBusy"
-        class="volume-plan-busy-chip"
-      >
-        {{ busyLabel }}
-      </span>
+      <div class="flex flex-wrap items-center gap-2">
+        <span
+          v-if="isWorkbenchBusy"
+          class="volume-plan-busy-chip"
+        >
+          {{ busyLabel }}
+        </span>
+        <button
+          v-if="store.shouldShowStopFlow"
+          type="button"
+          class="volume-plan-stop-button"
+          :disabled="store.stoppingFlow"
+          @click="store.stopCurrentFlow()"
+        >
+          {{ store.stoppingFlow ? '停止中...' : store.stopFlowLabel }}
+        </button>
+      </div>
     </div>
 
     <div
@@ -129,15 +140,25 @@
         <OutlineSidebar :items="sidebarItems" @select="handleSelect" />
 
         <div class="space-y-4">
-          <OutlineDetailPanel :detail="detailPanel" :create-action="null" @create="handleCreate" />
+          <OutlineDetailPanel
+            :detail="detailPanel"
+            :create-action="null"
+            :reviewing="store.outlineWorkbench.reviewing"
+            @create="handleCreate"
+            @review="handleReviewOutline"
+            @apply-suggestion="handleApplySuggestion"
+          />
           <OutlineConversation
+            ref="conversationRef"
             :messages="store.outlineWorkbench.messages"
             :submitting="store.outlineWorkbench.submitting"
             :disabled="conversationDisabled"
             :current-title="selectedItem?.title || detailPanel?.title || ''"
             :submit-label="conversationSubmitLabel"
             :allow-empty-submit="allowEmptyConversationSubmit"
+            :has-context="Boolean(store.outlineWorkbench.conversationSummary || store.outlineWorkbench.lastResultSnapshot)"
             @submit-feedback="handleSubmit"
+            @clear-context="handleClearContext"
           />
         </div>
       </div>
@@ -146,7 +167,7 @@
 </template>
 
 <script setup>
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import * as api from '@/api.js'
 import BrainstormSuggestionCards from '@/components/outline/BrainstormSuggestionCards.vue'
 import OutlineConversation from '@/components/outline/OutlineConversation.vue'
@@ -155,6 +176,7 @@ import OutlineSidebar from '@/components/outline/OutlineSidebar.vue'
 import { useNovelStore } from '@/stores/novel.js'
 
 const store = useNovelStore()
+const conversationRef = ref(null)
 
 const isBrainstormWorkspaceMode = computed(() => (
   store.canBrainstorm && store.brainstormWorkspace.data?.status === 'active'
@@ -180,10 +202,12 @@ const activeSelection = computed(() => (
 const isWorkbenchBusy = computed(() => (
   store.outlineWorkbench.state === 'loading' ||
   store.outlineWorkbench.submitting ||
-  Boolean(store.outlineWorkbench.creatingKey)
+  Boolean(store.outlineWorkbench.creatingKey) ||
+  Boolean(store.loadingActions.volume_plan)
 ))
 
 const busyLabel = computed(() => {
+  if (store.loadingActions.volume_plan) return '生成中'
   if (store.outlineWorkbench.submitting) return '提交中'
   if (store.outlineWorkbench.creatingKey) return '创建中'
   return '加载中'
@@ -260,6 +284,7 @@ const conversationSubmitLabel = computed(() => (
 const conversationDisabled = computed(() => (
   !store.novelId ||
   !activeSelection.value ||
+  Boolean(store.loadingActions.volume_plan) ||
   Boolean(store.outlineWorkbench.creatingKey) ||
   (detailPanel.value?.status === 'missing' && createAction.value?.disabled)
 ))
@@ -391,12 +416,14 @@ function buildSynopsisDetail(item, snapshot) {
   const themes = Array.isArray(snapshot?.themes) ? snapshot.themes.filter(Boolean) : []
   const characterArcs = Array.isArray(snapshot?.character_arcs) ? snapshot.character_arcs : []
   const milestones = Array.isArray(snapshot?.milestones) ? snapshot.milestones : []
+  const volumeOutlines = Array.isArray(snapshot?.volume_outlines) ? snapshot.volume_outlines : []
 
   return {
     outlineType: 'synopsis',
     outlineRef: item.outline_ref,
     status: item.status,
     statusLabel: item.statusLabel,
+    canReview: item.status !== 'missing',
     title: snapshot?.title || item.title,
     summary: snapshot?.logline || snapshot?.core_conflict || item.summary || '',
     meta: [
@@ -404,8 +431,35 @@ function buildSynopsisDetail(item, snapshot) {
       { label: '预估卷数', value: snapshot?.estimated_volumes || '待定' },
       { label: '预估总章数', value: snapshot?.estimated_total_chapters || '待定' },
     ],
+    review: buildReviewDetail(snapshot?.review_status),
     tags: themes,
     sections: [
+      volumeOutlines.length
+        ? {
+          title: '卷级总览',
+          items: volumeOutlines.map((volume) => {
+            const number = volume.volume_number || volume.number || ''
+            const title = volume.title || `第 ${number} 卷`
+            const goal = volume.main_goal || volume.goal || volume.summary || '待补充'
+            return `第 ${number} 卷《${title}》：${compactText(goal, 42)}`
+          }),
+          detailItems: volumeOutlines.map((volume) => {
+            const number = volume.volume_number || volume.number || ''
+            const title = volume.title || `第 ${number} 卷`
+            const goal = volume.main_goal || volume.goal || volume.summary || '待补充'
+            const conflict = volume.main_conflict || volume.conflict || ''
+            const climax = volume.climax || volume.climax_event || ''
+            const hook = volume.hook_to_next || volume.hook || ''
+            return [
+              `第 ${number} 卷《${title}》`,
+              `目标：${goal}`,
+              conflict ? `冲突：${conflict}` : '',
+              climax ? `高潮：${climax}` : '',
+              hook ? `钩子：${hook}` : '',
+            ].filter(Boolean).join('；')
+          }),
+        }
+        : null,
       characterArcs.length
         ? {
           title: '人物弧光',
@@ -415,7 +469,18 @@ function buildSynopsisDetail(item, snapshot) {
       milestones.length
         ? {
           title: '关键剧情里程碑',
-          items: milestones.map((milestone) => `${milestone.act || '阶段'}：${milestone.summary || '待补充'}`),
+          items: milestones.map((milestone) => `${milestone.act || '阶段'}：${compactText(milestone.summary || '待补充', 34)}`),
+          detailItems: milestones.map((milestone) => {
+            const act = milestone.act || '阶段'
+            const summary = milestone.summary || '待补充'
+            const consequence = milestone.consequence || milestone.result || ''
+            const trigger = milestone.trigger || milestone.turning_point || ''
+            return [
+              `${act}：${summary}`,
+              trigger ? `转折：${trigger}` : '',
+              consequence ? `影响：${consequence}` : '',
+            ].filter(Boolean).join('；')
+          }),
         }
         : null,
     ].filter(Boolean),
@@ -423,22 +488,56 @@ function buildSynopsisDetail(item, snapshot) {
   }
 }
 
+function compactText(value, maxLength = 40) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength)}...`
+}
+
 function buildVolumeDetail(item, snapshot) {
   const chapters = Array.isArray(snapshot?.chapters) ? snapshot.chapters : []
+  const reviewStatus = snapshot?.review_status || null
+  const reviewScore = reviewStatus?.score || null
 
   return {
     outlineType: 'volume',
     outlineRef: item.outline_ref,
     status: item.status,
     statusLabel: item.statusLabel,
+    canReview: item.status !== 'missing',
     title: snapshot?.title || item.title,
     summary: snapshot?.summary || item.summary || '',
+    review: buildReviewDetail(reviewStatus),
     meta: [
       { label: '卷目标', value: snapshot?.main_plot_goal || snapshot?.volume_goal || '待补充' },
       { label: '章节数', value: snapshot?.total_chapters || chapters.length || '待定' },
       { label: '预估字数', value: snapshot?.estimated_total_words || '待定' },
+      reviewScore?.overall !== undefined ? { label: '评分', value: reviewScore.overall } : null,
     ],
+    notices: reviewStatus?.status === 'revise_failed'
+      ? [
+        {
+          title: '自动修订失败',
+          text: reviewStatus.reason || '自动修订未完成，请在对话区提交修改意见继续处理。',
+        },
+      ]
+      : [],
     sections: [
+      reviewScore
+        ? {
+          title: '评分明细',
+          items: [
+            `整体评分：${reviewScore.overall ?? '未知'}`,
+            `大纲贴合：${reviewScore.outline_fidelity ?? '未知'}`,
+            `人物情节契合：${reviewScore.character_plot_alignment ?? '未知'}`,
+            `爽点分布：${reviewScore.hook_distribution ?? '未知'}`,
+            `伏笔管理：${reviewScore.foreshadowing_management ?? '未知'}`,
+            `章末钩子：${reviewScore.chapter_hooks ?? '未知'}`,
+            `翻页欲：${reviewScore.page_turning ?? '未知'}`,
+            reviewScore.summary_feedback ? `评审意见：${reviewScore.summary_feedback}` : '',
+          ].filter(Boolean),
+        }
+        : null,
       snapshot?.core_conflict
         ? {
           title: '核心冲突',
@@ -457,6 +556,51 @@ function buildVolumeDetail(item, snapshot) {
   }
 }
 
+function buildReviewDetail(reviewStatus) {
+  if (!reviewStatus) return null
+  const score = reviewStatus.score || null
+  const dimensions = score
+    ? [
+      { label: '大纲贴合', value: score.outline_fidelity },
+      { label: '人物情节契合', value: score.character_plot_alignment },
+      { label: '爽点分布', value: score.hook_distribution },
+      { label: '伏笔管理', value: score.foreshadowing_management },
+      { label: '章末钩子', value: score.chapter_hooks },
+      { label: '翻页欲', value: score.page_turning },
+    ].filter((item) => item.value !== undefined && item.value !== null)
+    : []
+
+  return {
+    status: reviewStatus.status || '',
+    overall: score?.overall,
+    feedback: score?.summary_feedback || reviewStatus.reason || '',
+    suggestion: reviewStatus.optimization_suggestion || buildOptimizationSuggestion(score),
+    dimensions,
+  }
+}
+
+function buildOptimizationSuggestion(score) {
+  if (!score) return ''
+  const parts = []
+  if (score.summary_feedback) parts.push(score.summary_feedback)
+  if (score.outline_fidelity !== undefined && score.outline_fidelity < 75) {
+    parts.push('请提高大纲与总设定、总目标、卷级规划的一致性，避免出现旧设定或未确认势力。')
+  }
+  if (score.character_plot_alignment !== undefined && score.character_plot_alignment < 75) {
+    parts.push('请强化人物动机与剧情推进的因果关系，让关键行动来自角色目标而不是外部硬推。')
+  }
+  if (score.hook_distribution !== undefined && score.hook_distribution < 75) {
+    parts.push('请重新分布爽点和阶段性成果，保证每个小阶段都有明确期待和兑现。')
+  }
+  if (score.foreshadowing_management !== undefined && score.foreshadowing_management < 75) {
+    parts.push('请补充伏笔的埋设、回收位置和信息递进，避免只列事件不形成悬念链。')
+  }
+  if (score.chapter_hooks !== undefined && score.chapter_hooks < 75) {
+    parts.push('请加强章末或卷末钩子，让每个关键节点都能推动读者继续阅读。')
+  }
+  return parts.join('\n')
+}
+
 async function handleSelect(item) {
   await store.refreshOutlineWorkbench({
     outline_type: item.outline_type,
@@ -472,6 +616,18 @@ async function handleSubmit(content) {
   if (!nextContent) return
 
   await store.submitOutlineFeedback({ content: nextContent })
+}
+
+async function handleClearContext() {
+  await store.clearOutlineContext()
+}
+
+async function handleReviewOutline() {
+  await store.reviewCurrentOutline()
+}
+
+function handleApplySuggestion(suggestion) {
+  conversationRef.value?.setDraft?.(suggestion)
 }
 
 async function handleCreate() {
@@ -540,6 +696,27 @@ function buildMissingOutlinePrompt(detail) {
   padding: 0.25rem 0.75rem;
   font-size: 0.75rem;
   font-weight: 500;
+}
+
+.volume-plan-stop-button {
+  border: 1px solid color-mix(in srgb, #ef4444 46%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #ef4444 10%, transparent);
+  color: color-mix(in srgb, #ef4444 82%, var(--app-text));
+  padding: 0.25rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  transition: transform 0.18s ease, filter 0.18s ease, opacity 0.18s ease;
+}
+
+.volume-plan-stop-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+}
+
+.volume-plan-stop-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
 }
 
 .volume-plan-workspace-banner {

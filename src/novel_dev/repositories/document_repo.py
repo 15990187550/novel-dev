@@ -1,7 +1,7 @@
 import math
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 
 from novel_dev.db.models import NovelDocument
 from novel_dev.schemas.similar_document import SimilarDocument
@@ -58,6 +58,19 @@ class DocumentRepository:
                 FROM novel_documents
                 WHERE novel_id = :novel_id
                   AND vector_embedding IS NOT NULL
+                  AND (doc_type, title, version, updated_at) IN (
+                    SELECT doc_type, title, version, updated_at
+                    FROM (
+                      SELECT doc_type, title, version, updated_at,
+                             ROW_NUMBER() OVER (
+                               PARTITION BY doc_type, title
+                               ORDER BY version DESC, updated_at DESC
+                             ) AS rn
+                      FROM novel_documents
+                      WHERE novel_id = :novel_id
+                    ) latest_docs
+                    WHERE rn = 1
+                  )
             """
             params = {"novel_id": novel_id, "query_vector": vector_str}
             if doc_type_filter:
@@ -89,6 +102,7 @@ class DocumentRepository:
 
         result = await self.session.execute(stmt)
         docs = result.scalars().all()
+        docs = self._latest_documents_by_type_title(docs)
 
         scored = []
         for doc in docs:
@@ -121,6 +135,55 @@ class DocumentRepository:
             .order_by(NovelDocument.updated_at.desc())
         )
         return result.scalars().all()
+
+    async def get_current_by_type(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
+        latest_stmt = (
+            select(
+                NovelDocument.id.label("id"),
+                NovelDocument.title.label("title"),
+                NovelDocument.version.label("version"),
+                NovelDocument.updated_at.label("updated_at"),
+                func.row_number()
+                .over(
+                    partition_by=NovelDocument.title,
+                    order_by=(NovelDocument.version.desc(), NovelDocument.updated_at.desc()),
+                )
+                .label("rn"),
+            )
+            .where(NovelDocument.novel_id == novel_id, NovelDocument.doc_type == doc_type)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(NovelDocument)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+                NovelDocument.id.in_(select(latest_stmt.c.id).where(latest_stmt.c.rn == 1)),
+            )
+            .order_by(NovelDocument.updated_at.desc())
+        )
+        return result.scalars().all()
+
+    @staticmethod
+    def _latest_documents_by_type_title(docs: List[NovelDocument]) -> List[NovelDocument]:
+        latest_by_key: dict[tuple[str, str], NovelDocument] = {}
+        for doc in docs:
+            key = (doc.doc_type, doc.title)
+            current = latest_by_key.get(key)
+            if current is None:
+                latest_by_key[key] = doc
+                continue
+            current_version = current.version or 0
+            doc_version = doc.version or 0
+            current_updated = current.updated_at
+            doc_updated = doc.updated_at
+            if doc_version > current_version or (
+                doc_version == current_version
+                and doc_updated is not None
+                and (current_updated is None or doc_updated > current_updated)
+            ):
+                latest_by_key[key] = doc
+        return list(latest_by_key.values())
 
     async def get_latest_by_type(self, novel_id: str, doc_type: str) -> Optional[NovelDocument]:
         """Return the document with the highest version number for the given novel and type."""

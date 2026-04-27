@@ -215,14 +215,16 @@ const fallbackEnabled = ref({})
 
 const agentOrder = [
   'brainstorm_agent', 'volume_planner_agent', 'setting_extractor_agent',
-  'style_profiler_agent', 'file_classifier', 'context_agent', 'writer_agent',
-  'critic_agent', 'editor_agent', 'fast_review_agent', 'librarian_agent',
+  'style_profiler_agent', 'file_classifier', 'entity_classifier_agent',
+  'outline_workbench_service', 'context_agent', 'writer_agent', 'critic_agent',
+  'editor_agent', 'fast_review_agent', 'librarian_agent',
 ]
 
 const agentLabels = {
   brainstorm_agent: 'Brainstorm', volume_planner_agent: 'Volume Planner',
   setting_extractor_agent: 'Setting Extractor', style_profiler_agent: 'Style Profiler',
-  file_classifier: 'File Classifier', context_agent: 'Context',
+  file_classifier: 'File Classifier', entity_classifier_agent: 'Entity Classifier',
+  outline_workbench_service: 'Outline Workbench', context_agent: 'Context',
   writer_agent: 'Writer', critic_agent: 'Critic',
   editor_agent: 'Editor', fast_review_agent: 'Fast Review',
   librarian_agent: 'Librarian',

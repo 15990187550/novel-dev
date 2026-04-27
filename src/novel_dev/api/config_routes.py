@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from novel_dev.config import settings
 from novel_dev.llm.models import TaskConfig
 from dotenv import set_key, find_dotenv
+from novel_dev.llm import llm_factory
 
 router = APIRouter()
 
@@ -41,7 +42,8 @@ async def save_llm_config(payload: LLMConfigPayload):
         os.makedirs(config_dir, exist_ok=True)
     with open(settings.llm_config_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(payload.config, f, allow_unicode=True, sort_keys=False)
-    return {"saved": True}
+    llm_factory.reload()
+    return {"saved": True, "reloaded": True}
 
 
 @router.get("/api/config/env")

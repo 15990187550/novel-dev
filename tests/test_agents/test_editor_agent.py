@@ -6,6 +6,13 @@ from novel_dev.agents.editor_agent import EditorAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
+from novel_dev.services.log_service import LogService
+
+
+@pytest.fixture(autouse=True)
+def clear_log_buffers():
+    LogService._buffers.clear()
+    LogService._listeners.clear()
 
 
 @pytest.mark.asyncio
@@ -41,6 +48,46 @@ async def test_polish_low_score_beats(async_session):
 
     state = await director.resume("novel_edit")
     assert state.current_phase == Phase.FAST_REVIEWING.value
+
+
+@pytest.mark.asyncio
+async def test_polish_emits_direct_llm_rewrite_step_logs(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_logs",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "beat_scores": [
+                {"beat_index": 0, "scores": {"humanity": 60}},
+            ]
+        },
+        volume_id="v1",
+        chapter_id="c_logs",
+    )
+    await ChapterRepository(async_session).create("c_logs", "v1", 1, "Test")
+    await ChapterRepository(async_session).update_text("c_logs", raw_draft="Beat one")
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="润色后的 Beat one")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent.polish("novel_edit_logs", "c_logs")
+
+    entries = list(LogService._buffers["novel_edit_logs"])
+    assert any(
+        entry.get("event") == "agent.step"
+        and entry.get("status") == "started"
+        and entry.get("node") == "polish_beat"
+        for entry in entries
+    )
+    assert any(
+        entry.get("event") == "agent.step"
+        and entry.get("status") == "succeeded"
+        and entry.get("task") == "polish_beat"
+        for entry in entries
+    )
 
 
 @pytest.mark.asyncio

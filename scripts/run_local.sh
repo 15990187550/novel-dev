@@ -7,7 +7,7 @@ LOG_DIR="${LOG_DIR:-/tmp/novel-dev}"
 PIP_INSTALL_MODE="${PIP_INSTALL_MODE:-auto}"
 
 PYTHON_BIN="${PYTHON_BIN:-python3.11}"
-API_HOST="${API_HOST:-127.0.0.1}"
+API_HOST="${API_HOST:-0.0.0.0}"
 API_PORT="${API_PORT:-8000}"
 EMBEDDING_HOST="${EMBEDDING_HOST:-127.0.0.1}"
 EMBEDDING_PORT="${EMBEDDING_PORT:-9997}"
@@ -210,9 +210,10 @@ start_detached "novel-dev-api" "${API_LOG}" env \
   DATABASE_URL="${DATABASE_URL}" \
   "${PYTHON_BIN}" -m uvicorn novel_dev.api:app --host "${API_HOST}" --port "${API_PORT}"
 wait_for_http "http://${API_HOST}:${API_PORT}/" "API 服务"
+wait_for_http "http://127.0.0.1:${API_PORT}/healthz" "API 健康检查"
 
 echo ""
 echo "系统已更新到当前代码的最新构建状态"
-echo "API: http://${API_HOST}:${API_PORT}/"
+echo "API: http://127.0.0.1:${API_PORT}/"
 echo "Embedding: http://${EMBEDDING_HOST}:${EMBEDDING_PORT}/v1/models"
 echo "日志目录: ${LOG_DIR}"

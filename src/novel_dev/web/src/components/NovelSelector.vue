@@ -106,8 +106,18 @@ fetchNovels()
 
 watch(() => store.novelId, (id) => {
   if (id && !options.value.find(o => o.value === id)) {
-    options.value.push({ value: id, label: id })
+    options.value.push({ value: id, label: store.novelTitle || id })
   }
   selected.value = id
+})
+
+watch(() => store.novelTitle, (title) => {
+  if (!store.novelId || !title) return
+  const option = options.value.find(o => o.value === store.novelId)
+  if (option) {
+    option.label = title
+  } else {
+    options.value.push({ value: store.novelId, label: title })
+  }
 })
 </script>

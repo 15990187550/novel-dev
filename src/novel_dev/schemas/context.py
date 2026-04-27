@@ -9,6 +9,7 @@ from novel_dev.schemas.similar_document import SimilarDocument
 class BeatPlan(BaseModel):
     summary: str
     target_mood: str
+    target_word_count: Optional[int] = None
     key_entities: List[str] = Field(default_factory=list)
     foreshadowings_to_embed: List[str] = Field(default_factory=list)
 
@@ -65,6 +66,12 @@ class EntityState(BaseModel):
     name: str
     type: str
     current_state: str
+    aliases: List[str] = Field(default_factory=list)
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def _coerce_aliases(cls, value: Any) -> List[str]:
+        return coerce_to_str_list(value)
 
 
 class NarrativeRelay(BaseModel):

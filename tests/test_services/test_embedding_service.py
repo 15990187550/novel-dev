@@ -1,5 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
+from types import SimpleNamespace
 
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -63,3 +64,19 @@ async def test_search_similar_generates_query_then_searches(async_session):
     mock_embedder.aembed.assert_awaited_once_with(["query text"])
     assert len(results) == 1
     assert results[0].doc_id == "doc_1"
+
+
+@pytest.mark.asyncio
+async def test_search_similar_skips_wrong_dimension_query_on_postgres(async_session, monkeypatch):
+    mock_embedder = AsyncMock()
+    mock_embedder.aembed = AsyncMock(return_value=[[0.1] * 1536])
+    monkeypatch.setattr(
+        async_session,
+        "get_bind",
+        lambda: SimpleNamespace(dialect=SimpleNamespace(name="postgresql")),
+    )
+
+    svc = EmbeddingService(async_session, mock_embedder)
+    results = await svc.search_similar("n1", "query text", limit=3)
+
+    assert results == []

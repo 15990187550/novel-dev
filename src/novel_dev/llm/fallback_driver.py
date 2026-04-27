@@ -26,6 +26,7 @@ class FallbackDriver(BaseDriver):
         self.usage_tracker = usage_tracker
         self.agent = agent
         self.task = task
+        self.config = getattr(primary, "config", None)
 
     async def acomplete(self, messages: Union[str, List[ChatMessage]], config: Optional[TaskConfig] = None) -> LLMResponse:
         if config is None:
@@ -40,6 +41,14 @@ class FallbackDriver(BaseDriver):
             if self.fallback_config is None:
                 raise
             fallback_config = self.fallback_config
+            if config is not None:
+                fallback_config = fallback_config.model_copy(
+                    update={
+                        "structured_output": getattr(config, "structured_output", None),
+                        "response_tool_name": getattr(config, "response_tool_name", None),
+                        "response_json_schema": getattr(config, "response_json_schema", None),
+                    }
+                )
             if self.usage_tracker:
                 async def _log():
                     try:
