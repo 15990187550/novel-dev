@@ -188,6 +188,38 @@ async def test_auto_run_background_job_archives_and_moves_to_next_context_prepar
 
 
 @pytest.mark.asyncio
+async def test_auto_run_background_job_updates_heartbeat(async_session):
+    plan = build_test_volume("vol_heartbeat_bg", "ch_heartbeat_bg")
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_heartbeat_bg",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+        },
+        volume_id="vol_heartbeat_bg",
+        chapter_id="ch_heartbeat_bg_1",
+    )
+    repo = GenerationJobRepository(async_session)
+    job = await repo.create(
+        "n_auto_heartbeat_bg",
+        "chapter_auto_run",
+        {"max_chapters": 1, "stop_at_volume_end": True},
+    )
+    await async_session.commit()
+
+    from novel_dev.services.generation_job_service import run_generation_job
+
+    await run_generation_job(job.id)
+
+    refreshed = await repo.get_by_id(job.id)
+    assert refreshed.heartbeat_at is not None
+    assert refreshed.finished_at is not None
+    assert refreshed.heartbeat_at <= refreshed.finished_at
+
+
+@pytest.mark.asyncio
 async def test_auto_run_stops_at_volume_end(async_session):
     plan = build_test_volume("vol_end", "ch_end")
     director = NovelDirector(session=async_session)
