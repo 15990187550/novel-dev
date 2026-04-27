@@ -21,6 +21,7 @@ async def run_generation_job(job_id: str) -> None:
             return
 
         await repo.mark_running(job_id)
+        await repo.touch_heartbeat(job_id)
         await session.commit()
 
         if job.job_type != CHAPTER_AUTO_RUN_JOB:
@@ -31,21 +32,26 @@ async def run_generation_job(job_id: str) -> None:
         request = dict(job.request_payload or {})
         service = ChapterGenerationService(session)
         try:
+            await repo.touch_heartbeat(job_id)
+            await session.commit()
             result = await service.auto_run(
                 job.novel_id,
                 max_chapters=request.get("max_chapters", 1),
                 stop_at_volume_end=request.get("stop_at_volume_end", True),
             )
         except AutoRunFailedError as exc:
+            await repo.touch_heartbeat(job_id)
             await repo.mark_failed(job_id, exc.result.model_dump(), exc.result.error or str(exc))
             await session.commit()
             return
         except Exception as exc:
             log_service.add_log(job.novel_id, "GenerationJobService", f"后台生成任务失败: {exc}", level="error")
+            await repo.touch_heartbeat(job_id)
             await repo.mark_failed(job_id, {}, str(exc))
             await session.commit()
             return
 
+        await repo.touch_heartbeat(job_id)
         if result.stopped_reason == "flow_cancelled":
             await repo.mark_cancelled(job_id, result.model_dump())
         else:

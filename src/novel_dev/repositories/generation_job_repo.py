@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.db.models import GenerationJob
@@ -65,6 +65,42 @@ class GenerationJobRepository:
         job.updated_at = now
         await self.session.flush()
 
+    async def touch_heartbeat(self, job_id: str) -> None:
+        job = await self.get_by_id(job_id)
+        if not job:
+            return
+        now = datetime.utcnow()
+        job.heartbeat_at = now
+        job.updated_at = now
+        await self.session.flush()
+
+    async def list_stale_active(
+        self,
+        stale_queued_before: datetime,
+        stale_running_before: datetime,
+    ) -> list[GenerationJob]:
+        result = await self.session.execute(
+            select(GenerationJob)
+            .where(
+                or_(
+                    (GenerationJob.status == "queued")
+                    & (GenerationJob.updated_at < stale_queued_before),
+                    (GenerationJob.status == "running")
+                    & or_(
+                        GenerationJob.heartbeat_at < stale_running_before,
+                        (GenerationJob.heartbeat_at.is_(None))
+                        & (GenerationJob.updated_at < stale_running_before),
+                        (GenerationJob.heartbeat_at.is_(None))
+                        & (GenerationJob.updated_at.is_(None))
+                        & (GenerationJob.started_at < stale_running_before),
+                    ),
+                )
+            )
+            .order_by(GenerationJob.updated_at.asc(), GenerationJob.created_at.asc())
+            .execution_options(populate_existing=True)
+        )
+        return list(result.scalars().all())
+
     async def mark_succeeded(self, job_id: str, result_payload: dict) -> None:
         await self._mark_terminal(job_id, "succeeded", result_payload=result_payload)
 
@@ -78,6 +114,19 @@ class GenerationJobRepository:
 
     async def mark_cancelled(self, job_id: str, result_payload: dict) -> None:
         await self._mark_terminal(job_id, "cancelled", result_payload=result_payload)
+
+    async def mark_recovered_failed(self, job_id: str, reason: str) -> None:
+        job = await self.get_by_id(job_id)
+        if not job:
+            return
+        result_payload = dict(job.result_payload or {})
+        result_payload.update({"stopped_reason": "failed", "recovered": True})
+        await self._mark_terminal(
+            job_id,
+            "failed",
+            result_payload=result_payload,
+            error_message=reason,
+        )
 
     async def _mark_terminal(
         self,

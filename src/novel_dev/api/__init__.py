@@ -1,12 +1,48 @@
+import asyncio
 import os
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
 from novel_dev.api.routes import router
 from novel_dev.api.config_routes import router as config_router
+from novel_dev.db.engine import async_session_maker
+from novel_dev.services.log_service import log_service
+from novel_dev.services.recovery_cleanup_service import RecoveryCleanupService
 
-app = FastAPI()
+
+async def run_startup_recovery_cleanup() -> None:
+    try:
+        async with async_session_maker() as session:
+            await RecoveryCleanupService(session).run_cleanup()
+    except Exception as exc:
+        log_service.add_log(
+            "system",
+            "RecoveryCleanup",
+            f"启动恢复清理失败: {exc}",
+            level="error",
+            event="recovery.cleanup",
+            status="startup_failed",
+            node="recovery",
+            task="startup_cleanup",
+        )
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    cleanup_task = asyncio.create_task(run_startup_recovery_cleanup())
+    try:
+        yield
+    finally:
+        if not cleanup_task.done():
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+
+
+app = FastAPI(lifespan=lifespan)
 app.include_router(router)
 app.include_router(config_router)
 

@@ -1,4 +1,5 @@
 import pytest
+import asyncio
 from datetime import datetime, timedelta
 from sqlalchemy import select
 
@@ -11,6 +12,23 @@ def clear_log_service_state():
     LogService._buffers.clear()
     LogService._listeners.clear()
     LogService._pending_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_persist_done_ignores_cancelled_tasks():
+    service = LogService()
+
+    async def wait_forever():
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(wait_forever())
+    LogService._pending_tasks.add(task)
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+
+    service._handle_persist_done(task)
+
+    assert task not in LogService._pending_tasks
 
 
 @pytest.mark.asyncio

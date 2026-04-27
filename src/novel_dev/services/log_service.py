@@ -81,6 +81,8 @@ class LogService:
         self._pending_tasks.discard(task)
         try:
             task.result()
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 
@@ -106,7 +108,7 @@ class LogService:
     async def flush_pending(self) -> None:
         if not self._pending_tasks:
             return
-        await asyncio.gather(*list(self._pending_tasks))
+        await asyncio.gather(*list(self._pending_tasks), return_exceptions=True)
 
     def subscribe(self, novel_id: str) -> asyncio.Queue:
         q = asyncio.Queue(maxsize=100)
