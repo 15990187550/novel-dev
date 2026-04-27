@@ -4,6 +4,7 @@ import pytest
 
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
+from novel_dev.services.flow_control_service import clear_cancel_request, is_cancel_requested, request_cancel
 from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 
 
@@ -114,6 +115,29 @@ async def test_cleanup_releases_lock_after_recovering_stale_active_job(async_ses
 
 
 @pytest.mark.asyncio
+async def test_cleanup_overwrites_previous_auto_run_result_when_releasing_lock(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel-stale-lock-with-result",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "auto_run_lock": {"active": True, "token": "old-token"},
+            "auto_run_last_result": {"stopped_reason": "max_chapters_reached"},
+        },
+    )
+    await async_session.commit()
+
+    await RecoveryCleanupService(async_session).run_cleanup()
+
+    state = await director.resume("novel-stale-lock-with-result")
+    assert state.checkpoint_data["auto_run_last_result"] == {
+        "stopped_reason": "failed",
+        "recovered": True,
+        "error": "Recovered stale auto_run_lock after process interruption",
+    }
+
+
+@pytest.mark.asyncio
 async def test_cleanup_keeps_lock_with_fresh_active_job(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -160,6 +184,32 @@ async def test_cleanup_clears_expired_flow_stop(async_session):
     state = await director.resume("novel-expired-flow-stop")
     assert state.checkpoint_data == {"existing": "value"}
     assert result.cleared_flow_stops == ["novel-expired-flow-stop"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_clears_in_memory_cancel_flag_with_expired_flow_stop(async_session):
+    novel_id = "novel-expired-flow-memory"
+    clear_cancel_request(novel_id)
+    director = NovelDirector(session=async_session)
+    requested_at = (datetime.utcnow() - timedelta(hours=25)).isoformat() + "Z"
+    await director.save_checkpoint(
+        novel_id,
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "flow_control": {
+                "cancel_requested": True,
+                "requested_at": requested_at,
+                "reason": "user_requested",
+            },
+        },
+    )
+    request_cancel(novel_id)
+    assert is_cancel_requested(novel_id) is True
+    await async_session.commit()
+
+    await RecoveryCleanupService(async_session).run_cleanup()
+
+    assert is_cancel_requested(novel_id) is False
 
 
 @pytest.mark.asyncio
@@ -292,6 +342,44 @@ async def test_cleanup_dry_run_does_not_mutate(async_session):
     assert state.checkpoint_data["auto_run_lock"]["token"] == "dry-token"
     assert state.checkpoint_data["flow_control"]["cancel_requested"] is True
     assert result.cleaned_jobs == [job_id]
+    assert result.released_locks == ["novel-dry-run"]
+    assert result.cleared_flow_stops == ["novel-dry-run"]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_dry_run_plans_flow_stop_clear_after_stale_active_job_recovery(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel-dry-run-stale-flow",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "flow_control": {
+                "cancel_requested": True,
+                "requested_at": "not-a-date",
+                "reason": "invalid_timestamp",
+            },
+        },
+    )
+    repo = GenerationJobRepository(async_session)
+    job = await repo.create("novel-dry-run-stale-flow", "chapter_auto_run", {})
+    await repo.mark_running(job.id)
+    old = datetime.utcnow() - timedelta(hours=3)
+    job.heartbeat_at = old
+    job.updated_at = old
+    job_id = job.id
+    await async_session.commit()
+
+    result = await RecoveryCleanupService(async_session).run_cleanup(
+        RecoveryCleanupOptions(dry_run=True)
+    )
+
+    refreshed = await repo.get_by_id(job_id)
+    state = await director.resume("novel-dry-run-stale-flow")
+    assert refreshed.status == "running"
+    assert state.checkpoint_data["flow_control"]["cancel_requested"] is True
+    assert result.cleaned_jobs == [job_id]
+    assert result.cleared_flow_stops == ["novel-dry-run-stale-flow"]
+    assert result.skipped == []
 
 
 @pytest.mark.asyncio
