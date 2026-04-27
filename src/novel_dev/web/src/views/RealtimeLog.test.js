@@ -2,6 +2,8 @@ import { mount } from '@vue/test-utils'
 import { createPinia, getActivePinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ref } from 'vue'
+import fs from 'node:fs'
+import path from 'node:path'
 import { useNovelStore } from '@/stores/novel.js'
 import RealtimeLog from './RealtimeLog.vue'
 import * as api from '@/api.js'
@@ -50,5 +52,14 @@ describe('RealtimeLog', () => {
 
     expect(api.clearLogs).toHaveBeenCalledWith('novel-1')
     expect(mockLogs.value).toEqual([])
+  })
+
+  it('fills the app panel without using viewport calc heights', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, './RealtimeLog.vue'), 'utf8')
+
+    expect(source).toContain('realtime-log-page h-full min-h-0 flex flex-col')
+    expect(source).toContain('class="flex-1 min-h-0"')
+    expect(source).not.toMatch(/\.realtime-log-page\s*{[\s\S]*height:\s*calc\(100vh/)
+    expect(source).not.toMatch(/\.realtime-log-page\s*{[\s\S]*max-height:/)
   })
 })

@@ -394,6 +394,8 @@ export const useNovelStore = defineStore('novel', {
     },
     autoRunJob: null,
     autoRunLastResult: null,
+    chapterRewriteJobs: {},
+    chapterRewriteLastResults: {},
     stoppingFlow: false,
     dashboardPanels: createDashboardPanels(),
     dashboardLastUpdated: '',
@@ -492,6 +494,8 @@ export const useNovelStore = defineStore('novel', {
       this.flowActivity = { active: false, label: '', updatedAt: '' }
       this.autoRunJob = null
       this.autoRunLastResult = null
+      this.chapterRewriteJobs = {}
+      this.chapterRewriteLastResults = {}
       this.stoppingFlow = false
       this.resetDashboardSupplemental()
     },
@@ -636,6 +640,50 @@ export const useNovelStore = defineStore('novel', {
       if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
         await this.refreshState()
       }
+    },
+
+    async rewriteChapter(chapterId) {
+      if (!this.novelId || !chapterId) return null
+      const loadingKey = `rewrite:${chapterId}`
+      this.loadingActions[loadingKey] = true
+      try {
+        const job = await api.rewriteChapter(this.novelId, chapterId)
+        this.chapterRewriteJobs = {
+          ...this.chapterRewriteJobs,
+          [chapterId]: job,
+        }
+        await this.refreshState()
+        return job
+      } finally {
+        this.loadingActions[loadingKey] = false
+      }
+    },
+
+    async refreshChapterRewriteJob(chapterId) {
+      if (!this.novelId || !chapterId) return null
+      const current = this.chapterRewriteJobs?.[chapterId]
+      if (!current?.job_id) return null
+      const job = await api.getGenerationJob(this.novelId, current.job_id)
+      this.chapterRewriteJobs = {
+        ...this.chapterRewriteJobs,
+        [chapterId]: job,
+      }
+      if (job.result_payload) {
+        this.chapterRewriteLastResults = {
+          ...this.chapterRewriteLastResults,
+          [chapterId]: job.result_payload,
+        }
+      }
+      if (['succeeded', 'failed', 'cancelled'].includes(job.status)) {
+        await Promise.all([
+          this.refreshState(),
+          this.fetchEntities().catch(() => null),
+          this.fetchTimelines().catch(() => null),
+          this.fetchSpacelines().catch(() => null),
+          this.fetchForeshadowings().catch(() => null),
+        ])
+      }
+      return job
     },
 
     async stopCurrentFlow() {

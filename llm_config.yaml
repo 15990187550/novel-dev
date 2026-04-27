@@ -164,7 +164,6 @@ agents:
       rewrite_beat:
         temperature: 0.8
       generate_relay:
-        model: kimi-for-coding
         timeout: 15
         temperature: 0.2
     retries: 2
@@ -180,6 +179,7 @@ agents:
     tasks:
       score_chapter:
         temperature: 0.2
+        max_tokens: 8192
       score_beats:
         temperature: 0.2
     retries: 2
@@ -197,13 +197,13 @@ agents:
         temperature: 0.6
     retries: 2
   fast_review_agent:
-    model: minimax-2-7
-    timeout: 30
+    model: deepseek
+    timeout: 90
     temperature: 0.2
     fallback:
-      model: kimi-for-coding
+      model: minimax-2-7
       temperature: 0.2
-      timeout: 30
+      timeout: 60
       retries: 1
     tasks:
       fast_review_check:

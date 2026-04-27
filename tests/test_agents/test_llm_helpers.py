@@ -396,6 +396,37 @@ async def test_call_and_parse_model_falls_back_to_json_text_when_tool_payload_mi
 
 
 @pytest.mark.asyncio
+async def test_call_and_parse_model_falls_back_to_json_text_when_tool_payload_is_empty_dict():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="primary")
+    markdown_score = "### plot_tension - 80/100\n理由: 有推进, 但不是 JSON。"
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=markdown_score, structured_payload={}, finish_reason="end_turn"),
+        LLMResponse(text='{"title": "文本模式", "tags": ["稳定"]}', finish_reason="end_turn"),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "TestAgent",
+            "empty_payload_task",
+            "prompt",
+            ExamplePayload,
+            max_retries=3,
+            novel_id="novel-empty-payload",
+        )
+
+    assert result.title == "文本模式"
+    assert mock_client.acomplete.call_count == 2
+    first_config = mock_client.acomplete.call_args_list[0].kwargs["config"]
+    second_config = mock_client.acomplete.call_args_list[1].kwargs["config"]
+    assert first_config.response_tool_name == "emit_empty_payload_task"
+    assert second_config.response_tool_name is None
+    assert second_config.response_json_schema is None
+    assert any(entry.get("node") == "llm_text_fallback" for entry in LogService._buffers["novel-empty-payload"])
+
+
+@pytest.mark.asyncio
 async def test_call_and_parse_model_json_text_config_does_not_request_tool():
     mock_client = AsyncMock()
     mock_client.config = TaskConfig(

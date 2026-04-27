@@ -60,6 +60,43 @@ class ContextAgent:
             raise ValueError("current_chapter_plan missing in checkpoint_data")
 
         chapter_plan = ChapterPlan.model_validate(chapter_plan_data)
+        context = await self.assemble_for_chapter(
+            novel_id,
+            chapter_id,
+            chapter_plan,
+            volume_id=state.current_volume_id,
+            checkpoint=checkpoint,
+        )
+        checkpoint["chapter_context"] = context.model_dump()
+        checkpoint["drafting_progress"] = {
+            "beat_index": 0,
+            "total_beats": len(chapter_plan.beats),
+            "current_word_count": 0,
+        }
+        checkpoint["context_debug_snapshot"] = getattr(context, "_context_debug_snapshot", None)
+        if checkpoint["context_debug_snapshot"] is None:
+            checkpoint.pop("context_debug_snapshot", None)
+        log_service.add_log(novel_id, "ContextAgent", "章节上下文组装完成，进入 drafting 阶段")
+        await self.director.save_checkpoint(
+            novel_id,
+            phase=Phase.DRAFTING,
+            checkpoint_data=checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
+
+        return context
+
+    async def assemble_for_chapter(
+        self,
+        novel_id: str,
+        chapter_id: str,
+        chapter_plan: ChapterPlan,
+        *,
+        volume_id: str | None,
+        checkpoint: dict | None = None,
+    ) -> ChapterContext:
+        checkpoint = dict(checkpoint or {})
         log_service.add_log(novel_id, "ContextAgent", f"章节计划: {chapter_plan.title}，共 {len(chapter_plan.beats)} 个节拍")
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
@@ -162,7 +199,7 @@ class ContextAgent:
                 metadata={"document": self._document_row_log_item(worldview_doc)},
             )
         prev_summary = await self._load_previous_chapter_summary(
-            state.current_volume_id, chapter_plan
+            volume_id, chapter_plan
         )
 
         # Semantic search augmentation
@@ -269,13 +306,7 @@ class ContextAgent:
             metadata=context_source_metadata,
         )
 
-        checkpoint["chapter_context"] = context.model_dump()
-        checkpoint["drafting_progress"] = {
-            "beat_index": 0,
-            "total_beats": len(chapter_plan.beats),
-            "current_word_count": 0,
-        }
-        checkpoint["context_debug_snapshot"] = self._build_context_debug_snapshot(
+        context_debug_snapshot = self._build_context_debug_snapshot(
             chapter_plan,
             query_text,
             active_entities,
@@ -288,14 +319,7 @@ class ContextAgent:
             location_context,
             timeline_events,
         )
-        log_service.add_log(novel_id, "ContextAgent", "章节上下文组装完成，进入 drafting 阶段")
-        await self.director.save_checkpoint(
-            novel_id,
-            phase=Phase.DRAFTING,
-            checkpoint_data=checkpoint,
-            volume_id=state.current_volume_id,
-            chapter_id=state.current_chapter_id,
-        )
+        object.__setattr__(context, "_context_debug_snapshot", context_debug_snapshot)
 
         return context
 

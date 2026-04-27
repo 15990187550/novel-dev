@@ -50,6 +50,24 @@ def _word_count(text: str) -> int:
 
 _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
+_LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
+
+
+def _find_language_style_issues(text: str) -> list[str]:
+    words = []
+    seen = set()
+    for match in _LATIN_WORD_RE.finditer(text or ""):
+        word = match.group(0)
+        key = word.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        words.append(word)
+    if not words:
+        return []
+    preview = "、".join(words[:8])
+    suffix = " 等" if len(words) > 8 else ""
+    return [f"发现英文/外文词: {preview}{suffix}。正文应改为中文表达，除非章节计划明确要求保留原文。"]
 
 
 def _parse_review_json(text: str) -> dict:
@@ -146,6 +164,8 @@ class FastReviewAgent:
 
         word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
+        language_issues = _find_language_style_issues(polished)
+        language_style_ok = not language_issues
 
         # Trim context to only what FastReview needs, avoiding retrieval bloat
         chapter_context = checkpoint.get("chapter_context", {})
@@ -160,24 +180,37 @@ class FastReviewAgent:
             ],
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
         }
-        llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
-        consistency_fixed = llm_result.consistency_fixed
-        beat_cohesion_ok = llm_result.beat_cohesion_ok
-        notes = list(llm_result.notes)
+        if language_style_ok:
+            llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            consistency_fixed = llm_result.consistency_fixed
+            beat_cohesion_ok = llm_result.beat_cohesion_ok
+            notes = list(llm_result.notes)
+        else:
+            consistency_fixed = True
+            beat_cohesion_ok = True
+            notes = []
 
         if not word_count_ok:
             notes.append("字数偏离目标超过10%")
+        notes.extend(language_issues)
 
         report = FastReviewReport(
             word_count_ok=word_count_ok,
             consistency_fixed=consistency_fixed,
             ai_flavor_reduced=ai_flavor_reduced,
             beat_cohesion_ok=beat_cohesion_ok,
+            language_style_ok=language_style_ok,
             notes=notes,
         )
 
-        passed = all([word_count_ok, consistency_fixed, ai_flavor_reduced, beat_cohesion_ok])
-        log_service.add_log(novel_id, "FastReviewAgent", f"快速评审结果: {'通过' if passed else '未通过'} (字数={word_count_ok}, 一致性={consistency_fixed}, AI腔={ai_flavor_reduced}, 连贯={beat_cohesion_ok})")
+        passed = all([word_count_ok, consistency_fixed, ai_flavor_reduced, beat_cohesion_ok, language_style_ok])
+        log_service.add_log(
+            novel_id,
+            "FastReviewAgent",
+            f"快速评审结果: {'通过' if passed else '未通过'} "
+            f"(字数={word_count_ok}, 一致性={consistency_fixed}, AI腔={ai_flavor_reduced}, "
+            f"连贯={beat_cohesion_ok}, 语言={language_style_ok})",
+        )
 
         await self.chapter_repo.update_fast_review(
             chapter_id,
@@ -212,5 +245,65 @@ class FastReviewAgent:
                 volume_id=state.current_volume_id,
                 chapter_id=state.current_chapter_id,
             )
+        return report
 
+    async def review_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> FastReviewReport:
+        log_service.add_log(novel_id, "FastReviewAgent", f"开始独立快速评审: {chapter_id}")
+        ch = await self.chapter_repo.get_by_id(chapter_id)
+        if not ch:
+            raise ValueError(f"Chapter not found: {chapter_id}")
+
+        target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
+        raw = ch.raw_draft or ""
+        polished = ch.polished_text or ""
+
+        word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
+        ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
+        language_issues = _find_language_style_issues(polished)
+        language_style_ok = not language_issues
+
+        chapter_context = checkpoint.get("chapter_context", {})
+        trimmed_context = {
+            "chapter_plan": chapter_context.get("chapter_plan", {}),
+            "style_profile": chapter_context.get("style_profile", {}),
+            "worldview_summary": chapter_context.get("worldview_summary", ""),
+            "previous_chapter_summary": chapter_context.get("previous_chapter_summary", ""),
+            "active_entities": [
+                {"name": e.get("name"), "type": e.get("type"), "current_state": e.get("current_state", "")[:200]}
+                for e in chapter_context.get("active_entities", [])
+            ],
+            "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
+        }
+        if language_style_ok:
+            llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            consistency_fixed = llm_result.consistency_fixed
+            beat_cohesion_ok = llm_result.beat_cohesion_ok
+            notes = list(llm_result.notes)
+        else:
+            consistency_fixed = True
+            beat_cohesion_ok = True
+            notes = []
+        if not word_count_ok:
+            notes.append("字数偏离目标超过10%")
+        notes.extend(language_issues)
+        report = FastReviewReport(
+            word_count_ok=word_count_ok,
+            consistency_fixed=consistency_fixed,
+            ai_flavor_reduced=ai_flavor_reduced,
+            beat_cohesion_ok=beat_cohesion_ok,
+            language_style_ok=language_style_ok,
+            notes=notes,
+        )
+        passed = all([
+            word_count_ok,
+            report.consistency_fixed,
+            ai_flavor_reduced,
+            report.beat_cohesion_ok,
+            language_style_ok,
+        ])
+        await self.chapter_repo.update_fast_review(
+            chapter_id,
+            score=FAST_REVIEW_PASS_SCORE if passed else FAST_REVIEW_FAIL_SCORE,
+            feedback=report.model_dump(),
+        )
         return report

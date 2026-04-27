@@ -1,8 +1,22 @@
+import json
 from typing import Any, List, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
+
+
+def _parse_stringified_json_array(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    stripped = value.strip()
+    if not stripped.startswith("["):
+        return value
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return value
+    return parsed if isinstance(parsed, list) else value
 
 
 class TimelineEvent(BaseModel):
@@ -85,7 +99,22 @@ class ExtractionResult(BaseModel):
     new_foreshadowings: List[NewForeshadowing] = Field(default_factory=list)
     new_relationships: List[NewRelationship] = Field(default_factory=list)
 
+    @field_validator(
+        "timeline_events",
+        "spaceline_changes",
+        "new_entities",
+        "concept_updates",
+        "character_updates",
+        "new_foreshadowings",
+        "new_relationships",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_stringified_json_array_fields(cls, value: Any) -> Any:
+        return _parse_stringified_json_array(value)
+
     @field_validator("foreshadowings_recovered", mode="before")
     @classmethod
     def _coerce_recovered_ids(cls, value: Any) -> List[str]:
+        value = _parse_stringified_json_array(value)
         return coerce_to_str_list(value)

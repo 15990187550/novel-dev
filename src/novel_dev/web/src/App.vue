@@ -4,8 +4,8 @@
     <div class="app-shell__ambient app-shell__ambient--two"></div>
 
     <div class="relative z-10 min-h-screen p-3 sm:p-4 lg:p-5">
-      <div class="mx-auto flex min-h-[calc(100vh-1.5rem)] max-w-[1600px] flex-col gap-4 lg:flex-row">
-        <aside class="app-sidebar w-full lg:w-[19rem] lg:shrink-0">
+      <div class="mx-auto flex h-[calc(100vh-1.5rem)] max-w-[1600px] flex-col gap-4 lg:flex-row">
+        <aside class="app-sidebar w-full min-h-0 overflow-auto lg:w-[19rem] lg:shrink-0">
           <div class="app-sidebar__brand">
             <p class="app-sidebar__eyebrow">Story Engine</p>
             <h1 class="app-sidebar__title">Novel Dev</h1>

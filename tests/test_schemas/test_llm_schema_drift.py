@@ -112,6 +112,38 @@ def test_review_coerces_text_and_string_list_fields_but_keeps_scores_strict():
         ScoreResult(overall="高", dimensions=[], summary_feedback="bad")
 
 
+def test_score_result_normalizes_dimension_schema_drift_from_llm():
+    result = ScoreResult.model_validate({
+        "dimensions": [
+            {"dim": "plot_tension", "score": 80, "per_dim_issues": []},
+            {
+                "dim": "readability",
+                "score": 68,
+                "per_dim_issues": [
+                    {
+                        "dim": "readability",
+                        "beat_idx": 1,
+                        "problem": "第1个 beat 重复发现古经的信息。",
+                        "suggestion": "合并重复描写, 保留一次识海震动。",
+                    }
+                ],
+            },
+            {"dim": "hook_strength", "score": 95, "per_dim_issues": []},
+        ],
+        "summary_feedback": "节奏可读, 但重复描写需要压缩。",
+    })
+
+    assert result.overall == 81
+    assert [dimension.name for dimension in result.dimensions] == [
+        "plot_tension",
+        "readability",
+        "hook_strength",
+    ]
+    assert result.dimensions[1].comment == ""
+    assert result.per_dim_issues[0].dim == "readability"
+    assert result.per_dim_issues[0].beat_idx == 1
+
+
 def test_librarian_coerces_text_and_recovered_id_list_fields():
     result = ExtractionResult(
         timeline_events=[{"tick": 1, "narrative": {"事件": "玉佩发光"}}],
@@ -129,3 +161,17 @@ def test_librarian_coerces_text_and_recovered_id_list_fields():
     assert result.foreshadowings_recovered == ["伏笔: 玉佩来历"]
     assert result.new_foreshadowings[0].content == "悬念: 血玉低语"
     assert result.new_relationships[0].relation_type == "关系: 持有"
+
+
+def test_librarian_parses_stringified_json_array_fields_from_structured_payload():
+    result = ExtractionResult.model_validate({
+        "new_entities": '[{"type": "artifact", "name": "无名古经", "state": {"位置": "竹篓"}}]',
+        "concept_updates": '[{"entity_id": "识海", "state": {"状态": "震动"}, "diff_summary": {"source": "chapter"}}]',
+        "character_updates": '[{"entity_id": "陆照", "state": {"状态": "昏迷"}, "diff_summary": {"source": "chapter"}}]',
+        "new_relationships": '[{"source_entity_id": "陆照", "target_entity_id": "无名古经", "relation_type": "持有", "meta": {"状态": "已放入竹篓"}}]',
+    })
+
+    assert result.new_entities[0].name == "无名古经"
+    assert result.concept_updates[0].entity_id == "识海"
+    assert result.character_updates[0].state == {"状态": "昏迷"}
+    assert result.new_relationships[0].relation_type == "持有"

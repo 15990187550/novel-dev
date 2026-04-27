@@ -18,6 +18,14 @@ const props = defineProps({
 })
 
 const statusColor = { pending: '#94a3b8', drafted: '#3b82f6', edited: '#22c55e', archived: '#a855f7' }
+const scoreDimensionLabels = {
+  plot_tension: '情节张力',
+  characterization: '人物塑造',
+  readability: '可读性',
+  consistency: '一致性',
+  humanity: '沉浸感',
+  hook_strength: '章末钩子',
+}
 
 function chartScore(chapter) {
   const score = Number(chapter?.displayScore ?? chapter?.score_overall)
@@ -31,7 +39,7 @@ function scoreTooltip(chapter) {
       const score = typeof value === 'object' && value !== null ? value.score : value
       if (score == null || score === '') return ''
       const comment = typeof value === 'object' && value !== null && value.comment ? `：${value.comment}` : ''
-      return `${key}: ${score}${comment}`
+      return `${scoreDimensionLabels[key] || key}: ${score}${comment}`
     })
     .filter(Boolean)
     .join('<br/>')

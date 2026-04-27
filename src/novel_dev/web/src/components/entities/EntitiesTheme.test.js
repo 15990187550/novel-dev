@@ -98,6 +98,12 @@ const simpleStubs = {
       return () => h('div', { class: 'el-option-stub' })
     },
   }),
+  ElPagination: defineComponent({
+    name: 'ElPaginationStub',
+    setup() {
+      return () => h('div', { class: 'el-pagination-stub' })
+    },
+  }),
 }
 
 describe('entities theme classes', () => {

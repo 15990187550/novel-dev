@@ -144,6 +144,78 @@ class EditorAgent:
         )
         log_service.add_log(novel_id, "EditorAgent", "进入 fast_reviewing 阶段")
 
+    async def polish_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> str:
+        log_service.add_log(novel_id, "EditorAgent", f"开始独立精修章节: {chapter_id}")
+        ch = await self.chapter_repo.get_by_id(chapter_id)
+        if not ch:
+            raise ValueError(f"Chapter not found: {chapter_id}")
+
+        beat_scores = checkpoint.get("beat_scores", [])
+        per_dim_issues = checkpoint.get("per_dim_issues", [])
+        critique = checkpoint.get("critique_feedback", {}) or {}
+        chapter_context = checkpoint.get("chapter_context", {})
+        raw_draft = ch.raw_draft or ""
+        beats, _ = split_beats(raw_draft)
+
+        hook_score = None
+        breakdown = critique.get("breakdown") or {}
+        if isinstance(breakdown, dict):
+            hook_entry = breakdown.get("hook_strength") or {}
+            if isinstance(hook_entry, dict):
+                hook_score = hook_entry.get("score")
+        force_last_beat_rewrite = (
+            hook_score is not None
+            and isinstance(hook_score, (int, float))
+            and hook_score < 70
+            and len(beats) > 0
+        )
+
+        issues_by_beat: dict[int, list] = {}
+        whole_chapter_issues: list = []
+        for issue in per_dim_issues:
+            bi = issue.get("beat_idx")
+            if bi is None:
+                whole_chapter_issues.append(issue)
+            else:
+                issues_by_beat.setdefault(bi, []).append(issue)
+
+        last_idx = len(beats) - 1
+        polished_beats = []
+        flow_control = FlowControlService(self.session)
+        for idx, beat_text in enumerate(beats):
+            await flow_control.raise_if_cancelled(novel_id)
+            score_entry = beat_scores[idx] if idx < len(beat_scores) else {}
+            scores = score_entry.get("scores", {})
+            beat_level_issues = score_entry.get("issues", []) or []
+            chapter_issues = issues_by_beat.get(idx, [])
+            all_issues = chapter_issues + beat_level_issues
+            is_forced_last = force_last_beat_rewrite and idx == last_idx
+            if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
+                all_issues = all_issues + [{
+                    "dim": "hook_strength",
+                    "beat_idx": last_idx,
+                    "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
+                    "suggestion": "改写章末,给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
+                }]
+            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
+            if needs_rewrite:
+                polished = await self._rewrite_beat(
+                    beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                )
+            else:
+                polished = beat_text
+            polished_beats.append(polished)
+
+        polished_text = "\n\n".join(polished_beats)
+        await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
+        if self.embedding_service:
+            try:
+                await self.embedding_service.index_chapter(chapter_id)
+            except Exception as exc:
+                log_service.add_log(novel_id, "EditorAgent", f"独立精修章节索引失败: {exc}", level="warning")
+        await self.chapter_repo.update_status(chapter_id, "edited")
+        return polished_text
+
     async def _rewrite_beat(
         self,
         text: str,
@@ -183,7 +255,9 @@ class EditorAgent:
             "1. 禁用 AI 腔词汇:于是/总之/综上所述/这一切/无比/仿佛/似乎(非必要时)/油然而生/涌上心头。\n"
             "2. 显示不说(show don't tell):用动作/对话/细节替代『他感到 X』『她想到 Y』这类直述。\n"
             "3. 删除冗余总结段,避免复读前文已交代的信息。\n"
-            "4. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
+            "4. 禁止输出英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK),"
+            "把前世或现代概念转写成自然中文表达。\n"
+            "5. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
             style_block,
             plan_block,
         ]

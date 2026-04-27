@@ -35,6 +35,7 @@ vi.mock('@/api.js', () => ({
   submitBrainstormWorkspace: vi.fn(),
   submitOutlineFeedback: vi.fn(),
   autoRunChapters: vi.fn(),
+  rewriteChapter: vi.fn(),
   stopCurrentFlow: vi.fn(),
   getGenerationJob: vi.fn(),
 }))
@@ -1077,6 +1078,41 @@ describe('novel store dashboard loading', () => {
     expect(api.getGenerationJob).toHaveBeenCalledWith('novel-1', 'job-1')
     expect(store.autoRunJob.status).toBe('failed')
     expect(store.autoRunLastResult.error).toBe('draft exploded')
+  })
+
+  it('starts and refreshes chapter rewrite jobs independently from auto-run state', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshState = vi.fn().mockResolvedValue()
+    store.fetchEntities = vi.fn().mockResolvedValue()
+    store.fetchTimelines = vi.fn().mockResolvedValue()
+    store.fetchSpacelines = vi.fn().mockResolvedValue()
+    store.fetchForeshadowings = vi.fn().mockResolvedValue()
+    vi.mocked(api.rewriteChapter).mockResolvedValue({
+      job_id: 'job-rewrite-1',
+      status: 'queued',
+      job_type: 'chapter_rewrite',
+      request_payload: { chapter_id: 'ch-1' },
+    })
+    vi.mocked(api.getGenerationJob).mockResolvedValue({
+      job_id: 'job-rewrite-1',
+      status: 'succeeded',
+      result_payload: { chapter_id: 'ch-1', status: 'succeeded' },
+    })
+
+    const job = await store.rewriteChapter('ch-1')
+    await store.refreshChapterRewriteJob('ch-1')
+
+    expect(api.rewriteChapter).toHaveBeenCalledWith('novel-1', 'ch-1')
+    expect(job.job_type).toBe('chapter_rewrite')
+    expect(store.autoRunJob).toBeNull()
+    expect(store.chapterRewriteJobs['ch-1'].status).toBe('succeeded')
+    expect(store.chapterRewriteLastResults['ch-1']).toEqual({ chapter_id: 'ch-1', status: 'succeeded' })
+    expect(store.fetchEntities).toHaveBeenCalledTimes(1)
+    expect(store.fetchTimelines).toHaveBeenCalledTimes(1)
+    expect(store.fetchSpacelines).toHaveBeenCalledTimes(1)
+    expect(store.fetchForeshadowings).toHaveBeenCalledTimes(1)
+    expect(store.loadingActions['rewrite:ch-1']).toBe(false)
   })
 
   it('executeAction stores structured auto-run failure details', async () => {

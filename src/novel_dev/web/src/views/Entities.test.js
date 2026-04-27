@@ -1,10 +1,15 @@
 import { defineComponent, h, inject, provide } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNovelStore } from '@/stores/novel.js'
 import Entities from './Entities.vue'
 import { ElMessageBox } from 'element-plus'
+
+const entitiesSource = readFileSync(join(process.cwd(), 'src/views/Entities.vue'), 'utf8')
+const globalStyleSource = readFileSync(join(process.cwd(), 'src/style.css'), 'utf8')
 
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
@@ -256,6 +261,28 @@ describe('Entities', () => {
 
     expect(wrapper.classes()).toEqual(expect.arrayContaining(['entities-page', 'entities-theme']))
     expect(wrapper.find('.entity-tree-stub').exists()).toBe(true)
+  })
+
+  it('keeps the encyclopedia workspace inside the app panel and scrolls internally', () => {
+    seedStore()
+    const wrapper = mountView()
+
+    const content = wrapper.get('[data-testid="entities-workspace-layout"]')
+
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['entities-page', 'entities-theme', 'h-full', 'min-h-0', 'flex', 'flex-col']))
+    expect(content.classes()).toEqual(expect.arrayContaining([
+      'entities-page__content',
+      'min-h-0',
+      'flex-1',
+      'overflow-hidden',
+      'gap-4',
+      'lg:items-stretch',
+    ]))
+  })
+
+  it('does not use viewport calc heights for the entities root', () => {
+    expect(entitiesSource).not.toMatch(/\.entities-page\s*{[\s\S]*height:\s*calc\(100vh/)
+    expect(globalStyleSource).not.toMatch(/\.page-shell\s*{[\s\S]*height:\s*calc\(100vh/)
   })
 
   it('shows an empty workspace until the user selects a node', async () => {

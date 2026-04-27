@@ -41,4 +41,41 @@ describe('ChapterProgressGantt', () => {
     expect(option.series[0].data[0].value).toBe(82)
     expect(option.tooltip.formatter([{ dataIndex: 0 }])).toContain('节奏稳定')
   })
+
+  it('renders score breakdown dimension names in Chinese in tooltip', () => {
+    const wrapper = mount(ChapterProgressGantt, {
+      props: {
+        mode: 'score',
+        chapters: [
+          {
+            chapter_id: 'ch-1',
+            chapter_number: 1,
+            title: '道经初现',
+            statusLabel: '已编辑',
+            displayScore: 81,
+            score_breakdown: {
+              plot_tension: 78,
+              characterization: { score: 80, comment: '动机明确' },
+              readability: 85,
+              consistency: 90,
+              humanity: 78,
+              hook_strength: 74,
+            },
+          },
+        ],
+      },
+    })
+
+    const option = wrapper.findComponent({ name: 'VChart' }).props('option')
+    const tooltip = option.tooltip.formatter([{ dataIndex: 0 }])
+
+    expect(tooltip).toContain('情节张力: 78')
+    expect(tooltip).toContain('人物塑造: 80：动机明确')
+    expect(tooltip).toContain('可读性: 85')
+    expect(tooltip).toContain('一致性: 90')
+    expect(tooltip).toContain('沉浸感: 78')
+    expect(tooltip).toContain('章末钩子: 74')
+    expect(tooltip).not.toContain('plot_tension')
+    expect(tooltip).not.toContain('hook_strength')
+  })
 })

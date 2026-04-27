@@ -118,6 +118,20 @@ class ChapterRepository:
             ch.status = status
             await self.session.flush()
 
+    async def reset_generation(self, chapter_id: str) -> None:
+        ch = await self.get_by_id(chapter_id)
+        if ch:
+            ch.status = "pending"
+            ch.raw_draft = None
+            ch.polished_text = None
+            ch.score_overall = None
+            ch.score_breakdown = None
+            ch.review_feedback = None
+            ch.fast_review_score = None
+            ch.fast_review_feedback = None
+            ch.vector_embedding = None
+            await self.session.flush()
+
     async def get_previous_chapter(self, volume_id: str, chapter_number: int) -> Optional[Chapter]:
         result = await self.session.execute(
             select(Chapter)

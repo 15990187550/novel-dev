@@ -1,5 +1,5 @@
 <template>
-  <div class="entities-page entities-theme space-y-4">
+  <div class="entities-page entities-theme flex h-full min-h-0 flex-col gap-4">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2 class="text-xl font-bold">实体百科</h2>
@@ -16,7 +16,10 @@
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
 
     <template v-else>
-      <div class="grid gap-4 lg:grid-cols-[320px,minmax(0,1fr)] items-start">
+      <div
+        class="entities-page__content grid min-h-0 flex-1 overflow-hidden gap-4 lg:grid-cols-[320px,minmax(0,1fr)] lg:items-stretch"
+        data-testid="entities-workspace-layout"
+      >
         <EntityTree
           :nodes="store.entityTree"
           :search-query="store.entitySearchQuery"
@@ -30,7 +33,7 @@
           @select="handleNodeSelect"
         />
 
-        <div class="space-y-4 min-w-0">
+        <div class="min-w-0 min-h-0 space-y-4 overflow-auto pr-1">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="entities-page__meta text-sm">
               {{ workspaceStatusText }}

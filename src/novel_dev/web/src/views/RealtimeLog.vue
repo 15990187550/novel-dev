@@ -1,5 +1,5 @@
 <template>
-  <div class="h-full flex flex-col">
+  <div class="realtime-log-page h-full min-h-0 flex flex-col">
     <div class="mb-2 flex items-center justify-between gap-3">
       <h2 class="text-xl font-bold">实时日志</h2>
       <el-button

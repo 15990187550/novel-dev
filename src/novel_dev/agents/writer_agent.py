@@ -218,6 +218,118 @@ class WriterAgent:
 
         return metadata
 
+    async def write_standalone(
+        self,
+        novel_id: str,
+        context: ChapterContext,
+        chapter_id: str,
+        rewrite_plan: dict | None = None,
+    ) -> tuple[DraftMetadata, dict]:
+        log_service.add_log(novel_id, "WriterAgent", f"开始独立重写章节草稿: {context.chapter_plan.title}")
+        rewrite_plan = rewrite_plan or {}
+        raw_draft = ""
+        beat_coverage = []
+        embedded_foreshadowings = []
+        total_beats = len(context.chapter_plan.beats)
+
+        from novel_dev.schemas.context import NarrativeRelay
+        relay_history: List[NarrativeRelay] = []
+        inner_beats: List[str] = []
+        flow_control = FlowControlService(self.session)
+
+        for idx, beat in enumerate(context.chapter_plan.beats):
+            await flow_control.raise_if_cancelled(novel_id)
+            is_last = (idx == total_beats - 1)
+            last_beat_text = inner_beats[-1] if inner_beats else ""
+            log_service.add_log(novel_id, "WriterAgent", f"独立重写第 {idx + 1}/{total_beats} 个节拍: {beat.summary[:50]}...")
+
+            beat_text = await self._generate_beat(
+                beat, context, relay_history, last_beat_text,
+                idx, total_beats, is_last, novel_id, rewrite_plan,
+            )
+            inner = _strip_anchors(beat_text)
+            if len(inner) < 50:
+                inner = await self._rewrite_angle(
+                    beat,
+                    inner,
+                    context,
+                    relay_history,
+                    last_beat_text,
+                    idx,
+                    total_beats,
+                    is_last,
+                    None,
+                    novel_id,
+                    rewrite_plan,
+                )
+                beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+            self_check = self._self_check_beat(inner, beat, context, idx)
+            if self_check.needs_rewrite:
+                log_service.add_log(
+                    novel_id,
+                    "WriterAgent",
+                    f"独立重写第 {idx + 1} 个节拍自检未通过，重写",
+                    level="warning",
+                )
+                inner = await self._rewrite_angle(
+                    beat,
+                    inner,
+                    context,
+                    relay_history,
+                    last_beat_text,
+                    idx,
+                    total_beats,
+                    is_last,
+                    self_check,
+                    novel_id,
+                    rewrite_plan,
+                )
+                beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+            inner_beats.append(inner)
+            raw_draft += beat_text + "\n\n"
+            beat_coverage.append({"beat_index": idx, "word_count": len(inner)})
+
+            try:
+                next_beat = context.chapter_plan.beats[idx + 1] if idx + 1 < total_beats else None
+                relay = await self._generate_relay(inner, beat, context, idx, next_beat, novel_id)
+                relay_history.append(relay)
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"独立重写叙事接力生成失败: {exc}", level="warning")
+                relay_history.append(NarrativeRelay(
+                    scene_state=beat.summary,
+                    emotional_tone=beat.target_mood,
+                    new_info_revealed="",
+                    open_threads="",
+                    next_beat_hook="",
+                ))
+
+            for fs in context.pending_foreshadowings:
+                if fs.content in inner and fs.id not in embedded_foreshadowings:
+                    embedded_foreshadowings.append(fs.id)
+
+        clean_text = _strip_anchors(raw_draft)
+        total_words = len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+        metadata = DraftMetadata(
+            total_words=total_words,
+            beat_coverage=beat_coverage,
+            style_violations=[],
+            embedded_foreshadowings=embedded_foreshadowings,
+        )
+        await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
+        if self.embedding_service:
+            try:
+                await self.embedding_service.index_chapter(chapter_id)
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"独立重写章节索引失败: {exc}", level="warning")
+        await self.chapter_repo.update_status(chapter_id, "drafted")
+        return metadata, {
+            "chapter_context": context.model_dump(),
+            "draft_metadata": metadata.model_dump(),
+            "relay_history": [r.model_dump() for r in relay_history],
+        }
+
     async def _generate_beat(
         self,
         beat: BeatPlan,
@@ -359,8 +471,21 @@ class WriterAgent:
         plan_lines = [f"本章：{context.chapter_plan.title}（共{total}个节拍）"]
         for i, b in enumerate(context.chapter_plan.beats):
             marker = "→ " if i == idx else "  "
-            plan_lines.append(f"{marker}节拍{i+1}: {b.summary}")
+            if i < idx:
+                role = "已完成承接"
+            elif i == idx:
+                role = "当前必须完成"
+            else:
+                role = "后续边界，禁止提前发生"
+            plan_lines.append(f"{marker}节拍{i+1}（{role}）: {b.summary}")
         parts.append("### 章节计划\n" + "\n".join(plan_lines))
+        if idx + 1 < total:
+            parts.append(
+                "### 节拍边界硬约束\n"
+                "后续节拍只是边界参考，用来知道当前节拍在哪里停止。"
+                "禁止提前写后续节拍的核心事件、揭示、战斗、奇遇、昏迷、追兵到达或章末钩子；"
+                "当前节拍结尾只能留下通向下一节拍的轻微预兆或动作，不得让下一节拍事件实际发生。"
+            )
         parts.append(f"### 当前节拍目标字数\n约 {target_words} 字，允许 ±20%，不要明显缩水或灌水。")
 
         rewrite_focus = self._rewrite_focus_for_beat(rewrite_plan or {}, idx)
@@ -546,7 +671,9 @@ class WriterAgent:
                 ):
                     missing_foreshadowings.append(fs.content)
 
-        needs_rewrite = bool(missing_entities or missing_foreshadowings)
+        contradictions.extend(self._future_beat_leakage(inner, context, beat_idx))
+
+        needs_rewrite = bool(missing_entities or missing_foreshadowings or contradictions)
         return BeatSelfCheck(
             missing_entities=missing_entities,
             missing_foreshadowings=missing_foreshadowings,
@@ -557,6 +684,61 @@ class WriterAgent:
     @staticmethod
     def _normalize_for_check(text: str) -> str:
         return re.sub(r"\s+", "", text or "")
+
+    @classmethod
+    def _future_beat_leakage(cls, inner: str, context: ChapterContext, beat_idx: int) -> list[str]:
+        normalized_text = cls._normalize_for_check(inner)
+        if not normalized_text:
+            return []
+        current_terms = cls._beat_boundary_terms(context.chapter_plan.beats[beat_idx].summary)
+        issues = []
+        for future_idx, future_beat in enumerate(context.chapter_plan.beats[beat_idx + 1:], start=beat_idx + 1):
+            future_terms = [
+                term for term in cls._beat_boundary_terms(future_beat.summary)
+                if term not in current_terms
+            ]
+            matched = [term for term in future_terms if term in normalized_text]
+            if cls._is_future_beat_leakage(matched, future_terms):
+                preview = "、".join(matched[:5])
+                issues.append(f"疑似提前写入后续节拍{future_idx + 1}核心事件: {preview}")
+                break
+        return issues
+
+    @classmethod
+    def _is_future_beat_leakage(cls, matched_terms: list[str], future_terms: list[str]) -> bool:
+        if not matched_terms:
+            return False
+        distinctive_matches = [
+            term for term in matched_terms
+            if len(term) >= 3 or term in cls._HIGH_SIGNAL_BEAT_TERMS
+        ]
+        return len(distinctive_matches) >= 3 or (
+            len(distinctive_matches) >= 2 and len(matched_terms) >= 4
+        )
+
+    _BEAT_TERM_STOPWORDS = {
+        "一个", "一种", "一下", "一些", "大量", "无法", "不能", "开始", "继续", "进行",
+        "当前", "后续", "节拍", "情绪", "描写", "铺垫", "核心", "事件", "瞬间",
+    }
+    _HIGH_SIGNAL_BEAT_TERMS = {
+        "古经", "识海", "残念", "灵光", "昏迷", "流光", "追兵", "秘籍", "系统",
+        "玉佩", "血脉", "入魔", "突破", "飞剑", "雷劫",
+    }
+
+    @classmethod
+    def _beat_boundary_terms(cls, text: str) -> set[str]:
+        normalized = cls._normalize_for_check(text)
+        terms: set[str] = set()
+        for token in re.findall(r"[\u4e00-\u9fffA-Za-z0-9_]{2,}", normalized):
+            if token in cls._BEAT_TERM_STOPWORDS:
+                continue
+            terms.add(token)
+            for size in (2, 3, 4):
+                for start in range(0, len(token) - size + 1):
+                    chunk = token[start:start + size]
+                    if chunk not in cls._BEAT_TERM_STOPWORDS:
+                        terms.add(chunk)
+        return terms
 
     @classmethod
     def _entity_represented(cls, entity, normalized_text: str, beat: BeatPlan) -> bool:
@@ -661,6 +843,8 @@ class WriterAgent:
             "- **禁用词表**(避免 AI 腔):于是、总之、综上所述、综合来看、总的来说、"
             "这一切、一切的一切、无比、仿佛(非比喻不用)、似乎(非推测不用)、显然、无疑、"
             "油然而生、涌上心头、心头一震、深深地/静静地/默默地(避免叠用)。\n"
+            "- **语言纯度**:禁止输出英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK),"
+            "除非章节计划明确要求角色说外语；前世概念也必须转写成自然中文表达。\n"
             "- **显示不说**(show don't tell):禁止直接写『他感到愤怒』『她意识到』『他明白了』,"
             "改为用具体动作、生理反应、对话潜台词、环境反衬来呈现情绪和认知。\n"
             "- **对话占比**目标 30%-50%,对话要带潜台词/打断/回避,不要做问答式信息交代。\n"

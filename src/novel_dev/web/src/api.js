@@ -100,6 +100,8 @@ export const prepareContext = (id, cid) =>
   api.post(`/novels/${id}/chapters/${cid}/context`, null, withLongTimeout()).then(r => r.data)
 export const draftChapter = (id, cid) =>
   api.post(`/novels/${id}/chapters/${cid}/draft`, null, withLongTimeout()).then(r => r.data)
+export const rewriteChapter = (id, cid) =>
+  api.post(`/novels/${id}/chapters/${cid}/rewrite`, null, withLongTimeout()).then(r => r.data)
 export const advance = (id) => api.post(`/novels/${id}/advance`, null, withLongTimeout()).then(r => r.data)
 export const runLibrarian = (id) => api.post(`/novels/${id}/librarian`, null, withLongTimeout()).then(r => r.data)
 export const autoRunChapters = (id, options = {}) =>

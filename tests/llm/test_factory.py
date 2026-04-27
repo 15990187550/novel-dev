@@ -165,3 +165,23 @@ agents:
     assert cfg.model == "gpt-4"
     assert cfg.timeout == 45
     assert new_driver is not old_driver
+
+
+def test_writer_relay_task_uses_writer_primary_model():
+    settings = Settings(llm_config_path="llm_config.yaml")
+    factory = LLMFactory(settings)
+
+    cfg = factory._resolve_config("WriterAgent", "generate_relay")
+
+    assert cfg.model == "deepseek-v4-flash"
+    assert cfg.fallback is not None
+    assert cfg.fallback.model == "Minimax-2.7"
+
+
+def test_critic_score_chapter_has_enough_output_budget():
+    settings = Settings(llm_config_path="llm_config.yaml")
+    factory = LLMFactory(settings)
+
+    cfg = factory._resolve_config("CriticAgent", "score_chapter")
+
+    assert cfg.max_tokens == 8192

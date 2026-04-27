@@ -220,6 +220,10 @@ def _diagnostic_json_error_message(error: Exception, bad_output: str) -> str:
     )
 
 
+def _is_empty_structured_payload(payload: Any) -> bool:
+    return isinstance(payload, dict) and not payload
+
+
 def _validation_missing_paths(error: Exception) -> list[str]:
     if not isinstance(error, ValidationError):
         return []
@@ -626,6 +630,36 @@ async def call_and_parse_model(
                     },
                     duration_ms=int((time.perf_counter() - started_at) * 1000),
                 )
+                if (
+                    isinstance(exc, ValidationError)
+                    and response is not None
+                    and _is_empty_structured_payload(response.structured_payload)
+                    and not text_fallback_started
+                    and active_structured_config.response_tool_name
+                    and (active_structured_config.structured_output or StructuredOutputConfig()).fallback_to_text
+                ):
+                    missing_error = StructuredPayloadMissingError(
+                        f"{task} returned an empty structured tool payload"
+                    )
+                    active_structured_config = _text_fallback_structured_config(active_structured_config)
+                    current_prompt = _build_json_regenerate_prompt(prompt, bad_output, missing_error)
+                    text_fallback_started = True
+                    attempt = 0
+                    _log_llm_event(
+                        novel_id,
+                        agent_name,
+                        task,
+                        f"{task} 结构化 tool 输出为空，降级为 JSON 文本模式重试",
+                        status="started",
+                        node="llm_text_fallback",
+                        level="warning",
+                        metadata={
+                            "error_kind": "empty_tool_payload",
+                            "error": str(exc),
+                            "raw_len": len(bad_output or ""),
+                        },
+                    )
+                    continue
                 attempt += 1
                 if attempt >= max_retries and not fallback_started:
                     fallback_info = _fallback_driver_for_parse(client)
