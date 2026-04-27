@@ -93,7 +93,8 @@ class RecoveryCleanupService:
             }
             try:
                 if not options.dry_run:
-                    await self.job_repo.mark_recovered_failed(job.id, reason)
+                    async with self.session.begin_nested():
+                        await self.job_repo.mark_recovered_failed(job.id, reason)
 
                 result.cleaned_jobs.append(cleaned_job)
                 planned_recovered_job_ids.add(job.id)
@@ -149,7 +150,8 @@ class RecoveryCleanupService:
                     "reason": "Recovered stale auto_run_lock after process interruption",
                 }
                 if not options.dry_run:
-                    await self._save_state_checkpoint(state, checkpoint)
+                    async with self.session.begin_nested():
+                        await self._save_state_checkpoint(state, checkpoint)
 
                 result.released_locks.append(released_lock)
                 if not options.dry_run:
@@ -205,7 +207,8 @@ class RecoveryCleanupService:
                 }
                 if not options.dry_run:
                     checkpoint.pop("flow_control", None)
-                    await self._save_state_checkpoint(state, checkpoint)
+                    async with self.session.begin_nested():
+                        await self._save_state_checkpoint(state, checkpoint)
 
                 result.cleared_flow_stops.append(cleared_flow_stop)
                 if not options.dry_run:

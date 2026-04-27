@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import text
 
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
@@ -217,6 +218,42 @@ async def test_cleanup_skips_failed_lock_cleanup_and_continues_releasing_other_l
             "error": "checkpoint write failed",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_cleanup_continues_after_checkpoint_db_error(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel-lock-db-error",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={"auto_run_lock": {"active": True, "token": "db-error-token"}},
+    )
+    await director.save_checkpoint(
+        "novel-lock-after-db-error",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={"auto_run_lock": {"active": True, "token": "after-failure-token"}},
+    )
+    await async_session.commit()
+    original_save = RecoveryCleanupService._save_state_checkpoint
+
+    async def fail_one_save_with_db_error(self, state, checkpoint):
+        if state.novel_id == "novel-lock-db-error":
+            await self.session.execute(text("SELECT * FROM missing_recovery_cleanup_table"))
+        await original_save(self, state, checkpoint)
+
+    monkeypatch.setattr(RecoveryCleanupService, "_save_state_checkpoint", fail_one_save_with_db_error)
+
+    result = await RecoveryCleanupService(async_session).run_cleanup()
+
+    failed_state = await director.resume("novel-lock-db-error")
+    succeeded_state = await director.resume("novel-lock-after-db-error")
+    assert failed_state.checkpoint_data["auto_run_lock"]["token"] == "db-error-token"
+    assert "auto_run_lock" not in succeeded_state.checkpoint_data
+    assert result.released_locks == [_released_lock_detail("novel-lock-after-db-error")]
+    assert len(result.skipped) == 1
+    assert result.skipped[0]["novel_id"] == "novel-lock-db-error"
+    assert result.skipped[0]["reason"] == "cleanup_error"
+    assert "missing_recovery_cleanup_table" in result.skipped[0]["error"]
 
 
 @pytest.mark.asyncio
