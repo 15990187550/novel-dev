@@ -36,6 +36,7 @@ from novel_dev.services.flow_control_service import FlowCancelledError, FlowCont
 from novel_dev.services.chapter_generation_service import AutoRunChaptersRequest
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.generation_job_service import CHAPTER_AUTO_RUN_JOB, schedule_generation_job
+from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
@@ -1629,6 +1630,15 @@ async def get_generation_job(novel_id: str, job_id: str, session: AsyncSession =
     if not job or job.novel_id != novel_id:
         raise HTTPException(status_code=404, detail="Generation job not found")
     return _generation_job_response(job)
+
+
+@router.post("/api/recovery/cleanup")
+async def run_recovery_cleanup(
+    req: RecoveryCleanupOptions = RecoveryCleanupOptions(),
+    session: AsyncSession = Depends(get_session),
+):
+    result = await RecoveryCleanupService(session).run_cleanup(req)
+    return result.model_dump()
 
 
 @router.post("/api/novels/{novel_id}/flow/stop")
