@@ -113,3 +113,24 @@ async def test_polish_preserves_high_readability(async_session):
     ch = await ChapterRepository(async_session).get_by_id("c2")
     assert ch.polished_text == "A readable beat"
     assert ch.status == "edited"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_prompt_requires_cleaning_english_terms(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="他摸到竹筒，翻身坐起。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "他摸到竹筒，脑子里冒出一句 snooze。",
+            {},
+            [],
+            [],
+            {"style_profile": {}},
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "禁止输出英文" in prompt
+    assert "snooze" in prompt

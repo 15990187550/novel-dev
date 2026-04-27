@@ -46,6 +46,7 @@ class FastReviewReport(BaseModel):
     consistency_fixed: bool
     ai_flavor_reduced: bool
     beat_cohesion_ok: bool
+    language_style_ok: bool = True
     notes: List[str] = Field(default_factory=list)
 
     @field_validator("notes", mode="before")

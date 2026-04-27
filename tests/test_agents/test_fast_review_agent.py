@@ -20,7 +20,7 @@ async def test_fast_review_pass(async_session):
         chapter_id="c1",
     )
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
-    await ChapterRepository(async_session).update_text("c1", raw_draft="abc", polished_text="abc")
+    await ChapterRepository(async_session).update_text("c1", raw_draft="甲乙丙", polished_text="甲乙丙")
 
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(
@@ -102,4 +102,38 @@ async def test_fast_review_fail_word_count(async_session):
     assert "字数偏离目标超过10%" in report.notes
 
     state = await director.resume("novel_fr_fail")
+    assert state.current_phase == Phase.EDITING.value
+
+
+@pytest.mark.asyncio
+async def test_fast_review_fails_unapproved_english_terms(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_fail_english",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 25}}},
+        volume_id="v1",
+        chapter_id="c_english",
+    )
+    await ChapterRepository(async_session).create("c_english", "v1", 1, "Test")
+    await ChapterRepository(async_session).update_text(
+        "c_english",
+        raw_draft="他摸到床头竹筒，脑子里冒出前世闹钟的念头。",
+        polished_text="他摸到床头竹筒，脑子里冒出一句 snooze。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_fail_english", "c_english")
+
+    assert report.language_style_ok is False
+    assert any("snooze" in note for note in report.notes)
+
+    state = await director.resume("novel_fr_fail_english")
     assert state.current_phase == Phase.EDITING.value

@@ -71,6 +71,32 @@ async def test_review_pass_high_score(async_session):
 
 
 @pytest.mark.asyncio
+async def test_generate_score_prompt_requires_flagging_english_terms(async_session):
+    score_result = ScoreResult(
+        overall=88,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment=""),
+            DimensionScore(name="characterization", score=85, comment=""),
+            DimensionScore(name="readability", score=85, comment=""),
+            DimensionScore(name="consistency", score=85, comment=""),
+            DimensionScore(name="humanity", score=85, comment=""),
+        ],
+        summary_feedback="ok",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score("他想按掉 snooze 再睡。", _make_context().model_dump(), "novel_crit_lang")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "禁止英文" in prompt
+    assert "snooze" in prompt
+
+
+@pytest.mark.asyncio
 async def test_review_fail_low_score(async_session):
     director = NovelDirector(session=async_session)
     context = _make_context()

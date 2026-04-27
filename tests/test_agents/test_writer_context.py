@@ -31,6 +31,7 @@ class TestBuildSystemPrompt:
         result = agent._build_system_prompt(ctx, is_last=False)
         assert "简洁有力" in result
         assert "禁用词" in result
+        assert "禁止输出英文" in result
 
     def test_no_worldview_or_entities(self):
         ctx = _make_context(worldview_summary="这是一段很长的世界观描述" * 100)
