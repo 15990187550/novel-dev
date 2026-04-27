@@ -1,4 +1,5 @@
 import pytest
+from copy import deepcopy
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -11,6 +12,7 @@ from novel_dev.schemas.outline import SynopsisData, VolumeBeat, VolumePlan
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.chapter_generation_service import ChapterGenerationService
+from novel_dev.services.generation_job_service import CHAPTER_REWRITE_JOB
 
 
 app = FastAPI()
@@ -144,6 +146,97 @@ async def test_auto_run_route_creates_queued_generation_job(async_session, monke
         assert status_response.json()["job_id"] == data["job_id"]
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_rewrite_route_creates_independent_generation_job(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    monkeypatch.setattr("novel_dev.api.routes.schedule_generation_job", lambda job_id: None)
+    transport = ASGITransport(app=app)
+    try:
+        plan = build_test_volume("vol_rewrite_route", "ch_rewrite_route")
+        director = NovelDirector(session=async_session)
+        await director.save_checkpoint(
+            "n_rewrite_route",
+            phase=Phase.CONTEXT_PREPARATION,
+            checkpoint_data={
+                "current_volume_plan": plan.model_dump(),
+                "current_chapter_plan": plan.chapters[1].model_dump(),
+            },
+            volume_id="vol_rewrite_route",
+            chapter_id="ch_rewrite_route_2",
+        )
+        repo = ChapterRepository(async_session)
+        await repo.ensure_from_plan("n_rewrite_route", "vol_rewrite_route", plan.chapters[0])
+        await repo.update_text("ch_rewrite_route_1", polished_text="旧正文")
+        await repo.update_status("ch_rewrite_route_1", "archived")
+
+        async with AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+            response = await client.post("/api/novels/n_rewrite_route/chapters/ch_rewrite_route_1/rewrite")
+
+        assert response.status_code == 202
+        data = response.json()
+        assert data["status"] == "queued"
+        assert data["job_type"] == CHAPTER_REWRITE_JOB
+        assert data["request_payload"] == {"chapter_id": "ch_rewrite_route_1"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_rewrite_background_job_archives_without_touching_current_state(async_session):
+    plan = build_test_volume("vol_rewrite_bg", "ch_rewrite_bg")
+    director = NovelDirector(session=async_session)
+    checkpoint = {
+        "current_volume_plan": plan.model_dump(),
+        "current_chapter_plan": plan.chapters[1].model_dump(),
+        "custom_marker": {"keep": True},
+    }
+    await director.save_checkpoint(
+        "n_rewrite_bg",
+        phase=Phase.DRAFTING,
+        checkpoint_data=deepcopy(checkpoint),
+        volume_id="vol_rewrite_bg",
+        chapter_id="ch_rewrite_bg_2",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.ensure_from_plan("n_rewrite_bg", "vol_rewrite_bg", plan.chapters[0])
+    await repo.update_text(
+        "ch_rewrite_bg_1",
+        raw_draft="旧草稿",
+        polished_text="旧正文",
+    )
+    await repo.update_status("ch_rewrite_bg_1", "archived")
+    job = await GenerationJobRepository(async_session).create(
+        "n_rewrite_bg",
+        CHAPTER_REWRITE_JOB,
+        {"chapter_id": "ch_rewrite_bg_1"},
+    )
+    await async_session.commit()
+
+    from novel_dev.services.generation_job_service import run_generation_job
+
+    await run_generation_job(job.id)
+
+    refreshed = await GenerationJobRepository(async_session).get_by_id(job.id)
+    assert refreshed.status == "succeeded"
+    assert refreshed.result_payload["chapter_id"] == "ch_rewrite_bg_1"
+
+    rewritten = await ChapterRepository(async_session).get_by_id("ch_rewrite_bg_1")
+    assert rewritten.status == "archived"
+    assert rewritten.raw_draft and rewritten.raw_draft != "旧草稿"
+    assert rewritten.polished_text and rewritten.polished_text != "旧正文"
+    assert rewritten.score_overall == 88
+    assert rewritten.fast_review_feedback
+
+    state = await director.resume("n_rewrite_bg")
+    assert state.current_phase == Phase.DRAFTING.value
+    assert state.current_volume_id == "vol_rewrite_bg"
+    assert state.current_chapter_id == "ch_rewrite_bg_2"
+    assert state.checkpoint_data == checkpoint
 
 
 @pytest.mark.asyncio
@@ -289,6 +382,48 @@ async def test_auto_run_rejects_when_generation_job_is_active(async_session, mon
 
         assert response.status_code == 409
         assert "already running" in response.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_auto_run_route_clears_stale_checkpoint_lock_when_no_active_job(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    monkeypatch.setattr("novel_dev.api.routes.schedule_generation_job", lambda job_id: None)
+    transport = ASGITransport(app=app)
+    try:
+        plan = build_test_volume("vol_stale_lock", "ch_stale_lock")
+        director = NovelDirector(session=async_session)
+        await director.save_checkpoint(
+            "n_auto_stale_lock",
+            phase=Phase.CONTEXT_PREPARATION,
+            checkpoint_data={
+                "current_volume_plan": plan.model_dump(),
+                "current_chapter_plan": plan.chapters[0].model_dump(),
+                "auto_run_lock": {
+                    "active": True,
+                    "token": "old-token",
+                    "started_at": "2026-04-27T14:15:44Z",
+                },
+            },
+            volume_id="vol_stale_lock",
+            chapter_id="ch_stale_lock_1",
+        )
+
+        async with AsyncClient(transport=transport, base_url="http://test", timeout=120) as client:
+            response = await client.post("/api/novels/n_auto_stale_lock/chapters/auto-run")
+
+        assert response.status_code == 202
+        state = await director.resume("n_auto_stale_lock")
+        assert "auto_run_lock" not in state.checkpoint_data
+        assert state.checkpoint_data["auto_run_last_result"] == {
+            "stopped_reason": "failed",
+            "recovered": True,
+            "error": "Recovered stale auto_run_lock after process interruption",
+        }
     finally:
         app.dependency_overrides.clear()
 

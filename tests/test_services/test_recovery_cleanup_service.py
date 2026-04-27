@@ -5,7 +5,11 @@ import pytest
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.flow_control_service import clear_cancel_request, is_cancel_requested, request_cancel
-from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
+from novel_dev.services.recovery_cleanup_service import (
+    RECOVERED_LOCK_RESULT,
+    RecoveryCleanupOptions,
+    RecoveryCleanupService,
+)
 
 
 def _cleaned_job_detail(
@@ -58,6 +62,7 @@ async def test_cleanup_marks_stale_running_job_failed(async_session):
 
     refreshed = await repo.get_by_id(job_id)
     assert refreshed.status == "failed"
+    assert refreshed.error_message == "Recovered stale running job after process interruption"
     assert refreshed.result_payload["recovered"] is True
     assert result.cleaned_jobs == [
         _cleaned_job_detail(job_id, "novel-stale-running", "running")
@@ -77,6 +82,7 @@ async def test_cleanup_marks_stale_queued_job_failed(async_session):
 
     refreshed = await repo.get_by_id(job_id)
     assert refreshed.status == "failed"
+    assert refreshed.error_message == "Recovered stale queued job after process interruption"
     assert refreshed.result_payload["recovered"] is True
     assert result.cleaned_jobs == [
         _cleaned_job_detail(job_id, "novel-stale-queued", "queued")
@@ -115,11 +121,7 @@ async def test_cleanup_releases_lock_without_active_job(async_session):
     state = await director.resume("novel-stale-lock")
     assert state.checkpoint_data["existing"] == "value"
     assert "auto_run_lock" not in state.checkpoint_data
-    assert state.checkpoint_data["auto_run_last_result"] == {
-        "stopped_reason": "failed",
-        "recovered": True,
-        "error": "Recovered stale auto_run_lock after process interruption",
-    }
+    assert state.checkpoint_data["auto_run_last_result"] == RECOVERED_LOCK_RESULT
     assert result.released_locks == [_released_lock_detail("novel-stale-lock")]
 
 
@@ -148,6 +150,7 @@ async def test_cleanup_releases_lock_after_recovering_stale_active_job(async_ses
     refreshed = await repo.get_by_id(job_id)
     state = await director.resume("novel-stale-job-lock")
     assert refreshed.status == "failed"
+    assert refreshed.error_message == "Recovered stale running job after process interruption"
     assert "auto_run_lock" not in state.checkpoint_data
     assert result.cleaned_jobs == [
         _cleaned_job_detail(job_id, "novel-stale-job-lock", "running")
@@ -156,14 +159,15 @@ async def test_cleanup_releases_lock_after_recovering_stale_active_job(async_ses
 
 
 @pytest.mark.asyncio
-async def test_cleanup_overwrites_previous_auto_run_result_when_releasing_lock(async_session):
+async def test_cleanup_preserves_previous_auto_run_result_when_releasing_lock(async_session):
     director = NovelDirector(session=async_session)
+    previous_result = {"stopped_reason": "max_chapters_reached"}
     await director.save_checkpoint(
         "novel-stale-lock-with-result",
         phase=Phase.CONTEXT_PREPARATION,
         checkpoint_data={
             "auto_run_lock": {"active": True, "token": "old-token"},
-            "auto_run_last_result": {"stopped_reason": "max_chapters_reached"},
+            "auto_run_last_result": previous_result,
         },
     )
     await async_session.commit()
@@ -171,11 +175,48 @@ async def test_cleanup_overwrites_previous_auto_run_result_when_releasing_lock(a
     await RecoveryCleanupService(async_session).run_cleanup()
 
     state = await director.resume("novel-stale-lock-with-result")
-    assert state.checkpoint_data["auto_run_last_result"] == {
-        "stopped_reason": "failed",
-        "recovered": True,
-        "error": "Recovered stale auto_run_lock after process interruption",
-    }
+    assert "auto_run_lock" not in state.checkpoint_data
+    assert state.checkpoint_data["auto_run_last_result"] == previous_result
+
+
+@pytest.mark.asyncio
+async def test_cleanup_skips_failed_lock_cleanup_and_continues_releasing_other_locks(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel-lock-save-fails",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={"auto_run_lock": {"active": True, "token": "fail-token"}},
+    )
+    await director.save_checkpoint(
+        "novel-lock-save-succeeds",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={"auto_run_lock": {"active": True, "token": "success-token"}},
+    )
+    await async_session.commit()
+    original_save = RecoveryCleanupService._save_state_checkpoint
+
+    async def fail_one_save(self, state, checkpoint):
+        if state.novel_id == "novel-lock-save-fails":
+            raise RuntimeError("checkpoint write failed")
+        await original_save(self, state, checkpoint)
+
+    monkeypatch.setattr(RecoveryCleanupService, "_save_state_checkpoint", fail_one_save)
+
+    result = await RecoveryCleanupService(async_session).run_cleanup()
+
+    failed_state = await director.resume("novel-lock-save-fails")
+    succeeded_state = await director.resume("novel-lock-save-succeeds")
+    assert failed_state.checkpoint_data["auto_run_lock"]["token"] == "fail-token"
+    assert "auto_run_lock" not in succeeded_state.checkpoint_data
+    assert succeeded_state.checkpoint_data["auto_run_last_result"] == RECOVERED_LOCK_RESULT
+    assert result.released_locks == [_released_lock_detail("novel-lock-save-succeeds")]
+    assert result.skipped == [
+        {
+            "novel_id": "novel-lock-save-fails",
+            "reason": "cleanup_error",
+            "error": "checkpoint write failed",
+        }
+    ]
 
 
 @pytest.mark.asyncio

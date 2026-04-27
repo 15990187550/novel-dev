@@ -83,31 +83,38 @@ class RecoveryCleanupService:
             stale_running_before=now - timedelta(minutes=options.stale_running_minutes),
         )
         for job in stale_jobs:
-            result.cleaned_jobs.append(
-                {
-                    "job_id": job.id,
-                    "novel_id": job.novel_id,
-                    "job_type": job.job_type,
-                    "previous_status": job.status,
-                    "reason": f"Recovered stale {job.status} job after process interruption",
-                }
-            )
-            planned_recovered_job_ids.add(job.id)
-            if options.dry_run:
-                continue
+            reason = f"Recovered stale {job.status} job after process interruption"
+            cleaned_job = {
+                "job_id": job.id,
+                "novel_id": job.novel_id,
+                "job_type": job.job_type,
+                "previous_status": job.status,
+                "reason": reason,
+            }
+            try:
+                if not options.dry_run:
+                    await self.job_repo.mark_recovered_failed(job.id, reason)
 
-            await self.job_repo.mark_recovered_failed(
-                job.id,
-                f"Recovered by cleanup after stale {job.status} generation job",
-            )
-            pending_logs.append(
-                self._log_entry(
-                    job.novel_id,
-                    "cleaned_job",
-                    f"Recovered stale generation job {job.id}",
-                    {"job_id": job.id, "job_type": job.job_type, "status": "failed"},
+                result.cleaned_jobs.append(cleaned_job)
+                planned_recovered_job_ids.add(job.id)
+                if not options.dry_run:
+                    pending_logs.append(
+                        self._log_entry(
+                            job.novel_id,
+                            "cleaned_job",
+                            f"Recovered stale generation job {job.id}",
+                            {"job_id": job.id, "job_type": job.job_type, "status": "failed"},
+                        )
+                    )
+            except Exception as exc:
+                result.skipped.append(
+                    {
+                        "job_id": job.id,
+                        "novel_id": job.novel_id,
+                        "reason": "cleanup_error",
+                        "error": str(exc),
+                    }
                 )
-            )
 
     async def _release_stale_locks(
         self,
@@ -118,42 +125,50 @@ class RecoveryCleanupService:
     ) -> None:
         states = await self._states_with_checkpoint_key("auto_run_lock")
         for state in states:
-            checkpoint = dict(state.checkpoint_data or {})
-            lock = checkpoint.get("auto_run_lock")
-            if not isinstance(lock, dict) or not lock.get("active"):
-                continue
+            try:
+                checkpoint = dict(state.checkpoint_data or {})
+                lock = checkpoint.get("auto_run_lock")
+                if not isinstance(lock, dict) or not lock.get("active"):
+                    continue
 
-            has_active_job = await self._has_active_generation_job(
-                state.novel_id,
-                job_type=CHAPTER_AUTO_RUN_JOB,
-                exclude_job_ids=planned_recovered_job_ids,
-            )
-            if has_active_job:
-                result.skipped.append({"novel_id": state.novel_id, "reason": "fresh_active_job"})
-                continue
+                has_active_job = await self._has_active_generation_job(
+                    state.novel_id,
+                    job_type=CHAPTER_AUTO_RUN_JOB,
+                    exclude_job_ids=planned_recovered_job_ids,
+                )
+                if has_active_job:
+                    result.skipped.append({"novel_id": state.novel_id, "reason": "fresh_active_job"})
+                    continue
 
-            checkpoint.pop("auto_run_lock", None)
-            checkpoint["auto_run_last_result"] = dict(RECOVERED_LOCK_RESULT)
-            result.released_locks.append(
-                {
+                checkpoint.pop("auto_run_lock", None)
+                checkpoint.setdefault("auto_run_last_result", dict(RECOVERED_LOCK_RESULT))
+                released_lock = {
                     "novel_id": state.novel_id,
                     "chapter_id": state.current_chapter_id,
                     "volume_id": state.current_volume_id,
                     "reason": "Recovered stale auto_run_lock after process interruption",
                 }
-            )
-            if options.dry_run:
-                continue
+                if not options.dry_run:
+                    await self._save_state_checkpoint(state, checkpoint)
 
-            await self._save_state_checkpoint(state, checkpoint)
-            pending_logs.append(
-                self._log_entry(
-                    state.novel_id,
-                    "released_lock",
-                    "Released stale auto-run lock",
-                    {"lock": lock},
+                result.released_locks.append(released_lock)
+                if not options.dry_run:
+                    pending_logs.append(
+                        self._log_entry(
+                            state.novel_id,
+                            "released_lock",
+                            "Released stale auto-run lock",
+                            {"lock": lock},
+                        )
+                    )
+            except Exception as exc:
+                result.skipped.append(
+                    {
+                        "novel_id": state.novel_id,
+                        "reason": "cleanup_error",
+                        "error": str(exc),
+                    }
                 )
-            )
 
     async def _clear_expired_flow_stops(
         self,
@@ -167,42 +182,50 @@ class RecoveryCleanupService:
         expires_before = now - timedelta(hours=options.stale_flow_stop_hours)
         states = await self._states_with_checkpoint_key("flow_control")
         for state in states:
-            checkpoint = dict(state.checkpoint_data or {})
-            flow_control = checkpoint.get("flow_control")
-            if not isinstance(flow_control, dict) or not flow_control.get("cancel_requested"):
-                continue
+            try:
+                checkpoint = dict(state.checkpoint_data or {})
+                flow_control = checkpoint.get("flow_control")
+                if not isinstance(flow_control, dict) or not flow_control.get("cancel_requested"):
+                    continue
 
-            requested_at = self._parse_requested_at(flow_control.get("requested_at"))
-            if requested_at is not None and requested_at >= expires_before:
-                continue
+                requested_at = self._parse_requested_at(flow_control.get("requested_at"))
+                if requested_at is not None and requested_at >= expires_before:
+                    continue
 
-            if requested_at is None and await self._has_active_generation_job(
-                state.novel_id,
-                exclude_job_ids=planned_recovered_job_ids,
-            ):
-                result.skipped.append({"novel_id": state.novel_id, "reason": "active_job_with_unvalidated_flow_stop"})
-                continue
+                if requested_at is None and await self._has_active_generation_job(
+                    state.novel_id,
+                    exclude_job_ids=planned_recovered_job_ids,
+                ):
+                    result.skipped.append({"novel_id": state.novel_id, "reason": "active_job_with_unvalidated_flow_stop"})
+                    continue
 
-            result.cleared_flow_stops.append(
-                {
+                cleared_flow_stop = {
                     "novel_id": state.novel_id,
                     "reason": "Cleared expired flow stop marker",
                 }
-            )
-            if options.dry_run:
-                continue
+                if not options.dry_run:
+                    checkpoint.pop("flow_control", None)
+                    await self._save_state_checkpoint(state, checkpoint)
 
-            checkpoint.pop("flow_control", None)
-            await self._save_state_checkpoint(state, checkpoint)
-            pending_cancel_clears.add(state.novel_id)
-            pending_logs.append(
-                self._log_entry(
-                    state.novel_id,
-                    "cleared_flow_stop",
-                    "Cleared stale flow stop marker",
-                    {"flow_control": flow_control},
+                result.cleared_flow_stops.append(cleared_flow_stop)
+                if not options.dry_run:
+                    pending_cancel_clears.add(state.novel_id)
+                    pending_logs.append(
+                        self._log_entry(
+                            state.novel_id,
+                            "cleared_flow_stop",
+                            "Cleared stale flow stop marker",
+                            {"flow_control": flow_control},
+                        )
+                    )
+            except Exception as exc:
+                result.skipped.append(
+                    {
+                        "novel_id": state.novel_id,
+                        "reason": "cleanup_error",
+                        "error": str(exc),
+                    }
                 )
-            )
 
     async def _states_with_checkpoint_key(self, key: str) -> list[NovelState]:
         result = await self.session.execute(
