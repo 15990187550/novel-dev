@@ -1,9 +1,9 @@
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import text
 
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.db.models import NovelState
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.flow_control_service import clear_cancel_request, is_cancel_requested, request_cancel
 from novel_dev.services.recovery_cleanup_service import (
@@ -221,39 +221,49 @@ async def test_cleanup_skips_failed_lock_cleanup_and_continues_releasing_other_l
 
 
 @pytest.mark.asyncio
-async def test_cleanup_continues_after_checkpoint_db_error(async_session, monkeypatch):
+async def test_cleanup_continues_after_checkpoint_flush_failure(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
-        "novel-lock-db-error",
+        "novel-lock-flush-fails",
         phase=Phase.CONTEXT_PREPARATION,
-        checkpoint_data={"auto_run_lock": {"active": True, "token": "db-error-token"}},
+        checkpoint_data={"auto_run_lock": {"active": True, "token": "flush-fail-token"}},
     )
     await director.save_checkpoint(
-        "novel-lock-after-db-error",
+        "novel-lock-after-flush-failure",
         phase=Phase.CONTEXT_PREPARATION,
         checkpoint_data={"auto_run_lock": {"active": True, "token": "after-failure-token"}},
     )
     await async_session.commit()
     original_save = RecoveryCleanupService._save_state_checkpoint
 
-    async def fail_one_save_with_db_error(self, state, checkpoint):
-        if state.novel_id == "novel-lock-db-error":
-            await self.session.execute(text("SELECT * FROM missing_recovery_cleanup_table"))
+    async def fail_one_save_with_flush(self, state, checkpoint):
+        if state.novel_id == "novel-lock-flush-fails":
+            self.session.expunge(state)
+            self.session.add(
+                NovelState(
+                    novel_id=state.novel_id,
+                    current_phase=state.current_phase,
+                    current_volume_id=state.current_volume_id,
+                    current_chapter_id=state.current_chapter_id,
+                    checkpoint_data=checkpoint,
+                )
+            )
+            await self.session.flush()
         await original_save(self, state, checkpoint)
 
-    monkeypatch.setattr(RecoveryCleanupService, "_save_state_checkpoint", fail_one_save_with_db_error)
+    monkeypatch.setattr(RecoveryCleanupService, "_save_state_checkpoint", fail_one_save_with_flush)
 
     result = await RecoveryCleanupService(async_session).run_cleanup()
 
-    failed_state = await director.resume("novel-lock-db-error")
-    succeeded_state = await director.resume("novel-lock-after-db-error")
-    assert failed_state.checkpoint_data["auto_run_lock"]["token"] == "db-error-token"
+    failed_state = await director.resume("novel-lock-flush-fails")
+    succeeded_state = await director.resume("novel-lock-after-flush-failure")
+    assert failed_state.checkpoint_data["auto_run_lock"]["token"] == "flush-fail-token"
     assert "auto_run_lock" not in succeeded_state.checkpoint_data
-    assert result.released_locks == [_released_lock_detail("novel-lock-after-db-error")]
+    assert result.released_locks == [_released_lock_detail("novel-lock-after-flush-failure")]
     assert len(result.skipped) == 1
-    assert result.skipped[0]["novel_id"] == "novel-lock-db-error"
+    assert result.skipped[0]["novel_id"] == "novel-lock-flush-fails"
     assert result.skipped[0]["reason"] == "cleanup_error"
-    assert "missing_recovery_cleanup_table" in result.skipped[0]["error"]
+    assert "novel_state" in result.skipped[0]["error"]
 
 
 @pytest.mark.asyncio
