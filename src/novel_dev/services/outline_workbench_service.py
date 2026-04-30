@@ -206,7 +206,6 @@ class OutlineWorkbenchService:
         clarification_decision = await self._run_generation_clarification_gate(
             novel_id=novel_id,
             state=state,
-            outline_session=outline_session,
             outline_type=outline_type,
             outline_ref=outline_ref,
             feedback=feedback,
@@ -1344,7 +1343,6 @@ class OutlineWorkbenchService:
         *,
         novel_id: str,
         state: Any,
-        outline_session: Any,
         outline_type: str,
         outline_ref: str,
         feedback: str,
@@ -1353,7 +1351,6 @@ class OutlineWorkbenchService:
     ) -> OutlineClarificationDecision | None:
         if not self._should_run_generation_clarification(
             state=state,
-            outline_session=outline_session,
             outline_type=outline_type,
             outline_ref=outline_ref,
             workspace_outline_drafts=workspace_outline_drafts,
@@ -1384,6 +1381,7 @@ class OutlineWorkbenchService:
                 outline_ref,
             ),
         )
+        await self._release_connection_before_external_call()
         try:
             return await OutlineClarificationAgent().clarify(request)
         except Exception as exc:
@@ -1428,12 +1426,10 @@ class OutlineWorkbenchService:
         self,
         *,
         state: Any,
-        outline_session: Any,
         outline_type: str,
         outline_ref: str,
         workspace_outline_drafts: Optional[dict[str, dict[str, Any]]],
     ) -> bool:
-        _ = outline_session
         if not self._is_brainstorming_phase(getattr(state, "current_phase", None)):
             return False
 
@@ -1458,7 +1454,7 @@ class OutlineWorkbenchService:
             for message in context_window.recent_messages
             if (message.meta or {}).get("interaction_stage") == "generation_clarification"
         ]
-        return min((max(rounds) if rounds else 0) + 1, MAX_CLARIFICATION_ROUNDS)
+        return (max(rounds) if rounds else 0) + 1
 
     def _has_user_clarification_answer(self, context_window: OutlineContextWindow) -> bool:
         seen_question = False
