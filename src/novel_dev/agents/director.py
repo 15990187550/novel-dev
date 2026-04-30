@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.db.models import NovelState
+from novel_dev.agents._log_helpers import log_agent_detail
 from novel_dev.services.log_service import logged_agent_step, log_service
 
 
@@ -72,7 +73,20 @@ class NovelDirector:
             raise ValueError(f"Novel state not found for {novel_id}")
         current = Phase(state.current_phase)
         checkpoint = dict(state.checkpoint_data or {})
-        log_service.add_log(novel_id, "NovelDirector", f"开始推进: {current.value}")
+        log_agent_detail(
+            novel_id,
+            "NovelDirector",
+            f"流程推进准备：当前阶段 {current.value}",
+            node="advance_phase",
+            task="advance",
+            status="started",
+            metadata={
+                "current_phase": current.value,
+                "current_volume_id": state.current_volume_id,
+                "current_chapter_id": state.current_chapter_id,
+                "checkpoint_keys": sorted(checkpoint.keys()),
+            },
+        )
 
         if current == Phase.BRAINSTORMING:
             from novel_dev.repositories.document_repo import DocumentRepository
@@ -87,7 +101,15 @@ class NovelDirector:
                 chapter_id=state.current_chapter_id,
             )
         elif current == Phase.VOLUME_PLANNING:
-            log_service.add_log(novel_id, "NovelDirector", "运行 VolumePlannerAgent")
+            log_agent_detail(
+                novel_id,
+                "NovelDirector",
+                "进入 VolumePlannerAgent",
+                node="advance_agent",
+                task="advance",
+                status="started",
+                metadata={"from_phase": current.value, "target_agent": "VolumePlannerAgent", "target_phase": Phase.CONTEXT_PREPARATION.value},
+            )
             return await self._run_volume_planner(state)
         elif current == Phase.CONTEXT_PREPARATION:
             if not checkpoint.get("chapter_context"):
@@ -116,16 +138,32 @@ class NovelDirector:
                 chapter_id=chapter_id,
             )
         elif current == Phase.REVIEWING:
-            log_service.add_log(novel_id, "NovelDirector", "运行 CriticAgent")
+            log_agent_detail(
+                novel_id, "NovelDirector", "进入 CriticAgent",
+                node="advance_agent", task="advance", status="started",
+                metadata={"from_phase": current.value, "target_agent": "CriticAgent", "chapter_id": state.current_chapter_id},
+            )
             return await self._run_critic(state)
         elif current == Phase.EDITING:
-            log_service.add_log(novel_id, "NovelDirector", "运行 EditorAgent")
+            log_agent_detail(
+                novel_id, "NovelDirector", "进入 EditorAgent",
+                node="advance_agent", task="advance", status="started",
+                metadata={"from_phase": current.value, "target_agent": "EditorAgent", "chapter_id": state.current_chapter_id},
+            )
             return await self._run_editor(state)
         elif current == Phase.FAST_REVIEWING:
-            log_service.add_log(novel_id, "NovelDirector", "运行 FastReviewAgent")
+            log_agent_detail(
+                novel_id, "NovelDirector", "进入 FastReviewAgent",
+                node="advance_agent", task="advance", status="started",
+                metadata={"from_phase": current.value, "target_agent": "FastReviewAgent", "chapter_id": state.current_chapter_id},
+            )
             return await self._run_fast_review(state)
         elif current == Phase.LIBRARIAN:
-            log_service.add_log(novel_id, "NovelDirector", "运行 LibrarianAgent")
+            log_agent_detail(
+                novel_id, "NovelDirector", "进入 LibrarianAgent",
+                node="advance_agent", task="advance", status="started",
+                metadata={"from_phase": current.value, "target_agent": "LibrarianAgent", "chapter_id": state.current_chapter_id},
+            )
             return await self._run_librarian(state)
         elif current == Phase.COMPLETED:
             log_service.add_log(novel_id, "NovelDirector", "completed → 继续下一章/卷")
@@ -185,6 +223,14 @@ class NovelDirector:
         if not ch or not ch.polished_text:
             log_service.add_log(state.novel_id, "NovelDirector", "章节精修文本缺失", level="error")
             raise ValueError("Chapter polished text missing")
+        if getattr(ch, "quality_status", "unchecked") == "block":
+            log_service.add_log(
+                state.novel_id,
+                "NovelDirector",
+                "章节质量门禁阻断，禁止进入 Librarian",
+                level="error",
+            )
+            raise ValueError("Chapter quality gate blocked librarian ingestion")
 
         from novel_dev.services.embedding_service import EmbeddingService
         from novel_dev.llm import llm_factory
@@ -214,11 +260,23 @@ class NovelDirector:
                 )
 
         await agent.persist(extraction, chapter_id, state.novel_id)
+        await ChapterRepository(self.session).mark_world_state_ingested(chapter_id, True)
 
         settings = Settings()
         archive_svc = ArchiveService(self.session, settings.markdown_output_dir)
         await archive_svc.archive(state.novel_id, chapter_id)
-        log_service.add_log(state.novel_id, "NovelDirector", f"章节归档完成: {chapter_id}")
+        log_agent_detail(
+            state.novel_id,
+            "NovelDirector",
+            "章节归档完成",
+            node="archive",
+            task="run_librarian",
+            metadata={
+                "chapter_id": chapter_id,
+                "volume_id": state.current_volume_id,
+                "polished_chars": len(ch.polished_text or ""),
+            },
+        )
 
         checkpoint = dict(state.checkpoint_data)
         checkpoint["last_archived_chapter_id"] = chapter_id
@@ -229,7 +287,14 @@ class NovelDirector:
             volume_id=state.current_volume_id,
             chapter_id=chapter_id,
         )
-        log_service.add_log(state.novel_id, "NovelDirector", "进入 completed 阶段")
+        log_agent_detail(
+            state.novel_id,
+            "NovelDirector",
+            "阶段跳转完成：进入 completed",
+            node="phase_transition",
+            task="run_librarian",
+            metadata={"from_phase": Phase.LIBRARIAN.value, "to_phase": Phase.COMPLETED.value, "chapter_id": chapter_id},
+        )
 
         return await self._continue_to_next_chapter(state.novel_id)
 
@@ -251,7 +316,20 @@ class NovelDirector:
                     next_plan,
                 )
                 checkpoint["current_chapter_plan"] = next_plan
-                log_service.add_log(novel_id, "NovelDirector", f"进入下一章: {next_plan.get('title')}")
+                log_agent_detail(
+                    novel_id,
+                    "NovelDirector",
+                    f"进入下一章：{next_plan.get('title')}",
+                    node="phase_transition",
+                    task="continue_chapter",
+                    metadata={
+                        "from_phase": Phase.COMPLETED.value,
+                        "to_phase": Phase.CONTEXT_PREPARATION.value,
+                        "previous_chapter_id": current_chapter_id,
+                        "next_chapter_id": next_plan.get("chapter_id"),
+                        "next_title": next_plan.get("title"),
+                    },
+                )
                 return await self.save_checkpoint(
                     novel_id,
                     Phase.CONTEXT_PREPARATION,
@@ -283,7 +361,20 @@ class NovelDirector:
         checkpoint["pending_volume_plans"] = checkpoint.get("pending_volume_plans", []) + [placeholder_volume]
         checkpoint["volume_completed"] = True
         checkpoint.pop("current_chapter_plan", None)
-        log_service.add_log(novel_id, "NovelDirector", f"当前卷完成，进入第 {current_volume_number + 1} 卷规划")
+        log_agent_detail(
+            novel_id,
+            "NovelDirector",
+            f"当前卷完成，进入第 {current_volume_number + 1} 卷规划",
+            node="phase_transition",
+            task="continue_chapter",
+            metadata={
+                "from_phase": Phase.COMPLETED.value,
+                "to_phase": Phase.VOLUME_PLANNING.value,
+                "completed_volume_id": state.current_volume_id,
+                "next_volume_id": next_volume_id,
+                "placeholder_chapter_id": placeholder_volume["chapters"][0]["chapter_id"],
+            },
+        )
 
         return await self.save_checkpoint(
             novel_id,

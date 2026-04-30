@@ -40,6 +40,9 @@ class LogService:
         metadata: dict[str, Any] | None = None,
         duration_ms: int | None = None,
     ):
+        source_filename = metadata.get("source_filename") if metadata else None
+        if source_filename and source_filename not in message:
+            message = f"{message}（文件: {source_filename}）"
         timestamp = datetime.utcnow()
         entry = {
             "timestamp": timestamp.isoformat() + "Z",
@@ -179,6 +182,13 @@ class LogService:
 log_service = LogService()
 
 
+def _with_metadata_source_filename(message: str, metadata: dict[str, Any] | None = None) -> str:
+    source_filename = metadata.get("source_filename") if metadata else None
+    if source_filename and source_filename not in message:
+        return f"{message}（文件: {source_filename}）"
+    return message
+
+
 @asynccontextmanager
 async def agent_step(
     novel_id: str,
@@ -200,7 +210,7 @@ async def agent_step(
     log_service.add_log(
         novel_id,
         agent,
-        f"{label}开始",
+        _with_metadata_source_filename(f"{label}开始", metadata),
         event="agent.step",
         status="started",
         node=node,
@@ -216,7 +226,7 @@ async def agent_step(
         log_service.add_log(
             novel_id,
             agent,
-            f"{label}失败: {exc}",
+            _with_metadata_source_filename(f"{label}失败: {exc}", failure_metadata),
             level="error",
             event="agent.step",
             status="failed",
@@ -232,7 +242,7 @@ async def agent_step(
         log_service.add_log(
             novel_id,
             agent,
-            f"{label}完成",
+            _with_metadata_source_filename(f"{label}完成", metadata),
             event="agent.step",
             status="succeeded",
             node=node,
@@ -249,6 +259,7 @@ def logged_agent_step(
     node: str | None = None,
     task: str | None = None,
     novel_id_arg: str = "novel_id",
+    metadata_builder: Callable[[dict[str, Any]], dict[str, Any] | None] | None = None,
 ) -> Callable:
     """Decorate an async public agent entrypoint with frontend-visible lifecycle logs."""
     def decorator(func: Callable) -> Callable:
@@ -258,12 +269,13 @@ def logged_agent_step(
         async def wrapper(*args, **kwargs):
             bound = signature.bind_partial(*args, **kwargs)
             novel_id = bound.arguments.get(novel_id_arg, "")
+            metadata = metadata_builder(bound.arguments) if metadata_builder else None
             session = getattr(bound.arguments.get("self"), "session", None)
             if session is not None and novel_id:
                 from novel_dev.services.flow_control_service import FlowControlService
 
                 await FlowControlService(session).raise_if_cancelled(str(novel_id))
-            async with agent_step(str(novel_id or ""), agent, label, node=node, task=task):
+            async with agent_step(str(novel_id or ""), agent, label, node=node, task=task, metadata=metadata):
                 result = await func(*args, **kwargs)
             if session is not None and novel_id:
                 from novel_dev.services.flow_control_service import FlowControlService

@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock
 
+from novel_dev.agents.entity_classifier import EntityClassificationBatchItem, EntityClassificationBatchResult
+from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.services.entity_classification_service import EntityClassificationService
 
 
@@ -156,3 +158,41 @@ async def test_local_rules_prefer_skill_over_treasure_for_item_names(async_sessi
 
     assert result.system_category == "功法"
     assert result.system_group_name == "剑道传承"
+
+
+@pytest.mark.asyncio
+async def test_batch_classification_retries_timeout_before_rule_fallback(async_session):
+    svc = EntityClassificationService(async_session)
+    svc.classifier_agent.classify_batch = AsyncMock(
+        side_effect=[
+            LLMTimeoutError("Request timed out"),
+            EntityClassificationBatchResult(
+                items=[
+                    EntityClassificationBatchItem(
+                        index=0,
+                        category="人物",
+                        group_name="反派",
+                        confidence=0.91,
+                        reason="retry succeeded",
+                    )
+                ]
+            ),
+        ]
+    )
+
+    results = await svc.classify_batch(
+        "n1",
+        [
+            {
+                "entity_type": "character",
+                "entity_name": "木冰眉",
+                "latest_state": {"identity": "反派"},
+                "relationships": [],
+            }
+        ],
+    )
+
+    assert svc.classifier_agent.classify_batch.await_count == 2
+    assert results[0].system_category == "人物"
+    assert results[0].system_group_name == "反派"
+    assert results[0].classification_reason["reason"] == "llm_batch_classification"

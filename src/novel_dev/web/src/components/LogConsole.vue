@@ -22,16 +22,32 @@
       <div ref="logEntries" class="log-console__entries min-h-full" data-testid="log-entry-list">
         <div
           v-for="(log, i) in visibleLogs"
-          :key="i"
-          class="flex gap-2 hover:bg-gray-900/50 px-1 rounded"
+          :key="logKey(log, i)"
+          class="log-console__entry rounded px-1 hover:bg-gray-900/50"
           :data-testid="`log-line-${i}`"
         >
-          <span class="text-gray-500 shrink-0">{{ formatTime(log.timestamp) }}</span>
-          <span class="shrink-0 font-semibold" :style="{ color: agentColor(log.agent) }">[{{ log.agent }}]</span>
-          <span v-if="log.level" class="shrink-0 rounded border px-1 text-[11px]" :class="levelClass(log.level)">{{ log.level }}</span>
-          <span v-if="log.status" class="shrink-0 rounded border border-sky-800/70 bg-sky-950/60 px-1 text-[11px] text-sky-200">{{ log.status }}</span>
-          <span v-if="log.node" class="shrink-0 rounded border border-gray-700 bg-gray-900 px-1 text-[11px] text-gray-300">{{ log.node }}</span>
-          <span class="text-gray-300">{{ log.message }}</span>
+          <div class="flex gap-2">
+            <span class="text-gray-500 shrink-0">{{ formatTime(log.timestamp) }}</span>
+            <span class="shrink-0 font-semibold" :style="{ color: agentColor(log.agent) }">[{{ log.agent }}]</span>
+            <span v-if="log.level" class="shrink-0 rounded border px-1 text-[11px]" :class="levelClass(log.level)">{{ log.level }}</span>
+            <span v-if="log.status" class="shrink-0 rounded border border-sky-800/70 bg-sky-950/60 px-1 text-[11px] text-sky-200">{{ log.status }}</span>
+            <span v-if="log.node" class="shrink-0 rounded border border-gray-700 bg-gray-900 px-1 text-[11px] text-gray-300">{{ log.node }}</span>
+            <span class="min-w-0 flex-1 text-gray-300">{{ log.message }}</span>
+            <button
+              v-if="hasMetadata(log)"
+              type="button"
+              class="log-console__details-toggle shrink-0"
+              :data-testid="`log-details-toggle-${i}`"
+              @click="toggleDetails(logKey(log, i))"
+            >
+              {{ expandedDetails.has(logKey(log, i)) ? '收起' : '详情' }}
+            </button>
+          </div>
+          <pre
+            v-if="hasMetadata(log) && expandedDetails.has(logKey(log, i))"
+            class="log-console__details"
+            :data-testid="`log-details-${i}`"
+          >{{ formatMetadata(log.metadata) }}</pre>
         </div>
       </div>
     </div>
@@ -56,6 +72,7 @@ const emit = defineEmits(['clear'])
 
 const paused = ref(false)
 const filters = ref(new Set())
+const expandedDetails = ref(new Set())
 const logContainer = ref(null)
 const logEntries = ref(null)
 const autoScroll = ref(true)
@@ -71,6 +88,25 @@ function isFiltered(agent) { return filters.value.size === 0 || filters.value.ha
 function toggleFilter(agent) { filters.value.has(agent) ? filters.value.delete(agent) : filters.value.add(agent) }
 function agentColor(agent) { return colors[agent] || '#9ca3af' }
 function formatTime(ts) { return formatBeijingTime(ts) }
+function logKey(log, index) {
+  return `${log.timestamp || ''}:${log.agent || ''}:${log.node || ''}:${log.task || ''}:${index}`
+}
+function hasMetadata(log) {
+  if (!log || log.metadata == null) return false
+  if (Array.isArray(log.metadata)) return log.metadata.length > 0
+  if (typeof log.metadata === 'object') return Object.keys(log.metadata).length > 0
+  return true
+}
+function formatMetadata(metadata) {
+  if (typeof metadata === 'string') return metadata
+  return JSON.stringify(metadata, null, 2)
+}
+function toggleDetails(key) {
+  const next = new Set(expandedDetails.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  expandedDetails.value = next
+}
 function levelClass(level) {
   if (level === 'error') return 'border-red-800/80 bg-red-950/70 text-red-200'
   if (level === 'warning') return 'border-amber-800/80 bg-amber-950/70 text-amber-200'
@@ -146,6 +182,34 @@ watch(() => visibleLogs.value.length, async (nextLength, previousLength = 0) => 
   flex-direction: column;
   justify-content: flex-end;
   gap: 0.125rem;
+}
+
+.log-console__entry {
+  min-width: 0;
+}
+
+.log-console__details-toggle {
+  border: 1px solid rgba(75, 85, 99, 0.8);
+  border-radius: 4px;
+  background: rgba(17, 24, 39, 0.96);
+  padding: 0 0.35rem;
+  font-size: 0.6875rem;
+  line-height: 1.25rem;
+  color: #bfdbfe;
+}
+
+.log-console__details {
+  margin: 0.25rem 0 0.35rem 5.5rem;
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border-left: 2px solid rgba(96, 165, 250, 0.45);
+  background: rgba(3, 7, 18, 0.72);
+  padding: 0.5rem 0.65rem;
+  color: #cbd5e1;
+  font-size: 0.75rem;
+  line-height: 1.45;
 }
 
 .log-console__new-log-prompt {

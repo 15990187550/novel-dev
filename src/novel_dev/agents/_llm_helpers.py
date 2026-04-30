@@ -269,6 +269,46 @@ def _fallback_driver_for_parse(client: Any) -> tuple[Any, TaskConfig | None] | N
     return fallback, fallback_config
 
 
+def _preview_text(value: str | None, limit: int = 300) -> str:
+    text = (value or "").replace("\r", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
+def _prompt_metadata(prompt: str, *, limit: int = 300) -> dict[str, Any]:
+    return {
+        "prompt_chars": len(prompt or ""),
+        "prompt_preview": _preview_text(prompt, limit),
+    }
+
+
+def _response_metadata(response: Any | None, *, output_source: str | None = None) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "output_source": output_source,
+        "finish_reason": getattr(response, "finish_reason", None) if response is not None else None,
+        "usage": None,
+    }
+    usage = getattr(response, "usage", None) if response is not None else None
+    if usage is not None:
+        metadata["usage"] = usage.model_dump() if hasattr(usage, "model_dump") else usage
+    text = getattr(response, "text", "") if response is not None else ""
+    metadata["raw_len"] = len(text or "")
+    if text:
+        metadata["raw_preview"] = _preview_text(text, 300)
+    return metadata
+
+
+def _parse_failure_metadata(error: Exception, raw_output: str, *, source: str | None = None) -> dict[str, Any]:
+    return {
+        "error": str(error),
+        "error_kind": _classify_parse_error(error, raw_output),
+        "missing_paths": _validation_missing_paths(error),
+        "raw_len": len(raw_output or ""),
+        "raw_tail": _preview_text((raw_output or "")[-300:], 300),
+        "output_source": source,
+    }
+
+
 def _log_llm_event(
     novel_id: str,
     agent_name: str,
@@ -283,6 +323,9 @@ def _log_llm_event(
 ) -> None:
     if not novel_id:
         return
+    source_filename = metadata.get("source_filename") if metadata else None
+    if source_filename and source_filename not in message:
+        message = f"{message}（文件: {source_filename}）"
     log_service.add_log(
         novel_id,
         agent_name,
@@ -410,13 +453,21 @@ async def call_and_parse(
     parser: Callable[[str], T],
     max_retries: int = 3,
     novel_id: str = "",
+    context_metadata: dict[str, Any] | None = None,
 ) -> T:
+    context_metadata = context_metadata or {}
     client = llm_factory.get(agent_name, task=task)
     last_error = None
     current_prompt = prompt
     for attempt in range(max_retries):
         raise_if_cancelled_sync(novel_id)
-        attempt_metadata = {"attempt": attempt + 1, "max_retries": max_retries, "structured": False}
+        attempt_metadata = {
+            "attempt": attempt + 1,
+            "max_retries": max_retries,
+            "structured": False,
+            **_prompt_metadata(current_prompt),
+            **context_metadata,
+        }
         started_at = time.perf_counter()
         _log_llm_event(
             novel_id,
@@ -451,7 +502,7 @@ async def call_and_parse(
                 f"{task} 成功",
                 status="succeeded",
                 node="llm_parse",
-                metadata=attempt_metadata,
+                metadata={**attempt_metadata, **_response_metadata(response, output_source="text")},
                 duration_ms=int((time.perf_counter() - started_at) * 1000),
             )
             raise_if_cancelled_sync(novel_id)
@@ -462,7 +513,7 @@ async def call_and_parse(
                 current_prompt = _build_json_regenerate_prompt(prompt, response.text, exc)
             else:
                 current_prompt = _build_json_repair_prompt(prompt, response.text, exc)
-            failure_metadata = {**attempt_metadata, "error": str(exc)}
+            failure_metadata = {**attempt_metadata, **_parse_failure_metadata(exc, response.text, source="text")}
             _log_llm_event(
                 novel_id,
                 agent_name,
@@ -484,7 +535,12 @@ async def call_and_parse(
         status="failed",
         node="llm_parse",
         level="error",
-        metadata={"max_retries": max_retries, "error": str(last_error)},
+        metadata={
+            "max_retries": max_retries,
+            **_prompt_metadata(current_prompt),
+            **context_metadata,
+            **(_parse_failure_metadata(last_error, "", source="text") if last_error else {}),
+        },
     )
     raise RuntimeError(
         f"LLM parse failed after {max_retries} retries for {agent_name}/{task}: {last_error}"
@@ -498,7 +554,9 @@ async def call_and_parse_model(
     model_cls: Any,
     max_retries: int = 3,
     novel_id: str = "",
+    context_metadata: dict[str, Any] | None = None,
 ) -> Any:
+    context_metadata = context_metadata or {}
     adapter = TypeAdapter(model_cls)
 
     def validate_payload(payload: Any, *, source: str, last_error: Exception | None = None):
@@ -524,6 +582,7 @@ async def call_and_parse_model(
                 status="succeeded",
                 node="llm_normalize",
                 metadata={
+                    **context_metadata,
                     "source": source,
                     "error_kind": _classify_parse_error(exc, ""),
                     "missing_paths": _validation_missing_paths(exc),
@@ -556,8 +615,18 @@ async def call_and_parse_model(
                 "max_retries": max_retries,
                 "structured": True,
                 "tool_name": active_structured_config.response_tool_name,
+                "schema_name": (
+                    active_structured_config.structured_output.schema_name
+                    if active_structured_config.structured_output else None
+                ),
+                "structured_mode": (
+                    active_structured_config.structured_output.mode
+                    if active_structured_config.structured_output else None
+                ),
                 "json_text_fallback": text_fallback_started,
                 "fallback": fallback_started,
+                **_prompt_metadata(current_prompt),
+                **context_metadata,
             }
             started_at = time.perf_counter()
             _log_llm_event(
@@ -582,6 +651,7 @@ async def call_and_parse_model(
                 )
                 if response.structured_payload is not None:
                     result = payload_parser(response.structured_payload)
+                    output_source = "tool"
                 else:
                     cleaned = _strip_markdown(response.text)
                     if not cleaned.strip():
@@ -589,6 +659,7 @@ async def call_and_parse_model(
                             f"{task} did not return structured tool payload or JSON text"
                         )
                     result = parser(cleaned)
+                    output_source = "text"
                 _log_llm_event(
                     novel_id,
                     agent_name,
@@ -599,6 +670,7 @@ async def call_and_parse_model(
                     metadata={
                         **attempt_metadata,
                         "used_structured_payload": response.structured_payload is not None,
+                        **_response_metadata(response, output_source=output_source),
                     },
                     duration_ms=int((time.perf_counter() - started_at) * 1000),
                 )
@@ -623,10 +695,13 @@ async def call_and_parse_model(
                     level="warning",
                     metadata={
                         **attempt_metadata,
-                        "error": str(exc),
-                        "error_kind": error_kind,
-                        "missing_paths": _validation_missing_paths(exc),
-                        "raw_len": len(bad_output or ""),
+                        **_parse_failure_metadata(
+                            exc,
+                            bad_output,
+                            source="tool" if response is not None and response.structured_payload is not None else "text",
+                        ),
+                        "finish_reason": response.finish_reason if response is not None else None,
+                        "usage": response.usage.model_dump() if response is not None and response.usage else None,
                     },
                     duration_ms=int((time.perf_counter() - started_at) * 1000),
                 )
@@ -654,9 +729,12 @@ async def call_and_parse_model(
                         node="llm_text_fallback",
                         level="warning",
                         metadata={
+                            **context_metadata,
+                            **_prompt_metadata(current_prompt),
                             "error_kind": "empty_tool_payload",
                             "error": str(exc),
                             "raw_len": len(bad_output or ""),
+                            "raw_tail": _preview_text((bad_output or "")[-300:], 300),
                         },
                     )
                     continue
@@ -675,7 +753,12 @@ async def call_and_parse_model(
                                 status="started",
                                 node="llm_fallback",
                                 level="warning",
-                                metadata={"error_kind": error_kind, "error": str(exc)},
+                                metadata={
+                                    **context_metadata,
+                                    **_prompt_metadata(current_prompt),
+                                    "error_kind": error_kind,
+                                    "error": str(exc),
+                                },
                             )
                             active_client = fallback_client
                             active_structured_config = fallback_structured_config
@@ -701,9 +784,7 @@ async def call_and_parse_model(
                     level="warning",
                     metadata={
                         **attempt_metadata,
-                        "error": str(exc),
-                        "error_kind": error_kind,
-                        "raw_len": len(bad_output or ""),
+                        **_parse_failure_metadata(exc, bad_output, source="missing_tool"),
                         "finish_reason": response.finish_reason if response is not None else None,
                         "usage": response.usage.model_dump() if response is not None and response.usage else None,
                     },
@@ -726,7 +807,12 @@ async def call_and_parse_model(
                         status="started",
                         node="llm_text_fallback",
                         level="warning",
-                        metadata={"error_kind": error_kind, "error": str(exc)},
+                        metadata={
+                            **context_metadata,
+                            **_prompt_metadata(current_prompt),
+                            "error_kind": error_kind,
+                            "error": str(exc),
+                        },
                     )
                     continue
                 attempt += 1
@@ -744,7 +830,12 @@ async def call_and_parse_model(
                                 status="started",
                                 node="llm_fallback",
                                 level="warning",
-                                metadata={"error_kind": error_kind, "error": str(exc)},
+                                metadata={
+                                    **context_metadata,
+                                    **_prompt_metadata(current_prompt),
+                                    "error_kind": error_kind,
+                                    "error": str(exc),
+                                },
                             )
                             active_client = fallback_client
                             active_structured_config = fallback_structured_config
@@ -766,6 +857,8 @@ async def call_and_parse_model(
             metadata={
                 "max_retries": max_retries,
                 "structured": True,
+                **_prompt_metadata(current_prompt),
+                **context_metadata,
                 "error": str(last_error),
                 "error_kind": _classify_parse_error(last_error, "") if last_error else "parse_error",
                 "missing_paths": _validation_missing_paths(last_error) if last_error else [],
@@ -782,4 +875,5 @@ async def call_and_parse_model(
         parser=parser,
         max_retries=max_retries,
         novel_id=novel_id,
+        context_metadata=context_metadata,
     )

@@ -21,13 +21,40 @@ class TimelineRepository:
         await self.session.flush()
         return entry
 
+    async def get_by_tick(self, tick: int, novel_id: Optional[str] = None) -> Optional[Timeline]:
+        stmt = select(Timeline).where(Timeline.tick == tick)
+        if novel_id is not None:
+            stmt = stmt.where(Timeline.novel_id == novel_id)
+        result = await self.session.execute(stmt.order_by(Timeline.id.asc()).limit(1))
+        return result.scalars().first()
+
+    async def create_or_merge(
+        self,
+        tick: int,
+        narrative: str,
+        anchor_chapter_id: Optional[str] = None,
+        anchor_event_id: Optional[str] = None,
+        novel_id: Optional[str] = None,
+    ) -> tuple[Timeline, bool]:
+        existing = await self.get_by_tick(tick, novel_id=novel_id)
+        if not existing:
+            return await self.create(tick, narrative, anchor_chapter_id, anchor_event_id, novel_id), True
+
+        if narrative and narrative not in (existing.narrative or ""):
+            existing.narrative = "\n".join(part for part in [existing.narrative, narrative] if part)
+        if anchor_chapter_id and not existing.anchor_chapter_id:
+            existing.anchor_chapter_id = anchor_chapter_id
+        if anchor_event_id and not existing.anchor_event_id:
+            existing.anchor_event_id = anchor_event_id
+        await self.session.flush()
+        return existing, False
+
     async def get_current_tick(self, novel_id: Optional[str] = None) -> Optional[int]:
         stmt = select(Timeline.tick).order_by(Timeline.tick.desc())
         if novel_id is not None:
             stmt = stmt.where(Timeline.novel_id == novel_id)
-        result = await self.session.execute(stmt)
-        row = result.scalar_one_or_none()
-        return row
+        result = await self.session.execute(stmt.limit(1))
+        return result.scalars().first()
 
     async def get_adjacent(self, tick: int):
         prev_result = await self.session.execute(

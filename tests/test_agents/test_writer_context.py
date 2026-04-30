@@ -33,6 +33,16 @@ class TestBuildSystemPrompt:
         assert "禁用词" in result
         assert "禁止输出英文" in result
 
+    def test_prompt_contains_low_ai_flavor_style_controls(self):
+        ctx = _make_context(style_profile={})
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._build_system_prompt(ctx, is_last=False)
+        assert "比喻密度" in result
+        assert "抽象玄幻词" in result
+        assert "奇观堆叠" in result
+        assert "现代吐槽" in result
+        assert "style_profile" in result
+
     def test_no_worldview_or_entities(self):
         ctx = _make_context(worldview_summary="这是一段很长的世界观描述" * 100)
         agent = WriterAgent.__new__(WriterAgent)

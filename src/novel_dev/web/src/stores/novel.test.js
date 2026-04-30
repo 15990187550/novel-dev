@@ -38,6 +38,7 @@ vi.mock('@/api.js', () => ({
   rewriteChapter: vi.fn(),
   stopCurrentFlow: vi.fn(),
   getGenerationJob: vi.fn(),
+  getChapterRewriteJobs: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -46,6 +47,7 @@ describe('novel store dashboard loading', () => {
     vi.clearAllMocks()
     vi.mocked(api.getSynopsis).mockResolvedValue(null)
     vi.mocked(api.getVolumePlan).mockResolvedValue(null)
+    vi.mocked(api.getChapterRewriteJobs).mockResolvedValue({ items: [] })
   })
 
   it('marks every dashboard panel ready after loadDashboardSupplemental succeeds', async () => {
@@ -124,6 +126,43 @@ describe('novel store dashboard loading', () => {
     expect(api.getVolumePlan).not.toHaveBeenCalled()
     expect(store.volumePlan).toBeNull()
     expect(store.synopsisData).toEqual({ title: '道照诸天' })
+  })
+
+  it('loads persisted rewrite jobs so failed chapters can continue after refresh', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getNovelState).mockResolvedValue({
+      current_phase: 'context_preparation',
+      current_chapter_id: 'ch-1',
+      checkpoint_data: {
+        current_volume_plan: {
+          chapters: [{ chapter_id: 'ch-1', summary: '第一章计划摘要' }],
+        },
+      },
+    })
+    vi.mocked(api.getArchiveStats).mockResolvedValue({})
+    vi.mocked(api.getChapters).mockResolvedValue({
+      items: [{ chapter_id: 'ch-1', title: '第一章', status: 'edited', word_count: 4401 }],
+    })
+    vi.mocked(api.getChapterRewriteJobs).mockResolvedValue({
+      items: [{
+        chapter_id: 'ch-1',
+        job: {
+          job_id: 'job-failed-rewrite',
+          status: 'failed',
+          job_type: 'chapter_rewrite',
+          request_payload: { chapter_id: 'ch-1' },
+          result_payload: { resume_from_stage: 'librarian_archive' },
+        },
+      }],
+    })
+
+    await store.refreshState()
+
+    expect(api.getChapterRewriteJobs).toHaveBeenCalledWith('novel-1')
+    expect(store.chapterRewriteJobs['ch-1'].job_id).toBe('job-failed-rewrite')
+    expect(store.chapterRewriteJobs['ch-1'].status).toBe('failed')
   })
 
   it('uses explicit novel title instead of synopsis title for display', () => {
@@ -1113,6 +1152,34 @@ describe('novel store dashboard loading', () => {
     expect(store.fetchSpacelines).toHaveBeenCalledTimes(1)
     expect(store.fetchForeshadowings).toHaveBeenCalledTimes(1)
     expect(store.loadingActions['rewrite:ch-1']).toBe(false)
+  })
+
+  it('passes resume options when continuing a failed chapter rewrite', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshState = vi.fn().mockResolvedValue()
+    vi.mocked(api.rewriteChapter).mockResolvedValue({
+      job_id: 'job-resume-1',
+      status: 'queued',
+      job_type: 'chapter_rewrite',
+      request_payload: {
+        chapter_id: 'ch-1',
+        resume: true,
+        failed_job_id: 'job-failed-1',
+      },
+    })
+
+    const job = await store.rewriteChapter('ch-1', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    })
+
+    expect(api.rewriteChapter).toHaveBeenCalledWith('novel-1', 'ch-1', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    })
+    expect(job.job_id).toBe('job-resume-1')
+    expect(store.chapterRewriteJobs['ch-1'].request_payload.resume).toBe(true)
   })
 
   it('executeAction stores structured auto-run failure details', async () => {

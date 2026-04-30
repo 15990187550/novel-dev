@@ -70,6 +70,14 @@
         <el-table-column prop="status" label="状态" width="100">
           <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
         </el-table-column>
+        <el-table-column label="质量" width="110">
+          <template #default="{ row }">
+            <el-tag :type="qualityType(row.quality_status)" size="small">{{ qualityLabel(row.quality_status) }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="评分" width="90">
+          <template #default="{ row }">{{ row.display_score ?? row.final_review_score ?? row.score_overall ?? '-' }}</template>
+        </el-table-column>
         <el-table-column prop="word_count" label="字数" width="90" />
         <el-table-column label="进度" width="120">
           <template #default="{ row }">
@@ -97,6 +105,16 @@
                 @click="refreshRewrite(row)"
               >
                 刷新
+              </el-button>
+              <el-button
+                v-if="canResumeRewrite(row)"
+                size="small"
+                type="primary"
+                plain
+                :loading="isRewriting(row)"
+                @click="resumeRewriteChapter(row)"
+              >
+                继续
               </el-button>
             </div>
           </template>
@@ -146,7 +164,7 @@ const stopAtVolumeEnd = ref(true)
 const chapterPage = ref(1)
 const chapterPageSize = 20
 const runningStatuses = ['queued', 'running']
-const rewriteableStatuses = ['edited', 'archived']
+const rewriteableStatuses = ['drafted', 'edited', 'archived']
 const hasRunningAutoRun = computed(() => runningStatuses.includes(store.autoRunJob?.status))
 const chapterTotal = computed(() => store.chapters.length)
 const maxChapterPage = computed(() => Math.max(1, Math.ceil(chapterTotal.value / chapterPageSize)))
@@ -171,12 +189,24 @@ const jobStatusLabel = computed(() => ({
 }[store.autoRunJob?.status] || store.autoRunJob?.status || '-'))
 
 function statusType(s) { return { pending: 'info', drafted: 'primary', edited: 'success', archived: 'danger' }[s] || 'info' }
+function qualityType(s) { return { pass: 'success', warn: 'warning', block: 'danger', unchecked: 'info' }[s] || 'info' }
+function qualityLabel(s) {
+  return {
+    pass: '通过',
+    warn: '告警',
+    block: '阻断',
+    unchecked: '未检查',
+  }[s] || '未检查'
+}
 function rewriteJob(row) { return store.chapterRewriteJobs?.[row.chapter_id] || null }
 function isRewriting(row) {
   return Boolean(store.loadingActions[`rewrite:${row.chapter_id}`]) || runningStatuses.includes(rewriteJob(row)?.status)
 }
 function canRewrite(row) {
   return rewriteableStatuses.includes(row.status) && !isRewriting(row)
+}
+function canResumeRewrite(row) {
+  return ['pending', ...rewriteableStatuses].includes(row.status) && rewriteJob(row)?.status === 'failed' && !isRewriting(row)
 }
 
 watch(chapterTotal, () => {
@@ -226,6 +256,19 @@ async function rewriteCompletedChapter(row) {
   } catch (error) {
     if (error === 'cancel') return
     ElMessage.error(error?.response?.data?.detail || error?.message || '重写任务提交失败')
+  }
+}
+
+async function resumeRewriteChapter(row) {
+  const failedJob = rewriteJob(row)
+  try {
+    const job = await store.rewriteChapter(row.chapter_id, {
+      resume: true,
+      failed_job_id: failedJob?.job_id,
+    })
+    ElMessage.success(`续跑任务已提交：${job?.job_id || '-'}`)
+  } catch (error) {
+    ElMessage.error(error?.response?.data?.detail || error?.message || '续跑任务提交失败')
   }
 }
 

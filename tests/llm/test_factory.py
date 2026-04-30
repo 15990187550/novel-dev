@@ -185,3 +185,12 @@ def test_critic_score_chapter_has_enough_output_budget():
     cfg = factory._resolve_config("CriticAgent", "score_chapter")
 
     assert cfg.max_tokens == 8192
+
+
+def test_default_max_tokens_is_doubled_for_tasks_without_override():
+    settings = Settings(llm_config_path="llm_config.yaml")
+    factory = LLMFactory(settings)
+
+    cfg = factory._resolve_config("WriterAgent", "generate_beat")
+
+    assert cfg.max_tokens == 8192

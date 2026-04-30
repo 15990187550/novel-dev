@@ -45,6 +45,16 @@ async def test_list_chapters(async_session):
         {"plot_tension": {"score": 88}, "readability": 82},
         {"summary_feedback": "节奏稳定，章末钩子清晰。"},
     )
+    await ChapterRepository(async_session).update_quality_gate(
+        "c1",
+        quality_status="warn",
+        quality_reasons={"warning_items": [{"code": "word_count_drift", "message": "字数偏长"}]},
+        final_review_score=78,
+        final_review_feedback={"summary_feedback": "成稿可用但需压缩。"},
+        draft_review_score=86,
+        draft_review_feedback={"summary_feedback": "草稿节奏稳定。"},
+        world_state_ingested=True,
+    )
     await async_session.commit()
 
     try:
@@ -58,6 +68,12 @@ async def test_list_chapters(async_session):
             assert c1["status"] == "pending"
             assert c1["word_count"] == 10
             assert c1["score_overall"] == 86
+            assert c1["display_score"] == 78
+            assert c1["quality_status"] == "warn"
+            assert c1["quality_reasons"]["warning_items"][0]["code"] == "word_count_drift"
+            assert c1["draft_review_score"] == 86
+            assert c1["final_review_score"] == 78
+            assert c1["world_state_ingested"] is True
             assert c1["score_breakdown"]["plot_tension"]["score"] == 88
             assert c1["review_feedback"]["summary_feedback"] == "节奏稳定，章末钩子清晰。"
             assert data["items"][1]["score_overall"] is None

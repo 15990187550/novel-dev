@@ -147,6 +147,72 @@ async def test_domain_upload_approval_writes_local_docs_and_entities_without_glo
 
 
 @pytest.mark.asyncio
+async def test_delete_knowledge_domain_removes_local_docs_and_entities(async_session, monkeypatch):
+    async def override():
+        yield async_session
+
+    async def fail_merge(*args, **kwargs):
+        raise AssertionError("domain import approval should not merge global library documents")
+
+    monkeypatch.setattr(ExtractionService, "_request_setting_document_merge", fail_merge)
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            await EntityRepository(async_session).create(
+                "global_entity",
+                "character",
+                "林风",
+                novel_id="n1",
+            )
+
+            upload_resp = await client.post(
+                "/api/novels/n1/documents/upload",
+                json={
+                    "filename": "仙逆.md",
+                    "content": "世界观：仙逆。人物：王林。势力：藤家。物品：天逆珠。",
+                    "knowledge_usage": "domain",
+                    "domain_name": "仙逆",
+                },
+            )
+            assert upload_resp.status_code == 200
+            pending_id = upload_resp.json()["id"]
+            domain_id = upload_resp.json()["knowledge_domain"]["id"]
+
+            approve_resp = await client.post(
+                "/api/novels/n1/documents/pending/approve",
+                json={"pending_id": pending_id},
+            )
+            assert approve_resp.status_code == 200
+            assert approve_resp.json()["documents"]
+
+            entities_before = await EntityRepository(async_session).list_by_novel("n1")
+            assert {entity.name for entity in entities_before} >= {"林风", "Mock", "MockItem"}
+
+            delete_resp = await client.delete(f"/api/novels/n1/knowledge_domains/{domain_id}")
+            assert delete_resp.status_code == 200
+            payload = delete_resp.json()
+            assert payload["deleted"] is True
+            assert payload["deleted_domain_id"] == domain_id
+            assert payload["deleted_documents"] > 0
+            assert payload["deleted_entities"] > 0
+
+            domains_resp = await client.get("/api/novels/n1/knowledge_domains", params={"include_disabled": True})
+            assert all(item["id"] != domain_id for item in domains_resp.json()["items"])
+
+            doc_repo = DocumentRepository(async_session)
+            domain_docs = []
+            for doc_type in ("domain_worldview", "domain_setting", "domain_synopsis", "domain_concept"):
+                domain_docs.extend(await doc_repo.get_by_type("n1", doc_type))
+            assert domain_docs == []
+
+            remaining_entities = await EntityRepository(async_session).list_by_novel("n1")
+            assert {entity.name for entity in remaining_entities} == {"林风"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_batch_upload_setting_returns_per_file_results_and_pending_source_filename(async_session):
     async def override():
         yield async_session

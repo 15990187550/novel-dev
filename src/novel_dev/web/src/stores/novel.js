@@ -521,11 +521,12 @@ export const useNovelStore = defineStore('novel', {
       if (!this.novelId) return
       const state = await api.getNovelState(this.novelId)
       const shouldLoadVolumePlan = !!state.checkpoint_data?.current_volume_plan
-      const [stats, chapters, synopsis, volumePlan] = await Promise.all([
+      const [stats, chapters, synopsis, volumePlan, rewriteJobs] = await Promise.all([
         api.getArchiveStats(this.novelId).catch(() => ({})),
         api.getChapters(this.novelId).catch(() => ({ items: [] })),
         api.getSynopsis(this.novelId).catch(() => null),
         shouldLoadVolumePlan ? api.getVolumePlan(this.novelId).catch(() => null) : Promise.resolve(null),
+        api.getChapterRewriteJobs(this.novelId).catch(() => ({ items: [] })),
       ])
       this.novelState = state
       this.archiveStats = stats
@@ -533,6 +534,11 @@ export const useNovelStore = defineStore('novel', {
       this.synopsisContent = synopsis?.content || ''
       this.synopsisData = synopsis?.synopsis_data || state.checkpoint_data?.synopsis_data || null
       this.volumePlan = volumePlan || state.checkpoint_data?.current_volume_plan || null
+      this.chapterRewriteJobs = Object.fromEntries(
+        (rewriteJobs.items || [])
+          .filter(item => item?.chapter_id && item?.job)
+          .map(item => [item.chapter_id, item.job]),
+      )
       if (state.current_phase !== 'brainstorming') {
         this.brainstormWorkspace = createBrainstormWorkspaceState()
       }
@@ -642,12 +648,15 @@ export const useNovelStore = defineStore('novel', {
       }
     },
 
-    async rewriteChapter(chapterId) {
+    async rewriteChapter(chapterId, options = {}) {
       if (!this.novelId || !chapterId) return null
       const loadingKey = `rewrite:${chapterId}`
       this.loadingActions[loadingKey] = true
       try {
-        const job = await api.rewriteChapter(this.novelId, chapterId)
+        const hasOptions = options && Object.keys(options).length > 0
+        const job = hasOptions
+          ? await api.rewriteChapter(this.novelId, chapterId, options)
+          : await api.rewriteChapter(this.novelId, chapterId)
         this.chapterRewriteJobs = {
           ...this.chapterRewriteJobs,
           [chapterId]: job,
@@ -852,6 +861,13 @@ export const useNovelStore = defineStore('novel', {
       const result = await api.disableKnowledgeDomain(this.novelId, domainId)
       await this.fetchKnowledgeDomains(true)
       return result.item
+    },
+
+    async deleteKnowledgeDomain(domainId) {
+      if (!this.novelId || !domainId) return null
+      const result = await api.deleteKnowledgeDomain(this.novelId, domainId)
+      await this.fetchKnowledgeDomains(true)
+      return result
     },
 
     async saveSynopsis(content) {

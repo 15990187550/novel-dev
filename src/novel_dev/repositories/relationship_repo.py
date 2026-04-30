@@ -48,8 +48,8 @@ class RelationshipRepository:
         )
         if novel_id is not None:
             stmt = stmt.where(EntityRelationship.novel_id == novel_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
+        result = await self.session.execute(stmt.order_by(EntityRelationship.id.desc()).limit(1))
+        return result.scalars().first()
 
     async def upsert(
         self,
@@ -60,7 +60,16 @@ class RelationshipRepository:
         chapter_id: Optional[str] = None,
         novel_id: Optional[str] = None,
     ) -> EntityRelationship:
-        existing = await self.get_active(source_id, target_id, novel_id=novel_id)
+        stmt = select(EntityRelationship).where(
+            EntityRelationship.source_id == source_id,
+            EntityRelationship.target_id == target_id,
+            EntityRelationship.is_active == True,
+        )
+        if novel_id is not None:
+            stmt = stmt.where(EntityRelationship.novel_id == novel_id)
+        result = await self.session.execute(stmt.order_by(EntityRelationship.id.desc()))
+        matches = list(result.scalars().all())
+        existing = matches[0] if matches else None
         if existing is None:
             return await self.create(
                 source_id=source_id,
@@ -71,6 +80,8 @@ class RelationshipRepository:
                 novel_id=novel_id,
             )
 
+        for duplicate in matches[1:]:
+            duplicate.is_active = False
         existing.relation_type = relation_type
         existing.meta = meta
         existing.created_at_chapter_id = chapter_id

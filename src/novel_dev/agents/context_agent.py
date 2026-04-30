@@ -17,6 +17,7 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
 
 logger = logging.getLogger(__name__)
@@ -97,7 +98,31 @@ class ContextAgent:
         checkpoint: dict | None = None,
     ) -> ChapterContext:
         checkpoint = dict(checkpoint or {})
-        log_service.add_log(novel_id, "ContextAgent", f"章节计划: {chapter_plan.title}，共 {len(chapter_plan.beats)} 个节拍")
+        log_agent_detail(
+            novel_id,
+            "ContextAgent",
+            f"章节计划已读取：{chapter_plan.title}，{len(chapter_plan.beats)} 个节拍",
+            node="context_chapter_plan",
+            task="assemble",
+            status="started",
+            metadata={
+                "chapter_id": chapter_id,
+                "volume_id": volume_id,
+                "chapter_number": chapter_plan.chapter_number,
+                "title": chapter_plan.title,
+                "target_word_count": chapter_plan.target_word_count,
+                "beats": [
+                    {
+                        "index": idx,
+                        "summary_preview": preview_text(beat.summary),
+                        "target_mood": beat.target_mood,
+                        "key_entities": beat.key_entities,
+                        "foreshadowings_to_embed": beat.foreshadowings_to_embed,
+                    }
+                    for idx, beat in enumerate(chapter_plan.beats)
+                ],
+            },
+        )
 
         key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
@@ -161,7 +186,14 @@ class ContextAgent:
             )
 
         location_context = await self._load_location_context(chapter_plan, novel_id)
-        log_service.add_log(novel_id, "ContextAgent", f"地点上下文: {location_context.current}")
+        log_agent_detail(
+            novel_id,
+            "ContextAgent",
+            f"地点上下文已准备：{location_context.current}",
+            node="context_location",
+            task="assemble",
+            metadata={"location": location_context.model_dump()},
+        )
         timeline_events = await self._load_timeline_events(checkpoint, novel_id)
         log_service.add_log(
             novel_id,
@@ -290,15 +322,26 @@ class ContextAgent:
             "worldview": self._document_row_log_item(worldview_doc) if worldview_doc else None,
             "has_style_profile": bool(style_profile),
             "has_previous_chapter_summary": bool(prev_summary),
+            "guardrails": guardrails,
+            "beat_contexts": [
+                {
+                    "beat_index": bc.beat_index,
+                    "summary_preview": preview_text(bc.beat.summary),
+                    "entities": [e.name for e in bc.entities],
+                    "documents": [doc.title for doc in bc.relevant_documents],
+                    "foreshadowings": [fs.id for fs in bc.foreshadowings],
+                    "guardrail_count": len(bc.guardrails),
+                }
+                for bc in beat_contexts
+            ],
         }
         log_service.add_log(
             novel_id,
             "ContextAgent",
-            "章节上下文来源: "
-            f"实体[{self._join_names([e.name for e in active_entities + related_entities])}], "
-            f"文档[{self._join_names([doc.title for doc in relevant_docs])}], "
-            f"相似章节[{self._join_names([doc.title for doc in similar_chapters])}], "
-            f"伏笔[{self._join_names([fs.content for fs in pending_foreshadowings])}]",
+            "章节上下文来源已准备："
+            f"实体 {len(active_entities) + len(related_entities)} 个，"
+            f"文档 {len(relevant_docs)} 个，相似章节 {len(similar_chapters)} 个，"
+            f"伏笔 {len(pending_foreshadowings)} 条",
             event="agent.progress",
             status="succeeded",
             node="context_sources",

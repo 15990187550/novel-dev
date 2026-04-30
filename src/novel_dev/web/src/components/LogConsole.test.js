@@ -47,6 +47,53 @@ describe('LogConsole', () => {
     expect(wrapper.text()).toContain('生成失败')
   })
 
+  it('shows and toggles formatted metadata details only when metadata exists', async () => {
+    const wrapper = mount(LogConsole, {
+      props: {
+        connected: true,
+        logs: [
+          {
+            timestamp: '2026-04-25T01:00:00Z',
+            agent: 'ContextAgent',
+            level: 'info',
+            status: 'succeeded',
+            node: 'context_sources',
+            message: '章节上下文来源已准备',
+            metadata: {
+              query: '山门 夜战',
+              active_entities: [{ name: '陆照', preview: '负伤但清醒' }],
+            },
+          },
+          {
+            timestamp: '2026-04-25T01:00:01Z',
+            agent: 'WriterAgent',
+            level: 'info',
+            message: '普通日志',
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          ElTag: { props: ['type'], template: '<span class="el-tag-stub"><slot /></span>' },
+          ElButton: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+
+    expect(wrapper.find('[data-testid="log-details-toggle-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="log-details-toggle-1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="log-details-0"]').exists()).toBe(false)
+
+    await wrapper.get('[data-testid="log-details-toggle-0"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="log-details-0"]').text()).toContain('"query": "山门 夜战"')
+    expect(wrapper.get('[data-testid="log-details-0"]').text()).toContain('"name": "陆照"')
+
+    await wrapper.get('[data-testid="log-details-toggle-0"]').trigger('click')
+
+    expect(wrapper.find('[data-testid="log-details-0"]').exists()).toBe(false)
+  })
+
   it('scrolls to the bottom when opened with existing logs', async () => {
     const restoreAnimationFrame = installAnimationFrameMock()
     const scrollTo = vi.fn()

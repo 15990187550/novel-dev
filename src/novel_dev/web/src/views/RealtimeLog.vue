@@ -18,6 +18,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { ElMessageBox } from 'element-plus'
 import * as api from '@/api.js'
 import { useNovelStore } from '@/stores/novel.js'
 import { useRealtimeLog } from '@/composables/useRealtimeLog.js'
@@ -29,7 +30,23 @@ const { logs, connected } = useRealtimeLog(novelIdRef)
 
 async function handleClearLogs() {
   if (store.novelId) {
-    await api.clearLogs(store.novelId)
+    try {
+      const confirmed = await ElMessageBox.confirm(
+        '会删除当前小说最近 7 天内已持久化的日志，仅保留一条清空记录。',
+        '清空日志',
+        {
+          confirmButtonText: '清空',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      )
+      if (confirmed !== 'confirm') return
+    } catch {
+      return
+    }
+    const result = await api.clearLogs(store.novelId)
+    logs.value = result?.audit_log ? [result.audit_log] : []
+    return
   }
   logs.value = []
 }

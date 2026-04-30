@@ -307,13 +307,14 @@ async def test_call_and_parse_model_uses_regenerate_prompt_after_repair_attempt_
 async def test_call_and_parse_model_emits_frontend_visible_llm_node_logs():
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(text='{"title": "主线", "tags": ["成长"]}')
+    prompt = "prompt-" + ("很长的提示" * 80)
 
     with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         result = await call_and_parse_model(
             "TestAgent",
             "test_task",
-            "prompt",
+            prompt,
             ExamplePayload,
             max_retries=3,
             novel_id="novel-logs",
@@ -326,6 +327,14 @@ async def test_call_and_parse_model_emits_frontend_visible_llm_node_logs():
     assert "succeeded" in statuses
     assert any(entry.get("event") == "agent.llm" and entry.get("node") == "llm_call" for entry in entries)
     assert any(entry.get("task") == "test_task" for entry in entries)
+    started = next(entry for entry in entries if entry.get("status") == "started")
+    metadata = started["metadata"]
+    assert metadata["prompt_chars"] == len(prompt)
+    assert len(metadata["prompt_preview"]) <= 300
+    assert metadata["prompt_preview"] != prompt
+    succeeded = next(entry for entry in entries if entry.get("status") == "succeeded")
+    assert succeeded["metadata"]["output_source"] == "text"
+    assert "finish_reason" in succeeded["metadata"]
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,8 @@
 import asyncio
 import json
+from datetime import datetime
 from typing import Any, Optional
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, func, select
@@ -77,6 +78,11 @@ class CreateNovelRequest(BaseModel):
 
 class UpdateNovelRequest(BaseModel):
     title: str
+
+
+class ChapterRewriteRequest(BaseModel):
+    resume: bool = False
+    failed_job_id: Optional[str] = None
 
 
 class EntityClassificationUpdateRequest(BaseModel):
@@ -950,12 +956,43 @@ async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_sessi
             "status": ch.status if ch else "pending",
             "word_count": word_count,
             "score_overall": ch.score_overall if ch else None,
+            "display_score": (
+                ch.final_review_score
+                if ch and ch.final_review_score is not None
+                else (ch.score_overall if ch else None)
+            ),
             "score_breakdown": ch.score_breakdown if ch else {},
             "review_feedback": ch.review_feedback if ch else {},
             "fast_review_score": ch.fast_review_score if ch else None,
             "fast_review_feedback": ch.fast_review_feedback if ch else {},
+            "draft_review_score": ch.draft_review_score if ch else None,
+            "draft_review_feedback": ch.draft_review_feedback if ch else {},
+            "final_review_score": ch.final_review_score if ch else None,
+            "final_review_feedback": ch.final_review_feedback if ch else {},
+            "quality_status": ch.quality_status if ch else "unchecked",
+            "quality_reasons": ch.quality_reasons if ch else {},
+            "quality_checked_at": ch.quality_checked_at.isoformat() if ch and ch.quality_checked_at else None,
+            "world_state_ingested": bool(ch.world_state_ingested) if ch else False,
         })
     return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/chapters/rewrite_jobs")
+async def list_chapter_rewrite_jobs(novel_id: str, session: AsyncSession = Depends(get_session)):
+    state = await NovelStateRepository(session).get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    jobs = await GenerationJobRepository(session).list_latest_by_chapter(novel_id, CHAPTER_REWRITE_JOB)
+    return {
+        "novel_id": novel_id,
+        "items": [
+            {
+                "chapter_id": chapter_id,
+                "job": _generation_job_response(job),
+            }
+            for chapter_id, job in jobs
+        ],
+    }
 
 
 @router.get("/api/novels/{novel_id}/chapters/{chapter_id}")
@@ -971,6 +1008,36 @@ async def get_chapter(novel_id: str, chapter_id: str, session: AsyncSession = De
         "title": ch.title,
         "status": ch.status,
         "score_overall": ch.score_overall,
+        "display_score": ch.final_review_score if ch.final_review_score is not None else ch.score_overall,
+        "draft_review_score": ch.draft_review_score,
+        "draft_review_feedback": ch.draft_review_feedback,
+        "final_review_score": ch.final_review_score,
+        "final_review_feedback": ch.final_review_feedback,
+        "quality_status": ch.quality_status,
+        "quality_reasons": ch.quality_reasons,
+        "quality_checked_at": ch.quality_checked_at.isoformat() if ch.quality_checked_at else None,
+        "world_state_ingested": ch.world_state_ingested,
+    }
+
+
+@router.get("/api/novels/{novel_id}/chapters/{chapter_id}/quality")
+async def get_chapter_quality(novel_id: str, chapter_id: str, session: AsyncSession = Depends(get_session)):
+    repo = ChapterRepository(session)
+    ch = await repo.get_by_id(chapter_id)
+    if not ch or ch.novel_id not in {None, novel_id}:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    return {
+        "chapter_id": ch.id,
+        "quality_status": ch.quality_status,
+        "quality_reasons": ch.quality_reasons or {},
+        "quality_checked_at": ch.quality_checked_at.isoformat() if ch.quality_checked_at else None,
+        "draft_review_score": ch.draft_review_score,
+        "draft_review_feedback": ch.draft_review_feedback or {},
+        "final_review_score": ch.final_review_score,
+        "final_review_feedback": ch.final_review_feedback or {},
+        "fast_review_score": ch.fast_review_score,
+        "fast_review_feedback": ch.fast_review_feedback or {},
+        "world_state_ingested": ch.world_state_ingested,
     }
 
 
@@ -1315,6 +1382,21 @@ async def disable_knowledge_domain(
     return {"item": serialize_knowledge_domain(domain)}
 
 
+@router.delete("/api/novels/{novel_id}/knowledge_domains/{domain_id}")
+async def delete_knowledge_domain(
+    novel_id: str,
+    domain_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    svc = KnowledgeDomainService(session)
+    try:
+        result = await svc.delete_domain(novel_id, domain_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return result
+
+
 @router.post("/api/novels/{novel_id}/documents/library/merge-duplicates")
 async def merge_duplicate_library_documents(novel_id: str, session: AsyncSession = Depends(get_session)):
     embedder = llm_factory.get_embedder()
@@ -1610,7 +1692,9 @@ async def auto_run_chapters(
     if not state:
         raise HTTPException(status_code=404, detail="Novel state not found")
     await FlowControlService(session).clear_stop(novel_id)
-    await RecoveryCleanupService(session).run_cleanup()
+    await RecoveryCleanupService(session).run_cleanup(
+        RecoveryCleanupOptions(stale_running_minutes=5, stale_queued_minutes=1)
+    )
     repo = GenerationJobRepository(session)
     active = await repo.get_active(novel_id, CHAPTER_AUTO_RUN_JOB)
     if active:
@@ -1629,17 +1713,22 @@ async def auto_run_chapters(
 async def rewrite_chapter(
     novel_id: str,
     chapter_id: str,
+    req: ChapterRewriteRequest | None = Body(default=None),
     session: AsyncSession = Depends(get_session),
 ):
+    req = req or ChapterRewriteRequest()
     state = await NovelStateRepository(session).get_state(novel_id)
     if not state:
         raise HTTPException(status_code=404, detail="Novel state not found")
 
-    chapter = await ChapterRepository(session).get_by_id(chapter_id)
-    if not chapter or chapter.novel_id != novel_id:
+    chapter_repo = ChapterRepository(session)
+    chapter = await chapter_repo.get_by_id(chapter_id)
+    if chapter and chapter.novel_id != novel_id:
         raise HTTPException(status_code=404, detail="Chapter not found")
-    if chapter.status not in {"edited", "archived"}:
-        raise HTTPException(status_code=409, detail="Only edited or archived chapters can be rewritten")
+    if not req.resume and not chapter:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if not req.resume and chapter.status not in {"drafted", "edited", "archived"}:
+        raise HTTPException(status_code=409, detail="Only drafted, edited or archived chapters can be rewritten")
 
     checkpoint = dict(state.checkpoint_data or {})
     volume_plan = checkpoint.get("current_volume_plan") or {}
@@ -1659,10 +1748,77 @@ async def rewrite_chapter(
     if active_auto_run and state.current_chapter_id == chapter_id:
         raise HTTPException(status_code=409, detail="Current chapter is being generated")
 
-    job = await repo.create(novel_id, CHAPTER_REWRITE_JOB, {"chapter_id": chapter_id})
+    payload = {"chapter_id": chapter_id}
+    if req.resume:
+        resume_payload = await _build_chapter_rewrite_resume_payload(
+            session,
+            novel_id,
+            chapter_id,
+            chapter,
+            failed_job_id=req.failed_job_id,
+        )
+        payload.update(resume_payload)
+    elif chapter.status not in {"drafted", "edited", "archived"}:
+        raise HTTPException(status_code=409, detail="Only drafted, edited or archived chapters can be rewritten")
+
+    await FlowControlService(session).clear_stop(novel_id)
+    job = await repo.create(novel_id, CHAPTER_REWRITE_JOB, payload)
     await session.commit()
     schedule_generation_job(job.id)
     return _generation_job_response(job)
+
+
+async def _build_chapter_rewrite_resume_payload(
+    session: AsyncSession,
+    novel_id: str,
+    chapter_id: str,
+    chapter: Chapter | None,
+    *,
+    failed_job_id: str | None,
+) -> dict:
+    payload: dict[str, Any] = {
+        "resume": True,
+    }
+    failed_payload: dict[str, Any] = {}
+    if failed_job_id:
+        failed_job = await GenerationJobRepository(session).get_by_id(failed_job_id)
+        if not failed_job or failed_job.novel_id != novel_id or failed_job.job_type != CHAPTER_REWRITE_JOB:
+            raise HTTPException(status_code=404, detail="Failed rewrite job not found")
+        if failed_job.status != "failed":
+            raise HTTPException(status_code=409, detail="Only failed rewrite jobs can be resumed")
+        request_chapter_id = (failed_job.request_payload or {}).get("chapter_id")
+        result_chapter_id = (failed_job.result_payload or {}).get("chapter_id")
+        if request_chapter_id != chapter_id and result_chapter_id != chapter_id:
+            raise HTTPException(status_code=409, detail="Failed rewrite job belongs to another chapter")
+        failed_payload = dict(failed_job.result_payload or {})
+        payload["failed_job_id"] = failed_job_id
+
+    resume_from_stage = failed_payload.get("resume_from_stage") or _infer_chapter_rewrite_resume_stage(chapter)
+    if not chapter and resume_from_stage != "context":
+        raise HTTPException(status_code=409, detail="Failed rewrite job cannot be resumed without chapter artifacts")
+    if chapter and chapter.status == "pending" and resume_from_stage != "context":
+        raise HTTPException(status_code=409, detail="Failed rewrite job cannot be resumed from this stage without chapter artifacts")
+    if chapter and chapter.status not in {"pending", "drafted", "edited", "archived"}:
+        raise HTTPException(status_code=409, detail="Only pending, drafted, edited or archived chapters can resume rewrite")
+    payload["resume_from_stage"] = resume_from_stage
+    checkpoint = failed_payload.get("rewrite_checkpoint")
+    if isinstance(checkpoint, dict) and checkpoint:
+        payload["resume_checkpoint"] = checkpoint
+    return payload
+
+
+def _infer_chapter_rewrite_resume_stage(chapter: Chapter | None) -> str:
+    if not chapter:
+        return "context"
+    if getattr(chapter, "quality_status", "unchecked") == "block":
+        return "edit_fast_review"
+    if chapter.polished_text and chapter.score_overall is not None and chapter.fast_review_feedback is not None:
+        return "librarian_archive"
+    if chapter.raw_draft and chapter.score_overall is not None:
+        return "edit_fast_review"
+    if chapter.raw_draft:
+        return "review"
+    return "context"
 
 
 @router.get("/api/novels/{novel_id}/generation_jobs/{job_id}")
@@ -2278,6 +2434,45 @@ async def get_archive_stats(novel_id: str, session: AsyncSession = Depends(get_s
     }
 
 
+def _agent_log_to_entry(row: AgentLog) -> dict[str, Any]:
+    entry = {
+        "timestamp": row.timestamp.isoformat() + "Z",
+        "agent": row.agent,
+        "message": row.message,
+        "level": row.level,
+    }
+    if row.event is not None:
+        entry["event"] = row.event
+    if row.status is not None:
+        entry["status"] = row.status
+    if row.node is not None:
+        entry["node"] = row.node
+    if row.task is not None:
+        entry["task"] = row.task
+    if row.meta is not None:
+        entry["metadata"] = row.meta
+    if row.duration_ms is not None:
+        entry["duration_ms"] = row.duration_ms
+    return entry
+
+
+@router.get("/api/novels/{novel_id}/logs")
+async def get_logs(novel_id: str, limit: int = 500, session: AsyncSession = Depends(get_session)):
+    state = await session.get(NovelState, novel_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    bounded_limit = max(1, min(limit, 500))
+    result = await session.execute(
+        select(AgentLog)
+        .where(AgentLog.novel_id == novel_id)
+        .order_by(AgentLog.timestamp.desc(), AgentLog.id.desc())
+        .limit(bounded_limit)
+    )
+    rows = list(result.scalars())[::-1]
+    return {"novel_id": novel_id, "logs": [_agent_log_to_entry(row) for row in rows]}
+
+
 @router.get("/api/novels/{novel_id}/logs/stream")
 async def stream_logs(novel_id: str):
     from novel_dev.services.log_service import log_service as _log_service
@@ -2311,6 +2506,26 @@ async def clear_logs(novel_id: str, session: AsyncSession = Depends(get_session)
     )
     deleted_count = int(count_result.scalar_one() or 0)
     await session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
+    audit_timestamp = datetime.utcnow()
+    audit_entry = {
+        "timestamp": audit_timestamp.isoformat() + "Z",
+        "agent": "LogService",
+        "message": f"日志已清空，删除 {deleted_count} 条历史记录",
+        "level": "warning",
+        "event": "logs.clear",
+        "status": "succeeded",
+        "metadata": {"deleted_count": deleted_count},
+    }
+    session.add(AgentLog(
+        novel_id=novel_id,
+        timestamp=audit_timestamp,
+        agent=audit_entry["agent"],
+        message=audit_entry["message"],
+        level=audit_entry["level"],
+        event=audit_entry["event"],
+        status=audit_entry["status"],
+        meta=audit_entry["metadata"],
+    ))
     await session.commit()
     log_service.clear_memory(novel_id)
-    return {"novel_id": novel_id, "deleted_count": deleted_count}
+    return {"novel_id": novel_id, "deleted_count": deleted_count, "audit_log": audit_entry}

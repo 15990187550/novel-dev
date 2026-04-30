@@ -25,9 +25,11 @@ const {
   getKnowledgeDomainsMock,
   confirmKnowledgeDomainScopeMock,
   disableKnowledgeDomainMock,
+  deleteKnowledgeDomainMock,
   updateLibraryDocumentMock,
   rollbackStyleProfileMock,
   successMessageMock,
+  confirmMessageBoxMock,
 } = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
   deletePendingDocMock: vi.fn(),
@@ -38,9 +40,11 @@ const {
   getKnowledgeDomainsMock: vi.fn(),
   confirmKnowledgeDomainScopeMock: vi.fn(),
   disableKnowledgeDomainMock: vi.fn(),
+  deleteKnowledgeDomainMock: vi.fn(),
   updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
   successMessageMock: vi.fn(),
+  confirmMessageBoxMock: vi.fn(),
 }))
 
 vi.mock('@/api.js', () => ({
@@ -53,6 +57,7 @@ vi.mock('@/api.js', () => ({
   getKnowledgeDomains: getKnowledgeDomainsMock,
   confirmKnowledgeDomainScope: confirmKnowledgeDomainScopeMock,
   disableKnowledgeDomain: disableKnowledgeDomainMock,
+  deleteKnowledgeDomain: deleteKnowledgeDomainMock,
   updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
 }))
@@ -60,6 +65,9 @@ vi.mock('@/api.js', () => ({
 vi.mock('element-plus', () => ({
   ElMessage: {
     success: successMessageMock,
+  },
+  ElMessageBox: {
+    confirm: confirmMessageBoxMock,
   },
 }))
 
@@ -139,6 +147,8 @@ describe('Documents', () => {
     getKnowledgeDomainsMock.mockResolvedValue({ items: [] })
     confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
     disableKnowledgeDomainMock.mockResolvedValue({ item: {} })
+    deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
+    confirmMessageBoxMock.mockResolvedValue()
     rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
   })
 
@@ -1003,6 +1013,83 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('彼岸传承者')
   })
 
+  it('saves the active draft field before approving the pending document', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-significance',
+        source_filename: '道经.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'create',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '', new_value: '核心功法' },
+                { field: 'significance', label: '重要性', old_value: '', new_value: '旧的重要性' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    const editedSignificance = '让主角提前获得高阶特征，是核心外挂与正统修炼的象征'
+    updatePendingDraftFieldMock.mockResolvedValue({
+      item: {
+        ...store.pendingDocs[0],
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'create',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '', new_value: '核心功法' },
+                { field: 'significance', label: '重要性', old_value: '', new_value: editedSignificance },
+              ],
+            },
+          ],
+        },
+      },
+    })
+    approvePendingMock.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButtons = wrapper.findAll('.documents-draft-field__edit')
+    await editButtons[1].trigger('click')
+    await nextTick()
+
+    await wrapper.find('.documents-draft-field__input').setValue(editedSignificance)
+    const approveButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '批准')
+    await approveButton.trigger('click')
+    await flushPromises()
+
+    expect(updatePendingDraftFieldMock).toHaveBeenCalledWith('novel-1', 'doc-significance', {
+      entity_type: 'item',
+      entity_name: '道经',
+      field: 'significance',
+      value: editedSignificance,
+    })
+    expect(approvePendingMock).toHaveBeenCalledWith('novel-1', 'doc-significance', [])
+    expect(updatePendingDraftFieldMock.mock.invocationCallOrder[0]).toBeLessThan(
+      approvePendingMock.mock.invocationCallOrder[0]
+    )
+  })
+
   it('cancels a draft field edit on Escape without closing the detail content', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -1346,5 +1433,44 @@ describe('Documents', () => {
       global.FileReader = originalFileReader
       vi.useRealTimers()
     }
+  })
+
+  it('confirms and deletes a knowledge domain with its local documents and entities', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.knowledgeDomains = [
+      {
+        id: 'domain-1',
+        name: '仙逆',
+        is_active: true,
+        scope_status: 'confirmed',
+        activation_mode: 'auto',
+        activation_keywords: ['仙逆'],
+        suggested_scopes: [],
+        confirmed_scopes: [],
+        rules: {},
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchKnowledgeDomains = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const deleteButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '删除')
+    expect(deleteButton).toBeTruthy()
+    await deleteButton.trigger('click')
+    await flushPromises()
+
+    expect(confirmMessageBoxMock).toHaveBeenCalledWith(
+      expect.stringContaining('仙逆'),
+      '删除规则域',
+      expect.objectContaining({ type: 'warning' })
+    )
+    expect(deleteKnowledgeDomainMock).toHaveBeenCalledWith('novel-1', 'domain-1')
+    expect(store.fetchDocuments).toHaveBeenCalled()
+    expect(store.fetchKnowledgeDomains).toHaveBeenCalledWith(true)
+    expect(successMessageMock).toHaveBeenCalledWith('规则域已删除，已清理 2 份局部文档、3 个局部实体')
   })
 })

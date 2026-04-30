@@ -8,6 +8,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
+from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.embedding_service import EmbeddingService
@@ -102,7 +103,29 @@ class WriterAgent:
             await flow_control.raise_if_cancelled(novel_id)
             is_last = (idx == total_beats - 1)
             last_beat_text = inner_beats[-1] if inner_beats else ""
-            log_service.add_log(novel_id, "WriterAgent", f"生成第 {idx + 1}/{total_beats} 个节拍: {beat.summary[:50]}...")
+            beat_context = self._beat_context(context, idx)
+            log_agent_detail(
+                novel_id,
+                "WriterAgent",
+                f"节拍 {idx + 1}/{total_beats} 写作输入已准备",
+                node="draft_beat_input",
+                task="write",
+                status="started",
+                metadata={
+                    "beat_index": idx,
+                    "total_beats": total_beats,
+                    "summary_preview": preview_text(beat.summary),
+                    "target_mood": beat.target_mood,
+                    "target_word_count": self._beat_target_word_count(context, total_beats, beat),
+                    "last_beat_chars": len(last_beat_text),
+                    "relay_count": len(relay_history),
+                    "rewrite_plan_present": bool(rewrite_plan),
+                    "related_entities": [e.name for e in beat_context.entities] if beat_context else [],
+                    "related_documents": [doc.title for doc in beat_context.relevant_documents] if beat_context else [],
+                    "foreshadowings": [fs.content for fs in beat_context.foreshadowings] if beat_context else [],
+                    "guardrails": beat_context.guardrails if beat_context else [],
+                },
+            )
 
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
@@ -127,6 +150,23 @@ class WriterAgent:
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
             self_check = self._self_check_beat(inner, beat, context, idx)
+            log_agent_detail(
+                novel_id,
+                "WriterAgent",
+                f"节拍 {idx + 1} 自检完成：{'需重写' if self_check.needs_rewrite else '通过'}",
+                node="draft_self_check",
+                task="write",
+                status="failed" if self_check.needs_rewrite else "succeeded",
+                level="warning" if self_check.needs_rewrite else "info",
+                metadata={
+                    "beat_index": idx,
+                    "generated_chars": len(inner),
+                    "needs_rewrite": self_check.needs_rewrite,
+                    "missing_entities": self_check.missing_entities,
+                    "missing_foreshadowings": self_check.missing_foreshadowings,
+                    "contradictions": self_check.contradictions,
+                },
+            )
             if self_check.needs_rewrite:
                 log_service.add_log(
                     novel_id,
@@ -158,7 +198,23 @@ class WriterAgent:
                 relay = await self._generate_relay(inner, beat, context, idx, next_beat, novel_id)
                 relay_history.append(relay)
             except Exception as exc:
-                log_service.add_log(novel_id, "WriterAgent", f"叙事接力生成失败: {exc}", level="warning")
+                log_agent_detail(
+                    novel_id,
+                    "WriterAgent",
+                    "叙事接力生成失败，使用节拍摘要 fallback",
+                    node="generate_relay",
+                    task="generate_relay",
+                    status="failed",
+                    level="warning",
+                    metadata={
+                        "beat_index": idx,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "fallback": {
+                            "scene_state": beat.summary,
+                            "emotional_tone": beat.target_mood,
+                        },
+                    },
+                )
                 relay_history.append(NarrativeRelay(
                     scene_state=beat.summary,
                     emotional_tone=beat.target_mood,
@@ -171,7 +227,21 @@ class WriterAgent:
                 if fs.content in inner and fs.id not in embedded_foreshadowings:
                     embedded_foreshadowings.append(fs.id)
 
-            log_service.add_log(novel_id, "WriterAgent", f"第 {idx + 1}/{total_beats} 个节拍完成，{len(inner)} 字")
+            log_agent_detail(
+                novel_id,
+                "WriterAgent",
+                f"节拍 {idx + 1}/{total_beats} 完成：{len(inner)} 字",
+                node="draft_beat_result",
+                task="write",
+                metadata={
+                    "beat_index": idx,
+                    "total_beats": total_beats,
+                    "generated_chars": len(inner),
+                    "preview": preview_text(inner, 300),
+                    "embedded_foreshadowings": list(embedded_foreshadowings),
+                    "relay_count": len(relay_history),
+                },
+            )
             checkpoint["drafting_progress"] = {
                 "beat_index": idx + 1,
                 "total_beats": total_beats,
@@ -190,7 +260,19 @@ class WriterAgent:
 
         clean_text = _strip_anchors(raw_draft)
         total_words = len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
-        log_service.add_log(novel_id, "WriterAgent", f"草稿完成，总字数: {total_words}，嵌入伏笔: {len(embedded_foreshadowings)} 条")
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"草稿完成：总字数 {total_words}，嵌入伏笔 {len(embedded_foreshadowings)} 条",
+            node="draft_result",
+            task="write",
+            metadata={
+                "chapter_id": chapter_id,
+                "total_words": total_words,
+                "beat_coverage": beat_coverage,
+                "embedded_foreshadowings": embedded_foreshadowings,
+            },
+        )
         metadata = DraftMetadata(
             total_words=total_words,
             beat_coverage=beat_coverage,
@@ -795,6 +877,23 @@ class WriterAgent:
         beat_context = self._beat_context(context, beat_idx)
         guardrails = beat_context.guardrails if beat_context else []
         foreshadowings = beat_context.foreshadowings if beat_context else []
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"叙事接力输入已准备：正文 {len(beat_text)} 字，约束 {len(guardrails)} 条，伏笔 {len(foreshadowings)} 条",
+            node="generate_relay",
+            task="generate_relay",
+            status="started",
+            metadata={
+                "beat_index": beat_idx,
+                "beat_summary_preview": preview_text(beat.summary),
+                "next_beat_summary_preview": preview_text(next_beat.summary if next_beat else ""),
+                "beat_text_chars": len(beat_text),
+                "beat_text_preview": preview_text(beat_text, 300),
+                "guardrails": guardrails,
+                "foreshadowings": [fs.model_dump() for fs in foreshadowings[:3]],
+            },
+        )
         prompt = (
             "你是一位小说导演场记。请根据节拍目标、正文、约束和下一节拍目标，"
             "提取稳定叙事接力信息。不要把正文中疑似跑偏或违背约束的内容当成既定事实。\n"
@@ -812,10 +911,26 @@ class WriterAgent:
             "- next_beat_hook 要服务下一节拍目标，不要凭空发明新主线。\n"
             "JSON:"
         )
-        return await call_and_parse_model(
+        relay = await call_and_parse_model(
             "WriterAgent", "generate_relay", prompt,
             NarrativeRelay, max_retries=2, novel_id=novel_id,
         )
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            "叙事接力已生成",
+            node="generate_relay",
+            task="generate_relay",
+            metadata={
+                "beat_index": beat_idx,
+                "scene_state_preview": preview_text(relay.scene_state),
+                "emotional_tone": relay.emotional_tone,
+                "new_info_preview": preview_text(relay.new_info_revealed),
+                "open_threads_preview": preview_text(relay.open_threads),
+                "next_beat_hook_preview": preview_text(relay.next_beat_hook),
+            },
+        )
+        return relay
 
     def _build_style_guide_block(self, context: ChapterContext) -> str:
         """把 style_profile 单独置顶,避免 LLM 在长 JSON 中忽略它。"""
@@ -847,6 +962,13 @@ class WriterAgent:
             "除非章节计划明确要求角色说外语；前世概念也必须转写成自然中文表达。\n"
             "- **显示不说**(show don't tell):禁止直接写『他感到愤怒』『她意识到』『他明白了』,"
             "改为用具体动作、生理反应、对话潜台词、环境反衬来呈现情绪和认知。\n"
+            "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或吐槽时,"
+            "默认写得克制、具体、生活化。控制比喻密度,同一节拍不要连续用 3 个以上『像/仿佛/似乎』解释感受;"
+            "减少『意识深处、存在、光点、温热感、沉入、古经』等抽象玄幻词连环复读。\n"
+            "- **奇遇/异象写法**:避免奇观堆叠和模板化传承演出。不要把视觉、听觉、触觉、痛觉平均铺满;"
+            "选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
+            "- **现代吐槽**:只有 style_profile 明确允许轻松吐槽/反差喜剧时才放大现代梗;"
+            "否则现代记忆只作短促念头,必须贴合角色处境,不得削弱当前场景压迫感。\n"
             "- **对话占比**目标 30%-50%,对话要带潜台词/打断/回避,不要做问答式信息交代。\n"
             "- **句式节奏**:长短句交替,动作场景用短句推进,情绪/景物可用长句铺陈;"
             "避免连续 3 句相同结构(如连续『XX 的 XX,XX 的 XX』)。\n"

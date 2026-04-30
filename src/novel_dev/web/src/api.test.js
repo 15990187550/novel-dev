@@ -36,6 +36,7 @@ import {
   draftChapter,
   rewriteChapter,
   getGenerationJob,
+  getChapterRewriteJobs,
   getSynopsis,
   getBrainstormWorkspace,
   getVolumePlan,
@@ -54,7 +55,10 @@ import {
   getKnowledgeDomains,
   confirmKnowledgeDomainScope,
   clearLogs,
+  getLogs,
   disableKnowledgeDomain,
+  deleteKnowledgeDomain,
+  testLLMModel,
 } from '@/api.js'
 
 describe('outline workbench api', () => {
@@ -164,6 +168,7 @@ describe('outline workbench api', () => {
       scope_refs: ['vol_2'],
     })).resolves.toEqual({ ok: true })
     await expect(disableKnowledgeDomain('novel-1', 'domain-1')).resolves.toEqual({ ok: true })
+    await expect(deleteKnowledgeDomain('novel-1', 'domain-1')).resolves.toEqual({ ok: true })
 
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains', {
       params: { include_disabled: true },
@@ -173,6 +178,7 @@ describe('outline workbench api', () => {
       scope_refs: ['vol_2'],
     })
     expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains/domain-1/disable')
+    expect(mockDelete).toHaveBeenCalledWith('/novels/novel-1/knowledge_domains/domain-1')
   })
 
   it('uses a long timeout for brainstorm and volume planning requests', async () => {
@@ -220,10 +226,30 @@ describe('outline workbench api', () => {
     })
   })
 
+  it('posts resume payload when continuing a failed chapter rewrite', async () => {
+    await expect(rewriteChapter('novel-1', 'ch-1', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    })).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/chapters/ch-1/rewrite', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    }, {
+      timeout: 180000,
+    })
+  })
+
   it('requests generation job status', async () => {
     await expect(getGenerationJob('novel-1', 'job-1')).resolves.toEqual({ ok: true })
 
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/generation_jobs/job-1')
+  })
+
+  it('requests persisted chapter rewrite jobs for the current novel', async () => {
+    await expect(getChapterRewriteJobs('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/chapters/rewrite_jobs')
   })
 
   it('clears persisted logs for the current novel', async () => {
@@ -232,9 +258,33 @@ describe('outline workbench api', () => {
     expect(mockDelete).toHaveBeenCalledWith('/novels/novel-1/logs')
   })
 
+  it('requests persisted logs for the current novel', async () => {
+    await expect(getLogs('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/logs')
+  })
+
   it('requests current flow stop endpoint', async () => {
     await expect(stopCurrentFlow('novel-1')).resolves.toEqual({ ok: true })
 
     expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/flow/stop')
+  })
+
+  it('tests an unsaved LLM model profile through the config endpoint', async () => {
+    const profile = {
+      provider: 'anthropic',
+      model: 'claude-test',
+      base_url: 'https://api.example.test',
+      api_key: 'sk-test',
+    }
+
+    await expect(testLLMModel('main', profile)).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/config/llm/test_model', {
+      name: 'main',
+      profile,
+    }, {
+      timeout: 60000,
+    })
   })
 })

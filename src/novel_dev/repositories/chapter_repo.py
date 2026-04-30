@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from typing import Any, Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
@@ -103,6 +104,8 @@ class ChapterRepository:
             ch.score_overall = overall
             ch.score_breakdown = breakdown
             ch.review_feedback = feedback
+            ch.draft_review_score = overall
+            ch.draft_review_feedback = feedback
             await self.session.flush()
 
     async def update_fast_review(self, chapter_id: str, score: int, feedback: dict) -> None:
@@ -110,6 +113,41 @@ class ChapterRepository:
         if ch:
             ch.fast_review_score = score
             ch.fast_review_feedback = feedback
+            await self.session.flush()
+
+    async def update_quality_gate(
+        self,
+        chapter_id: str,
+        *,
+        quality_status: str,
+        quality_reasons: dict,
+        final_review_score: int | None = None,
+        final_review_feedback: dict | None = None,
+        draft_review_score: int | None = None,
+        draft_review_feedback: dict | None = None,
+        world_state_ingested: bool | None = None,
+    ) -> None:
+        ch = await self.get_by_id(chapter_id)
+        if ch:
+            ch.quality_status = quality_status
+            ch.quality_reasons = quality_reasons
+            ch.quality_checked_at = datetime.utcnow()
+            if final_review_score is not None:
+                ch.final_review_score = final_review_score
+            if final_review_feedback is not None:
+                ch.final_review_feedback = final_review_feedback
+            if draft_review_score is not None:
+                ch.draft_review_score = draft_review_score
+            if draft_review_feedback is not None:
+                ch.draft_review_feedback = draft_review_feedback
+            if world_state_ingested is not None:
+                ch.world_state_ingested = world_state_ingested
+            await self.session.flush()
+
+    async def mark_world_state_ingested(self, chapter_id: str, ingested: bool = True) -> None:
+        ch = await self.get_by_id(chapter_id)
+        if ch:
+            ch.world_state_ingested = ingested
             await self.session.flush()
 
     async def update_status(self, chapter_id: str, status: str) -> None:
@@ -129,6 +167,14 @@ class ChapterRepository:
             ch.review_feedback = None
             ch.fast_review_score = None
             ch.fast_review_feedback = None
+            ch.draft_review_score = None
+            ch.draft_review_feedback = None
+            ch.final_review_score = None
+            ch.final_review_feedback = None
+            ch.quality_status = "unchecked"
+            ch.quality_reasons = None
+            ch.quality_checked_at = None
+            ch.world_state_ingested = False
             ch.vector_embedding = None
             await self.session.flush()
 

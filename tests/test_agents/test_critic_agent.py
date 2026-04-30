@@ -97,6 +97,41 @@ async def test_generate_score_prompt_requires_flagging_english_terms(async_sessi
 
 
 @pytest.mark.asyncio
+async def test_generate_score_prompt_flags_specific_ai_flavor_patterns(async_session):
+    score_result = ScoreResult(
+        overall=88,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment=""),
+            DimensionScore(name="characterization", score=85, comment=""),
+            DimensionScore(name="readability", score=85, comment=""),
+            DimensionScore(name="consistency", score=85, comment=""),
+            DimensionScore(name="humanity", score=85, comment=""),
+            DimensionScore(name="hook_strength", score=85, comment=""),
+        ],
+        summary_feedback="ok",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score(
+            "光像潮水，意识深处又像万花筒，仿佛有什么存在从古经里醒来。",
+            _make_context().model_dump(),
+            "novel_crit_ai_flavor",
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "比喻密度" in prompt
+    assert "抽象玄幻词" in prompt
+    assert "感官平均用力" in prompt
+    assert "模板化奇遇" in prompt
+    assert "现代吐槽突兀" in prompt
+    assert "删减连续三处像字比喻" in prompt
+
+
+@pytest.mark.asyncio
 async def test_review_fail_low_score(async_session):
     director = NovelDirector(session=async_session)
     context = _make_context()

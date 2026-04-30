@@ -6,6 +6,7 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.llm.models import ChatMessage
+from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
@@ -51,7 +52,22 @@ class EditorAgent:
 
         checkpoint = dict(state.checkpoint_data or {})
         checkpoint["edit_attempt_count"] = checkpoint.get("edit_attempt_count", 0) + 1
-        log_service.add_log(novel_id, "EditorAgent", f"第 {checkpoint['edit_attempt_count']} 次精修尝试")
+        log_agent_detail(
+            novel_id,
+            "EditorAgent",
+            f"精修输入已准备：第 {checkpoint['edit_attempt_count']} 次尝试",
+            node="edit_input",
+            task="polish",
+            status="started",
+            metadata={
+                "chapter_id": chapter_id,
+                "attempt": checkpoint["edit_attempt_count"],
+                "raw_chars": len(ch.raw_draft or ""),
+                "beat_score_count": len(checkpoint.get("beat_scores", [])),
+                "per_dim_issue_count": len(checkpoint.get("per_dim_issues", [])),
+                "overall": (checkpoint.get("critique_feedback") or {}).get("overall"),
+            },
+        )
         beat_scores = checkpoint.get("beat_scores", [])
         per_dim_issues = checkpoint.get("per_dim_issues", [])
         critique = checkpoint.get("critique_feedback", {}) or {}
@@ -106,7 +122,23 @@ class EditorAgent:
 
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
             if needs_rewrite:
-                log_service.add_log(novel_id, "EditorAgent", f"改写第 {idx + 1} 个节拍 ({len(beat_text)} 字)")
+                log_agent_detail(
+                    novel_id,
+                    "EditorAgent",
+                    f"节拍 {idx + 1} 需要改写",
+                    node="polish_beat_decision",
+                    task="polish",
+                    status="started",
+                    metadata={
+                        "beat_index": idx,
+                        "source_chars": len(beat_text),
+                        "scores": scores,
+                        "low_dimensions": [dim for dim, score in scores.items() if score < 70],
+                        "issues": all_issues[:12],
+                        "whole_chapter_issues": whole_chapter_issues[:6],
+                        "forced_last_beat": is_forced_last,
+                    },
+                )
                 async with agent_step(
                     novel_id,
                     "EditorAgent",
@@ -118,16 +150,52 @@ class EditorAgent:
                     polished = await self._rewrite_beat(
                         beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                     )
-                log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍改写完成 ({len(polished)} 字)")
+                log_agent_detail(
+                    novel_id,
+                    "EditorAgent",
+                    f"节拍 {idx + 1} 改写完成：{len(beat_text)}→{len(polished)} 字",
+                    node="polish_beat_result",
+                    task="polish",
+                    metadata={
+                        "beat_index": idx,
+                        "source_chars": len(beat_text),
+                        "polished_chars": len(polished),
+                        "preview": preview_text(polished, 300),
+                    },
+                )
             else:
-                log_service.add_log(novel_id, "EditorAgent", f"第 {idx + 1} 个节拍无需改写")
+                log_agent_detail(
+                    novel_id,
+                    "EditorAgent",
+                    f"节拍 {idx + 1} 无需改写",
+                    node="polish_beat_decision",
+                    task="polish",
+                    metadata={
+                        "beat_index": idx,
+                        "source_chars": len(beat_text),
+                        "scores": scores,
+                        "issue_count": len(all_issues),
+                    },
+                )
                 polished = beat_text
             polished_beats.append(polished)
             await flow_control.raise_if_cancelled(novel_id)
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
-        log_service.add_log(novel_id, "EditorAgent", f"精修完成，总字数: {len(polished_text)}")
+        log_agent_detail(
+            novel_id,
+            "EditorAgent",
+            f"精修完成：总字数 {len(polished_text)}",
+            node="edit_result",
+            task="polish",
+            metadata={
+                "chapter_id": chapter_id,
+                "raw_chars": len(raw_draft),
+                "polished_chars": len(polished_text),
+                "beat_count": len(beats),
+            },
+        )
         if self.embedding_service:
             try:
                 await self.embedding_service.index_chapter(chapter_id)
@@ -257,7 +325,11 @@ class EditorAgent:
             "3. 删除冗余总结段,避免复读前文已交代的信息。\n"
             "4. 禁止输出英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK),"
             "把前世或现代概念转写成自然中文表达。\n"
-            "5. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
+            "5. 重点清理低 AI 味问题:比喻过密、抽象玄幻词连环复读、感官描写平均用力、奇观堆叠、模板化入体/传承演出。\n"
+            "6. 遇到异象/奇遇段落,压缩泛化光影和『意识深处/存在/光点/沉入』套话,"
+            "保留最关键的 1-2 个画面,并落到身体反应、行动阻碍或具体后果。\n"
+            "7. 现代吐槽只在风格约束明确允许时放大;否则改成短促、贴处境的内心念头,不要冲淡压迫感。\n"
+            "8. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
             style_block,
             plan_block,
         ]

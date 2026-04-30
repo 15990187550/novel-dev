@@ -304,6 +304,16 @@
                 >
                   禁用
                 </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="deletingDomainId === domain.id"
+                  :disabled="!!deletingDomainId && deletingDomainId !== domain.id"
+                  @click="deleteDomain(domain)"
+                >
+                  删除
+                </el-button>
               </div>
             </div>
             <div class="mt-3 text-sm text-gray-600 dark:text-gray-300">
@@ -836,7 +846,7 @@ import {
   updateLibraryDocument,
   rollbackStyleProfile,
 } from '@/api.js'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatBeijingDateTime } from '@/utils/time.js'
 
 const DOCUMENT_POLL_INTERVAL_MS = 2000
@@ -854,6 +864,7 @@ const uploading = ref(false)
 const knowledgeUsage = ref('auto')
 const domainName = ref('')
 const knowledgeDomainsLoading = ref(false)
+const deletingDomainId = ref('')
 const domainDetailVisible = ref(false)
 const selectedDomain = ref(null)
 const detailVisible = ref(false)
@@ -1220,7 +1231,8 @@ function replacePendingDoc(updatedDoc) {
 }
 
 async function saveDraftFieldEdit() {
-  if (!editingDraftField.value || !store.novelId || !editingDraftField.value.pendingId) return
+  if (!editingDraftField.value) return true
+  if (!store.novelId || !editingDraftField.value.pendingId) return false
   const payload = editingDraftField.value
   savingDraftFieldKey.value = payload.key
   draftFieldError.value = ''
@@ -1233,9 +1245,11 @@ async function saveDraftFieldEdit() {
     })
     replacePendingDoc(response.item)
     cancelDraftFieldEdit()
+    return true
   } catch (error) {
     draftFieldError.value = error?.response?.data?.detail || error?.message || '保存失败'
-    savingDraftFieldKey.value = payload.key
+    savingDraftFieldKey.value = ''
+    return false
   }
 }
 
@@ -1413,6 +1427,33 @@ async function disableDomain(domain) {
   ElMessage.success('规则域已禁用')
 }
 
+async function deleteDomain(domain) {
+  if (!store.novelId || deletingDomainId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除规则域“${domain.name}”吗？这会删除该规则域写入的局部文档和局部实体，无法撤销。`,
+      '删除规则域',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+  deletingDomainId.value = domain.id
+  try {
+    const result = await store.deleteKnowledgeDomain(domain.id)
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
+    const deletedDocuments = result?.deleted_documents ?? 0
+    const deletedEntities = result?.deleted_entities ?? 0
+    ElMessage.success(`规则域已删除，已清理 ${deletedDocuments} 份局部文档、${deletedEntities} 个局部实体`)
+  } finally {
+    deletingDomainId.value = ''
+  }
+}
+
 function domainRuleSummary(domain) {
   const rules = domain.rules || {}
   const forbidden = rules.forbidden_now || []
@@ -1425,13 +1466,18 @@ function domainRuleSummary(domain) {
 async function approve(id) {
   if (approvingPendingId.value) return
   approvingPendingId.value = id
-  rememberConflictSelections(selectedDoc.value)
-  const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
-  const hasMergeResolution = fieldResolutions.some((resolution) => resolution.action === 'merge')
-  if (selectedDoc.value?.id === id) {
-    markResolvingMergeKeys(fieldResolutions)
-  }
   try {
+    if (selectedDoc.value?.id === id) {
+      const draftSaved = await saveDraftFieldEdit()
+      if (!draftSaved) return
+    }
+
+    rememberConflictSelections(selectedDoc.value)
+    const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
+    const hasMergeResolution = fieldResolutions.some((resolution) => resolution.action === 'merge')
+    if (selectedDoc.value?.id === id) {
+      markResolvingMergeKeys(fieldResolutions)
+    }
     await approvePending(store.novelId, id, fieldResolutions)
     await Promise.all([store.fetchDocuments(), fetchLibrary()])
     syncSelectedDocFromStore(id)

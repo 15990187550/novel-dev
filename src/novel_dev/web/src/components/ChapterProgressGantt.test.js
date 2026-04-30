@@ -1,5 +1,5 @@
-import { mount } from '@vue/test-utils'
-import { describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, mount } from '@vue/test-utils'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import ChapterProgressGantt from './ChapterProgressGantt.vue'
 
 vi.mock('vue-echarts', () => ({
@@ -9,6 +9,20 @@ vi.mock('vue-echarts', () => ({
     template: '<div class="v-chart-stub" />',
   },
 }))
+
+vi.mock('element-plus', () => ({
+  ElMessage: {
+    success: vi.fn(),
+    error: vi.fn(),
+  },
+}))
+
+enableAutoUnmount(afterEach)
+
+afterEach(() => {
+  document.body.innerHTML = ''
+  vi.unstubAllGlobals()
+})
 
 describe('ChapterProgressGantt', () => {
   it('uses score values and hides unscored chapters in score mode', () => {
@@ -77,5 +91,68 @@ describe('ChapterProgressGantt', () => {
     expect(tooltip).toContain('章末钩子: 74')
     expect(tooltip).not.toContain('plot_tension')
     expect(tooltip).not.toContain('hook_strength')
+  })
+
+  it('keeps score tooltip interactive, compact, and shifted away from the left edge', () => {
+    const wrapper = mount(ChapterProgressGantt, {
+      props: {
+        mode: 'score',
+        chapters: [
+          {
+            chapter_id: 'ch-1',
+            chapter_number: 1,
+            title: '道经初现',
+            statusLabel: '已编辑',
+            displayScore: 81,
+            scoreDetail: '节奏稳定',
+            score_breakdown: {
+              plot_tension: { score: 78, comment: '开局钩子明确' },
+            },
+          },
+        ],
+      },
+    })
+
+    const option = wrapper.findComponent({ name: 'VChart' }).props('option')
+    const tooltip = option.tooltip.formatter([{ dataIndex: 0 }])
+    const copyPayload = tooltip.match(/data-score-tooltip-copy="([^"]+)"/)?.[1]
+
+    expect(option.tooltip.enterable).toBe(true)
+    expect(option.tooltip.appendToBody).toBe(true)
+    expect(option.tooltip.confine).toBe(false)
+    expect(option.tooltip.extraCssText).toContain('max-width: 280px')
+    expect(option.tooltip.position([40, 80], null, null, null, {
+      contentSize: [260, 120],
+      viewSize: [480, 200],
+    })).toEqual([56, 20])
+    expect(option.tooltip.position([420, 80], null, null, null, {
+      contentSize: [260, 120],
+      viewSize: [480, 200],
+    })).toEqual([436, 20])
+    expect(tooltip).toContain('data-score-tooltip-copy')
+    expect(tooltip).toContain('复制')
+    expect(decodeURIComponent(copyPayload)).toContain('道经初现')
+    expect(decodeURIComponent(copyPayload)).toContain('情节张力: 78：开局钩子明确')
+  })
+
+  it('copies score tooltip text from the tooltip copy button', async () => {
+    const writeText = vi.fn().mockResolvedValue()
+    vi.stubGlobal('navigator', {
+      clipboard: { writeText },
+    })
+    mount(ChapterProgressGantt, {
+      props: {
+        mode: 'score',
+        chapters: [{ chapter_id: 'ch-1', chapter_number: 1, title: '第一章', displayScore: 82 }],
+      },
+    })
+    const button = document.createElement('button')
+    button.dataset.scoreTooltipCopy = encodeURIComponent('第一章\n评分: 82')
+    document.body.appendChild(button)
+
+    button.click()
+    await Promise.resolve()
+
+    expect(writeText).toHaveBeenCalledWith('第一章\n评分: 82')
   })
 })

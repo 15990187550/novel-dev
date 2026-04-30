@@ -65,6 +65,28 @@ async def test_process_setting_upload(async_session, mock_llm):
 
 
 @pytest.mark.asyncio
+async def test_process_upload_logs_include_source_filename(async_session, mock_llm):
+    svc = ExtractionService(async_session)
+
+    with patch("novel_dev.services.log_service.log_service.add_log") as add_log:
+        await svc.process_upload(
+            novel_id="n_logs",
+            filename="setting-a.md",
+            content="世界观：天玄大陆。主角林风。",
+        )
+
+    import_calls = [
+        call
+        for call in add_log.call_args_list
+        if len(call.args) >= 2 and call.args[1] in {"ExtractionService", "SettingExtractorAgent"}
+    ]
+    assert import_calls
+    for call in import_calls:
+        assert "setting-a.md" in call.args[2]
+        assert call.kwargs.get("metadata", {}).get("source_filename") == "setting-a.md"
+
+
+@pytest.mark.asyncio
 async def test_process_style_upload(async_session, mock_llm):
     svc = ExtractionService(async_session)
     pe = await svc.process_upload(

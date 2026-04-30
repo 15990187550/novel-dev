@@ -55,6 +55,29 @@ class GenerationJobRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_latest_by_chapter(self, novel_id: str, job_type: str) -> list[tuple[str, GenerationJob]]:
+        result = await self.session.execute(
+            select(GenerationJob)
+            .where(
+                GenerationJob.novel_id == novel_id,
+                GenerationJob.job_type == job_type,
+            )
+            .order_by(GenerationJob.updated_at.desc(), GenerationJob.created_at.desc())
+            .execution_options(populate_existing=True)
+        )
+        latest: dict[str, GenerationJob] = {}
+        for job in result.scalars().all():
+            chapter_id = self._chapter_id_from_job(job)
+            if chapter_id and chapter_id not in latest:
+                latest[chapter_id] = job
+        return list(latest.items())
+
+    def _chapter_id_from_job(self, job: GenerationJob) -> str | None:
+        request_payload = job.request_payload or {}
+        result_payload = job.result_payload or {}
+        chapter_id = request_payload.get("chapter_id") or result_payload.get("chapter_id")
+        return chapter_id if isinstance(chapter_id, str) and chapter_id else None
+
     async def mark_running(self, job_id: str) -> None:
         job = await self.get_by_id(job_id)
         if not job:
@@ -114,6 +137,14 @@ class GenerationJobRepository:
 
     async def mark_cancelled(self, job_id: str, result_payload: dict) -> None:
         await self._mark_terminal(job_id, "cancelled", result_payload=result_payload)
+
+    async def update_result_payload(self, job_id: str, result_payload: dict) -> None:
+        job = await self.get_by_id(job_id)
+        if not job:
+            return
+        job.result_payload = dict(result_payload or {})
+        job.updated_at = datetime.utcnow()
+        await self.session.flush()
 
     async def mark_recovered_failed(self, job_id: str, reason: str) -> None:
         job = await self.get_by_id(job_id)
