@@ -99,6 +99,7 @@ class OutlineClarificationAgent:
     ]
     NEGATION_MARKERS = ["不需要马上", "不是让你", "不要现在", "不需要", "不要先", "不想", "先别", "不是", "不要", "别", "不"]
     NEGATION_LOOKBACK_CHARS = 12
+    CLARIFICATION_TARGET_MARKERS = ["补问题", "追问", "澄清", "确认", "问"]
 
     @staticmethod
     def is_force_generate_intent(text: str | None) -> bool:
@@ -117,7 +118,18 @@ class OutlineClarificationAgent:
     @staticmethod
     def _is_negated_match(text: str, match_index: int) -> bool:
         prefix = text[max(0, match_index - OutlineClarificationAgent.NEGATION_LOOKBACK_CHARS):match_index]
-        return any(marker in prefix for marker in OutlineClarificationAgent.NEGATION_MARKERS)
+        marker_positions = [
+            (prefix.rfind(marker), marker)
+            for marker in OutlineClarificationAgent.NEGATION_MARKERS
+            if marker in prefix
+        ]
+        if not marker_positions:
+            return False
+        marker_index, marker = max(marker_positions, key=lambda item: item[0])
+        after_marker = prefix[marker_index + len(marker):]
+        if any(target in after_marker for target in OutlineClarificationAgent.CLARIFICATION_TARGET_MARKERS):
+            return False
+        return True
 
     @staticmethod
     def force_generate_decision(reason: str) -> OutlineClarificationDecision:
