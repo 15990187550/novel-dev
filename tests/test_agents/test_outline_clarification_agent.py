@@ -149,7 +149,7 @@ async def test_clarify_inherits_volume_generation_config(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_clarify_forces_generation_at_round_limit(monkeypatch):
+async def test_clarify_allows_clarifying_at_round_limit(monkeypatch):
     async def fake_call_and_parse_model(*args, **kwargs):
         return OutlineClarificationDecision(
             status="clarifying",
@@ -173,6 +173,43 @@ async def test_clarify_forces_generation_at_round_limit(monkeypatch):
         feedback="继续问",
         context_window=OutlineContextWindow(),
         round_number=MAX_CLARIFICATION_ROUNDS,
+        max_rounds=MAX_CLARIFICATION_ROUNDS,
+        source_text="",
+        workspace_snapshot=None,
+        checkpoint_snapshot=None,
+    )
+
+    decision = await OutlineClarificationAgent().clarify(request)
+
+    assert decision.status == "clarifying"
+    assert decision.questions == ["主线目标是什么？"]
+
+
+@pytest.mark.asyncio
+async def test_clarify_forces_generation_after_round_limit(monkeypatch):
+    async def fake_call_and_parse_model(*args, **kwargs):
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.2,
+            missing_points=["主线目标不明确"],
+            questions=["主线目标是什么？"],
+            clarification_summary="信息仍不完整。",
+            assumptions=[],
+            reason="缺少主线。",
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.agents.outline_clarification_agent.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    request = OutlineClarificationRequest(
+        novel_id="novel-limit",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="继续问",
+        context_window=OutlineContextWindow(),
+        round_number=MAX_CLARIFICATION_ROUNDS + 1,
         max_rounds=MAX_CLARIFICATION_ROUNDS,
         source_text="",
         workspace_snapshot=None,

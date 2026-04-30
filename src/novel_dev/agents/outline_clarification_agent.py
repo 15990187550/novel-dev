@@ -160,7 +160,7 @@ class OutlineClarificationAgent:
             config_agent_name=config_agent,
             config_task=config_task,
         )
-        if request.round_number >= request.max_rounds and decision.status == "clarifying":
+        if request.round_number > request.max_rounds and decision.status == "clarifying":
             decision = self.force_generate_decision(
                 f"达到澄清上限（第 {request.round_number}/{request.max_rounds} 轮），停止追问"
             )
