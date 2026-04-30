@@ -25,6 +25,9 @@ def test_force_generation_intent_matches_common_phrases():
     assert not OutlineClarificationAgent.is_force_generate_intent("不要按当前设定生成，先确认几个问题")
     assert not OutlineClarificationAgent.is_force_generate_intent("不要现在直接生成，先问我问题")
     assert not OutlineClarificationAgent.is_force_generate_intent("不是让你直接生成，先问问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不是让你现在直接生成，先问问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("我不想现在直接生成，先确认")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不需要马上按当前设定生成，先补问题")
 
 
 def test_request_rejects_unknown_outline_type():
@@ -48,7 +51,7 @@ def test_prompt_bounds_large_snapshots_and_source_text():
         novel_id="novel-large",
         outline_type="synopsis",
         outline_ref="synopsis",
-        feedback="生成",
+        feedback="反馈" + "f" * 3000 + "FEEDBACK_TAIL",
         context_window=OutlineContextWindow(
             conversation_summary="摘要" + "s" * 3000 + "SUMMARY_TAIL",
             recent_messages=[
@@ -75,6 +78,7 @@ def test_prompt_bounds_large_snapshots_and_source_text():
     assert "CHECKPOINT_TAIL" not in prompt
     assert "SUMMARY_TAIL" not in prompt
     assert "MESSAGE_TAIL" not in prompt
+    assert "FEEDBACK_TAIL" not in prompt
     assert '"content": "' in prompt
     assert '\n  "content"' not in prompt
 

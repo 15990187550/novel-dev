@@ -14,6 +14,7 @@ SOURCE_TEXT_PROMPT_LIMIT = 5000
 SNAPSHOT_PROMPT_LIMIT = 3000
 CONVERSATION_SUMMARY_PROMPT_LIMIT = 2000
 RECENT_MESSAGE_PROMPT_LIMIT = 800
+FEEDBACK_PROMPT_LIMIT = 2000
 DEFAULT_CLARIFICATION_QUESTION = "请补充一个最关键的方向：你希望这个大纲优先突出人物成长、主线冲突还是世界设定？"
 DEFAULT_READY_SUMMARY = "当前信息已足够进入大纲生成。"
 DEFAULT_FORCE_ASSUMPTION = "信息仍不完整，以下内容基于当前设定、当前对话和系统可见资料生成。"
@@ -96,8 +97,8 @@ class OutlineClarificationAgent:
         "先生成",
         "确认生成",
     ]
-    NEGATION_MARKERS = ["不是让你", "不要现在", "不需要", "不要先", "不想", "别先", "先别", "不是", "不要", "别", "不"]
-    NEGATION_LOOKBACK_CHARS = 10
+    NEGATION_MARKERS = ["不需要马上", "不是让你", "不要现在", "不需要", "不要先", "不想", "先别", "不是", "不要", "别", "不"]
+    NEGATION_LOOKBACK_CHARS = 12
 
     @staticmethod
     def is_force_generate_intent(text: str | None) -> bool:
@@ -116,7 +117,7 @@ class OutlineClarificationAgent:
     @staticmethod
     def _is_negated_match(text: str, match_index: int) -> bool:
         prefix = text[max(0, match_index - OutlineClarificationAgent.NEGATION_LOOKBACK_CHARS):match_index]
-        return any(prefix.endswith(marker) for marker in OutlineClarificationAgent.NEGATION_MARKERS)
+        return any(marker in prefix for marker in OutlineClarificationAgent.NEGATION_MARKERS)
 
     @staticmethod
     def force_generate_decision(reason: str) -> OutlineClarificationDecision:
@@ -180,6 +181,7 @@ class OutlineClarificationAgent:
         workspace_snapshot = self._bounded_json(request.workspace_snapshot, SNAPSHOT_PROMPT_LIMIT)
         checkpoint_snapshot = self._bounded_json(request.checkpoint_snapshot, SNAPSHOT_PROMPT_LIMIT)
         source_text = self._bounded_text(request.source_text, SOURCE_TEXT_PROMPT_LIMIT)
+        feedback = self._bounded_text(request.feedback, FEEDBACK_PROMPT_LIMIT)
         conversation_summary = self._bounded_text(
             context_window.conversation_summary,
             CONVERSATION_SUMMARY_PROMPT_LIMIT,
@@ -193,7 +195,7 @@ class OutlineClarificationAgent:
             f"- outline_ref: {request.outline_ref}\n"
             f"- clarification_round: 第 {request.round_number}/{request.max_rounds} 轮\n\n"
             "## 用户本轮反馈\n"
-            f"{request.feedback or '[EMPTY]'}\n\n"
+            f"{feedback or '[EMPTY]'}\n\n"
             "## 对话摘要\n"
             f"{conversation_summary or '[EMPTY]'}\n\n"
             "## 最近消息\n"
