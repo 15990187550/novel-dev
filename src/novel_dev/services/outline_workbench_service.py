@@ -4,6 +4,12 @@ from typing import Any, Optional
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
+from novel_dev.agents.outline_clarification_agent import (
+    MAX_CLARIFICATION_ROUNDS,
+    OutlineClarificationAgent,
+    OutlineClarificationDecision,
+    OutlineClarificationRequest,
+)
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.repositories.document_repo import DocumentRepository
 from pydantic import BaseModel, Field
@@ -197,30 +203,39 @@ class OutlineWorkbenchService:
             outline_ref=outline_ref,
             workspace_outline_drafts=workspace_outline_drafts,
         )
-        if self._should_request_generation_confirmation(
+        clarification_decision = await self._run_generation_clarification_gate(
+            novel_id=novel_id,
             state=state,
             outline_session=outline_session,
             outline_type=outline_type,
             outline_ref=outline_ref,
+            feedback=feedback,
+            context_window=context_window,
             workspace_outline_drafts=workspace_outline_drafts,
-        ):
+        )
+        if clarification_decision and clarification_decision.status == "clarifying":
             outline_session.status = "awaiting_confirmation"
             outline_session.conversation_summary = self._merge_conversation_summary(
                 context_window.conversation_summary,
                 feedback,
             )
+            round_number = self._next_clarification_round(context_window)
             assistant_message = await self.outline_message_repo.create(
                 session_id=outline_session.id,
                 role="assistant",
                 message_type="question",
-                content=self._build_generation_confirmation_message(
-                    outline_type=outline_type,
-                    outline_ref=outline_ref,
-                ),
+                content=self._build_clarification_question_content(clarification_decision),
                 meta={
                     "outline_type": outline_type,
                     "outline_ref": outline_ref,
-                    "interaction_stage": "generation_confirmation",
+                    "interaction_stage": "generation_clarification",
+                    "clarification_round": round_number,
+                    "max_rounds": MAX_CLARIFICATION_ROUNDS,
+                    "clarification_status": clarification_decision.status,
+                    "confidence": clarification_decision.confidence,
+                    "missing_points": clarification_decision.missing_points,
+                    "clarification_summary": clarification_decision.clarification_summary,
+                    "assumptions": clarification_decision.assumptions,
                 },
             )
             await self.session.commit()
@@ -231,6 +246,9 @@ class OutlineWorkbenchService:
                 conversation_summary=outline_session.conversation_summary,
                 setting_update_summary=None,
             )
+
+        if clarification_decision:
+            feedback = self._append_clarification_context(feedback, clarification_decision)
 
         await self._release_connection_before_external_call()
         log_service.add_log(
@@ -1321,7 +1339,92 @@ class OutlineWorkbenchService:
         _, _, outline_ref = outline_key.partition(":")
         return outline_ref
 
-    def _should_request_generation_confirmation(
+    async def _run_generation_clarification_gate(
+        self,
+        *,
+        novel_id: str,
+        state: Any,
+        outline_session: Any,
+        outline_type: str,
+        outline_ref: str,
+        feedback: str,
+        context_window: OutlineContextWindow,
+        workspace_outline_drafts: Optional[dict[str, dict[str, Any]]],
+    ) -> OutlineClarificationDecision | None:
+        if not self._should_run_generation_clarification(
+            state=state,
+            outline_session=outline_session,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            workspace_outline_drafts=workspace_outline_drafts,
+        ):
+            return None
+
+        round_number = self._next_clarification_round(context_window)
+        if OutlineClarificationAgent.is_force_generate_intent(feedback):
+            return OutlineClarificationAgent.force_generate_decision("用户要求跳过进一步澄清")
+
+        request = OutlineClarificationRequest(
+            novel_id=novel_id,
+            outline_type=outline_type,
+            outline_ref=outline_ref,
+            feedback=feedback,
+            context_window=context_window,
+            round_number=round_number,
+            max_rounds=MAX_CLARIFICATION_ROUNDS,
+            source_text=await self._load_brainstorm_source_text(novel_id),
+            workspace_snapshot=self._get_workspace_snapshot(
+                workspace_outline_drafts,
+                outline_type,
+                outline_ref,
+            ),
+            checkpoint_snapshot=self._get_checkpoint_snapshot(
+                state.checkpoint_data or {},
+                outline_type,
+                outline_ref,
+            ),
+        )
+        try:
+            return await OutlineClarificationAgent().clarify(request)
+        except Exception as exc:
+            if round_number <= 1 and not self._has_user_clarification_answer(context_window):
+                log_service.add_log(
+                    novel_id,
+                    "OutlineClarificationAgent",
+                    f"澄清判断失败，使用本地兜底问题: {exc}",
+                    level="warning",
+                    event="agent.progress",
+                    status="failed",
+                    node="outline_clarification",
+                    task="outline_clarify",
+                    metadata={
+                        "outline_type": outline_type,
+                        "outline_ref": outline_ref,
+                        "clarification_round": round_number,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                return OutlineClarificationDecision(
+                    status="clarifying",
+                    confidence=0.0,
+                    missing_points=["澄清模型暂不可用"],
+                    questions=[self._fallback_clarification_question(outline_type, outline_ref)],
+                    clarification_summary="澄清模型暂不可用，先收集用户最关键的生成偏好。",
+                    assumptions=[],
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+
+            return OutlineClarificationDecision(
+                status="force_generate",
+                confidence=0.0,
+                missing_points=["澄清模型暂不可用"],
+                questions=[],
+                clarification_summary="澄清模型暂不可用，系统基于当前可见设定生成。",
+                assumptions=["澄清模型暂不可用，系统基于当前可见设定生成。"],
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+
+    def _should_run_generation_clarification(
         self,
         *,
         state: Any,
@@ -1330,9 +1433,8 @@ class OutlineWorkbenchService:
         outline_ref: str,
         workspace_outline_drafts: Optional[dict[str, dict[str, Any]]],
     ) -> bool:
+        _ = outline_session
         if not self._is_brainstorming_phase(getattr(state, "current_phase", None)):
-            return False
-        if getattr(outline_session, "status", "") == "awaiting_confirmation":
             return False
 
         items = self.build_outline_items(
@@ -1350,25 +1452,53 @@ class OutlineWorkbenchService:
         )
         return current_item is not None and current_item.status == "missing"
 
-    def _build_generation_confirmation_message(self, *, outline_type: str, outline_ref: str) -> str:
-        if outline_type == "synopsis":
-            return (
-                "在我开始生成总纲草稿前，先确认几个关键信息。你可以直接用一条消息回复，也可以只回答你在意的部分：\n"
-                "1. 题材、基调和你最想突出的卖点是什么？\n"
-                "2. 预计卷数、总篇幅是否按当前设定走，还是要调整？\n"
-                "3. 有没有必须保留或必须避免的人物关系、世界观设定、终局方向？\n"
-                "如果你已经想清楚，也可以直接回复“按当前设定生成”，我再开始生成总纲草稿。"
-            )
+    def _next_clarification_round(self, context_window: OutlineContextWindow) -> int:
+        rounds = [
+            int((message.meta or {}).get("clarification_round") or 0)
+            for message in context_window.recent_messages
+            if (message.meta or {}).get("interaction_stage") == "generation_clarification"
+        ]
+        return min((max(rounds) if rounds else 0) + 1, MAX_CLARIFICATION_ROUNDS)
 
-        volume_number = self._parse_volume_number(outline_ref)
-        volume_label = f"第 {volume_number} 卷" if volume_number else "当前卷"
-        return (
-            f"在我开始生成{volume_label}卷纲前，先确认几个关键信息。你可以直接用一条消息回复，也可以只回答最在意的部分：\n"
-            "1. 这一卷最核心的主线目标、冲突和情绪走向是什么？\n"
-            "2. 有没有必须出现的角色推进、伏笔回收或卷末钩子？\n"
-            "3. 节奏上更偏升级推进、群像展开，还是阴谋揭示？\n"
-            f"如果你已经想清楚，也可以直接回复“按当前设定生成{volume_label}卷纲”，我再开始生成。"
+    def _has_user_clarification_answer(self, context_window: OutlineContextWindow) -> bool:
+        seen_question = False
+        for message in context_window.recent_messages:
+            if (
+                message.role == "assistant"
+                and message.message_type == "question"
+                and (message.meta or {}).get("interaction_stage") == "generation_clarification"
+            ):
+                seen_question = True
+                continue
+            if seen_question and message.role == "user":
+                return True
+        return False
+
+    def _fallback_clarification_question(self, outline_type: str, outline_ref: str) -> str:
+        if outline_type == "volume":
+            volume_number = self._parse_volume_number(outline_ref)
+            label = f"第 {volume_number} 卷" if volume_number else "当前卷"
+            return (
+                f"开始生成{label}卷纲前，请补充这一卷最关键的主线目标、卷末钩子或必须出现的角色推进。"
+                "也可以回复“按当前设定生成”。"
+            )
+        return "开始生成总纲前，请补充题材基调、核心卖点或必须保留/避免的关键设定。也可以回复“按当前设定生成”。"
+
+    def _build_clarification_question_content(self, decision: OutlineClarificationDecision) -> str:
+        question_text = "\n".join(
+            f"{index}. {question}"
+            for index, question in enumerate(decision.questions[:3], start=1)
         )
+        suffix = "如果已经足够，也可以直接回复“按当前设定生成”。"
+        return f"{question_text}\n{suffix}".strip()
+
+    def _append_clarification_context(self, feedback: str, decision: OutlineClarificationDecision) -> str:
+        parts = [feedback.strip()]
+        if decision.clarification_summary:
+            parts.append(f"澄清摘要：{decision.clarification_summary}")
+        if decision.assumptions:
+            parts.append("生成假设：\n" + "\n".join(f"- {item}" for item in decision.assumptions))
+        return "\n\n".join(part for part in parts if part)
 
     async def _load_brainstorm_source_text(self, novel_id: str) -> str:
         docs = await self.doc_repo.get_current_by_type(novel_id, "worldview")

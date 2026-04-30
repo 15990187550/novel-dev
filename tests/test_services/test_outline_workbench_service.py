@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
+from novel_dev.agents.outline_clarification_agent import OutlineClarificationAgent, OutlineClarificationDecision
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.db.models import OutlineMessage, OutlineSession
 from novel_dev.llm.models import LLMResponse
@@ -909,10 +910,10 @@ def test_classify_feedback_intent_detects_regenerate_and_negation(async_session)
 
 
 @pytest.mark.asyncio
-async def test_submit_feedback_requests_confirmation_before_generating_missing_brainstorm_synopsis(async_session, monkeypatch):
+async def test_submit_feedback_requests_dynamic_clarification_before_generating_missing_brainstorm_synopsis(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
-        "n_brainstorm_confirm",
+        "n_brainstorm_clarify",
         phase=Phase.BRAINSTORMING,
         checkpoint_data={
             "synopsis_data": {
@@ -934,12 +935,27 @@ async def test_submit_feedback_requests_confirmation_before_generating_missing_b
     service = OutlineWorkbenchService(async_session)
 
     async def fail_optimize_outline(**kwargs):
-        raise AssertionError("should not optimize before confirmation")
+        raise AssertionError("should not optimize while clarification is needed")
+
+    async def fake_clarify(self, request):
+        assert request.outline_type == "synopsis"
+        assert request.outline_ref == "synopsis"
+        assert request.round_number == 1
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.4,
+            missing_points=["题材卖点不明确"],
+            questions=["题材、基调和核心卖点更偏哪一类？"],
+            clarification_summary="用户想生成总纲，但题材卖点不明确。",
+            assumptions=[],
+            reason="缺少题材方向。",
+        )
 
     monkeypatch.setattr(service, "_optimize_outline", fail_optimize_outline)
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
 
     response = await service.submit_feedback(
-        novel_id="n_brainstorm_confirm",
+        novel_id="n_brainstorm_clarify",
         outline_type="synopsis",
         outline_ref="synopsis",
         feedback="请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
@@ -948,25 +964,27 @@ async def test_submit_feedback_requests_confirmation_before_generating_missing_b
     assert response.assistant_message.role == "assistant"
     assert response.assistant_message.message_type == "question"
     assert response.last_result_snapshot is None
-    assert "在我开始生成总纲草稿前" in response.assistant_message.content
+    assert "题材、基调和核心卖点" in response.assistant_message.content
+    assert response.assistant_message.meta["interaction_stage"] == "generation_clarification"
+    assert response.assistant_message.meta["clarification_round"] == 1
+    assert response.assistant_message.meta["max_rounds"] == 5
+    assert response.assistant_message.meta["clarification_status"] == "clarifying"
+    assert response.assistant_message.meta["missing_points"] == ["题材卖点不明确"]
 
     session = await OutlineSessionRepository(async_session).get_or_create(
-        novel_id="n_brainstorm_confirm",
+        novel_id="n_brainstorm_clarify",
         outline_type="synopsis",
         outline_ref="synopsis",
     )
     assert session.status == "awaiting_confirmation"
     assert session.last_result_snapshot is None
 
-    workspace = await BrainstormWorkspaceService(async_session).get_workspace_payload("n_brainstorm_confirm")
-    assert workspace.outline_drafts == {}
-
 
 @pytest.mark.asyncio
-async def test_submit_feedback_generates_after_confirmation_for_missing_brainstorm_synopsis(async_session, monkeypatch):
+async def test_submit_feedback_generates_when_clarification_reports_ready(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
-        "n_brainstorm_generate",
+        "n_brainstorm_ready",
         phase=Phase.BRAINSTORMING,
         checkpoint_data={
             "synopsis_data": {
@@ -986,26 +1004,22 @@ async def test_submit_feedback_generates_after_confirmation_for_missing_brainsto
     )
 
     service = OutlineWorkbenchService(async_session)
-    first_response = await service.submit_feedback(
-        novel_id="n_brainstorm_generate",
-        outline_type="synopsis",
-        outline_ref="synopsis",
-        feedback="请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
-    )
-    assert first_response.assistant_message.message_type == "question"
+
+    async def fake_clarify(self, request):
+        return OutlineClarificationDecision(
+            status="ready_to_generate",
+            confidence=0.88,
+            missing_points=[],
+            questions=[],
+            clarification_summary="用户已确认仙侠升级流、两卷、弱感情线。",
+            assumptions=[],
+            reason="信息足够。",
+        )
 
     optimize_calls = []
 
     async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
-        optimize_calls.append(
-            {
-                "novel_id": novel_id,
-                "outline_type": outline_type,
-                "outline_ref": outline_ref,
-                "feedback": feedback,
-                "context_window": context_window,
-            }
-        )
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
         return {
             "content": "已生成总纲草稿，请继续提出修改意见。",
             "result_snapshot": {
@@ -1019,33 +1033,23 @@ async def test_submit_feedback_generates_after_confirmation_for_missing_brainsto
                 "estimated_total_chapters": 120,
                 "estimated_total_words": 360000,
             },
-            "conversation_summary": "用户确认先生成完整总纲草稿。",
+            "conversation_summary": "用户已确认仙侠升级流、两卷、弱感情线。",
         }
 
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
     monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
 
     response = await service.submit_feedback(
-        novel_id="n_brainstorm_generate",
+        novel_id="n_brainstorm_ready",
         outline_type="synopsis",
         outline_ref="synopsis",
-        feedback="走仙侠升级流，预计两卷，感情线弱一些，确认按这个方向生成。",
+        feedback="走仙侠升级流，预计两卷，感情线弱一些，按这个方向生成。",
     )
 
-    assert optimize_calls and optimize_calls[0]["outline_type"] == "synopsis"
-    assert "确认按这个方向生成" in optimize_calls[0]["feedback"]
+    assert optimize_calls
+    assert "澄清摘要：用户已确认仙侠升级流、两卷、弱感情线。" in optimize_calls[0]["feedback"]
     assert response.assistant_message.message_type == "result"
     assert response.last_result_snapshot["title"] == "新总纲"
-
-    session = await OutlineSessionRepository(async_session).get_or_create(
-        novel_id="n_brainstorm_generate",
-        outline_type="synopsis",
-        outline_ref="synopsis",
-    )
-    assert session.status == "active"
-    assert session.last_result_snapshot["title"] == "新总纲"
-
-    workspace = await BrainstormWorkspaceService(async_session).get_workspace_payload("n_brainstorm_generate")
-    assert workspace.outline_drafts["synopsis:synopsis"]["title"] == "新总纲"
 
 
 @pytest.mark.asyncio
