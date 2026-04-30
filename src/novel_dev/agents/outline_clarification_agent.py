@@ -12,6 +12,8 @@ from novel_dev.services.log_service import log_service
 MAX_CLARIFICATION_ROUNDS = 5
 SOURCE_TEXT_PROMPT_LIMIT = 5000
 SNAPSHOT_PROMPT_LIMIT = 3000
+CONVERSATION_SUMMARY_PROMPT_LIMIT = 2000
+RECENT_MESSAGE_PROMPT_LIMIT = 800
 DEFAULT_CLARIFICATION_QUESTION = "请补充一个最关键的方向：你希望这个大纲优先突出人物成长、主线冲突还是世界设定？"
 DEFAULT_READY_SUMMARY = "当前信息已足够进入大纲生成。"
 DEFAULT_FORCE_ASSUMPTION = "信息仍不完整，以下内容基于当前设定、当前对话和系统可见资料生成。"
@@ -94,8 +96,8 @@ class OutlineClarificationAgent:
         "先生成",
         "确认生成",
     ]
-    NEGATION_MARKERS = ["不要先", "别先", "先别", "不要", "别", "不"]
-    NEGATION_LOOKBACK_CHARS = 4
+    NEGATION_MARKERS = ["不是让你", "不要现在", "不需要", "不要先", "不想", "别先", "先别", "不是", "不要", "别", "不"]
+    NEGATION_LOOKBACK_CHARS = 10
 
     @staticmethod
     def is_force_generate_intent(text: str | None) -> bool:
@@ -178,6 +180,10 @@ class OutlineClarificationAgent:
         workspace_snapshot = self._bounded_json(request.workspace_snapshot, SNAPSHOT_PROMPT_LIMIT)
         checkpoint_snapshot = self._bounded_json(request.checkpoint_snapshot, SNAPSHOT_PROMPT_LIMIT)
         source_text = self._bounded_text(request.source_text, SOURCE_TEXT_PROMPT_LIMIT)
+        conversation_summary = self._bounded_text(
+            context_window.conversation_summary,
+            CONVERSATION_SUMMARY_PROMPT_LIMIT,
+        )
         recent_messages = self._format_recent_messages(context_window)
         return (
             "你是小说大纲澄清决策 Agent。你的任务不是生成大纲，而是判断在生成缺失的总纲/卷纲之前，"
@@ -189,7 +195,7 @@ class OutlineClarificationAgent:
             "## 用户本轮反馈\n"
             f"{request.feedback or '[EMPTY]'}\n\n"
             "## 对话摘要\n"
-            f"{context_window.conversation_summary or '[EMPTY]'}\n\n"
+            f"{conversation_summary or '[EMPTY]'}\n\n"
             "## 最近消息\n"
             f"{recent_messages or '[EMPTY]'}\n\n"
             "## 工作区快照 JSON\n"
@@ -232,7 +238,8 @@ class OutlineClarificationAgent:
         for message in context_window.recent_messages[-8:]:
             role = role_labels.get(message.role, "系统")
             message_type = f"[{message.message_type}]" if message.message_type else ""
-            lines.append(f"{role}{message_type}: {message.content}")
+            content = OutlineClarificationAgent._bounded_text(message.content, RECENT_MESSAGE_PROMPT_LIMIT)
+            lines.append(f"{role}{message_type}: {content}")
         return "\n".join(lines)
 
     def _log_decision(

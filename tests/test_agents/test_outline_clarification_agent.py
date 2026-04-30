@@ -23,6 +23,8 @@ def test_force_generation_intent_matches_common_phrases():
     assert not OutlineClarificationAgent.is_force_generate_intent("请问我几个关键问题")
     assert not OutlineClarificationAgent.is_force_generate_intent("不要直接生成，先问我问题")
     assert not OutlineClarificationAgent.is_force_generate_intent("不要按当前设定生成，先确认几个问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不要现在直接生成，先问我问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不是让你直接生成，先问问题")
 
 
 def test_request_rejects_unknown_outline_type():
@@ -47,7 +49,18 @@ def test_prompt_bounds_large_snapshots_and_source_text():
         outline_type="synopsis",
         outline_ref="synopsis",
         feedback="生成",
-        context_window=OutlineContextWindow(),
+        context_window=OutlineContextWindow(
+            conversation_summary="摘要" + "s" * 3000 + "SUMMARY_TAIL",
+            recent_messages=[
+                OutlineMessagePayload(
+                    id="m-large",
+                    role="user",
+                    message_type="feedback",
+                    content="消息" + "m" * 1200 + "MESSAGE_TAIL",
+                    meta={},
+                )
+            ],
+        ),
         round_number=1,
         max_rounds=MAX_CLARIFICATION_ROUNDS,
         source_text="源文本" + "x" * 6000 + "TAIL",
@@ -60,6 +73,8 @@ def test_prompt_bounds_large_snapshots_and_source_text():
     assert "TAIL" not in prompt
     assert "WORKSPACE_TAIL" not in prompt
     assert "CHECKPOINT_TAIL" not in prompt
+    assert "SUMMARY_TAIL" not in prompt
+    assert "MESSAGE_TAIL" not in prompt
     assert '"content": "' in prompt
     assert '\n  "content"' not in prompt
 
