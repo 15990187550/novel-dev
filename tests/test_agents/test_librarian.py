@@ -133,3 +133,113 @@ async def test_librarian_persist_upserts_relationship_for_existing_pair(async_se
     assert rels[0].target_id == "e_sqh"
     assert rels[0].relation_type == "ally"
     assert rels[0].meta == {"chapter": 1}
+
+
+@pytest.mark.asyncio
+async def test_librarian_persist_demotes_canonical_conflict_to_current_state(async_session):
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.version_repo import EntityVersionRepository
+
+    agent = LibrarianAgent(async_session)
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+
+    await entity_repo.create("e_ldz", "character", "陆照", novel_id="n1")
+    await version_repo.create(
+        "e_ldz",
+        1,
+        {
+            "canonical_profile": {"name": "陆照", "identity_role": "主角"},
+            "current_state": {},
+            "observations": {},
+            "canonical_meta": {"identity_role": {"source": "setting"}},
+        },
+        chapter_id="setting",
+    )
+    await entity_repo.update_version("e_ldz", 1)
+
+    extraction = ExtractionResult(
+        character_updates=[{
+            "entity_id": "陆照",
+            "state": {"身份": "小人物", "职业": "采药人", "状态": "昏迷"},
+            "diff_summary": {"source": "chapter"},
+        }],
+    )
+
+    await agent.persist(extraction, "vol_1_ch_1", "n1")
+    await async_session.commit()
+
+    latest = await version_repo.get_latest("e_ldz")
+    assert latest.version == 2
+    assert latest.state["canonical_profile"]["identity_role"] == "主角"
+    assert latest.state["current_state"]["social_position"] == "小人物"
+    assert latest.state["current_state"]["occupation"] == "采药人"
+    assert latest.state["current_state"]["condition"] == "昏迷"
+
+
+@pytest.mark.asyncio
+async def test_librarian_persist_policy_events_are_logged(async_session, monkeypatch):
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.version_repo import EntityVersionRepository
+
+    captured = []
+
+    def fake_log_agent_detail(
+        novel_id,
+        agent,
+        message,
+        *,
+        node,
+        task,
+        metadata=None,
+        status="succeeded",
+        level="info",
+        **kwargs,
+    ):
+        captured.append({
+            "novel_id": novel_id,
+            "agent": agent,
+            "message": message,
+            "node": node,
+            "task": task,
+            "metadata": metadata or {},
+            "status": status,
+            "level": level,
+            "extra_kwargs": kwargs,
+        })
+
+    monkeypatch.setattr("novel_dev.agents.librarian.log_agent_detail", fake_log_agent_detail)
+
+    agent = LibrarianAgent(async_session)
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+
+    await entity_repo.create("e_ldz", "character", "陆照", novel_id="n1")
+    await version_repo.create(
+        "e_ldz",
+        1,
+        {
+            "canonical_profile": {"name": "陆照", "identity_role": "主角"},
+            "current_state": {},
+            "observations": {},
+            "canonical_meta": {"identity_role": {"source": "setting"}},
+        },
+    )
+    await entity_repo.update_version("e_ldz", 1)
+
+    extraction = ExtractionResult(
+        character_updates=[{
+            "entity_id": "陆照",
+            "state": {"身份": "小人物"},
+            "diff_summary": {"source": "chapter"},
+        }],
+    )
+
+    await agent.persist(extraction, "vol_1_ch_1", "n1")
+
+    result_logs = [entry for entry in captured if entry["node"] == "librarian_persist_result"]
+    assert result_logs
+    metadata = result_logs[-1]["metadata"]
+    assert "policy_events" in metadata, metadata
+    events = metadata["policy_events"]
+    assert any(event["type"] == "canonical_conflict_demoted" for event in events)
