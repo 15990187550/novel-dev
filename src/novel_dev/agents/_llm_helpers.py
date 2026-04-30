@@ -269,6 +269,32 @@ def _fallback_driver_for_parse(client: Any) -> tuple[Any, TaskConfig | None] | N
     return fallback, fallback_config
 
 
+def _retag_llm_client_identity(
+    client: Any,
+    agent_name: str,
+    task: str,
+    seen: set[int] | None = None,
+) -> None:
+    if client is None:
+        return
+    seen = seen or set()
+    client_id = id(client)
+    if client_id in seen:
+        return
+    seen.add(client_id)
+
+    attrs = getattr(client, "__dict__", {})
+    if "agent" in attrs:
+        setattr(client, "agent", agent_name)
+    if "task" in attrs:
+        setattr(client, "task", task)
+
+    for child_name in ("primary", "fallback"):
+        child = attrs.get(child_name)
+        if child is not None:
+            _retag_llm_client_identity(child, agent_name, task, seen)
+
+
 def _preview_text(value: str | None, limit: int = 300) -> str:
     text = (value or "").replace("\r", "")
     text = re.sub(r"\s+", " ", text).strip()
@@ -462,6 +488,7 @@ async def call_and_parse(
     config_agent_name = config_agent_name or agent_name
     config_task = config_task or task
     client = client or llm_factory.get(config_agent_name, task=config_task)
+    _retag_llm_client_identity(client, agent_name, task)
     last_error = None
     current_prompt = prompt
     for attempt in range(max_retries):
@@ -607,6 +634,7 @@ async def call_and_parse_model(
         return validate_payload(payload, source="tool")
 
     client = llm_factory.get(config_agent_name, task=config_task)
+    _retag_llm_client_identity(client, agent_name, task)
     structured_config = _structured_config_for_client(client, task, model_cls)
     if structured_config is not None:
         last_error = None

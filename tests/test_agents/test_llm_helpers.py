@@ -15,6 +15,30 @@ class ExamplePayload(BaseModel):
     tags: list[str] = []
 
 
+class DummyLLMClient:
+    def __init__(
+        self,
+        *,
+        agent: str = "ConfigAgent",
+        task: str = "config_task",
+        config: TaskConfig | None = None,
+        response: LLMResponse | None = None,
+        primary=None,
+        fallback=None,
+    ):
+        self.agent = agent
+        self.task = task
+        self.config = config
+        self.response = response or LLMResponse(text='{"title": "主线", "tags": ["成长"]}')
+        self.primary = primary
+        self.fallback = fallback
+        self.calls = []
+
+    async def acomplete(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        return self.response
+
+
 @pytest.fixture(autouse=True)
 def clear_log_buffers():
     LogService._buffers.clear()
@@ -125,6 +149,8 @@ async def test_call_and_parse_model_prefers_structured_payload():
 @pytest.mark.asyncio
 async def test_call_and_parse_model_can_inherit_config_from_another_agent():
     mock_client = AsyncMock()
+    mock_client.agent = "VolumePlannerAgent"
+    mock_client.task = "generate_volume_plan"
     mock_client.config = TaskConfig(provider="anthropic", model="volume-model")
     mock_client.acomplete.return_value = LLMResponse(
         text="",
@@ -149,6 +175,8 @@ async def test_call_and_parse_model_can_inherit_config_from_another_agent():
     mock_factory.get.assert_called_once_with("VolumePlannerAgent", task="generate_volume_plan")
     call_kwargs = mock_client.acomplete.call_args.kwargs
     assert call_kwargs["config"].response_tool_name == "emit_outline_clarify"
+    assert mock_client.agent == "OutlineClarificationAgent"
+    assert mock_client.task == "outline_clarify"
 
     entries = LogService._buffers["novel-config-alias"]
     assert any(
@@ -157,6 +185,40 @@ async def test_call_and_parse_model_can_inherit_config_from_another_agent():
         and entry.get("metadata", {}).get("purpose") == "clarification"
         for entry in entries
     )
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_retags_nested_usage_identity_for_config_inheritance():
+    primary = DummyLLMClient(agent="VolumePlannerAgent", task="generate_volume_plan")
+    fallback = DummyLLMClient(agent="VolumePlannerAgent", task="generate_volume_plan")
+    client = DummyLLMClient(
+        agent="VolumePlannerAgent",
+        task="generate_volume_plan",
+        config=TaskConfig(provider="anthropic", model="volume-model"),
+        response=LLMResponse(text="", structured_payload={"title": "澄清结果", "tags": ["继承配置"]}),
+        primary=primary,
+        fallback=fallback,
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            config_agent_name="VolumePlannerAgent",
+            config_task="generate_volume_plan",
+        )
+
+    assert result.title == "澄清结果"
+    assert client.agent == "OutlineClarificationAgent"
+    assert client.task == "outline_clarify"
+    assert primary.agent == "OutlineClarificationAgent"
+    assert primary.task == "outline_clarify"
+    assert fallback.agent == "OutlineClarificationAgent"
+    assert fallback.task == "outline_clarify"
 
 
 @pytest.mark.asyncio
