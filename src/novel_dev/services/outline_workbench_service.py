@@ -205,6 +205,7 @@ class OutlineWorkbenchService:
         )
         clarification_decision = await self._run_generation_clarification_gate(
             novel_id=novel_id,
+            session_id=outline_session.id,
             state=state,
             outline_type=outline_type,
             outline_ref=outline_ref,
@@ -212,29 +213,32 @@ class OutlineWorkbenchService:
             context_window=context_window,
             workspace_outline_drafts=workspace_outline_drafts,
         )
-        if clarification_decision and clarification_decision.status == "clarifying":
+        if clarification_decision:
+            decision, clarification_round = clarification_decision
+        else:
+            decision, clarification_round = None, None
+        if decision and decision.status == "clarifying":
             outline_session.status = "awaiting_confirmation"
             outline_session.conversation_summary = self._merge_conversation_summary(
                 context_window.conversation_summary,
                 feedback,
             )
-            round_number = self._next_clarification_round(context_window)
             assistant_message = await self.outline_message_repo.create(
                 session_id=outline_session.id,
                 role="assistant",
                 message_type="question",
-                content=self._build_clarification_question_content(clarification_decision),
+                content=self._build_clarification_question_content(decision),
                 meta={
                     "outline_type": outline_type,
                     "outline_ref": outline_ref,
                     "interaction_stage": "generation_clarification",
-                    "clarification_round": round_number,
+                    "clarification_round": clarification_round,
                     "max_rounds": MAX_CLARIFICATION_ROUNDS,
-                    "clarification_status": clarification_decision.status,
-                    "confidence": clarification_decision.confidence,
-                    "missing_points": clarification_decision.missing_points,
-                    "clarification_summary": clarification_decision.clarification_summary,
-                    "assumptions": clarification_decision.assumptions,
+                    "clarification_status": decision.status,
+                    "confidence": decision.confidence,
+                    "missing_points": decision.missing_points,
+                    "clarification_summary": decision.clarification_summary,
+                    "assumptions": decision.assumptions,
                 },
             )
             await self.session.commit()
@@ -246,8 +250,8 @@ class OutlineWorkbenchService:
                 setting_update_summary=None,
             )
 
-        if clarification_decision:
-            feedback = self._append_clarification_context(feedback, clarification_decision)
+        if decision:
+            feedback = self._append_clarification_context(feedback, decision)
 
         await self._release_connection_before_external_call()
         log_service.add_log(
@@ -1342,13 +1346,14 @@ class OutlineWorkbenchService:
         self,
         *,
         novel_id: str,
+        session_id: str,
         state: Any,
         outline_type: str,
         outline_ref: str,
         feedback: str,
         context_window: OutlineContextWindow,
         workspace_outline_drafts: Optional[dict[str, dict[str, Any]]],
-    ) -> OutlineClarificationDecision | None:
+    ) -> tuple[OutlineClarificationDecision, int] | None:
         if not self._should_run_generation_clarification(
             state=state,
             outline_type=outline_type,
@@ -1357,9 +1362,12 @@ class OutlineWorkbenchService:
         ):
             return None
 
-        round_number = self._next_clarification_round(context_window)
+        round_number = await self._next_clarification_round_for_session(session_id)
         if OutlineClarificationAgent.is_force_generate_intent(feedback):
-            return OutlineClarificationAgent.force_generate_decision("用户要求跳过进一步澄清")
+            return (
+                OutlineClarificationAgent.force_generate_decision("用户要求跳过进一步澄清"),
+                round_number,
+            )
 
         request = OutlineClarificationRequest(
             novel_id=novel_id,
@@ -1383,7 +1391,7 @@ class OutlineWorkbenchService:
         )
         await self._release_connection_before_external_call()
         try:
-            return await OutlineClarificationAgent().clarify(request)
+            return await OutlineClarificationAgent().clarify(request), round_number
         except Exception as exc:
             if round_number <= 1 and not self._has_user_clarification_answer(context_window):
                 log_service.add_log(
@@ -1402,24 +1410,30 @@ class OutlineWorkbenchService:
                         "error": f"{type(exc).__name__}: {exc}",
                     },
                 )
-                return OutlineClarificationDecision(
-                    status="clarifying",
-                    confidence=0.0,
-                    missing_points=["澄清模型暂不可用"],
-                    questions=[self._fallback_clarification_question(outline_type, outline_ref)],
-                    clarification_summary="澄清模型暂不可用，先收集用户最关键的生成偏好。",
-                    assumptions=[],
-                    reason=f"{type(exc).__name__}: {exc}",
+                return (
+                    OutlineClarificationDecision(
+                        status="clarifying",
+                        confidence=0.0,
+                        missing_points=["澄清模型暂不可用"],
+                        questions=[self._fallback_clarification_question(outline_type, outline_ref)],
+                        clarification_summary="澄清模型暂不可用，先收集用户最关键的生成偏好。",
+                        assumptions=[],
+                        reason=f"{type(exc).__name__}: {exc}",
+                    ),
+                    round_number,
                 )
 
-            return OutlineClarificationDecision(
-                status="force_generate",
-                confidence=0.0,
-                missing_points=["澄清模型暂不可用"],
-                questions=[],
-                clarification_summary="澄清模型暂不可用，系统基于当前可见设定生成。",
-                assumptions=["澄清模型暂不可用，系统基于当前可见设定生成。"],
-                reason=f"{type(exc).__name__}: {exc}",
+            return (
+                OutlineClarificationDecision(
+                    status="force_generate",
+                    confidence=0.0,
+                    missing_points=["澄清模型暂不可用"],
+                    questions=[],
+                    clarification_summary="澄清模型暂不可用，系统基于当前可见设定生成。",
+                    assumptions=["澄清模型暂不可用，系统基于当前可见设定生成。"],
+                    reason=f"{type(exc).__name__}: {exc}",
+                ),
+                round_number,
             )
 
     def _should_run_generation_clarification(
@@ -1448,10 +1462,11 @@ class OutlineWorkbenchService:
         )
         return current_item is not None and current_item.status == "missing"
 
-    def _next_clarification_round(self, context_window: OutlineContextWindow) -> int:
+    async def _next_clarification_round_for_session(self, session_id: str) -> int:
+        messages = await self.outline_message_repo.list_recent(session_id, limit=200)
         rounds = [
             int((message.meta or {}).get("clarification_round") or 0)
-            for message in context_window.recent_messages
+            for message in messages
             if (message.meta or {}).get("interaction_stage") == "generation_clarification"
         ]
         return (max(rounds) if rounds else 0) + 1

@@ -1301,6 +1301,121 @@ async def test_submit_feedback_passes_round_six_after_five_clarification_questio
 
 
 @pytest.mark.asyncio
+async def test_submit_feedback_counts_clarification_rounds_outside_context_window(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_round_history",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    outline_session = await OutlineSessionRepository(async_session).get_or_create(
+        novel_id="n_brainstorm_round_history",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="awaiting_confirmation",
+    )
+    message_repo = OutlineMessageRepository(async_session)
+    for round_number in range(1, 6):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant",
+            message_type="question",
+            content=f"第 {round_number} 轮问题",
+            meta={
+                "outline_type": "synopsis",
+                "outline_ref": "synopsis",
+                "interaction_stage": "generation_clarification",
+                "clarification_round": round_number,
+                "max_rounds": 5,
+            },
+        )
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="user",
+            message_type="feedback",
+            content=f"第 {round_number} 轮回答",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    for index in range(8):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant" if index % 2 else "user",
+            message_type="note",
+            content=f"后续非澄清消息 {index}",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    await async_session.commit()
+
+    seen_rounds = []
+
+    async def fake_clarify(self, request):
+        assert not any(
+            (message.meta or {}).get("interaction_stage") == "generation_clarification"
+            for message in request.context_window.recent_messages
+        )
+        seen_rounds.append(request.round_number)
+        return OutlineClarificationDecision(
+            status="force_generate",
+            confidence=1.0,
+            missing_points=[],
+            questions=[],
+            clarification_summary="达到澄清上限，按当前设定生成。",
+            assumptions=["历史澄清轮次已达到上限。"],
+            reason="round 6 forces generation",
+        )
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
+        return {
+            "content": "已生成总纲草稿。",
+            "result_snapshot": {
+                "title": "历史轮次强制生成总纲",
+                "logline": "新的故事主线",
+                "core_conflict": "新的冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 120,
+                "estimated_total_words": 360000,
+            },
+            "conversation_summary": "达到澄清上限，按当前设定生成。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_round_history",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="根据前面所有澄清生成。",
+    )
+
+    assert seen_rounds == [6]
+    assert optimize_calls
+    assert response.assistant_message.message_type == "result"
+
+
+@pytest.mark.asyncio
 async def test_submit_feedback_generates_on_second_reply_after_clarification_question(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
