@@ -981,6 +981,56 @@ async def test_submit_feedback_requests_dynamic_clarification_before_generating_
 
 
 @pytest.mark.asyncio
+async def test_submit_feedback_force_generates_without_calling_clarification_agent(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_force",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={"synopsis_data": {"estimated_volumes": 1}},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fail_clarify(self, request):
+        raise AssertionError("force generation should not call LLM clarification")
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append(feedback)
+        return {
+            "content": "已生成",
+            "result_snapshot": {
+                "title": "强制生成总纲",
+                "logline": "主线",
+                "core_conflict": "冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 30,
+                "estimated_total_words": 90000,
+            },
+            "conversation_summary": "用户要求直接生成。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fail_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_force",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="不用问了，按当前设定生成",
+    )
+
+    assert response.assistant_message.message_type == "result"
+    assert "用户要求跳过进一步澄清" in optimize_calls[0]
+
+
+@pytest.mark.asyncio
 async def test_submit_feedback_generates_when_clarification_reports_ready(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -1297,7 +1347,62 @@ async def test_submit_feedback_passes_round_six_after_five_clarification_questio
     assert seen_rounds == [6]
     assert optimize_calls
     assert "生成假设：" in optimize_calls[0]["feedback"]
+    assert "已完成 5 轮澄清，当前回复作为最终生成依据。" in optimize_calls[0]["feedback"]
     assert response.assistant_message.message_type == "result"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_clarifies_missing_volume_with_volume_context(async_session, monkeypatch):
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=2,
+        estimated_total_chapters=20,
+        estimated_total_words=60000,
+    )
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_volume_clarify",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fail_optimize_outline(**kwargs):
+        raise AssertionError("volume should wait for clarification")
+
+    async def fake_clarify(self, request):
+        assert request.outline_type == "volume"
+        assert request.outline_ref == "vol_1"
+        assert request.checkpoint_snapshot is None
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.5,
+            missing_points=["卷末钩子不明确"],
+            questions=["第一卷末尾要留下什么钩子？"],
+            clarification_summary="缺少卷末钩子。",
+            assumptions=[],
+            reason="影响章节收束。",
+        )
+
+    monkeypatch.setattr(service, "_optimize_outline", fail_optimize_outline)
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_volume_clarify",
+        outline_type="volume",
+        outline_ref="vol_1",
+        feedback="生成第一卷卷纲",
+    )
+
+    assert response.assistant_message.message_type == "question"
+    assert "第一卷末尾" in response.assistant_message.content
+    assert response.assistant_message.meta["outline_type"] == "volume"
+    assert response.assistant_message.meta["outline_ref"] == "vol_1"
 
 
 @pytest.mark.asyncio
