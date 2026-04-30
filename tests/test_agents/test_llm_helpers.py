@@ -123,6 +123,43 @@ async def test_call_and_parse_model_prefers_structured_payload():
 
 
 @pytest.mark.asyncio
+async def test_call_and_parse_model_can_inherit_config_from_another_agent():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="volume-model")
+    mock_client.acomplete.return_value = LLMResponse(
+        text="",
+        structured_payload={"title": "澄清结果", "tags": ["继承配置"]},
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            novel_id="novel-config-alias",
+            context_metadata={"purpose": "clarification"},
+            config_agent_name="VolumePlannerAgent",
+            config_task="generate_volume_plan",
+        )
+
+    assert result.title == "澄清结果"
+    mock_factory.get.assert_called_once_with("VolumePlannerAgent", task="generate_volume_plan")
+    call_kwargs = mock_client.acomplete.call_args.kwargs
+    assert call_kwargs["config"].response_tool_name == "emit_outline_clarify"
+
+    entries = LogService._buffers["novel-config-alias"]
+    assert any(
+        entry.get("agent") == "OutlineClarificationAgent"
+        and entry.get("task") == "outline_clarify"
+        and entry.get("metadata", {}).get("purpose") == "clarification"
+        for entry in entries
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_and_parse_model_wraps_list_structured_payload():
     mock_client = AsyncMock()
     mock_client.config = TaskConfig(provider="anthropic", model="test-model")

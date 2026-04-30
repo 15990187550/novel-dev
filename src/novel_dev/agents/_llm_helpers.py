@@ -555,8 +555,12 @@ async def call_and_parse_model(
     max_retries: int = 3,
     novel_id: str = "",
     context_metadata: dict[str, Any] | None = None,
+    config_agent_name: str | None = None,
+    config_task: str | None = None,
 ) -> Any:
     context_metadata = context_metadata or {}
+    config_agent_name = config_agent_name or agent_name
+    config_task = config_task or task
     adapter = TypeAdapter(model_cls)
 
     def validate_payload(payload: Any, *, source: str, last_error: Exception | None = None):
@@ -597,7 +601,7 @@ async def call_and_parse_model(
     def payload_parser(payload: Any):
         return validate_payload(payload, source="tool")
 
-    client = llm_factory.get(agent_name, task=task)
+    client = llm_factory.get(config_agent_name, task=config_task)
     structured_config = _structured_config_for_client(client, task, model_cls)
     if structured_config is not None:
         last_error = None
