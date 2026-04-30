@@ -3,6 +3,7 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents.outline_clarification_agent import OutlineClarificationAgent, OutlineClarificationDecision
 from novel_dev.api.routes import OutlineWorkbenchService, get_session, router
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat, VolumePlan
 from novel_dev.schemas.context import BeatPlan
@@ -192,7 +193,7 @@ async def test_submit_outline_workbench_releases_transaction_before_optimization
 
 
 @pytest.mark.asyncio
-async def test_submit_outline_workbench_feedback_returns_confirmation_question_for_missing_brainstorm_synopsis(async_session, test_client):
+async def test_submit_outline_workbench_feedback_returns_confirmation_question_for_missing_brainstorm_synopsis(async_session, test_client, monkeypatch):
     director = NovelDirector(session=async_session)
     synopsis = SynopsisData(
         title="九霄行",
@@ -211,6 +212,19 @@ async def test_submit_outline_workbench_feedback_returns_confirmation_question_f
     )
     await async_session.commit()
 
+    async def fake_clarify(self, request):
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.5,
+            missing_points=["题材卖点不明确"],
+            questions=["题材、基调和核心卖点是什么？"],
+            clarification_summary="需要补充题材卖点。",
+            assumptions=[],
+            reason="信息不足。",
+        )
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+
     async with test_client as client:
         resp = await client.post(
             "/api/novels/n_outline_brainstorm_question/outline_workbench/submit",
@@ -225,7 +239,9 @@ async def test_submit_outline_workbench_feedback_returns_confirmation_question_f
     data = resp.json()
     assert data["assistant_message"]["role"] == "assistant"
     assert data["assistant_message"]["message_type"] == "question"
-    assert data["assistant_message"]["meta"]["interaction_stage"] == "generation_confirmation"
+    assert data["assistant_message"]["meta"]["interaction_stage"] == "generation_clarification"
+    assert data["assistant_message"]["meta"]["clarification_round"] == 1
+    assert data["assistant_message"]["meta"]["max_rounds"] == 5
     assert data["last_result_snapshot"] is None
 
 
