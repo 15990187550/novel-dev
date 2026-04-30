@@ -11,8 +11,10 @@ from novel_dev.agents.outline_clarification_agent import (
     OutlineClarificationRequest,
 )
 from novel_dev.agents.volume_planner import VolumePlannerAgent
+from novel_dev.db.models import OutlineMessage
 from novel_dev.repositories.document_repo import DocumentRepository
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
@@ -1463,12 +1465,17 @@ class OutlineWorkbenchService:
         return current_item is not None and current_item.status == "missing"
 
     async def _next_clarification_round_for_session(self, session_id: str) -> int:
-        messages = await self.outline_message_repo.list_recent(session_id, limit=200)
-        rounds = [
-            int((message.meta or {}).get("clarification_round") or 0)
-            for message in messages
-            if (message.meta or {}).get("interaction_stage") == "generation_clarification"
-        ]
+        result = await self.session.execute(
+            select(OutlineMessage.meta).where(OutlineMessage.session_id == session_id)
+        )
+        rounds: list[int] = []
+        for meta in result.scalars().all():
+            if (meta or {}).get("interaction_stage") != "generation_clarification":
+                continue
+            try:
+                rounds.append(int((meta or {}).get("clarification_round") or 0))
+            except (TypeError, ValueError):
+                continue
         return (max(rounds) if rounds else 0) + 1
 
     def _has_user_clarification_answer(self, context_window: OutlineContextWindow) -> bool:

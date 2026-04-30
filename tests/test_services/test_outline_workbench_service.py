@@ -1352,7 +1352,7 @@ async def test_submit_feedback_counts_clarification_rounds_outside_context_windo
             content=f"第 {round_number} 轮回答",
             meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
         )
-    for index in range(8):
+    for index in range(210):
         await message_repo.create(
             session_id=outline_session.id,
             role="assistant" if index % 2 else "user",
