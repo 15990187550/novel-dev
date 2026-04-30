@@ -21,6 +21,47 @@ def test_force_generation_intent_matches_common_phrases():
     assert OutlineClarificationAgent.is_force_generate_intent("不用问了，直接生成")
     assert OutlineClarificationAgent.is_force_generate_intent("先生成第一版")
     assert not OutlineClarificationAgent.is_force_generate_intent("请问我几个关键问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不要直接生成，先问我问题")
+    assert not OutlineClarificationAgent.is_force_generate_intent("不要按当前设定生成，先确认几个问题")
+
+
+def test_request_rejects_unknown_outline_type():
+    with pytest.raises(ValueError):
+        OutlineClarificationRequest(
+            novel_id="novel-bad",
+            outline_type="chapter",
+            outline_ref="ch_1",
+            feedback="生成",
+            context_window=OutlineContextWindow(),
+            round_number=1,
+            max_rounds=MAX_CLARIFICATION_ROUNDS,
+            source_text="",
+            workspace_snapshot=None,
+            checkpoint_snapshot=None,
+        )
+
+
+def test_prompt_bounds_large_snapshots_and_source_text():
+    request = OutlineClarificationRequest(
+        novel_id="novel-large",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="生成",
+        context_window=OutlineContextWindow(),
+        round_number=1,
+        max_rounds=MAX_CLARIFICATION_ROUNDS,
+        source_text="源文本" + "x" * 6000 + "TAIL",
+        workspace_snapshot={"content": "w" * 4000 + "WORKSPACE_TAIL"},
+        checkpoint_snapshot={"content": "c" * 4000 + "CHECKPOINT_TAIL"},
+    )
+
+    prompt = OutlineClarificationAgent()._build_prompt(request)
+
+    assert "TAIL" not in prompt
+    assert "WORKSPACE_TAIL" not in prompt
+    assert "CHECKPOINT_TAIL" not in prompt
+    assert '"content": "' in prompt
+    assert '\n  "content"' not in prompt
 
 
 def test_force_generation_decision_contains_default_assumption():

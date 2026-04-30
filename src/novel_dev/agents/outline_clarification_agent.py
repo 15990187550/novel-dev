@@ -10,6 +10,8 @@ from novel_dev.services.log_service import log_service
 
 
 MAX_CLARIFICATION_ROUNDS = 5
+SOURCE_TEXT_PROMPT_LIMIT = 5000
+SNAPSHOT_PROMPT_LIMIT = 3000
 DEFAULT_CLARIFICATION_QUESTION = "请补充一个最关键的方向：你希望这个大纲优先突出人物成长、主线冲突还是世界设定？"
 DEFAULT_READY_SUMMARY = "当前信息已足够进入大纲生成。"
 DEFAULT_FORCE_ASSUMPTION = "信息仍不完整，以下内容基于当前设定、当前对话和系统可见资料生成。"
@@ -72,7 +74,7 @@ class OutlineClarificationDecision(BaseModel):
 
 class OutlineClarificationRequest(BaseModel):
     novel_id: str
-    outline_type: str
+    outline_type: Literal["synopsis", "volume"]
     outline_ref: str
     feedback: str
     context_window: OutlineContextWindow
@@ -92,11 +94,27 @@ class OutlineClarificationAgent:
         "先生成",
         "确认生成",
     ]
+    NEGATION_MARKERS = ["不要先", "别先", "先别", "不要", "别", "不"]
+    NEGATION_LOOKBACK_CHARS = 4
 
     @staticmethod
     def is_force_generate_intent(text: str | None) -> bool:
         normalized = re.sub(r"\s+", "", text or "")
-        return any(pattern in normalized for pattern in OutlineClarificationAgent.FORCE_GENERATE_PATTERNS)
+        for pattern in OutlineClarificationAgent.FORCE_GENERATE_PATTERNS:
+            start = 0
+            while True:
+                index = normalized.find(pattern, start)
+                if index == -1:
+                    break
+                if not OutlineClarificationAgent._is_negated_match(normalized, index):
+                    return True
+                start = index + len(pattern)
+        return False
+
+    @staticmethod
+    def _is_negated_match(text: str, match_index: int) -> bool:
+        prefix = text[max(0, match_index - OutlineClarificationAgent.NEGATION_LOOKBACK_CHARS):match_index]
+        return any(prefix.endswith(marker) for marker in OutlineClarificationAgent.NEGATION_MARKERS)
 
     @staticmethod
     def force_generate_decision(reason: str) -> OutlineClarificationDecision:
@@ -157,8 +175,9 @@ class OutlineClarificationAgent:
 
     def _build_prompt(self, request: OutlineClarificationRequest) -> str:
         context_window = request.context_window
-        workspace_snapshot = json.dumps(request.workspace_snapshot, ensure_ascii=False, indent=2, default=str)
-        checkpoint_snapshot = json.dumps(request.checkpoint_snapshot, ensure_ascii=False, indent=2, default=str)
+        workspace_snapshot = self._bounded_json(request.workspace_snapshot, SNAPSHOT_PROMPT_LIMIT)
+        checkpoint_snapshot = self._bounded_json(request.checkpoint_snapshot, SNAPSHOT_PROMPT_LIMIT)
+        source_text = self._bounded_text(request.source_text, SOURCE_TEXT_PROMPT_LIMIT)
         recent_messages = self._format_recent_messages(context_window)
         return (
             "你是小说大纲澄清决策 Agent。你的任务不是生成大纲，而是判断在生成缺失的总纲/卷纲之前，"
@@ -178,7 +197,7 @@ class OutlineClarificationAgent:
             "## 检查点快照 JSON\n"
             f"{checkpoint_snapshot}\n\n"
             "## 可见源文本\n"
-            f"{request.source_text or '[EMPTY]'}\n\n"
+            f"{source_text or '[EMPTY]'}\n\n"
             "## 输出规则\n"
             "只返回严格 JSON，字段必须符合 OutlineClarificationDecision。\n"
             "- status=clarifying: 仅当缺口会显著改变故事方向时使用，questions 必须 1-3 个，问题要具体可回答。\n"
@@ -187,6 +206,20 @@ class OutlineClarificationAgent:
             "- missing_points 只列真正阻塞质量的缺口，不要泛泛而谈。\n"
             "- confidence 为 0 到 1 的数字。\n"
         )
+
+    @staticmethod
+    def _bounded_json(value: Any, limit: int) -> str:
+        return OutlineClarificationAgent._bounded_text(
+            json.dumps(value, ensure_ascii=False, default=str),
+            limit,
+        )
+
+    @staticmethod
+    def _bounded_text(value: str | None, limit: int) -> str:
+        text = value or ""
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}\n[TRUNCATED {len(text) - limit} CHARS]"
 
     @staticmethod
     def _format_recent_messages(context_window: OutlineContextWindow) -> str:
