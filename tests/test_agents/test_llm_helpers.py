@@ -160,6 +160,41 @@ async def test_call_and_parse_model_can_inherit_config_from_another_agent():
 
 
 @pytest.mark.asyncio
+async def test_call_and_parse_model_uses_config_identity_for_text_fallback():
+    mock_client = AsyncMock()
+    mock_client.config = None
+    mock_client.acomplete.return_value = LLMResponse(
+        text='{"title": "文本结果", "tags": ["继承配置"]}',
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            novel_id="novel-config-text-alias",
+            context_metadata={"purpose": "text fallback"},
+            config_agent_name="BrainstormAgent",
+            config_task="generate_synopsis",
+        )
+
+    assert result.title == "文本结果"
+    assert result.tags == ["继承配置"]
+    mock_factory.get.assert_called_once_with("BrainstormAgent", task="generate_synopsis")
+
+    entries = LogService._buffers["novel-config-text-alias"]
+    assert any(
+        entry.get("agent") == "OutlineClarificationAgent"
+        and entry.get("task") == "outline_clarify"
+        and entry.get("metadata", {}).get("purpose") == "text fallback"
+        for entry in entries
+    )
+
+
+@pytest.mark.asyncio
 async def test_call_and_parse_model_wraps_list_structured_payload():
     mock_client = AsyncMock()
     mock_client.config = TaskConfig(provider="anthropic", model="test-model")

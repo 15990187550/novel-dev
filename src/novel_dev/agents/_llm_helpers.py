@@ -454,9 +454,14 @@ async def call_and_parse(
     max_retries: int = 3,
     novel_id: str = "",
     context_metadata: dict[str, Any] | None = None,
+    config_agent_name: str | None = None,
+    config_task: str | None = None,
+    client: Any | None = None,
 ) -> T:
     context_metadata = context_metadata or {}
-    client = llm_factory.get(agent_name, task=task)
+    config_agent_name = config_agent_name or agent_name
+    config_task = config_task or task
+    client = client or llm_factory.get(config_agent_name, task=config_task)
     last_error = None
     current_prompt = prompt
     for attempt in range(max_retries):
@@ -880,4 +885,7 @@ async def call_and_parse_model(
         max_retries=max_retries,
         novel_id=novel_id,
         context_metadata=context_metadata,
+        config_agent_name=config_agent_name,
+        config_task=config_task,
+        client=client,
     )
