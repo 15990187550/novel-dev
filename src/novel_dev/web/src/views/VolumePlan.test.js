@@ -580,6 +580,49 @@ describe('VolumePlan', () => {
     expect(store.updateBrainstormSuggestionCard).toHaveBeenCalledWith('card-1', 'submit_to_pending')
   })
 
+  it('ignores suggestion card update without payload', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.updateBrainstormSuggestionCard = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+          BrainstormSuggestionCards: {
+            template: '<button data-testid="emit-empty-update" @click="$emit(\'update-card\')">emit</button>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await expect(wrapper.get('[data-testid="emit-empty-update"]').trigger('click')).resolves.toBeUndefined()
+
+    expect(store.updateBrainstormSuggestionCard).not.toHaveBeenCalled()
+  })
+
   it('renders brainstorm submit warnings from workspace data', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)

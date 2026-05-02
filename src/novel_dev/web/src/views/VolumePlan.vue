@@ -672,7 +672,7 @@ function handleFillSuggestionConversation(card) {
   conversationRef.value?.setDraft?.(buildSuggestionCardPrompt(card))
 }
 
-async function handleUpdateSuggestionCard({ card, action }) {
+async function handleUpdateSuggestionCard({ card, action } = {}) {
   const cardId = card?.card_id || card?.merge_key
   if (!cardId || !action) return
   await store.updateBrainstormSuggestionCard(cardId, action)
