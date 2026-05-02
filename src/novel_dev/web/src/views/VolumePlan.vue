@@ -134,6 +134,8 @@
         :workspace="store.brainstormWorkspace.data"
         :last-round-summary="store.brainstormWorkspace.lastRoundSummary"
         :submit-warnings="store.brainstormWorkspace.data?.submit_warnings || []"
+        @fill-conversation="handleFillSuggestionConversation"
+        @update-card="handleUpdateSuggestionCard"
       />
 
       <div class="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
@@ -628,6 +630,52 @@ async function handleReviewOutline() {
 
 function handleApplySuggestion(suggestion) {
   conversationRef.value?.setDraft?.(suggestion)
+}
+
+function buildSuggestionCardPrompt(card) {
+  const title = card?.title || '未命名建议卡'
+  const type = card?.card_type || 'unknown'
+  const refs = Array.isArray(card?.source_outline_refs) && card.source_outline_refs.length
+    ? card.source_outline_refs.join('、')
+    : '未知'
+  const status = card?.status || 'unknown'
+  const summary = card?.summary || ''
+  const payloadSummary = summarizeSuggestionPayload(card?.payload)
+  return [
+    '请根据这张设定建议卡继续优化当前大纲：',
+    `标题：${title}`,
+    `类型：${type}`,
+    `来源：${refs}`,
+    `状态：${status}`,
+    `建议：${summary}`,
+    `需要补充/确认的设定字段：${payloadSummary}`,
+  ].join('\n')
+}
+
+function summarizeSuggestionPayload(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '无结构化字段'
+  const entries = Object.entries(payload)
+    .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+    .slice(0, 12)
+    .map(([key, value]) => `${key}=${formatSuggestionPayloadValue(value)}`)
+  return entries.length ? entries.join('；') : '无结构化字段'
+}
+
+function formatSuggestionPayloadValue(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) return value.map(formatSuggestionPayloadValue).join('、')
+  if (typeof value === 'object' && value !== null) return JSON.stringify(value)
+  return String(value)
+}
+
+function handleFillSuggestionConversation(card) {
+  conversationRef.value?.setDraft?.(buildSuggestionCardPrompt(card))
+}
+
+async function handleUpdateSuggestionCard({ card, action }) {
+  const cardId = card?.card_id || card?.merge_key
+  if (!cardId || !action) return
+  await store.updateBrainstormSuggestionCard(cardId, action)
 }
 
 async function handleCreate() {
