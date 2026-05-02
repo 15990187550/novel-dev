@@ -28,10 +28,11 @@ vi.mock('@/api.js', () => ({
 }))
 
 const routerPushMock = vi.fn()
+const routerReplaceMock = vi.fn()
 
 vi.mock('vue-router', () => ({
   useRoute: () => ({ query: {} }),
-  useRouter: () => ({ push: routerPushMock }),
+  useRouter: () => ({ push: routerPushMock, replace: routerReplaceMock }),
 }))
 
 const ElAlertStub = defineComponent({
@@ -49,6 +50,7 @@ describe('SettingWorkbench', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     routerPushMock.mockReset()
+    routerReplaceMock.mockReset()
     getSettingWorkbenchMock.mockResolvedValue({
       sessions: [
         {
@@ -197,5 +199,42 @@ describe('SettingWorkbench', () => {
 
     expect(generateSettingReviewBatchMock).toHaveBeenCalledWith('novel-1', 'sgs_2', {})
     expect(wrapper.text()).toContain('新增 1 张设定卡片')
+    expect(wrapper.find('[data-testid="setting-generate-batch"]').exists()).toBe(false)
+  })
+
+  it('does not show the generate button for already generated sessions', async () => {
+    const wrapper = mountView()
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_done'
+    store.settingWorkbench.selectedSession = {
+      id: 'sgs_done',
+      title: '已生成会话',
+      status: 'generated',
+    }
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('已生成')
+    expect(wrapper.find('[data-testid="setting-generate-batch"]').exists()).toBe(false)
+  })
+
+  it('keeps reply draft when sending fails', async () => {
+    replySettingSessionMock.mockRejectedValueOnce(new Error('网络失败'))
+    const wrapper = mountView()
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_2'
+    store.settingWorkbench.selectedSession = {
+      id: 'sgs_2',
+      title: '主角阵营设定',
+      status: 'clarifying',
+    }
+    await flushPromises()
+
+    await wrapper.find('[data-testid="setting-reply-input"]').setValue('这段回答不能丢')
+    await wrapper.find('[data-testid="setting-send-reply"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="setting-reply-input"]').element.value).toBe('这段回答不能丢')
   })
 })

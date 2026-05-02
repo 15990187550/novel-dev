@@ -107,6 +107,8 @@ const createSettingWorkbenchState = () => ({
   selectedSession: null,
   selectedMessages: [],
   selectedReviewBatch: null,
+  requestToken: 0,
+  sessionRequestToken: 0,
   creatingSession: false,
   replying: false,
   generating: false,
@@ -863,12 +865,16 @@ export const useNovelStore = defineStore('novel', {
       }
       this.settingWorkbench.state = 'loading'
       this.settingWorkbench.error = ''
+      const token = this.settingWorkbench.requestToken + 1
+      this.settingWorkbench.requestToken = token
       try {
         const payload = await api.getSettingWorkbench(this.novelId)
+        if (token !== this.settingWorkbench.requestToken) return
         this.settingWorkbench.sessions = payload?.sessions || []
         this.settingWorkbench.reviewBatches = payload?.review_batches || []
         this.settingWorkbench.state = 'ready'
       } catch (error) {
+        if (token !== this.settingWorkbench.requestToken) return
         this.settingWorkbench.state = 'error'
         this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定工作台失败'
       }
@@ -880,6 +886,7 @@ export const useNovelStore = defineStore('novel', {
       this.settingWorkbench.error = ''
       try {
         const session = await api.createSettingSession(this.novelId, payload)
+        this.settingWorkbench.requestToken += 1
         this.settingWorkbench.sessions = [
           session,
           ...this.settingWorkbench.sessions.filter((item) => item.id !== session.id),
@@ -899,13 +906,17 @@ export const useNovelStore = defineStore('novel', {
     async loadSettingSession(sessionId) {
       if (!this.novelId || !sessionId) return null
       this.settingWorkbench.error = ''
+      const token = this.settingWorkbench.sessionRequestToken + 1
+      this.settingWorkbench.sessionRequestToken = token
       try {
         const payload = await api.getSettingSession(this.novelId, sessionId)
+        if (token !== this.settingWorkbench.sessionRequestToken) return payload
         this.settingWorkbench.selectedSessionId = sessionId
         this.settingWorkbench.selectedSession = payload?.session || this.settingWorkbench.sessions.find((session) => session.id === sessionId) || null
         this.settingWorkbench.selectedMessages = payload?.messages || payload?.recent_messages || []
         return payload
       } catch (error) {
+        if (token !== this.settingWorkbench.sessionRequestToken) return null
         this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定会话失败'
         throw error
       }
@@ -913,13 +924,15 @@ export const useNovelStore = defineStore('novel', {
 
     async replySettingSession(content) {
       if (!this.novelId || !this.settingWorkbench.selectedSessionId) return null
+      const sessionId = this.settingWorkbench.selectedSessionId
       this.settingWorkbench.replying = true
       this.settingWorkbench.error = ''
       try {
-        const payload = await api.replySettingSession(this.novelId, this.settingWorkbench.selectedSessionId, { content })
+        const payload = await api.replySettingSession(this.novelId, sessionId, { content })
+        if (this.settingWorkbench.selectedSessionId !== sessionId) return payload
         this.settingWorkbench.selectedSession = payload?.session || this.settingWorkbench.selectedSession
         this.settingWorkbench.sessions = this.settingWorkbench.sessions.map((session) =>
-          session.id === this.settingWorkbench.selectedSessionId
+          session.id === sessionId
             ? { ...session, ...this.settingWorkbench.selectedSession }
             : session
         )
@@ -942,21 +955,22 @@ export const useNovelStore = defineStore('novel', {
 
     async generateSettingReviewBatch(payload = {}) {
       if (!this.novelId || !this.settingWorkbench.selectedSessionId) return null
+      const sessionId = this.settingWorkbench.selectedSessionId
       this.settingWorkbench.generating = true
       this.settingWorkbench.error = ''
       try {
-        const batch = await api.generateSettingReviewBatch(this.novelId, this.settingWorkbench.selectedSessionId, payload)
+        const batch = await api.generateSettingReviewBatch(this.novelId, sessionId, payload)
         this.settingWorkbench.reviewBatches = [
           batch,
           ...this.settingWorkbench.reviewBatches.filter((item) => item.id !== batch.id),
         ]
-        if (this.settingWorkbench.selectedSession) {
+        if (this.settingWorkbench.selectedSessionId === sessionId && this.settingWorkbench.selectedSession) {
           this.settingWorkbench.selectedSession = {
             ...this.settingWorkbench.selectedSession,
             status: 'generated',
           }
           this.settingWorkbench.sessions = this.settingWorkbench.sessions.map((session) =>
-            session.id === this.settingWorkbench.selectedSessionId
+            session.id === sessionId
               ? { ...session, status: 'generated' }
               : session
           )

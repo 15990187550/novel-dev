@@ -17,13 +17,13 @@
       <p v-if="store.settingWorkbench.error" class="setting-error">{{ store.settingWorkbench.error }}</p>
 
       <section class="setting-entry-grid" aria-label="设定工作台入口">
-        <button type="button" class="surface-card setting-entry" data-testid="setting-import-entry" @click="router.push('/documents')">
+        <button type="button" class="setting-panel setting-entry" data-testid="setting-import-entry" @click="router.push('/documents')">
           <span class="setting-entry__label">导入已有资料</span>
           <span class="setting-entry__desc">上传世界观、人物表、文风样本和设定文档，进入现有资料审核流程。</span>
         </button>
         <button
           type="button"
-          class="surface-card setting-entry"
+          class="setting-panel setting-entry"
           :class="{ 'setting-entry--active': mode === 'ai' }"
           data-testid="setting-ai-entry"
           @click="mode = 'ai'"
@@ -34,7 +34,7 @@
       </section>
 
       <section v-if="mode === 'ai'" class="setting-ai-layout" aria-label="AI 设定会话">
-        <aside class="surface-card setting-panel setting-session-panel">
+        <aside class="setting-panel setting-session-panel">
           <div class="setting-panel__title-row">
             <div>
               <h2 class="setting-panel__title">AI 会话</h2>
@@ -88,7 +88,7 @@
           </form>
         </aside>
 
-        <section class="surface-card setting-panel setting-conversation">
+        <section class="setting-panel setting-conversation">
           <div class="setting-panel__title-row">
             <div class="min-w-0">
               <h2 class="setting-panel__title">{{ selectedSession?.title || '选择或创建会话' }}</h2>
@@ -136,7 +136,7 @@
         </section>
       </section>
 
-      <section class="surface-card setting-panel">
+      <section class="setting-panel">
         <div class="setting-panel__title-row">
           <div>
             <h2 class="setting-panel__title">审核记录</h2>
@@ -177,7 +177,7 @@ const replyDraft = ref('')
 const selectedSession = computed(() => store.settingWorkbench.selectedSession)
 const messages = computed(() => store.settingWorkbench.selectedMessages || [])
 const reviewBatches = computed(() => store.settingWorkbench.reviewBatches || [])
-const canGenerate = computed(() => ['ready_to_generate', 'generated'].includes(selectedSession.value?.status))
+const canGenerate = computed(() => selectedSession.value?.status === 'ready_to_generate')
 
 watch(
   () => [store.novelId, route.query?.session],
@@ -229,19 +229,25 @@ async function createSession() {
   if (session?.id) {
     newTitle.value = ''
     newIdea.value = ''
+    router.replace({ path: '/settings', query: { ...route.query, session: session.id } })
     await store.loadSettingSession(session.id)
   }
 }
 
 async function selectSession(id) {
+  router.replace({ path: '/settings', query: { ...route.query, session: id } })
   await store.loadSettingSession(id)
 }
 
 async function sendReply() {
   const content = replyDraft.value.trim()
   if (!content) return
-  replyDraft.value = ''
-  await store.replySettingSession(content)
+  try {
+    await store.replySettingSession(content)
+    replyDraft.value = ''
+  } catch {
+    replyDraft.value = content
+  }
 }
 </script>
 
@@ -341,7 +347,9 @@ async function sendReply() {
 }
 
 .setting-panel {
-  border-radius: 1rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.5rem;
+  background: var(--app-surface);
 }
 
 .setting-panel__title-row {

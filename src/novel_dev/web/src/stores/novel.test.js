@@ -264,6 +264,83 @@ describe('novel store dashboard loading', () => {
     expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
   })
 
+  it('ignores stale setting workbench and session responses', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const staleWorkbench = createDeferred()
+    vi.mocked(api.getSettingWorkbench)
+      .mockReturnValueOnce(staleWorkbench.promise)
+      .mockResolvedValueOnce({
+        sessions: [{ id: 'sgs_new', title: '新会话', status: 'clarifying' }],
+        review_batches: [],
+      })
+
+    const firstFetch = store.fetchSettingWorkbench()
+    const secondFetch = store.fetchSettingWorkbench()
+    await secondFetch
+    staleWorkbench.resolve({
+      sessions: [{ id: 'sgs_old', title: '旧会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+    await firstFetch
+
+    expect(store.settingWorkbench.sessions.map((session) => session.id)).toEqual(['sgs_new'])
+
+    const staleSession = createDeferred()
+    vi.mocked(api.getSettingSession)
+      .mockReturnValueOnce(staleSession.promise)
+      .mockResolvedValueOnce({
+        session: { id: 'sgs_new', title: '新会话', status: 'ready_to_generate' },
+        messages: [{ role: 'assistant', content: '新消息' }],
+      })
+
+    const firstLoad = store.loadSettingSession('sgs_old')
+    const secondLoad = store.loadSettingSession('sgs_new')
+    await secondLoad
+    staleSession.resolve({
+      session: { id: 'sgs_old', title: '旧会话', status: 'clarifying' },
+      messages: [{ role: 'assistant', content: '旧消息' }],
+    })
+    await firstLoad
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_new')
+    expect(store.settingWorkbench.selectedMessages[0].content).toBe('新消息')
+  })
+
+  it('does not apply reply or generation results to a newly selected session', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_a'
+    store.settingWorkbench.selectedSession = { id: 'sgs_a', title: '会话 A', status: 'clarifying' }
+    vi.mocked(api.replySettingSession).mockImplementation(async () => {
+      store.settingWorkbench.selectedSessionId = 'sgs_b'
+      store.settingWorkbench.selectedSession = { id: 'sgs_b', title: '会话 B', status: 'clarifying' }
+      return {
+        session: { id: 'sgs_a', title: '会话 A', status: 'ready_to_generate' },
+        assistant_message: 'A 已就绪',
+        questions: [],
+      }
+    })
+
+    await store.replySettingSession('回答 A')
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_b')
+    expect(store.settingWorkbench.selectedSession.status).toBe('clarifying')
+    expect(store.settingWorkbench.selectedMessages).toEqual([])
+
+    vi.mocked(api.generateSettingReviewBatch).mockImplementation(async () => {
+      store.settingWorkbench.selectedSessionId = 'sgs_c'
+      store.settingWorkbench.selectedSession = { id: 'sgs_c', title: '会话 C', status: 'clarifying' }
+      return { id: 'srb_a', summary: 'A 的审核记录', status: 'pending' }
+    })
+
+    await store.generateSettingReviewBatch()
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_c')
+    expect(store.settingWorkbench.selectedSession.status).toBe('clarifying')
+    expect(store.settingWorkbench.reviewBatches[0].id).toBe('srb_a')
+  })
+
   it('marks a failed supplemental panel as error and clears its stale data', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
