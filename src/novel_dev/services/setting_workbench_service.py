@@ -66,7 +66,8 @@ class SettingWorkbenchService:
                 snapshot = decision.get("edited_after_snapshot") or {}
 
             try:
-                await self._apply_change(novel_id, batch, change, snapshot)
+                async with self.session.begin_nested():
+                    await self._apply_change(novel_id, batch, change, snapshot)
             except Exception as exc:
                 await self.repo.update_change_status(change.id, "failed", error_message=str(exc))
                 failed += 1
@@ -115,7 +116,7 @@ class SettingWorkbenchService:
                 doc_type=(snapshot.get("doc_type") or "setting").strip() or "setting",
                 title=(snapshot.get("title") or "未命名设定").strip() or "未命名设定",
                 content=content,
-                version=int(snapshot.get("version") or 1),
+                version=1,
             )
         elif operation == "update":
             existing = await self._get_target_document(novel_id, change)

@@ -1,7 +1,7 @@
 import pytest
 from sqlalchemy import select
 
-from novel_dev.db.models import Entity, EntityRelationship
+from novel_dev.db.models import Entity, EntityRelationship, NovelDocument
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.setting_workbench_service import SettingWorkbenchService
@@ -228,3 +228,86 @@ async def test_apply_review_batch_deactivates_relationship(async_session):
     assert result["status"] == "approved"
     stored = await async_session.get(EntityRelationship, relationship.id)
     assert stored.is_active is False
+
+
+async def test_apply_review_batch_setting_card_create_forces_version_one(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-version",
+        title="设定版本",
+        target_categories=["体系设定"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-version",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="新增带版本号的设定卡",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "境界", "content": "九境。", "version": 9},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-version",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    assert result["status"] == "approved"
+    documents = await DocumentRepository(async_session).get_by_type_and_title(
+        "novel-sw-version",
+        "setting",
+        "境界",
+    )
+    assert documents[0].version == 1
+
+
+async def test_apply_review_batch_marks_change_failed_after_flush_error(async_session):
+    async_session.add(
+        NovelDocument(
+            id="doc_duplicate",
+            novel_id="novel-sw-failure",
+            doc_type="setting",
+            title="既有设定",
+            content="旧内容",
+            version=1,
+        )
+    )
+    await async_session.flush()
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-failure",
+        title="冲突设定",
+        target_categories=["体系设定"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-failure",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="新增会触发 flush 失败的设定卡",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"id": "doc_duplicate", "title": "重复设定", "content": "新内容"},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-failure",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    stored_change = await repo.get_review_change(change.id)
+    stored_batch = await repo.get_review_batch(batch.id)
+    assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
+    assert stored_change.status == "failed"
+    assert stored_change.error_message
+    assert stored_batch.status == "failed"
