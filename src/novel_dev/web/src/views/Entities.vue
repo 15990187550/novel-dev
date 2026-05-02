@@ -76,6 +76,7 @@
               @clear-override="clearOverride"
               @reclassify="reclassifyEntity"
               @select-entity="selectEntityById"
+              @open-source-session="openSourceSession"
             />
           </template>
 
@@ -92,6 +93,7 @@
               height="28rem"
               show-fullscreen-action
               @fullscreen="graphFullscreenVisible = true"
+              @open-source-session="openSourceSession"
             />
           </div>
         </div>
@@ -109,6 +111,7 @@
           :entities="graphEntities"
           :relationships="graphRelationships"
           height="calc(100vh - 10rem)"
+          @open-source-session="openSourceSession"
         />
       </el-dialog>
     </template>
@@ -248,6 +251,13 @@ function findNodeByEntityId(nodes = [], entityId) {
     if (match) return match
   }
   return null
+}
+
+function openSourceSession({ sessionId, changeId } = {}) {
+  if (!sessionId) return
+  const query = new URLSearchParams({ session: sessionId })
+  if (changeId) query.set('change', changeId)
+  window.location.assign(`/settings?${query.toString()}`)
 }
 
 async function runEntitySearch() {

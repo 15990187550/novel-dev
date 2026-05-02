@@ -17,6 +17,14 @@
 
     <template v-else>
       <div class="flex flex-wrap justify-end gap-2">
+        <button
+          v-if="entity.source_type === 'ai' && entity.source_session_id"
+          type="button"
+          class="entity-ai-badge"
+          @click="emit('open-source-session', { sessionId: entity.source_session_id, changeId: entity.source_review_change_id })"
+        >
+          AI 生成 · 查看会话
+        </button>
         <el-button type="primary" plain @click="openEditDialog">编辑实体</el-button>
         <el-button type="danger" plain @click="emit('delete-entity', entity)">删除实体</el-button>
       </div>
@@ -177,7 +185,7 @@ const props = defineProps({
   title: { type: String, default: '实体详情' },
 })
 
-const emit = defineEmits(['save-classification', 'clear-override', 'reclassify', 'save-entity', 'delete-entity', 'select-entity'])
+const emit = defineEmits(['save-classification', 'clear-override', 'reclassify', 'save-entity', 'delete-entity', 'select-entity', 'open-source-session'])
 const manualCategory = ref('')
 const manualGroupName = ref('')
 const editDialogVisible = ref(false)
@@ -337,6 +345,17 @@ function statusTagType(status) {
 
 .entity-detail-panel__relation-detail {
   color: var(--entities-text-muted);
+}
+
+.entity-ai-badge {
+  border: 1px solid color-mix(in srgb, #2563eb 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #2563eb 9%, var(--entities-panel-bg));
+  color: #2563eb;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1;
 }
 
 .entity-detail-panel__descriptions {

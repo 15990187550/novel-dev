@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNovelStore } from '@/stores/novel.js'
 import Entities from './Entities.vue'
+import EntityDetailPanel from '@/components/entities/EntityDetailPanel.vue'
 import { ElMessageBox } from 'element-plus'
 
 const entitiesSource = readFileSync(join(process.cwd(), 'src/views/Entities.vue'), 'utf8')
@@ -67,10 +68,20 @@ const EntityDetailPanelStub = defineComponent({
   props: {
     entity: { type: Object, default: null },
   },
-  emits: ['save-entity', 'delete-entity'],
+  emits: ['save-entity', 'delete-entity', 'open-source-session'],
   setup(props, { emit }) {
     return () => h('div', { class: 'entity-detail-panel-stub' }, [
       h('div', props.entity?.name || 'empty'),
+      props.entity?.source_type === 'ai' && props.entity?.source_session_id
+        ? h('button', {
+            class: 'source-session-button',
+            type: 'button',
+            onClick: () => emit('open-source-session', {
+              sessionId: props.entity.source_session_id,
+              changeId: props.entity.source_review_change_id,
+            }),
+          }, 'AI 生成 · 查看会话')
+        : null,
       h('button', {
         class: 'save-entity-button',
         type: 'button',
@@ -115,10 +126,17 @@ const EntityGraphStub = defineComponent({
 describe('Entities', () => {
   const radioGroupKey = Symbol('radio-group')
   let pinia
+  let locationAssignMock
 
   beforeEach(() => {
     pinia = createPinia()
     setActivePinia(pinia)
+    vi.clearAllMocks()
+    locationAssignMock = vi.fn()
+    vi.stubGlobal('location', {
+      ...window.location,
+      assign: locationAssignMock,
+    })
   })
 
   function seedStore() {
@@ -347,6 +365,82 @@ describe('Entities', () => {
         identity: '主角',
       },
     })
+  })
+
+  it('renders AI source backlink for AI generated entity detail', async () => {
+    const wrapper = mount(EntityDetailPanel, {
+      props: {
+        title: '青云门',
+        entity: {
+          entity_id: 'ent_1',
+          name: '青云门',
+          type: 'faction',
+          source_type: 'ai',
+          source_session_id: 'sgs_1',
+          source_review_change_id: 'chg_1',
+          latest_state: {},
+        },
+        relationships: [],
+      },
+      global: {
+        stubs: {
+          ElButton: defineComponent({
+            name: 'ElButtonStub',
+            emits: ['click'],
+            setup(_, { emit, slots }) {
+              return () => h('button', { class: 'el-button-stub', onClick: () => emit('click') }, slots.default?.())
+            },
+          }),
+          ElTag: true,
+          ElEmpty: true,
+          ElDescriptions: defineComponent({
+            name: 'ElDescriptionsStub',
+            setup(_, { slots }) {
+              return () => h('div', { class: 'el-descriptions-stub' }, slots.default?.())
+            },
+          }),
+          ElDescriptionsItem: defineComponent({
+            name: 'ElDescriptionsItemStub',
+            props: { label: { type: String, default: '' } },
+            setup(props, { slots }) {
+              return () => h('div', { class: 'el-descriptions-item-stub' }, [props.label, slots.default?.()])
+            },
+          }),
+          ElAlert: true,
+          ElSelect: true,
+          ElOption: true,
+          ElDialog: true,
+          ElInput: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('AI 生成')
+    expect(wrapper.text()).toContain('查看会话')
+
+    await wrapper.get('.entity-ai-badge').trigger('click')
+
+    expect(wrapper.emitted('open-source-session')?.[0]).toEqual([{ sessionId: 'sgs_1', changeId: 'chg_1' }])
+  })
+
+  it('opens the setting session when the selected AI entity asks for its source session', async () => {
+    const store = seedStore()
+    const aiEntity = {
+      entity_id: 'lu',
+      name: '陆照',
+      source_type: 'ai',
+      source_session_id: 'sgs_1',
+      source_review_change_id: 'chg_1',
+    }
+    store.entityTree[0].children[0].children[0].data = aiEntity
+    store.entities[0] = aiEntity
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
+    await wrapper.get('.source-session-button').trigger('click')
+
+    expect(locationAssignMock).toHaveBeenCalledWith('/settings?session=sgs_1&change=chg_1')
   })
 
   it('asks for confirmation before deleting the selected entity', async () => {

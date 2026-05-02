@@ -138,6 +138,7 @@ const TableRowScope = defineComponent({
 
 describe('Documents', () => {
   let pinia
+  let locationAssignMock
 
   beforeEach(() => {
     pinia = createPinia()
@@ -150,6 +151,11 @@ describe('Documents', () => {
     deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
     confirmMessageBoxMock.mockResolvedValue()
     rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
+    locationAssignMock = vi.fn()
+    vi.stubGlobal('location', {
+      ...window.location,
+      assign: locationAssignMock,
+    })
   })
 
   function mountView() {
@@ -383,6 +389,67 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('轻快吐槽里包着热血推进。')
     expect(wrapper.text()).toContain('当前生效')
     expect(wrapper.text()).toContain('短句推进')
+  })
+
+  it('renames import review records to unified review records and marks import rows by source', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('审核记录')
+    expect(wrapper.text()).toContain('导入资料')
+    expect(wrapper.text()).toContain('AI 设定会话')
+    expect(wrapper.text()).toContain('后续优化')
+    expect(wrapper.text()).not.toContain('导入审核记录')
+  })
+
+  it('shows AI badge next to AI sourced setting cards and opens the source session', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'doc-ai',
+          doc_type: 'setting',
+          title: '修炼体系',
+          content: '九境。',
+          version: 1,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+          source_type: 'ai',
+          source_session_id: 'sgs_1',
+          source_review_change_id: 'chg_1',
+        },
+      ],
+      active_style_profile_version: null,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('修炼体系')
+    const badge = wrapper.get('.documents-ai-badge')
+    expect(badge.text()).toBe('AI')
+
+    await badge.trigger('click')
+
+    expect(locationAssignMock).toHaveBeenCalledWith('/settings?session=sgs_1&change=chg_1')
   })
 
   it('renders knowledge domains and confirms suggested scope', async () => {

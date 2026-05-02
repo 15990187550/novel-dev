@@ -159,7 +159,17 @@
               >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
-                    <div class="font-medium text-gray-900 dark:text-gray-100">{{ item.title || group.label }}</div>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">
+                      {{ item.title || group.label }}
+                      <button
+                        v-if="item.source_type === 'ai' && item.source_session_id"
+                        type="button"
+                        class="documents-ai-badge"
+                        @click="openSourceSession(item.source_session_id, item.source_review_change_id)"
+                      >
+                        AI
+                      </button>
+                    </div>
                     <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       v{{ item.version || 1 }} · {{ formatTimestamp(item.updated_at) }}
                     </div>
@@ -345,9 +355,15 @@
       </div>
 
       <div v-if="importRecordRows.length" class="surface-card documents-pending p-5">
-        <h3 class="font-bold mb-3">导入审核记录</h3>
+        <h3 class="font-bold">审核记录</h3>
+        <p class="mt-1 mb-3 text-sm text-gray-500 dark:text-gray-400">
+          这里统一显示导入资料、AI 设定会话和后续优化产生的待审核变更。
+        </p>
         <el-table :data="importRecordRows" class="documents-pending-table">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
+          <el-table-column label="来源">
+            <template #default>导入资料</template>
+          </el-table-column>
           <el-table-column label="类型">
             <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
           </el-table-column>
@@ -1128,6 +1144,13 @@ function openLibraryDetail(item, groupLabel = '') {
   libraryDetailVisible.value = true
 }
 
+function openSourceSession(sessionId, changeId = '') {
+  if (!sessionId) return
+  const query = new URLSearchParams({ session: sessionId })
+  if (changeId) query.set('change', changeId)
+  window.location.assign(`/settings?${query.toString()}`)
+}
+
 function openDomainDetail(domain) {
   selectedDomain.value = domain
   domainDetailVisible.value = true
@@ -1739,6 +1762,17 @@ watch(editingDraftField, (value) => {
   border-color: var(--app-border-strong);
   background: var(--app-surface);
   color: var(--app-text);
+}
+
+.documents-ai-badge {
+  margin-left: 0.5rem;
+  border: 1px solid color-mix(in srgb, #2563eb 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #2563eb 9%, var(--app-surface));
+  color: #2563eb;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .documents-library-editor__textarea {
