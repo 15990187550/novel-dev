@@ -121,7 +121,9 @@ class BrainstormWorkspaceService:
     ) -> list[SettingSuggestionCardPayload]:
         workspace = await self.workspace_repo.get_or_create(novel_id)
         cards = [
-            SettingSuggestionCardPayload.model_validate(item).model_dump()
+            self._dump_suggestion_card_for_storage(
+                SettingSuggestionCardPayload.model_validate(item)
+            )
             for item in (workspace.setting_suggestion_cards or [])
         ]
         by_merge_key = {item["merge_key"]: item for item in cards}
@@ -152,7 +154,9 @@ class BrainstormWorkspaceService:
             if existing is None:
                 # For new cards, default display_order to 0 if omitted.
                 incoming_payload.setdefault("display_order", normalized_update.display_order or 0)
-                incoming = SettingSuggestionCardPayload.model_validate(incoming_payload).model_dump()
+                incoming = self._dump_suggestion_card_for_storage(
+                    SettingSuggestionCardPayload.model_validate(incoming_payload)
+                )
                 if merge_key in superseded_merge_keys:
                     incoming["status"] = "superseded"
                 by_merge_key[merge_key] = incoming
@@ -160,13 +164,15 @@ class BrainstormWorkspaceService:
 
             # For existing cards, rely on validated upsert fields, but don't let an omitted
             # display_order clobber the current ordering.
-            incoming = SettingSuggestionCardPayload.model_validate(
-                {
-                    **incoming_payload,
-                    # Required by SettingSuggestionCardPayload even if merge payload omits it.
-                    "display_order": incoming_payload.get("display_order", 0),
-                }
-            ).model_dump()
+            incoming = self._dump_suggestion_card_for_storage(
+                SettingSuggestionCardPayload.model_validate(
+                    {
+                        **incoming_payload,
+                        # Required by SettingSuggestionCardPayload even if merge payload omits it.
+                        "display_order": incoming_payload.get("display_order", 0),
+                    }
+                )
+            )
             existing["card_id"] = incoming["card_id"]
             existing["card_type"] = incoming["card_type"]
             existing["summary"] = incoming["summary"]
@@ -190,10 +196,18 @@ class BrainstormWorkspaceService:
             by_merge_key.values(),
             key=lambda item: (item["display_order"], item["merge_key"]),
         )
-        workspace.setting_suggestion_cards = merged
+        workspace.setting_suggestion_cards = [
+            self._dump_suggestion_card_for_storage(
+                SettingSuggestionCardPayload.model_validate(item)
+            )
+            for item in merged
+        ]
         workspace.last_saved_at = datetime.utcnow()
         await self.session.flush()
-        return [SettingSuggestionCardPayload.model_validate(item) for item in merged]
+        return [
+            SettingSuggestionCardPayload.model_validate(item)
+            for item in workspace.setting_suggestion_cards
+        ]
 
     async def update_suggestion_card(
         self,
@@ -214,7 +228,9 @@ class BrainstormWorkspaceService:
             )
 
         cards = [
-            SettingSuggestionCardPayload.model_validate(item).model_dump()
+            self._dump_suggestion_card_for_storage(
+                SettingSuggestionCardPayload.model_validate(item)
+            )
             for item in (workspace.setting_suggestion_cards or [])
         ]
         target_index = self._find_suggestion_card_index(cards, card_id_or_merge_key)
@@ -258,7 +274,12 @@ class BrainstormWorkspaceService:
         else:
             raise ValueError(f"Unsupported suggestion card action: {action}")
 
-        workspace.setting_suggestion_cards = cards
+        workspace.setting_suggestion_cards = [
+            self._dump_suggestion_card_for_storage(
+                SettingSuggestionCardPayload.model_validate(item)
+            )
+            for item in cards
+        ]
         workspace.last_saved_at = datetime.utcnow()
         await self.session.flush()
         return BrainstormSuggestionCardUpdateResponse(
@@ -536,6 +557,12 @@ class BrainstormWorkspaceService:
                 f"Suggestion card action {action} requires status in [{allowed}], "
                 f"got {card.status}"
             )
+
+    def _dump_suggestion_card_for_storage(
+        self,
+        card: SettingSuggestionCardPayload,
+    ) -> dict[str, Any]:
+        return card.model_dump(exclude={"action_hint"})
 
     def _merge_pending_payloads(
         self,

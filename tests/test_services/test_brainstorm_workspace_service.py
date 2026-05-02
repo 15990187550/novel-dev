@@ -595,6 +595,19 @@ async def _prepare_workspace_card(
     return service
 
 
+async def _assert_stored_suggestion_card(
+    service: BrainstormWorkspaceService,
+    novel_id: str,
+    expected_status: str,
+) -> dict:
+    workspace = await service.workspace_repo.get_active_by_novel(novel_id)
+    assert workspace is not None
+    card = workspace.setting_suggestion_cards[0]
+    assert card["status"] == expected_status
+    assert "action_hint" not in card
+    return card
+
+
 @pytest.mark.asyncio
 async def test_update_suggestion_card_resolves_active_card(async_session):
     service = await _prepare_workspace_card(async_session, novel_id="novel_card_resolve")
@@ -603,6 +616,7 @@ async def test_update_suggestion_card_resolves_active_card(async_session):
 
     assert result.workspace.setting_suggestion_cards[0].status == "resolved"
     assert result.pending_extraction is None
+    await _assert_stored_suggestion_card(service, "novel_card_resolve", "resolved")
 
 
 @pytest.mark.asyncio
@@ -616,6 +630,7 @@ async def test_update_suggestion_card_dismisses_unresolved_card(async_session):
     result = await service.update_suggestion_card("novel_card_dismiss", "card_1", "dismiss")
 
     assert result.workspace.setting_suggestion_cards[0].status == "dismissed"
+    await _assert_stored_suggestion_card(service, "novel_card_dismiss", "dismissed")
 
 
 @pytest.mark.asyncio
@@ -633,6 +648,7 @@ async def test_update_suggestion_card_reactivates_resolved_card(async_session):
     )
 
     assert result.workspace.setting_suggestion_cards[0].status == "active"
+    await _assert_stored_suggestion_card(service, "novel_card_reactivate", "active")
 
 
 @pytest.mark.asyncio
@@ -655,6 +671,7 @@ async def test_update_suggestion_card_submits_pending_and_marks_submitted(async_
     assert len(pending) == 1
     assert result.pending_extraction is not None
     assert result.pending_extraction.id == pending[0].id
+    await _assert_stored_suggestion_card(service, "novel_card_submit", "submitted")
 
 
 @pytest.mark.asyncio
