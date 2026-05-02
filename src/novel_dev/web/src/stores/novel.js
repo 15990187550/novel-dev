@@ -92,6 +92,7 @@ const createBrainstormWorkspaceState = () => ({
   state: 'idle',
   error: '',
   submitting: false,
+  updatingCardId: '',
   data: null,
   lastRoundSummary: null,
   requestToken: 0,
@@ -1078,6 +1079,25 @@ export const useNovelStore = defineStore('novel', {
         throw error
       } finally {
         this.brainstormWorkspace.submitting = false
+      }
+    },
+
+    async updateBrainstormSuggestionCard(cardId, action) {
+      if (!this.novelId || !cardId || !action) return null
+      if (this.brainstormWorkspace.updatingCardId) return null
+
+      this.brainstormWorkspace.updatingCardId = cardId
+      this.brainstormWorkspace.error = ''
+      try {
+        const result = await api.updateBrainstormSuggestionCard(this.novelId, cardId, { action })
+        this.brainstormWorkspace.data = result.workspace
+        this.brainstormWorkspace.state = 'ready'
+        return result
+      } catch (error) {
+        this.brainstormWorkspace.error = error?.message || '请求失败'
+        throw error
+      } finally {
+        this.brainstormWorkspace.updatingCardId = ''
       }
     },
   },

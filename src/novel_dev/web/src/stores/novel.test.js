@@ -33,6 +33,7 @@ vi.mock('@/api.js', () => ({
   getBrainstormWorkspace: vi.fn(),
   startBrainstormWorkspace: vi.fn(),
   submitBrainstormWorkspace: vi.fn(),
+  updateBrainstormSuggestionCard: vi.fn(),
   submitOutlineFeedback: vi.fn(),
   autoRunChapters: vi.fn(),
   rewriteChapter: vi.fn(),
@@ -1030,6 +1031,55 @@ describe('novel store dashboard loading', () => {
       outline_ref: 'synopsis',
     })
     expect(store.brainstormWorkspace.data).toBeNull()
+  })
+
+  it('updateBrainstormSuggestionCard updates workspace data from API response', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      setting_suggestion_cards: [{ card_id: 'card-1', status: 'active' }],
+    }
+    vi.mocked(api.updateBrainstormSuggestionCard).mockResolvedValue({
+      workspace: {
+        workspace_id: 'ws-1',
+        novel_id: 'novel-1',
+        status: 'active',
+        setting_suggestion_cards: [{ card_id: 'card-1', status: 'resolved' }],
+      },
+      pending_extraction: null,
+    })
+
+    const result = await store.updateBrainstormSuggestionCard('card-1', 'resolve')
+
+    expect(api.updateBrainstormSuggestionCard).toHaveBeenCalledWith(
+      'novel-1',
+      'card-1',
+      { action: 'resolve' }
+    )
+    expect(result.pending_extraction).toBeNull()
+    expect(store.brainstormWorkspace.data.setting_suggestion_cards[0].status).toBe('resolved')
+    expect(store.brainstormWorkspace.updatingCardId).toBe('')
+  })
+
+  it('updateBrainstormSuggestionCard keeps workspace and records error on failure', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      setting_suggestion_cards: [{ card_id: 'card-1', status: 'active' }],
+    }
+    vi.mocked(api.updateBrainstormSuggestionCard).mockRejectedValue(new Error('状态不允许'))
+
+    await expect(store.updateBrainstormSuggestionCard('card-1', 'resolve')).rejects.toThrow('状态不允许')
+
+    expect(store.brainstormWorkspace.data.setting_suggestion_cards[0].status).toBe('active')
+    expect(store.brainstormWorkspace.error).toBe('状态不允许')
+    expect(store.brainstormWorkspace.updatingCardId).toBe('')
   })
 
   it('stopCurrentFlow requests backend stop and refreshes state', async () => {
