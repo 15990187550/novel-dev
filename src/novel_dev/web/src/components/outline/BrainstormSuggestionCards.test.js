@@ -170,4 +170,71 @@ describe('BrainstormSuggestionCards', () => {
     expect(wrapper.get('[data-testid="submit-to-pending-action"]').attributes('disabled')).toBeDefined()
     expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('关系建议将在最终确认时解析处理')
   })
+
+  it('shows update errors inside the open detail drawer', async () => {
+    const wrapper = mount(BrainstormSuggestionCards, {
+      props: {
+        actionError: 'Request timed out',
+        workspace: {
+          setting_suggestion_cards: [
+            {
+              ...baseCard,
+              action_hint: {
+                recommended_action: 'submit_to_pending',
+                primary_label: '转设定',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss', 'submit_to_pending'],
+                reason: '可转为待审批设定。',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="suggestion-process"]').trigger('click')
+
+    expect(wrapper.get('[data-testid="suggestion-action-error"]').text()).toContain('Request timed out')
+    expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('请检查后重试')
+  })
+
+  it('keeps the drawer bound to the latest card after workspace updates', async () => {
+    const wrapper = mount(BrainstormSuggestionCards, {
+      props: {
+        workspace: {
+          setting_suggestion_cards: [
+            {
+              ...baseCard,
+              action_hint: {
+                recommended_action: 'submit_to_pending',
+                primary_label: '转设定',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss', 'submit_to_pending'],
+                reason: '可转为待审批设定。',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="suggestion-process"]').trigger('click')
+    await wrapper.setProps({
+      workspace: {
+        setting_suggestion_cards: [
+          {
+            ...baseCard,
+            status: 'submitted',
+            action_hint: {
+              recommended_action: 'open_detail',
+              primary_label: '查看处理',
+              available_actions: ['open_detail'],
+              reason: '这张卡已转为待审批设定，请在设定审批入口继续处理。',
+            },
+          },
+        ],
+      },
+    })
+
+    expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('已转为待审批设定')
+    expect(wrapper.get('[data-testid="submit-to-pending-action"]').attributes('disabled')).toBeDefined()
+  })
 })

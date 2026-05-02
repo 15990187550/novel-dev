@@ -8,7 +8,10 @@ from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
-from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardPayload
+from novel_dev.schemas.brainstorm_workspace import (
+    PendingExtractionPayload,
+    SettingSuggestionCardPayload,
+)
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.entity_service import EntityService
 
@@ -672,6 +675,45 @@ async def test_update_suggestion_card_submits_pending_and_marks_submitted(async_
     assert result.pending_extraction is not None
     assert result.pending_extraction.id == pending[0].id
     await _assert_stored_suggestion_card(service, "novel_card_submit", "submitted")
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_reuses_existing_pending_for_same_card(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_submit_existing_pending",
+        payload={"canonical_name": "林风", "identity": "外门弟子"},
+    )
+    existing = await service.extraction_service.persist_pending_payload(
+        "novel_card_submit_existing_pending",
+        PendingExtractionPayload(
+            source_filename="brainstorm-character:sample.md",
+            extraction_type="setting",
+            raw_result={"character_profiles": [{"name": "林风"}]},
+            proposed_entities=[
+                {
+                    "type": "character",
+                    "name": "林风",
+                    "data": {"name": "林风"},
+                }
+            ],
+            diff_result={"summary": "existing"},
+        ),
+    )
+
+    result = await service.update_suggestion_card(
+        "novel_card_submit_existing_pending",
+        "card_1",
+        "submit_to_pending",
+    )
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel(
+        "novel_card_submit_existing_pending"
+    )
+    assert len(pending) == 1
+    assert result.pending_extraction is not None
+    assert result.pending_extraction.id == existing.id
+    assert result.workspace.setting_suggestion_cards[0].status == "submitted"
 
 
 @pytest.mark.asyncio
@@ -1575,6 +1617,71 @@ async def test_submit_workspace_materializes_non_character_suggestion_cards(asyn
     assert result.submit_warnings == []
     assert len(pending) == 1
     assert pending[0].source_filename == "brainstorm-faction:qing-yun-zong.md"
+
+
+@pytest.mark.parametrize("card_type", ["revision", "addition", "outline"])
+@pytest.mark.asyncio
+async def test_submit_workspace_skips_outline_suggestion_cards_with_warning(
+    async_session,
+    card_type: str,
+):
+    director = NovelDirector(async_session)
+    novel_id = f"novel_submit_{card_type}_cards"
+    await director.save_checkpoint(
+        novel_id,
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = BrainstormWorkspaceService(async_session)
+    await service.save_outline_draft(
+        novel_id=novel_id,
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        result_snapshot={
+            "title": "九霄行",
+            "logline": "林风逆势修行",
+            "core_conflict": "林风 vs 长老会",
+            "themes": ["成长"],
+            "character_arcs": [],
+            "milestones": [],
+            "estimated_volumes": 2,
+            "estimated_total_chapters": 200,
+            "estimated_total_words": 600000,
+        },
+    )
+    await service.merge_suggestion_cards(
+        novel_id,
+        [
+            {
+                "operation": "upsert",
+                "card_id": f"card_{card_type}",
+                "card_type": card_type,
+                "merge_key": f"{card_type}:ending-hook",
+                "title": "结尾钩子新颖度提升",
+                "summary": "开放钩子需要更独特。",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"focus": "结尾钩子"},
+                "display_order": 10,
+            }
+        ],
+    )
+
+    result = await service.submit_workspace(novel_id)
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel(
+        novel_id
+    )
+    assert result.pending_setting_count == 0
+    assert result.relationship_count == 0
+    assert len(pending) == 0
+    assert result.submit_warnings == [
+        f"Skipped suggestion card {card_type}:ending-hook: 结尾钩子新颖度提升 "
+        "适合继续优化大纲，最终确认时未转为待审批设定"
+    ]
 
 
 @pytest.mark.asyncio

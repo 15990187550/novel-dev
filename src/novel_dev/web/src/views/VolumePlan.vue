@@ -134,6 +134,7 @@
         :workspace="store.brainstormWorkspace.data"
         :last-round-summary="store.brainstormWorkspace.lastRoundSummary"
         :submit-warnings="store.brainstormWorkspace.data?.submit_warnings || []"
+        :action-error="store.brainstormWorkspace.error"
         @fill-conversation="handleFillSuggestionConversation"
         @update-card="handleUpdateSuggestionCard"
       />

@@ -148,6 +148,13 @@
           <div class="font-semibold">{{ getActionHint(selectedCard).primary_label }}</div>
           <p class="mt-1 text-xs leading-5">{{ getActionHint(selectedCard).reason }}</p>
         </div>
+        <div
+          v-if="actionError"
+          class="brainstorm-suggestion-error mt-4 rounded-2xl border px-4 py-3 text-sm"
+          data-testid="suggestion-action-error"
+        >
+          处理失败：{{ actionError }}。请检查后重试。
+        </div>
         <div class="mt-4 flex flex-wrap gap-2">
           <button
             type="button"
@@ -203,16 +210,17 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
   workspace: { type: Object, default: null },
   lastRoundSummary: { type: Object, default: null },
   submitWarnings: { type: Array, default: () => [] },
+  actionError: { type: String, default: '' },
 })
 
 const emit = defineEmits(['fill-conversation', 'update-card'])
-const selectedCard = ref(null)
+const selectedCardKey = ref('')
 const showHistory = ref(false)
 
 const terminalStatuses = new Set(['resolved', 'dismissed', 'submitted', 'superseded'])
@@ -234,6 +242,15 @@ const historyCards = computed(() => {
     .slice()
     .sort(sortCards)
 })
+
+const allCards = computed(() => [
+  ...activeCards.value,
+  ...historyCards.value,
+])
+
+const selectedCard = computed(() => (
+  allCards.value.find((card) => buildCardKey(card) === selectedCardKey.value) || null
+))
 
 const unresolvedCount = computed(() => activeCards.value.filter((card) => card?.status === 'unresolved').length)
 
@@ -265,6 +282,10 @@ function sortCards(left, right) {
   return String(left?.merge_key || '').localeCompare(String(right?.merge_key || ''))
 }
 
+function buildCardKey(card) {
+  return String(card?.card_id || card?.merge_key || '')
+}
+
 function getActionHint(card) {
   return card?.action_hint || {
     recommended_action: 'open_detail',
@@ -280,11 +301,11 @@ function hasAction(card, action) {
 }
 
 function openDetail(card) {
-  selectedCard.value = card
+  selectedCardKey.value = buildCardKey(card)
 }
 
 function closeDetail() {
-  selectedCard.value = null
+  selectedCardKey.value = ''
 }
 
 function handlePrimaryAction(card) {
@@ -309,6 +330,12 @@ function formatPayload(payload) {
   if (!payload || typeof payload !== 'object') return '{}'
   return JSON.stringify(payload, null, 2)
 }
+
+watch(selectedCard, (card) => {
+  if (!card && selectedCardKey.value) {
+    selectedCardKey.value = ''
+  }
+})
 </script>
 
 <style scoped>
@@ -326,6 +353,12 @@ function formatPayload(payload) {
   border-color: color-mix(in srgb, #f59e0b 35%, var(--app-border));
   background: color-mix(in srgb, #f59e0b 10%, var(--app-surface-soft));
   color: color-mix(in srgb, #f59e0b 72%, var(--app-text));
+}
+
+.brainstorm-suggestion-error {
+  border-color: color-mix(in srgb, #ef4444 38%, var(--app-border));
+  background: color-mix(in srgb, #ef4444 10%, var(--app-surface-soft));
+  color: color-mix(in srgb, #ef4444 72%, var(--app-text));
 }
 
 .brainstorm-suggestion-empty {

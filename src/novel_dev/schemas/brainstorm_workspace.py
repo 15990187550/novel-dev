@@ -36,13 +36,6 @@ SuggestionCardAvailableAction = Literal[
     "submit_to_pending",
     "reactivate",
 ]
-SuggestionCardUpdateAction = Literal[
-    "resolve",
-    "dismiss",
-    "submit_to_pending",
-    "reactivate",
-]
-
 
 class SuggestionCardActionHint(BaseModel):
     recommended_action: SuggestionCardRecommendedAction
@@ -116,7 +109,7 @@ class BrainstormWorkspaceSubmitResponse(BaseModel):
 
 
 class BrainstormSuggestionCardUpdateRequest(BaseModel):
-    action: SuggestionCardUpdateAction
+    action: str = Field(min_length=1)
 
 
 class PendingExtractionSummary(BaseModel):
