@@ -1,6 +1,7 @@
 from novel_dev.agents.setting_workbench_agent import (
     SettingBatchDraft,
     SettingClarificationDecision,
+    SettingWorkbenchAgent,
 )
 
 
@@ -37,8 +38,8 @@ def test_setting_batch_draft_counts_setting_cards_entities_and_relationships():
                     "target_type": "relationship",
                     "operation": "create",
                     "after_snapshot": {
-                        "source_ref": "陆照",
-                        "target_ref": "道种",
+                        "source_id": "ent_luzhao",
+                        "target_id": "ent_seed",
                         "relation_type": "持有",
                     },
                 },
@@ -48,3 +49,12 @@ def test_setting_batch_draft_counts_setting_cards_entities_and_relationships():
 
     assert draft.summary.startswith("新增 1 张")
     assert len(draft.changes) == 3
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="关系补全",
+        target_categories=["关系"],
+        messages=[{"role": "user", "content": "陆照持有道种"}],
+    )
+
+    assert "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type" in prompt
+    assert "source_ref" not in prompt
+    assert "target_ref" not in prompt

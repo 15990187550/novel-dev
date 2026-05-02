@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents.setting_workbench_agent import (
     SettingBatchDraft,
+    SettingBatchChangeDraft,
     SettingClarificationDecision,
     SettingWorkbenchAgent,
 )
@@ -133,42 +134,47 @@ class SettingWorkbenchService:
             focused_context=setting_session.focused_target,
         )
         await self._release_connection_before_external_call()
-        draft = await call_and_parse_model(
-            agent_name="SettingWorkbenchService",
-            task="setting_workbench_generate_batch",
-            prompt=prompt,
-            model_cls=SettingBatchDraft,
-            config_agent_name="setting_workbench_service",
-            novel_id=novel_id,
-            max_retries=2,
-        )
-
-        batch = await self.repo.create_review_batch(
-            novel_id=novel_id,
-            source_type="ai_session",
-            source_session_id=session_id,
-            summary=draft.summary,
-        )
-        for item in draft.changes:
-            await self.repo.add_review_change(
-                batch_id=batch.id,
-                target_type=item.target_type,
-                operation=item.operation,
-                target_id=item.target_id,
-                before_snapshot=item.before_snapshot,
-                after_snapshot=item.after_snapshot,
-                conflict_hints=item.conflict_hints,
-                source_session_id=session_id,
+        try:
+            draft = await call_and_parse_model(
+                agent_name="SettingWorkbenchService",
+                task="setting_workbench_generate_batch",
+                prompt=prompt,
+                model_cls=SettingBatchDraft,
+                config_agent_name="setting_workbench_service",
+                novel_id=novel_id,
+                max_retries=2,
             )
-        await self.repo.update_session_state(session_id, status="generated")
-        await self.repo.add_message(
-            session_id=session_id,
-            role="assistant",
-            content=f"已生成审核记录：{draft.summary}",
-            metadata={"batch_id": batch.id},
-        )
-        await self.session.flush()
-        return batch
+            self._validate_batch_draft(draft)
+
+            batch = await self.repo.create_review_batch(
+                novel_id=novel_id,
+                source_type="ai_session",
+                source_session_id=session_id,
+                summary=draft.summary,
+            )
+            for item in draft.changes:
+                await self.repo.add_review_change(
+                    batch_id=batch.id,
+                    target_type=item.target_type,
+                    operation=item.operation,
+                    target_id=item.target_id,
+                    before_snapshot=item.before_snapshot,
+                    after_snapshot=item.after_snapshot,
+                    conflict_hints=item.conflict_hints,
+                    source_session_id=session_id,
+                )
+            await self.repo.update_session_state(session_id, status="generated")
+            await self.repo.add_message(
+                session_id=session_id,
+                role="assistant",
+                content=f"已生成审核记录：{draft.summary}",
+                metadata={"batch_id": batch.id},
+            )
+            await self.session.flush()
+            return batch
+        except Exception as exc:
+            await self._restore_generation_ready_after_failure(session_id, exc)
+            raise
 
     async def apply_review_decisions(self, novel_id: str, batch_id: str, decisions: list[dict]) -> dict:
         batch = await self.repo.get_review_batch(batch_id)
@@ -433,6 +439,44 @@ class SettingWorkbenchService:
     @staticmethod
     def _message_items(messages: list[Any]) -> list[dict[str, Any]]:
         return [{"role": message.role, "content": message.content} for message in messages]
+
+    def _validate_batch_draft(self, draft: SettingBatchDraft) -> None:
+        for index, item in enumerate(draft.changes):
+            self._validate_draft_change(item, index=index)
+
+    @staticmethod
+    def _validate_draft_change(item: SettingBatchChangeDraft, *, index: int) -> None:
+        if item.operation in {"update", "delete"} and not (item.target_id or "").strip():
+            raise ValueError(f"Draft change {index} {item.target_type} {item.operation} target_id is required")
+
+        if item.target_type == "relationship" and item.operation == "create":
+            snapshot = item.after_snapshot or {}
+            missing = [
+                field
+                for field in ("source_id", "target_id", "relation_type")
+                if not str(snapshot.get(field) or "").strip()
+            ]
+            if missing:
+                raise ValueError(
+                    f"Draft change {index} relationship create after_snapshot missing: {', '.join(missing)}"
+                )
+
+    async def _restore_generation_ready_after_failure(self, session_id: str, exc: Exception) -> None:
+        if self.session.in_transaction():
+            await self.session.rollback()
+
+        await self.repo.update_session_state(session_id, status="ready_to_generate")
+        await self.repo.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=f"生成审核批次失败：{exc}",
+            metadata={
+                "status": "error",
+                "error": str(exc),
+                "stage": "setting_workbench_generate_batch",
+            },
+        )
+        await self.session.commit()
 
     @staticmethod
     def _resolve_batch_status(changes: list[SettingReviewChange], current_status: str) -> str:

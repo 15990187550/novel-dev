@@ -1,7 +1,11 @@
+from pathlib import Path
+
 import pytest
+import yaml
+from pydantic import ValidationError
 from sqlalchemy import select
 
-from novel_dev.db.models import Entity, EntityRelationship, NovelDocument
+from novel_dev.db.models import Entity, EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.entity_service import EntityService
@@ -687,9 +691,25 @@ async def test_reply_to_session_stores_clarification_question(async_session, mon
         target_categories=["功法"],
     )
 
-    async def fake_call_and_parse_model(**kwargs):
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
         from novel_dev.agents.setting_workbench_agent import SettingClarificationDecision
 
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_clarify"
+        assert "想要玄幻升级流" in prompt
+        assert model_cls is SettingClarificationDecision
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai"
+        assert max_retries == 2
         return SettingClarificationDecision(
             status="needs_clarification",
             assistant_message="请补充世界层级。",
@@ -720,6 +740,110 @@ async def test_reply_to_session_stores_clarification_question(async_session, mon
     ]
 
 
+async def test_reply_to_session_ready_decision_moves_session_to_ready_to_generate(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-ready",
+        title="体系补全",
+        initial_idea="九境体系",
+        target_categories=["体系"],
+    )
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingClarificationDecision
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_clarify"
+        assert model_cls is SettingClarificationDecision
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-ready"
+        assert max_retries == 2
+        return SettingClarificationDecision(
+            status="ready",
+            assistant_message="信息足够，可以生成。",
+            questions=[],
+            target_categories=["体系"],
+            conversation_summary="用户给出了九境体系。",
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    result = await service.reply_to_session(
+        novel_id="novel-ai-ready",
+        session_id=session.id,
+        content="补充宗门等级",
+    )
+
+    assert result["session"].status == "ready_to_generate"
+    assert result["session"].clarification_round == 1
+
+
+async def test_reply_to_session_fifth_clarification_round_becomes_ready_even_if_more_questions(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-round-limit",
+        title="多轮澄清",
+        initial_idea="先问问题",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="clarifying", clarification_round=4)
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingClarificationDecision
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_clarify"
+        assert model_cls is SettingClarificationDecision
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-round-limit"
+        assert max_retries == 2
+        return SettingClarificationDecision(
+            status="needs_clarification",
+            assistant_message="还想追问，但轮次已满。",
+            questions=["还需要什么势力？"],
+            target_categories=["势力"],
+            conversation_summary="已有 5 轮澄清。",
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    result = await service.reply_to_session(
+        novel_id="novel-ai-round-limit",
+        session_id=session.id,
+        content="第五轮补充",
+    )
+
+    assert result["session"].status == "ready_to_generate"
+    assert result["session"].clarification_round == 5
+
+
 async def test_generate_review_batch_creates_changes_from_agent(async_session, monkeypatch):
     service = SettingWorkbenchService(async_session)
     session = await service.create_generation_session(
@@ -730,9 +854,25 @@ async def test_generate_review_batch_creates_changes_from_agent(async_session, m
     )
     await service.repo.update_session_state(session.id, status="ready_to_generate")
 
-    async def fake_call_and_parse_model(**kwargs):
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
         from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert "宗门对立" in prompt
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-gen"
+        assert max_retries == 2
         return SettingBatchDraft.model_validate(
             {
                 "summary": "新增 1 张设定卡片，1 个实体",
@@ -782,3 +922,210 @@ async def test_generate_review_batch_creates_changes_from_agent(async_session, m
     ).scalars().all()
     assert documents == []
     assert entities == []
+
+
+@pytest.mark.parametrize("status", ["clarifying", "generating", "failed", "archived"])
+async def test_generate_review_batch_rejects_non_ready_or_generated_status(async_session, status):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id=f"novel-ai-gen-{status}",
+        title="状态校验",
+        initial_idea="不能生成",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status=status)
+
+    with pytest.raises(ValueError, match="not ready to generate"):
+        await service.generate_review_batch(novel_id=f"novel-ai-gen-{status}", session_id=session.id)
+
+
+async def test_generate_review_batch_allows_regeneration_from_generated_session(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-regenerate",
+        title="重复生成",
+        initial_idea="重新生成审核批次",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="generated")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-regenerate"
+        assert max_retries == 2
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "重新生成空批次",
+                "changes": [],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(novel_id="novel-ai-regenerate", session_id=session.id)
+
+    assert batch.summary == "重新生成空批次"
+    assert (await service.repo.get_session(session.id)).status == "generated"
+
+
+async def test_generate_review_batch_restores_ready_state_when_llm_fails(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-llm-fail",
+        title="LLM 失败",
+        initial_idea="生成会失败",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-llm-fail"
+        assert max_retries == 2
+        raise RuntimeError("LLM down")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    with pytest.raises(RuntimeError, match="LLM down"):
+        await service.generate_review_batch(novel_id="novel-ai-llm-fail", session_id=session.id)
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-llm-fail")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    messages = await service.repo.list_messages(session.id)
+    assert batches == []
+    assert changes == []
+    assert messages[-1].role == "assistant"
+    assert messages[-1].meta["status"] == "error"
+
+
+async def test_generate_review_batch_rejects_update_draft_without_target_id_before_creating_batch(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-invalid-draft",
+        title="无目标更新",
+        initial_idea="更新青云门",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-invalid-draft"
+        assert max_retries == 2
+        return SettingBatchDraft.model_construct(
+            summary="缺少目标实体的更新",
+            changes=[
+                SettingBatchChangeDraft.model_construct(
+                    target_type="entity",
+                    operation="update",
+                    target_id=None,
+                    before_snapshot=None,
+                    after_snapshot={"type": "faction", "name": "青云门", "state": {}},
+                    conflict_hints=[],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    with pytest.raises(ValueError, match="target_id is required"):
+        await service.generate_review_batch(novel_id="novel-ai-invalid-draft", session_id=session.id)
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-invalid-draft")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    assert batches == []
+    assert changes == []
+
+
+async def test_setting_batch_draft_rejects_relationship_create_without_entity_ids():
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    with pytest.raises(ValidationError, match="source_id, target_id, and relation_type"):
+        SettingBatchDraft.model_validate(
+            {
+                "summary": "新增 ref-only 关系",
+                "changes": [
+                    {
+                        "target_type": "relationship",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "source_ref": "陆照",
+                            "target_ref": "道种",
+                            "relation_type": "持有",
+                        },
+                    },
+                ],
+            }
+        )
+
+
+async def test_llm_config_sets_setting_workbench_service_generation_budget():
+    config = yaml.safe_load(Path("llm_config.yaml").read_text())
+
+    setting_workbench = config["agents"]["setting_workbench_service"]
+    assert setting_workbench["temperature"] == 0.55
+    assert setting_workbench["max_tokens"] == 12000

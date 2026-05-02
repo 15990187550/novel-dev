@@ -1,6 +1,6 @@
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class SettingClarificationDecision(BaseModel):
@@ -19,6 +19,17 @@ class SettingBatchChangeDraft(BaseModel):
     before_snapshot: Optional[dict[str, Any]] = None
     after_snapshot: Optional[dict[str, Any]] = None
     conflict_hints: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_review_change_shape(self):
+        if self.operation in {"update", "delete"} and not self.target_id:
+            raise ValueError(f"{self.target_type} {self.operation} target_id is required")
+
+        if self.target_type == "relationship" and self.operation == "create":
+            snapshot = self.after_snapshot or {}
+            if not all(snapshot.get(key) for key in ("source_id", "target_id", "relation_type")):
+                raise ValueError("relationship create after_snapshot.source_id, target_id, and relation_type are required")
+        return self
 
 
 class SettingBatchDraft(BaseModel):
@@ -66,9 +77,11 @@ class SettingWorkbenchAgent:
                 "只生成待审核批次，不直接写入正式设定。",
                 "每个批次必须包含 changes，change target_type 只能是 setting_card、entity、relationship。",
                 "operation 只能是 create、update、delete。",
+                "update/delete 必须提供 target_id，禁止用名称引用代替目标 ID。",
                 "setting_card 需要 after_snapshot.doc_type、title、content。",
                 "entity 需要 after_snapshot.type、name、state。",
-                "relationship 需要 after_snapshot.source_ref 或 source_id、target_ref 或 target_id、relation_type。",
+                "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type。",
+                "如果只有实体名称，先生成 entity create，并在 relationship after_snapshot 使用那些 entity 的 id 或稳定临时 id。",
                 f"会话标题：{title}",
                 f"目标分类：{', '.join(target_categories) if target_categories else '默认全量'}",
                 f"会话摘要：{conversation_summary or '暂无'}",
