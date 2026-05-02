@@ -140,6 +140,17 @@ agents:
       timeout: 180
       retries: 1
     retries: 2
+  setting_workbench_service:
+    model: kimi-for-coding
+    timeout: 180
+    temperature: 0.55
+    max_tokens: 12000
+    fallback:
+      model: minimax-2-7
+      temperature: 0.55
+      timeout: 180
+      retries: 1
+    retries: 2
   context_agent:
     model: minimax-2-7
     timeout: 60

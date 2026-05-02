@@ -3,6 +3,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.agents.setting_workbench_agent import (
+    SettingBatchDraft,
+    SettingClarificationDecision,
+    SettingWorkbenchAgent,
+)
 from novel_dev.db.models import EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
@@ -15,12 +21,154 @@ def _new_id(prefix: str) -> str:
 
 
 class SettingWorkbenchService:
+    MAX_CLARIFICATION_ROUNDS = 5
+
     def __init__(self, session: AsyncSession):
         self.session = session
         self.repo = SettingWorkbenchRepository(session)
         self.doc_repo = DocumentRepository(session)
         self.entity_service = EntityService(session)
         self.relationship_repo = RelationshipRepository(session)
+
+    async def _release_connection_before_external_call(self) -> None:
+        if self.session.in_transaction():
+            await self.session.commit()
+
+    async def create_generation_session(
+        self,
+        *,
+        novel_id: str,
+        title: str,
+        initial_idea: str = "",
+        target_categories: list[str] | None = None,
+        focused_target: dict[str, Any] | None = None,
+    ):
+        setting_session = await self.repo.create_session(
+            novel_id=novel_id,
+            title=title,
+            target_categories=target_categories or [],
+            focused_target=focused_target,
+        )
+        if initial_idea.strip():
+            await self.repo.add_message(
+                session_id=setting_session.id,
+                role="user",
+                content=initial_idea.strip(),
+            )
+        await self.session.flush()
+        return setting_session
+
+    async def reply_to_session(self, *, novel_id: str, session_id: str, content: str) -> dict[str, Any]:
+        setting_session = await self.repo.get_session(session_id)
+        if setting_session is None or setting_session.novel_id != novel_id:
+            raise ValueError("Setting generation session not found")
+
+        await self.repo.add_message(session_id=session_id, role="user", content=content.strip())
+        messages = await self.repo.list_messages(session_id)
+        prompt = SettingWorkbenchAgent.build_clarification_prompt(
+            title=setting_session.title,
+            target_categories=setting_session.target_categories or [],
+            messages=self._message_items(messages),
+            conversation_summary=setting_session.conversation_summary,
+            max_rounds=self.MAX_CLARIFICATION_ROUNDS,
+        )
+        await self._release_connection_before_external_call()
+        decision = await call_and_parse_model(
+            agent_name="SettingWorkbenchService",
+            task="setting_workbench_clarify",
+            prompt=prompt,
+            model_cls=SettingClarificationDecision,
+            config_agent_name="setting_workbench_service",
+            novel_id=novel_id,
+            max_retries=2,
+        )
+
+        next_round = setting_session.clarification_round + 1
+        next_status = (
+            "ready_to_generate"
+            if decision.status == "ready" or next_round >= self.MAX_CLARIFICATION_ROUNDS
+            else "clarifying"
+        )
+        updated = await self.repo.update_session_state(
+            session_id,
+            status=next_status,
+            clarification_round=next_round,
+            conversation_summary=decision.conversation_summary,
+        )
+        if updated is None:
+            raise ValueError("Setting generation session not found")
+        if decision.target_categories:
+            updated.target_categories = decision.target_categories
+        await self.repo.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=decision.assistant_message,
+            metadata={
+                "questions": decision.questions,
+                "status": decision.status,
+                "ready_to_generate": next_status == "ready_to_generate",
+            },
+        )
+        await self.session.flush()
+        return {
+            "session": updated,
+            "assistant_message": decision.assistant_message,
+            "questions": decision.questions,
+        }
+
+    async def generate_review_batch(self, *, novel_id: str, session_id: str):
+        setting_session = await self.repo.get_session(session_id)
+        if setting_session is None or setting_session.novel_id != novel_id:
+            raise ValueError("Setting generation session not found")
+        if setting_session.status not in {"ready_to_generate", "generated"}:
+            raise ValueError("Setting session is not ready to generate")
+
+        await self.repo.update_session_state(session_id, status="generating")
+        messages = await self.repo.list_messages(session_id)
+        prompt = SettingWorkbenchAgent.build_generation_prompt(
+            title=setting_session.title,
+            target_categories=setting_session.target_categories or [],
+            messages=self._message_items(messages),
+            conversation_summary=setting_session.conversation_summary,
+            focused_context=setting_session.focused_target,
+        )
+        await self._release_connection_before_external_call()
+        draft = await call_and_parse_model(
+            agent_name="SettingWorkbenchService",
+            task="setting_workbench_generate_batch",
+            prompt=prompt,
+            model_cls=SettingBatchDraft,
+            config_agent_name="setting_workbench_service",
+            novel_id=novel_id,
+            max_retries=2,
+        )
+
+        batch = await self.repo.create_review_batch(
+            novel_id=novel_id,
+            source_type="ai_session",
+            source_session_id=session_id,
+            summary=draft.summary,
+        )
+        for item in draft.changes:
+            await self.repo.add_review_change(
+                batch_id=batch.id,
+                target_type=item.target_type,
+                operation=item.operation,
+                target_id=item.target_id,
+                before_snapshot=item.before_snapshot,
+                after_snapshot=item.after_snapshot,
+                conflict_hints=item.conflict_hints,
+                source_session_id=session_id,
+            )
+        await self.repo.update_session_state(session_id, status="generated")
+        await self.repo.add_message(
+            session_id=session_id,
+            role="assistant",
+            content=f"已生成审核记录：{draft.summary}",
+            metadata={"batch_id": batch.id},
+        )
+        await self.session.flush()
+        return batch
 
     async def apply_review_decisions(self, novel_id: str, batch_id: str, decisions: list[dict]) -> dict:
         batch = await self.repo.get_review_batch(batch_id)
@@ -281,6 +429,10 @@ class SettingWorkbenchService:
         target.source_session_id = change.source_session_id or batch.source_session_id
         target.source_review_batch_id = batch.id
         target.source_review_change_id = change.id
+
+    @staticmethod
+    def _message_items(messages: list[Any]) -> list[dict[str, Any]]:
+        return [{"role": message.role, "content": message.content} for message in messages]
 
     @staticmethod
     def _resolve_batch_status(changes: list[SettingReviewChange], current_status: str) -> str:

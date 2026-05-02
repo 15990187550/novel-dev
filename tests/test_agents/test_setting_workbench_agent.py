@@ -1,0 +1,50 @@
+from novel_dev.agents.setting_workbench_agent import (
+    SettingBatchDraft,
+    SettingClarificationDecision,
+)
+
+
+def test_setting_clarification_decision_accepts_ready_payload():
+    decision = SettingClarificationDecision.model_validate(
+        {
+            "status": "ready",
+            "assistant_message": "信息足够，可以生成待审核设定。",
+            "target_categories": ["功法", "势力"],
+            "conversation_summary": "用户确认玄幻升级流和宗门冲突。",
+        }
+    )
+
+    assert decision.status == "ready"
+    assert decision.target_categories == ["功法", "势力"]
+
+
+def test_setting_batch_draft_counts_setting_cards_entities_and_relationships():
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "新增 1 张设定卡片，1 个实体，1 个关系变更",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {"title": "修炼体系", "content": "九境。"},
+                },
+                {
+                    "target_type": "entity",
+                    "operation": "create",
+                    "after_snapshot": {"type": "item", "name": "道种", "state": {}},
+                },
+                {
+                    "target_type": "relationship",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "source_ref": "陆照",
+                        "target_ref": "道种",
+                        "relation_type": "持有",
+                    },
+                },
+            ],
+        }
+    )
+
+    assert draft.summary.startswith("新增 1 张")
+    assert len(draft.changes) == 3

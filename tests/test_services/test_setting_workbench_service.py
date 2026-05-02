@@ -676,3 +676,109 @@ async def test_apply_review_batch_relationship_update_without_target_id_fails(as
     assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
     assert (await repo.get_review_change(change.id)).status == "failed"
     assert relationships == []
+
+
+async def test_reply_to_session_stores_clarification_question(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai",
+        title="修炼体系补全",
+        initial_idea="主角废脉开局",
+        target_categories=["功法"],
+    )
+
+    async def fake_call_and_parse_model(**kwargs):
+        from novel_dev.agents.setting_workbench_agent import SettingClarificationDecision
+
+        return SettingClarificationDecision(
+            status="needs_clarification",
+            assistant_message="请补充世界层级。",
+            questions=["世界最高战力到什么层次？"],
+            target_categories=["功法"],
+            conversation_summary="用户想写废脉开局。",
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    result = await service.reply_to_session(
+        novel_id="novel-ai",
+        session_id=session.id,
+        content="想要玄幻升级流",
+    )
+
+    assert result["session"].status == "clarifying"
+    assert result["assistant_message"] == "请补充世界层级。"
+    assert result["questions"] == ["世界最高战力到什么层次？"]
+    messages = await service.repo.list_messages(session.id)
+    assert [(message.role, message.content) for message in messages] == [
+        ("user", "主角废脉开局"),
+        ("user", "想要玄幻升级流"),
+        ("assistant", "请补充世界层级。"),
+    ]
+
+
+async def test_generate_review_batch_creates_changes_from_agent(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-gen",
+        title="势力格局",
+        initial_idea="宗门对立",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(**kwargs):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "新增 1 张设定卡片，1 个实体",
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": "势力格局",
+                            "content": "青云门与魔宗对立。",
+                        },
+                    },
+                    {
+                        "target_type": "entity",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "type": "faction",
+                            "name": "青云门",
+                            "state": {"description": "正道宗门"},
+                        },
+                    },
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(novel_id="novel-ai-gen", session_id=session.id)
+    changes = await service.repo.list_review_changes(batch.id)
+
+    assert batch.summary == "新增 1 张设定卡片，1 个实体"
+    assert [change.target_type for change in changes] == ["setting_card", "entity"]
+    assert [change.status for change in changes] == ["pending", "pending"]
+    assert (await service.repo.get_session(session.id)).status == "generated"
+
+    documents = await DocumentRepository(async_session).get_by_type_and_title(
+        "novel-ai-gen",
+        "setting",
+        "势力格局",
+    )
+    entities = (
+        await async_session.execute(select(Entity).where(Entity.novel_id == "novel-ai-gen"))
+    ).scalars().all()
+    assert documents == []
+    assert entities == []
