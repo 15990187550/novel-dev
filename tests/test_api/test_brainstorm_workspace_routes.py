@@ -21,6 +21,90 @@ def test_client(async_session):
     app.dependency_overrides.clear()
 
 
+async def _seed_route_suggestion_card(async_session, novel_id: str, status: str = "active"):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        novel_id,
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+    service = BrainstormWorkspaceService(async_session)
+    await service.merge_suggestion_cards(
+        novel_id,
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_route_1",
+                "card_type": "character",
+                "merge_key": "character:route",
+                "title": "林风",
+                "summary": "主角建议卡",
+                "status": status,
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "林风"},
+                "display_order": 1,
+            }
+        ],
+    )
+    await async_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_patch_suggestion_card_resolves_card(async_session, test_client):
+    await _seed_route_suggestion_card(async_session, "n_workspace_card_patch")
+
+    async with test_client as client:
+        resp = await client.patch(
+            "/api/novels/n_workspace_card_patch/brainstorm/suggestion_cards/card_route_1",
+            json={"action": "resolve"},
+        )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["workspace"]["setting_suggestion_cards"][0]["status"] == "resolved"
+    assert data["pending_extraction"] is None
+
+
+@pytest.mark.asyncio
+async def test_patch_suggestion_card_returns_404_for_missing_card(
+    async_session,
+    test_client,
+):
+    await _seed_route_suggestion_card(async_session, "n_workspace_card_missing")
+
+    async with test_client as client:
+        resp = await client.patch(
+            "/api/novels/n_workspace_card_missing/brainstorm/suggestion_cards/nope",
+            json={"action": "resolve"},
+        )
+
+    assert resp.status_code == 404
+    assert "not found" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_suggestion_card_returns_409_for_illegal_status(
+    async_session,
+    test_client,
+):
+    await _seed_route_suggestion_card(
+        async_session,
+        "n_workspace_card_illegal_status",
+        status="submitted",
+    )
+
+    async with test_client as client:
+        resp = await client.patch(
+            "/api/novels/n_workspace_card_illegal_status/brainstorm/suggestion_cards/card_route_1",
+            json={"action": "reactivate"},
+        )
+
+    assert resp.status_code == 409
+    assert "cannot be reactivated" in resp.json()["detail"]
+
+
 @pytest.mark.asyncio
 async def test_start_brainstorm_workspace_returns_active_workspace(async_session, test_client):
     director = NovelDirector(session=async_session)

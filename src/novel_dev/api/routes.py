@@ -29,6 +29,8 @@ from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
 from novel_dev.schemas.outline_workbench import OutlineClearContextResponse, OutlineMessagesResponse
 from novel_dev.schemas.brainstorm_workspace import (
+    BrainstormSuggestionCardUpdateRequest,
+    BrainstormSuggestionCardUpdateResponse,
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
 )
@@ -2373,6 +2375,29 @@ async def submit_brainstorm_workspace(
         detail = str(e)
         status_code = 404 if "not found" in detail.lower() else 409
         raise HTTPException(status_code=status_code, detail=detail)
+
+
+@router.patch(
+    "/api/novels/{novel_id}/brainstorm/suggestion_cards/{card_id}",
+    response_model=BrainstormSuggestionCardUpdateResponse,
+)
+async def update_brainstorm_suggestion_card(
+    novel_id: str,
+    card_id: str,
+    payload: BrainstormSuggestionCardUpdateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = BrainstormWorkspaceService(session)
+    try:
+        return await service.update_suggestion_card(novel_id, card_id, payload.action)
+    except ValueError as e:
+        detail = str(e)
+        lowered = detail.lower()
+        if "not found" in lowered:
+            raise HTTPException(status_code=404, detail=detail)
+        if "unsupported suggestion card action" in lowered:
+            raise HTTPException(status_code=400, detail=detail)
+        raise HTTPException(status_code=409, detail=detail)
 
 
 @router.post("/api/novels/{novel_id}/librarian")
