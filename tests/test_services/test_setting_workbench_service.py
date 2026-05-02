@@ -465,6 +465,9 @@ async def test_apply_review_batch_entity_update_renames_target_entity(async_sess
     assert stored_entity.name == "新名"
     assert latest_state["name"] == "新名"
     assert latest_state["identity"] == "新身份"
+    assert stored_entity.source_type == "ai"
+    assert stored_entity.source_session_id == session.id
+    assert stored_entity.source_review_batch_id == batch.id
     assert stored_entity.source_review_change_id == change.id
     assert len(entity_count) == 1
 
@@ -525,6 +528,9 @@ async def test_apply_review_batch_relationship_update_mutates_target_relationshi
     assert len(relationships) == 1
     assert stored.relation_type == "mentor"
     assert stored.meta == {"note": "updated", "source": "setting_workbench"}
+    assert stored.source_type == "ai"
+    assert stored.source_session_id == session.id
+    assert stored.source_review_batch_id == batch.id
     assert stored.source_review_change_id == change.id
 
 
@@ -569,3 +575,7 @@ async def test_apply_review_batch_setting_card_update_ignores_snapshot_id(async_
     assert result["status"] == "approved"
     assert [document.version for document in documents] == [2, 1]
     assert documents[0].id != existing.id
+    assert documents[0].source_type == "ai"
+    assert documents[0].source_session_id == session.id
+    assert documents[0].source_review_batch_id == batch.id
+    assert documents[0].source_review_change_id == change.id
