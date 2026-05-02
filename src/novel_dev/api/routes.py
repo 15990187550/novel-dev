@@ -9,7 +9,18 @@ from sqlalchemy import delete, func, select
 from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
-from novel_dev.db.models import AgentLog, EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
+from novel_dev.db.models import (
+    AgentLog,
+    Chapter,
+    Entity,
+    EntityGroup,
+    EntityRelationship,
+    Foreshadowing,
+    NovelState,
+    SettingGenerationSession,
+    Spaceline,
+    Timeline,
+)
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
@@ -23,7 +34,7 @@ from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.llm import llm_factory
-from novel_dev.llm.exceptions import LLMTimeoutError
+from novel_dev.llm.exceptions import LLMError, LLMTimeoutError
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
@@ -219,14 +230,19 @@ def _count_setting_review_changes(changes: list) -> dict[str, int]:
     return counts
 
 
-def _serialize_setting_review_batch(item, changes: list) -> dict[str, Any]:
+def _serialize_setting_review_batch(
+    item,
+    changes: list,
+    *,
+    source_session_title: str | None = None,
+) -> dict[str, Any]:
     return {
         "id": item.id,
         "novel_id": item.novel_id,
         "source_type": item.source_type,
         "source_file": item.source_file,
         "source_session_id": item.source_session_id,
-        "source_session_title": getattr(item, "source_session_title", None),
+        "source_session_title": source_session_title,
         "status": item.status,
         "summary": item.summary,
         "error_message": item.error_message,
@@ -235,6 +251,66 @@ def _serialize_setting_review_batch(item, changes: list) -> dict[str, Any]:
         "created_at": item.created_at,
         "updated_at": item.updated_at,
     }
+
+
+async def _setting_source_session_titles(session: AsyncSession, batches: list) -> dict[str, str]:
+    session_ids = sorted({batch.source_session_id for batch in batches if batch.source_session_id})
+    if not session_ids:
+        return {}
+    result = await session.execute(
+        select(SettingGenerationSession.id, SettingGenerationSession.title).where(
+            SettingGenerationSession.id.in_(session_ids)
+        )
+    )
+    return {session_id: title for session_id, title in result.all()}
+
+
+async def _serialize_setting_review_batches(session: AsyncSession, service: SettingWorkbenchService, batches: list) -> list[dict[str, Any]]:
+    titles = await _setting_source_session_titles(session, batches)
+    items = []
+    for batch in batches:
+        changes = await service.repo.list_review_changes(batch.id)
+        items.append(
+            _serialize_setting_review_batch(
+                batch,
+                changes,
+                source_session_title=titles.get(batch.source_session_id),
+            )
+        )
+    return items
+
+
+async def _serialize_setting_review_batch_with_title(
+    session: AsyncSession,
+    service: SettingWorkbenchService,
+    batch,
+) -> dict[str, Any]:
+    changes = await service.repo.list_review_changes(batch.id)
+    titles = await _setting_source_session_titles(session, [batch])
+    return _serialize_setting_review_batch(
+        batch,
+        changes,
+        source_session_title=titles.get(batch.source_session_id),
+    )
+
+
+def _setting_not_found_error(detail: str) -> bool:
+    return "not found" in detail.lower()
+
+
+def _raise_setting_value_error(exc: ValueError) -> None:
+    detail = str(exc)
+    status_code = 404 if _setting_not_found_error(detail) else 409
+    raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+def _raise_setting_generation_error(exc: Exception) -> None:
+    detail = str(exc) or "设定生成失败，请稍后重试"
+    if isinstance(exc, LLMTimeoutError):
+        raise HTTPException(status_code=504, detail="设定生成超时，请稍后重试或切换模型") from exc
+    if isinstance(exc, LLMError):
+        raise HTTPException(status_code=502, detail=detail) from exc
+    raise HTTPException(status_code=422, detail=detail) from exc
 
 
 def _serialize_pending_document(item) -> dict[str, Any]:
@@ -2500,10 +2576,7 @@ async def get_setting_workbench(novel_id: str, session: AsyncSession = Depends(g
     service = SettingWorkbenchService(session)
     sessions = await service.repo.list_sessions(novel_id)
     batches = await service.repo.list_review_batches(novel_id)
-    review_batches = []
-    for batch in batches:
-        changes = await service.repo.list_review_changes(batch.id)
-        review_batches.append(_serialize_setting_review_batch(batch, changes))
+    review_batches = await _serialize_setting_review_batches(session, service, batches)
     return {
         "novel_id": novel_id,
         "sessions": [_serialize_setting_session(item) for item in sessions],
@@ -2548,10 +2621,7 @@ async def get_setting_session(novel_id: str, session_id: str, session: AsyncSess
         for batch in await service.repo.list_review_batches(novel_id)
         if batch.source_session_id == session_id
     ]
-    review_batches = []
-    for batch in batches:
-        changes = await service.repo.list_review_changes(batch.id)
-        review_batches.append(_serialize_setting_review_batch(batch, changes))
+    review_batches = await _serialize_setting_review_batches(session, service, batches)
     return {
         "session": _serialize_setting_session(item),
         "messages": [_serialize_setting_message(message) for message in messages],
@@ -2570,7 +2640,7 @@ async def reply_setting_session(
     try:
         result = await service.reply_to_session(novel_id=novel_id, session_id=session_id, content=req.content)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        _raise_setting_value_error(exc)
     await session.commit()
     return {
         "session": _serialize_setting_session(result["session"]),
@@ -2590,21 +2660,18 @@ async def generate_setting_review_batch(
     try:
         batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _raise_setting_value_error(exc)
+    except Exception as exc:
+        _raise_setting_generation_error(exc)
     await session.commit()
-    changes = await service.repo.list_review_changes(batch.id)
-    return _serialize_setting_review_batch(batch, changes)
+    return await _serialize_setting_review_batch_with_title(session, service, batch)
 
 
 @router.get("/api/novels/{novel_id}/settings/review_batches")
 async def list_setting_review_batches(novel_id: str, session: AsyncSession = Depends(get_session)):
     service = SettingWorkbenchService(session)
     batches = await service.repo.list_review_batches(novel_id)
-    items = []
-    for batch in batches:
-        changes = await service.repo.list_review_changes(batch.id)
-        items.append(_serialize_setting_review_batch(batch, changes))
-    return {"items": items}
+    return {"items": await _serialize_setting_review_batches(session, service, batches)}
 
 
 @router.get("/api/novels/{novel_id}/settings/review_batches/{batch_id}")
@@ -2613,8 +2680,7 @@ async def get_setting_review_batch(novel_id: str, batch_id: str, session: AsyncS
     batch = await service.repo.get_review_batch(batch_id)
     if batch is None or batch.novel_id != novel_id:
         raise HTTPException(status_code=404, detail="Setting review batch not found")
-    changes = await service.repo.list_review_changes(batch.id)
-    return _serialize_setting_review_batch(batch, changes)
+    return await _serialize_setting_review_batch_with_title(session, service, batch)
 
 
 @router.post("/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply")
@@ -2632,7 +2698,7 @@ async def apply_setting_review_batch(
             decisions=[item.model_dump() for item in req.decisions],
         )
     except ValueError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
+        _raise_setting_value_error(exc)
     await session.commit()
     return result
 
