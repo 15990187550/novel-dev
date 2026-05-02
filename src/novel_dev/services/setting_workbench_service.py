@@ -122,7 +122,7 @@ class SettingWorkbenchService:
             existing = await self._get_target_document(novel_id, change)
             content = self._required_content(snapshot)
             document = await self.doc_repo.create(
-                doc_id=snapshot.get("id") or _new_id("doc_"),
+                doc_id=_new_id("doc_"),
                 novel_id=novel_id,
                 doc_type=(snapshot.get("doc_type") or existing.doc_type).strip() or existing.doc_type,
                 title=(snapshot.get("title") or existing.title).strip() or existing.title,
@@ -148,7 +148,7 @@ class SettingWorkbenchService:
         snapshot: dict,
     ):
         operation = change.operation
-        if operation in {"create", "update"}:
+        if operation == "create" or (operation == "update" and not change.target_id):
             name = (snapshot.get("name") or "").strip()
             if not name:
                 raise ValueError("Entity name is required")
@@ -163,11 +163,23 @@ class SettingWorkbenchService:
                 novel_id=novel_id,
                 initial_state=initial_state,
             )
-        elif operation == "delete":
-            if not change.target_id:
-                raise ValueError("Entity target_id is required")
+        elif operation == "update":
+            entity = await self._get_target_entity(novel_id, change)
+            state_fields = snapshot.get("state") or snapshot.get("data") or {}
+            if not isinstance(state_fields, dict):
+                raise ValueError("Entity state must be an object")
+            name = (snapshot.get("name") or entity.name or "").strip()
+            entity_type = (snapshot.get("type") or snapshot.get("entity_type") or entity.type or "").strip()
             entity = await self.entity_service.update_entity_fields(
-                change.target_id,
+                entity.id,
+                name=name,
+                entity_type=entity_type,
+                state_fields=state_fields,
+            )
+        elif operation == "delete":
+            entity = await self._get_target_entity(novel_id, change)
+            entity = await self.entity_service.update_entity_fields(
+                entity.id,
                 state_fields={
                     "_archived": True,
                     "_archive_reason": snapshot.get("archive_reason") or "setting_workbench_delete",
@@ -188,7 +200,7 @@ class SettingWorkbenchService:
         snapshot: dict,
     ) -> EntityRelationship | None:
         operation = change.operation
-        if operation in {"create", "update"}:
+        if operation == "create" or (operation == "update" and not change.target_id):
             source_id = snapshot.get("source_id")
             target_id = snapshot.get("target_id")
             relation_type = snapshot.get("relation_type")
@@ -206,11 +218,26 @@ class SettingWorkbenchService:
             self._stamp_source(relationship, batch, change)
             await self.session.flush()
             return relationship
+        if operation == "update":
+            relationship = await self._get_target_relationship(novel_id, change)
+            if "source_id" in snapshot:
+                relationship.source_id = snapshot["source_id"]
+            if "target_id" in snapshot:
+                relationship.target_id = snapshot["target_id"]
+            if "relation_type" in snapshot:
+                relationship.relation_type = snapshot["relation_type"]
+            meta = dict(snapshot.get("meta") if "meta" in snapshot else (relationship.meta or {}))
+            meta["source"] = "setting_workbench"
+            relationship.meta = meta
+            self._stamp_source(relationship, batch, change)
+            await self.session.flush()
+            return relationship
         if operation == "delete":
-            if not change.target_id:
-                raise ValueError("Relationship target_id is required")
-            await self.relationship_repo.deactivate(int(change.target_id))
-            return None
+            relationship = await self._get_target_relationship(novel_id, change)
+            self._stamp_source(relationship, batch, change)
+            relationship.is_active = False
+            await self.session.flush()
+            return relationship
         raise ValueError(f"Unsupported relationship operation: {operation}")
 
     async def _get_target_document(self, novel_id: str, change: SettingReviewChange) -> NovelDocument:
@@ -220,6 +247,26 @@ class SettingWorkbenchService:
         if document is None or document.novel_id != novel_id:
             raise ValueError("Setting card not found")
         return document
+
+    async def _get_target_entity(self, novel_id: str, change: SettingReviewChange):
+        if not change.target_id:
+            raise ValueError("Entity target_id is required")
+        entity = await self.entity_service.entity_repo.get_by_id(change.target_id)
+        if entity is None or entity.novel_id != novel_id:
+            raise ValueError("Entity not found")
+        return entity
+
+    async def _get_target_relationship(self, novel_id: str, change: SettingReviewChange) -> EntityRelationship:
+        if not change.target_id:
+            raise ValueError("Relationship target_id is required")
+        try:
+            relationship_id = int(change.target_id)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Relationship target_id is invalid") from exc
+        relationship = await self.relationship_repo.get_by_id(relationship_id)
+        if relationship is None or relationship.novel_id != novel_id:
+            raise ValueError("Relationship not found")
+        return relationship
 
     @staticmethod
     def _required_content(snapshot: dict) -> str:

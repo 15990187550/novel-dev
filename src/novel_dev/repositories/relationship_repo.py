@@ -51,6 +51,9 @@ class RelationshipRepository:
         result = await self.session.execute(stmt.order_by(EntityRelationship.id.desc()).limit(1))
         return result.scalars().first()
 
+    async def get_by_id(self, relationship_id: int) -> Optional[EntityRelationship]:
+        return await self.session.get(EntityRelationship, relationship_id)
+
     async def upsert(
         self,
         source_id: str,
@@ -100,7 +103,7 @@ class RelationshipRepository:
         await self.session.flush()
 
     async def deactivate(self, relationship_id: int) -> Optional[EntityRelationship]:
-        relationship = await self.session.get(EntityRelationship, relationship_id)
+        relationship = await self.get_by_id(relationship_id)
         if relationship is None:
             return None
         relationship.is_active = False

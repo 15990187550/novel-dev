@@ -4,6 +4,7 @@ from sqlalchemy import select
 from novel_dev.db.models import Entity, EntityRelationship, NovelDocument
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+from novel_dev.services.entity_service import EntityService
 from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 
 pytestmark = pytest.mark.asyncio
@@ -228,6 +229,69 @@ async def test_apply_review_batch_deactivates_relationship(async_session):
     assert result["status"] == "approved"
     stored = await async_session.get(EntityRelationship, relationship.id)
     assert stored.is_active is False
+    assert stored.source_type == "ai"
+    assert stored.source_session_id == session.id
+    assert stored.source_review_batch_id == batch.id
+    assert stored.source_review_change_id == change.id
+
+
+@pytest.mark.parametrize("target_mode", ["missing", "wrong_novel"])
+async def test_apply_review_batch_relationship_delete_fails_for_missing_or_wrong_target(
+    async_session,
+    target_mode,
+):
+    relationship = None
+    if target_mode == "wrong_novel":
+        async_session.add_all(
+            [
+                Entity(id="rel_wrong_source", type="character", name="甲", novel_id="novel-other"),
+                Entity(id="rel_wrong_target", type="character", name="乙", novel_id="novel-other"),
+            ]
+        )
+        await async_session.flush()
+        relationship = EntityRelationship(
+            source_id="rel_wrong_source",
+            target_id="rel_wrong_target",
+            relation_type="ally",
+            novel_id="novel-other",
+            is_active=True,
+        )
+        async_session.add(relationship)
+        await async_session.flush()
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-rel-fail",
+        title="关系删除失败",
+        target_categories=["关系"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-rel-fail",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="删除不存在或跨小说关系",
+    )
+    target_id = str(relationship.id) if relationship is not None else "999999"
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="relationship",
+        operation="delete",
+        target_id=target_id,
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-rel-fail",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
+    assert (await repo.get_review_change(change.id)).status == "failed"
+    if relationship is not None:
+        stored = await async_session.get(EntityRelationship, relationship.id)
+        assert stored.is_active is True
+        assert stored.source_type is None
 
 
 async def test_apply_review_batch_setting_card_create_forces_version_one(async_session):
@@ -311,3 +375,197 @@ async def test_apply_review_batch_marks_change_failed_after_flush_error(async_se
     assert stored_change.status == "failed"
     assert stored_change.error_message
     assert stored_batch.status == "failed"
+
+
+async def test_apply_review_batch_entity_delete_fails_for_wrong_novel_target(async_session):
+    entity_service = EntityService(async_session)
+    other_entity = await entity_service.create_entity(
+        "ent_wrong_novel_delete",
+        "character",
+        "误删对象",
+        novel_id="novel-other-entity",
+        initial_state={"identity": "其他小说人物"},
+    )
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-entity-delete",
+        title="实体删除失败",
+        target_categories=["人物"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-entity-delete",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="跨小说实体删除",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="entity",
+        operation="delete",
+        target_id=other_entity.id,
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-entity-delete",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    latest_state = await entity_service.get_latest_state(other_entity.id)
+    stored_entity = await async_session.get(Entity, other_entity.id)
+    assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
+    assert (await repo.get_review_change(change.id)).status == "failed"
+    assert latest_state.get("_archived") is not True
+    assert stored_entity.source_type is None
+
+
+async def test_apply_review_batch_entity_update_renames_target_entity(async_session):
+    entity_service = EntityService(async_session)
+    entity = await entity_service.create_entity(
+        "ent_update_target",
+        "character",
+        "旧名",
+        novel_id="novel-sw-entity-update",
+        initial_state={"identity": "旧身份"},
+    )
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-entity-update",
+        title="实体更新",
+        target_categories=["人物"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-entity-update",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="重命名实体",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="entity",
+        operation="update",
+        target_id=entity.id,
+        after_snapshot={"type": "character", "name": "新名", "state": {"identity": "新身份"}},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-entity-update",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    stored_entity = await async_session.get(Entity, entity.id)
+    latest_state = await entity_service.get_latest_state(entity.id)
+    entity_count = (
+        await async_session.execute(select(Entity).where(Entity.novel_id == "novel-sw-entity-update"))
+    ).scalars().all()
+    assert result["status"] == "approved"
+    assert stored_entity.name == "新名"
+    assert latest_state["name"] == "新名"
+    assert latest_state["identity"] == "新身份"
+    assert stored_entity.source_review_change_id == change.id
+    assert len(entity_count) == 1
+
+
+async def test_apply_review_batch_relationship_update_mutates_target_relationship(async_session):
+    async_session.add_all(
+        [
+            Entity(id="rel_update_source", type="character", name="师父", novel_id="novel-sw-rel-update"),
+            Entity(id="rel_update_target", type="character", name="徒弟", novel_id="novel-sw-rel-update"),
+        ]
+    )
+    await async_session.flush()
+    relationship = EntityRelationship(
+        source_id="rel_update_source",
+        target_id="rel_update_target",
+        relation_type="ally",
+        meta={"note": "old"},
+        novel_id="novel-sw-rel-update",
+        is_active=True,
+    )
+    async_session.add(relationship)
+    await async_session.flush()
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-rel-update",
+        title="关系更新",
+        target_categories=["关系"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-rel-update",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="修改关系类型",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="relationship",
+        operation="update",
+        target_id=str(relationship.id),
+        after_snapshot={"relation_type": "mentor", "meta": {"note": "updated"}},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-rel-update",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    relationships = (
+        await async_session.execute(
+            select(EntityRelationship).where(EntityRelationship.novel_id == "novel-sw-rel-update")
+        )
+    ).scalars().all()
+    stored = await async_session.get(EntityRelationship, relationship.id)
+    assert result["status"] == "approved"
+    assert len(relationships) == 1
+    assert stored.relation_type == "mentor"
+    assert stored.meta == {"note": "updated", "source": "setting_workbench"}
+    assert stored.source_review_change_id == change.id
+
+
+async def test_apply_review_batch_setting_card_update_ignores_snapshot_id(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    doc_repo = DocumentRepository(async_session)
+    existing = await doc_repo.create(
+        doc_id="doc_snapshot_id_v1",
+        novel_id="novel-sw-doc-update-id",
+        doc_type="setting",
+        title="境界",
+        content="三境。",
+        version=1,
+    )
+    session = await repo.create_session(
+        novel_id="novel-sw-doc-update-id",
+        title="设定更新忽略快照 id",
+        target_categories=["体系设定"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-doc-update-id",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="更新设定",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="update",
+        target_id=existing.id,
+        after_snapshot={"id": existing.id, "title": "境界", "content": "九境。"},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-doc-update-id",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    documents = await doc_repo.get_by_type_and_title("novel-sw-doc-update-id", "setting", "境界")
+    assert result["status"] == "approved"
+    assert [document.version for document in documents] == [2, 1]
+    assert documents[0].id != existing.id
