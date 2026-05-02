@@ -72,13 +72,138 @@
         <p class="mt-3 line-clamp-4 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
           {{ card.summary }}
         </p>
+        <p class="mt-3 text-xs leading-5 text-gray-500 dark:text-gray-400">
+          {{ getActionHint(card).reason }}
+        </p>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button brainstorm-suggestion-card__button--primary"
+            data-testid="suggestion-primary-action"
+            @click="handlePrimaryAction(card)"
+          >
+            {{ getActionHint(card).primary_label }}
+          </button>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button"
+            data-testid="suggestion-process"
+            @click="openDetail(card)"
+          >
+            处理
+          </button>
+        </div>
       </article>
+    </div>
+
+    <div v-if="historyCards.length" class="mt-4">
+      <button
+        type="button"
+        class="brainstorm-suggestion-card__button"
+        data-testid="toggle-suggestion-history"
+        @click="showHistory = !showHistory"
+      >
+        历史建议 {{ historyCards.length }}
+      </button>
+      <div v-if="showHistory" class="mt-3 grid gap-3 lg:grid-cols-2">
+        <article
+          v-for="card in historyCards"
+          :key="card.card_id || card.merge_key"
+          class="brainstorm-suggestion-card rounded-2xl border px-4 py-4"
+          data-testid="suggestion-history-card"
+        >
+          <div class="text-sm font-semibold text-gray-900 dark:text-gray-100">{{ card.title }}</div>
+          <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+            {{ getActionHint(card).reason }}
+          </p>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button mt-3"
+            @click="openDetail(card)"
+          >
+            查看处理
+          </button>
+        </article>
+      </div>
+    </div>
+
+    <div
+      v-if="selectedCard"
+      class="brainstorm-suggestion-drawer"
+      data-testid="suggestion-detail-drawer"
+    >
+      <div class="brainstorm-suggestion-drawer__panel">
+        <div class="flex items-start justify-between gap-3">
+          <div>
+            <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Suggestion Detail</div>
+            <h3 class="mt-2 text-lg font-semibold text-gray-900 dark:text-gray-100">{{ selectedCard.title }}</h3>
+            <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
+              类型：{{ selectedCard.card_type || 'unknown' }} · 来源：{{ formatSourceRefs(selectedCard.source_outline_refs) }}
+            </p>
+          </div>
+          <button type="button" class="brainstorm-suggestion-card__button" @click="closeDetail">关闭</button>
+        </div>
+        <p class="mt-4 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">{{ selectedCard.summary }}</p>
+        <div class="brainstorm-suggestion-summary mt-4 rounded-2xl border px-4 py-3 text-sm">
+          <div class="font-semibold">{{ getActionHint(selectedCard).primary_label }}</div>
+          <p class="mt-1 text-xs leading-5">{{ getActionHint(selectedCard).reason }}</p>
+        </div>
+        <div class="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button brainstorm-suggestion-card__button--primary"
+            data-testid="submit-to-pending-action"
+            :disabled="!hasAction(selectedCard, 'submit_to_pending')"
+            @click="emitUpdate(selectedCard, 'submit_to_pending')"
+          >
+            转为待审批设定
+          </button>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button"
+            :disabled="!hasAction(selectedCard, 'fill_conversation')"
+            @click="emit('fill-conversation', selectedCard)"
+          >
+            回填到输入区
+          </button>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button"
+            :disabled="!hasAction(selectedCard, 'resolve')"
+            @click="emitUpdate(selectedCard, 'resolve')"
+          >
+            标记已解决
+          </button>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button"
+            :disabled="!hasAction(selectedCard, 'dismiss')"
+            @click="emitUpdate(selectedCard, 'dismiss')"
+          >
+            忽略
+          </button>
+          <button
+            type="button"
+            class="brainstorm-suggestion-card__button"
+            :disabled="!hasAction(selectedCard, 'reactivate')"
+            @click="emitUpdate(selectedCard, 'reactivate')"
+          >
+            重新激活
+          </button>
+        </div>
+        <pre class="brainstorm-suggestion-payload mt-4 overflow-auto rounded-xl p-3 text-xs">{{ formatPayload(selectedCard.payload) }}</pre>
+        <details class="mt-4 text-xs text-gray-500 dark:text-gray-400">
+          <summary>调试信息</summary>
+          <div class="mt-2">card_id: {{ selectedCard.card_id }}</div>
+          <div>merge_key: {{ selectedCard.merge_key }}</div>
+        </details>
+      </div>
     </div>
   </section>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 
 const props = defineProps({
   workspace: { type: Object, default: null },
@@ -86,18 +211,28 @@ const props = defineProps({
   submitWarnings: { type: Array, default: () => [] },
 })
 
+const emit = defineEmits(['fill-conversation', 'update-card'])
+const selectedCard = ref(null)
+const showHistory = ref(false)
+
+const terminalStatuses = new Set(['resolved', 'dismissed', 'submitted', 'superseded'])
+
 const activeCards = computed(() => {
   const cards = props.workspace?.setting_suggestion_cards
   const list = Array.isArray(cards) ? cards : []
   return list
     .filter((card) => card && (card.status === 'active' || card.status === 'unresolved'))
     .slice()
-    .sort((left, right) => {
-      const leftOrder = Number(left?.display_order ?? 0)
-      const rightOrder = Number(right?.display_order ?? 0)
-      if (leftOrder !== rightOrder) return leftOrder - rightOrder
-      return String(left?.merge_key || '').localeCompare(String(right?.merge_key || ''))
-    })
+    .sort(sortCards)
+})
+
+const historyCards = computed(() => {
+  const cards = props.workspace?.setting_suggestion_cards
+  const list = Array.isArray(cards) ? cards : []
+  return list
+    .filter((card) => card && terminalStatuses.has(card.status))
+    .slice()
+    .sort(sortCards)
 })
 
 const unresolvedCount = computed(() => activeCards.value.filter((card) => card?.status === 'unresolved').length)
@@ -121,6 +256,58 @@ function formatSourceRefs(value) {
   const refs = Array.isArray(value) ? value.filter(Boolean) : []
   if (!refs.length) return '未知'
   return refs.join('、')
+}
+
+function sortCards(left, right) {
+  const leftOrder = Number(left?.display_order ?? 0)
+  const rightOrder = Number(right?.display_order ?? 0)
+  if (leftOrder !== rightOrder) return leftOrder - rightOrder
+  return String(left?.merge_key || '').localeCompare(String(right?.merge_key || ''))
+}
+
+function getActionHint(card) {
+  return card?.action_hint || {
+    recommended_action: 'open_detail',
+    primary_label: '查看处理',
+    available_actions: ['open_detail'],
+    reason: '这张卡当前只支持查看。',
+  }
+}
+
+function hasAction(card, action) {
+  return Array.isArray(getActionHint(card).available_actions) &&
+    getActionHint(card).available_actions.includes(action)
+}
+
+function openDetail(card) {
+  selectedCard.value = card
+}
+
+function closeDetail() {
+  selectedCard.value = null
+}
+
+function handlePrimaryAction(card) {
+  const hint = getActionHint(card)
+  if (hint.recommended_action === 'submit_to_pending' && hasAction(card, 'submit_to_pending')) {
+    emit('update-card', { card, action: 'submit_to_pending' })
+    return
+  }
+  if (hint.recommended_action === 'continue_outline_feedback' || hint.recommended_action === 'request_more_info') {
+    emit('fill-conversation', card)
+    return
+  }
+  openDetail(card)
+}
+
+function emitUpdate(card, action) {
+  if (!hasAction(card, action)) return
+  emit('update-card', { card, action })
+}
+
+function formatPayload(payload) {
+  if (!payload || typeof payload !== 'object') return '{}'
+  return JSON.stringify(payload, null, 2)
 }
 </script>
 
@@ -162,5 +349,50 @@ function formatSourceRefs(value) {
 
 .brainstorm-suggestion-card__status--accent {
   color: color-mix(in srgb, var(--app-accent, #34d399) 68%, var(--app-text));
+}
+
+.brainstorm-suggestion-card__button {
+  border: 1px solid var(--app-border);
+  border-radius: 8px;
+  background: var(--app-surface);
+  color: var(--app-text);
+  padding: 0.45rem 0.7rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.brainstorm-suggestion-card__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.brainstorm-suggestion-card__button--primary {
+  border-color: color-mix(in srgb, var(--app-accent, #34d399) 45%, var(--app-border));
+  color: color-mix(in srgb, var(--app-accent, #34d399) 72%, var(--app-text));
+}
+
+.brainstorm-suggestion-drawer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 23 42 / 0.32);
+}
+
+.brainstorm-suggestion-drawer__panel {
+  width: min(560px, 100vw);
+  height: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--app-border);
+  background: var(--app-surface);
+  padding: 1.25rem;
+  box-shadow: -16px 0 40px rgb(15 23 42 / 0.18);
+}
+
+.brainstorm-suggestion-payload {
+  border: 1px solid var(--app-border);
+  background: var(--app-surface-soft);
+  color: var(--app-text);
 }
 </style>

@@ -2,76 +2,172 @@ import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
 import BrainstormSuggestionCards from './BrainstormSuggestionCards.vue'
 
+const baseCard = {
+  card_id: 'card-1',
+  card_type: 'character',
+  merge_key: 'character:lin-feng',
+  title: '林风',
+  summary: '青云宗外门弟子，身负机缘。',
+  status: 'active',
+  source_outline_refs: ['synopsis', 'vol_1'],
+  payload: { canonical_name: '林风', goal: '逆天改命' },
+  display_order: 1,
+}
+
 describe('BrainstormSuggestionCards', () => {
-  it('renders active/unresolved cards, last-round summary, and warnings', () => {
+  it('renders smart primary actions and opens the detail drawer', async () => {
     const wrapper = mount(BrainstormSuggestionCards, {
       props: {
         workspace: {
           setting_suggestion_cards: [
             {
-              card_id: 'card-1',
-              card_type: 'character',
-              merge_key: 'character:lin-feng',
-              title: '林风',
-              summary: '青云宗外门弟子，身负机缘。',
-              status: 'active',
-              source_outline_refs: ['synopsis', 'vol_1'],
-              display_order: 1,
+              ...baseCard,
+              action_hint: {
+                recommended_action: 'submit_to_pending',
+                primary_label: '转设定',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss', 'submit_to_pending'],
+                reason: '这张卡包含可识别名称，可转为待审批设定。',
+              },
             },
             {
+              ...baseCard,
               card_id: 'card-2',
+              card_type: 'revision',
+              merge_key: 'revision:hook',
+              title: '结尾钩子新颖度提升',
+              summary: '开放钩子需要更独特。',
+              payload: { focus: '结尾钩子' },
+              action_hint: {
+                recommended_action: 'continue_outline_feedback',
+                primary_label: '继续优化',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss'],
+                reason: '这张卡是大纲结构或主题表达建议，不是可落库的实体设定。',
+              },
+            },
+            {
+              ...baseCard,
+              card_id: 'card-3',
+              card_type: 'character',
+              merge_key: 'character:unknown',
+              title: '角色动机不足',
+              payload: {},
+              action_hint: {
+                recommended_action: 'request_more_info',
+                primary_label: '补充信息',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss'],
+                reason: '这张设定类建议缺少可识别名称，需要先补充信息。',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('转设定')
+    expect(wrapper.text()).toContain('继续优化')
+    expect(wrapper.text()).toContain('补充信息')
+
+    await wrapper.findAll('[data-testid="suggestion-process"]')[0].trigger('click')
+
+    expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('林风')
+    expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('可转为待审批设定')
+  })
+
+  it('emits fill-conversation for outline optimization cards without submitting', async () => {
+    const wrapper = mount(BrainstormSuggestionCards, {
+      props: {
+        workspace: {
+          setting_suggestion_cards: [
+            {
+              ...baseCard,
+              card_type: 'revision',
+              action_hint: {
+                recommended_action: 'continue_outline_feedback',
+                primary_label: '继续优化',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss'],
+                reason: '适合继续优化大纲。',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="suggestion-primary-action"]').trigger('click')
+
+    expect(wrapper.emitted('fill-conversation')).toHaveLength(1)
+    expect(wrapper.emitted('fill-conversation')[0][0].card_id).toBe('card-1')
+    expect(wrapper.emitted('update-card')).toBeUndefined()
+  })
+
+  it('emits submit_to_pending for cards whose primary action is transfer to setting', async () => {
+    const wrapper = mount(BrainstormSuggestionCards, {
+      props: {
+        workspace: {
+          setting_suggestion_cards: [
+            {
+              ...baseCard,
+              action_hint: {
+                recommended_action: 'submit_to_pending',
+                primary_label: '转设定',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss', 'submit_to_pending'],
+                reason: '可转为待审批设定。',
+              },
+            },
+          ],
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="suggestion-primary-action"]').trigger('click')
+
+    expect(wrapper.emitted('update-card')[0][0]).toEqual({
+      card: expect.objectContaining({ card_id: 'card-1' }),
+      action: 'submit_to_pending',
+    })
+  })
+
+  it('shows historical cards collapsed and disables relationship submit', async () => {
+    const wrapper = mount(BrainstormSuggestionCards, {
+      props: {
+        workspace: {
+          setting_suggestion_cards: [
+            {
+              ...baseCard,
+              card_id: 'card-history',
+              status: 'resolved',
+              title: '已解决卡片',
+              action_hint: {
+                recommended_action: 'open_detail',
+                primary_label: '查看处理',
+                available_actions: ['open_detail', 'reactivate'],
+                reason: '这张卡已标记解决。',
+              },
+            },
+            {
+              ...baseCard,
+              card_id: 'card-rel',
               card_type: 'relationship',
               merge_key: 'relationship:a-b',
-              title: '师徒关系',
-              summary: '林风与师父之间的关键关系尚未明确。',
-              status: 'unresolved',
-              source_outline_refs: ['synopsis'],
-              display_order: 2,
+              title: '关系建议',
+              action_hint: {
+                recommended_action: 'continue_outline_feedback',
+                primary_label: '继续优化',
+                available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss'],
+                reason: '关系建议将在最终确认时解析处理。',
+              },
             },
-            {
-              card_id: 'card-3',
-              card_type: 'item',
-              merge_key: 'item:sword',
-              title: '青锋剑',
-              summary: '已被覆盖，不应显示。',
-              status: 'superseded',
-              source_outline_refs: ['vol_1'],
-              display_order: 3,
-            },
-          ],
-        },
-        lastRoundSummary: { created: 1, updated: 2, superseded: 0, unresolved: 1 },
-        submitWarnings: ['关系卡存在未解析项，最终确认时将跳过部分关系导入。'],
-      },
-    })
-
-    expect(wrapper.text()).toContain('设定建议卡')
-    expect(wrapper.text()).toContain('本轮设定更新')
-    expect(wrapper.get('[data-testid="last-round-summary"]').text()).toContain('新增 1')
-    expect(wrapper.get('[data-testid="unresolved-warning"]').text()).toContain('未解决')
-    expect(wrapper.get('[data-testid="submit-warnings"]').text()).toContain('关系卡存在未解析项')
-
-    expect(wrapper.text()).toContain('林风')
-    expect(wrapper.text()).toContain('师徒关系')
-    expect(wrapper.text()).not.toContain('青锋剑')
-
-    const cards = wrapper.findAll('[data-testid="suggestion-card"]')
-    expect(cards).toHaveLength(2)
-  })
-
-  it('renders empty state when there are no active cards', () => {
-    const wrapper = mount(BrainstormSuggestionCards, {
-      props: {
-        workspace: {
-          setting_suggestion_cards: [
-            { card_id: 'card-1', merge_key: 'x', title: '已覆盖', summary: '...', status: 'superseded' },
           ],
         },
       },
     })
 
-    expect(wrapper.get('[data-testid="suggestion-empty"]').text()).toContain('当前还没有待处理的设定建议卡')
-    expect(wrapper.findAll('[data-testid="suggestion-card"]')).toHaveLength(0)
+    expect(wrapper.text()).not.toContain('已解决卡片')
+    await wrapper.get('[data-testid="toggle-suggestion-history"]').trigger('click')
+    expect(wrapper.text()).toContain('已解决卡片')
+
+    await wrapper.find('[data-testid="suggestion-process"]').trigger('click')
+    expect(wrapper.get('[data-testid="submit-to-pending-action"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-testid="suggestion-detail-drawer"]').text()).toContain('关系建议将在最终确认时解析处理')
   })
 })
-
