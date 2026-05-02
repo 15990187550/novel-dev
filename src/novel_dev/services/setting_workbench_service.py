@@ -441,16 +441,68 @@ class SettingWorkbenchService:
         return [{"role": message.role, "content": message.content} for message in messages]
 
     def _validate_batch_draft(self, draft: SettingBatchDraft) -> None:
+        if not draft.changes:
+            raise ValueError("Draft must contain at least one change")
+        same_batch_entity_ids = self._same_batch_entity_create_ids(draft.changes)
+        same_batch_entity_names_without_ids = self._same_batch_entity_create_names_without_ids(draft.changes)
         for index, item in enumerate(draft.changes):
-            self._validate_draft_change(item, index=index)
+            self._validate_draft_change(
+                item,
+                index=index,
+                same_batch_entity_ids=same_batch_entity_ids,
+                same_batch_entity_names_without_ids=same_batch_entity_names_without_ids,
+            )
 
     @staticmethod
-    def _validate_draft_change(item: SettingBatchChangeDraft, *, index: int) -> None:
+    def _same_batch_entity_create_ids(changes: list[SettingBatchChangeDraft]) -> set[str]:
+        entity_ids: set[str] = set()
+        for item in changes:
+            if item.target_type != "entity" or item.operation != "create":
+                continue
+            snapshot = item.after_snapshot or {}
+            entity_id = str(snapshot.get("id") or "").strip()
+            if entity_id:
+                entity_ids.add(entity_id)
+        return entity_ids
+
+    @staticmethod
+    def _same_batch_entity_create_names_without_ids(changes: list[SettingBatchChangeDraft]) -> set[str]:
+        entity_names: set[str] = set()
+        for item in changes:
+            if item.target_type != "entity" or item.operation != "create":
+                continue
+            snapshot = item.after_snapshot or {}
+            if str(snapshot.get("id") or "").strip():
+                continue
+            name = str(snapshot.get("name") or "").strip()
+            if name:
+                entity_names.add(name)
+        return entity_names
+
+    @staticmethod
+    def _validate_draft_change(
+        item: SettingBatchChangeDraft,
+        *,
+        index: int,
+        same_batch_entity_ids: set[str] | None = None,
+        same_batch_entity_names_without_ids: set[str] | None = None,
+    ) -> None:
         if item.operation in {"update", "delete"} and not (item.target_id or "").strip():
             raise ValueError(f"Draft change {index} {item.target_type} {item.operation} target_id is required")
 
         if item.target_type == "relationship" and item.operation == "create":
             snapshot = item.after_snapshot or {}
+            ref_fields = [
+                field
+                for field in ("source_ref", "target_ref")
+                if str(snapshot.get(field) or "").strip()
+            ]
+            if (item.target_ref or "").strip():
+                ref_fields.append("target_ref")
+            if ref_fields:
+                raise ValueError(
+                    f"Draft change {index} relationship create must not use ref fields: {', '.join(ref_fields)}"
+                )
             missing = [
                 field
                 for field in ("source_id", "target_id", "relation_type")
@@ -460,6 +512,20 @@ class SettingWorkbenchService:
                 raise ValueError(
                     f"Draft change {index} relationship create after_snapshot missing: {', '.join(missing)}"
                 )
+            same_batch_entity_ids = same_batch_entity_ids or set()
+            same_batch_entity_names_without_ids = same_batch_entity_names_without_ids or set()
+            endpoints = {
+                "source_id": str(snapshot.get("source_id") or "").strip(),
+                "target_id": str(snapshot.get("target_id") or "").strip(),
+            }
+            for field, endpoint in endpoints.items():
+                if endpoint in same_batch_entity_ids:
+                    continue
+                if endpoint in same_batch_entity_names_without_ids:
+                    raise ValueError(
+                        f"Draft change {index} relationship create {field} references same-batch entity create "
+                        "without after_snapshot.id"
+                    )
 
     async def _restore_generation_ready_after_failure(self, session_id: str, exc: Exception) -> None:
         if self.session.in_transaction():

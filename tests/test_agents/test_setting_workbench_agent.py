@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from novel_dev.agents.setting_workbench_agent import (
     SettingBatchDraft,
     SettingClarificationDecision,
@@ -56,5 +59,33 @@ def test_setting_batch_draft_counts_setting_cards_entities_and_relationships():
     )
 
     assert "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type" in prompt
+    assert "同一批次中 entity create 的 after_snapshot.id" in prompt
+    assert "稳定临时 id" not in prompt
     assert "source_ref" not in prompt
     assert "target_ref" not in prompt
+
+
+def test_setting_batch_draft_rejects_empty_changes():
+    with pytest.raises(ValidationError):
+        SettingBatchDraft.model_validate({"summary": "没有变更", "changes": []})
+
+
+def test_setting_batch_draft_rejects_relationship_ref_fields_even_with_ids():
+    with pytest.raises(ValidationError, match="must not use ref fields"):
+        SettingBatchDraft.model_validate(
+            {
+                "summary": "混用了名称引用",
+                "changes": [
+                    {
+                        "target_type": "relationship",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "source_id": "ent_luzhao",
+                            "target_id": "ent_seed",
+                            "source_ref": "陆照",
+                            "relation_type": "持有",
+                        },
+                    },
+                ],
+            }
+        )

@@ -939,12 +939,15 @@ async def test_generate_review_batch_rejects_non_ready_or_generated_status(async
         await service.generate_review_batch(novel_id=f"novel-ai-gen-{status}", session_id=session.id)
 
 
-async def test_generate_review_batch_allows_regeneration_from_generated_session(async_session, monkeypatch):
+async def test_generate_review_batch_rejects_empty_changes_and_restores_ready_state(
+    async_session,
+    monkeypatch,
+):
     service = SettingWorkbenchService(async_session)
     session = await service.create_generation_session(
-        novel_id="novel-ai-regenerate",
-        title="重复生成",
-        initial_idea="重新生成审核批次",
+        novel_id="novel-ai-empty-draft",
+        title="空变更",
+        initial_idea="重新生成空审核批次",
         target_categories=["势力"],
     )
     await service.repo.update_session_state(session.id, status="generated")
@@ -965,24 +968,30 @@ async def test_generate_review_batch_allows_regeneration_from_generated_session(
         assert task == "setting_workbench_generate_batch"
         assert model_cls is SettingBatchDraft
         assert config_agent_name == "setting_workbench_service"
-        assert novel_id == "novel-ai-regenerate"
+        assert novel_id == "novel-ai-empty-draft"
         assert max_retries == 2
-        return SettingBatchDraft.model_validate(
-            {
-                "summary": "重新生成空批次",
-                "changes": [],
-            }
-        )
+        return SettingBatchDraft.model_construct(summary="重新生成空批次", changes=[])
 
     monkeypatch.setattr(
         "novel_dev.services.setting_workbench_service.call_and_parse_model",
         fake_call_and_parse_model,
     )
 
-    batch = await service.generate_review_batch(novel_id="novel-ai-regenerate", session_id=session.id)
+    with pytest.raises(ValueError, match="at least one change"):
+        await service.generate_review_batch(novel_id="novel-ai-empty-draft", session_id=session.id)
 
-    assert batch.summary == "重新生成空批次"
-    assert (await service.repo.get_session(session.id)).status == "generated"
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-empty-draft")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    messages = await service.repo.list_messages(session.id)
+    assert batches == []
+    assert changes == []
+    assert messages[-1].role == "assistant"
+    assert messages[-1].meta["status"] == "error"
 
 
 async def test_generate_review_batch_restores_ready_state_when_llm_fails(async_session, monkeypatch):
@@ -1099,6 +1108,265 @@ async def test_generate_review_batch_rejects_update_draft_without_target_id_befo
     changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
     assert batches == []
     assert changes == []
+
+
+async def test_generate_review_batch_rejects_relationship_ref_fields_before_creating_batch(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-rel-ref",
+        title="关系引用",
+        initial_idea="陆照持有道种",
+        target_categories=["关系"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-rel-ref"
+        assert max_retries == 2
+        return SettingBatchDraft.model_construct(
+            summary="混用了 ref 的关系",
+            changes=[
+                SettingBatchChangeDraft.model_construct(
+                    target_type="relationship",
+                    operation="create",
+                    target_id=None,
+                    before_snapshot=None,
+                    after_snapshot={
+                        "source_id": "ent_luzhao",
+                        "target_id": "ent_seed",
+                        "source_ref": "陆照",
+                        "relation_type": "持有",
+                    },
+                    conflict_hints=[],
+                )
+            ],
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    with pytest.raises(ValueError, match="must not use ref fields"):
+        await service.generate_review_batch(novel_id="novel-ai-rel-ref", session_id=session.id)
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-rel-ref")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    assert batches == []
+    assert changes == []
+
+
+async def test_generate_review_batch_rejects_relationship_to_same_batch_entity_without_id(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-rel-missing-entity-id",
+        title="同批实体关系",
+        initial_idea="陆照持有道种",
+        target_categories=["实体", "关系"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-rel-missing-entity-id"
+        assert max_retries == 2
+        return SettingBatchDraft.model_construct(
+            summary="同批新增实体和关系但实体无 id",
+            changes=[
+                SettingBatchChangeDraft.model_construct(
+                    target_type="entity",
+                    operation="create",
+                    target_id=None,
+                    before_snapshot=None,
+                    after_snapshot={"type": "character", "name": "陆照", "state": {}},
+                    conflict_hints=[],
+                ),
+                SettingBatchChangeDraft.model_construct(
+                    target_type="relationship",
+                    operation="create",
+                    target_id=None,
+                    before_snapshot=None,
+                    after_snapshot={
+                        "source_id": "陆照",
+                        "target_id": "ent_seed",
+                        "relation_type": "持有",
+                    },
+                    conflict_hints=[],
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    with pytest.raises(ValueError, match="same-batch entity create.*after_snapshot.id"):
+        await service.generate_review_batch(
+            novel_id="novel-ai-rel-missing-entity-id",
+            session_id=session.id,
+        )
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-rel-missing-entity-id")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    assert batches == []
+    assert changes == []
+
+
+async def test_validate_batch_draft_allows_relationship_to_same_batch_entity_id(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "同批新增实体和关系",
+            "changes": [
+                {
+                    "target_type": "entity",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "id": "ent_luzhao",
+                        "type": "character",
+                        "name": "陆照",
+                        "state": {},
+                    },
+                },
+                {
+                    "target_type": "relationship",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "source_id": "ent_luzhao",
+                        "target_id": "ent_seed",
+                        "relation_type": "持有",
+                    },
+                },
+            ],
+        }
+    )
+
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_generate_review_batch_rolls_back_when_change_persistence_fails(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-mid-persist-fail",
+        title="持久化失败",
+        initial_idea="生成后写入失败",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        assert agent_name == "SettingWorkbenchService"
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert config_agent_name == "setting_workbench_service"
+        assert novel_id == "novel-ai-mid-persist-fail"
+        assert max_retries == 2
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "新增设定",
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": "势力格局",
+                            "content": "青云门与魔宗对立。",
+                        },
+                    },
+                ],
+            }
+        )
+
+    async def fail_add_review_change(**kwargs):
+        raise RuntimeError("change persistence failed")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+    monkeypatch.setattr(service.repo, "add_review_change", fail_add_review_change)
+
+    with pytest.raises(RuntimeError, match="change persistence failed"):
+        await service.generate_review_batch(
+            novel_id="novel-ai-mid-persist-fail",
+            session_id=session.id,
+        )
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-mid-persist-fail")
+        )
+    ).scalars().all()
+    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
+    messages = await service.repo.list_messages(session.id)
+    assert batches == []
+    assert changes == []
+    assert messages[-1].role == "assistant"
+    assert messages[-1].meta["status"] == "error"
+    assert "change persistence failed" in messages[-1].content
 
 
 async def test_setting_batch_draft_rejects_relationship_create_without_entity_ids():

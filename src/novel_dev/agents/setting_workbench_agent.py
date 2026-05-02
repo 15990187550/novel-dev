@@ -29,12 +29,21 @@ class SettingBatchChangeDraft(BaseModel):
             snapshot = self.after_snapshot or {}
             if not all(snapshot.get(key) for key in ("source_id", "target_id", "relation_type")):
                 raise ValueError("relationship create after_snapshot.source_id, target_id, and relation_type are required")
+            ref_fields = [
+                field
+                for field in ("source_ref", "target_ref")
+                if str(snapshot.get(field) or "").strip()
+            ]
+            if self.target_ref:
+                ref_fields.append("target_ref")
+            if ref_fields:
+                raise ValueError(f"relationship create must not use ref fields: {', '.join(ref_fields)}")
         return self
 
 
 class SettingBatchDraft(BaseModel):
     summary: str
-    changes: list[SettingBatchChangeDraft]
+    changes: list[SettingBatchChangeDraft] = Field(min_length=1)
 
 
 class SettingWorkbenchAgent:
@@ -75,13 +84,14 @@ class SettingWorkbenchAgent:
             [
                 "你是小说设定工作台的设定生成助手。",
                 "只生成待审核批次，不直接写入正式设定。",
-                "每个批次必须包含 changes，change target_type 只能是 setting_card、entity、relationship。",
+                "每个批次必须包含至少 1 个 changes，change target_type 只能是 setting_card、entity、relationship。",
                 "operation 只能是 create、update、delete。",
                 "update/delete 必须提供 target_id，禁止用名称引用代替目标 ID。",
                 "setting_card 需要 after_snapshot.doc_type、title、content。",
                 "entity 需要 after_snapshot.type、name、state。",
                 "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type。",
-                "如果只有实体名称，先生成 entity create，并在 relationship after_snapshot 使用那些 entity 的 id 或稳定临时 id。",
+                "relationship create 的 source_id/target_id 必须引用已存在实体 ID，或同一批次中 entity create 的 after_snapshot.id。",
+                "如果无法确定实体 ID，不要生成 relationship change；只在实体 state 或设定 content 中描述关系，留待后续优化。",
                 f"会话标题：{title}",
                 f"目标分类：{', '.join(target_categories) if target_categories else '默认全量'}",
                 f"会话摘要：{conversation_summary or '暂无'}",
