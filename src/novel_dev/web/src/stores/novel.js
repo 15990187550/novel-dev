@@ -98,6 +98,21 @@ const createBrainstormWorkspaceState = () => ({
   requestToken: 0,
 })
 
+const createSettingWorkbenchState = () => ({
+  state: 'idle',
+  error: '',
+  sessions: [],
+  reviewBatches: [],
+  selectedSessionId: '',
+  selectedSession: null,
+  selectedMessages: [],
+  selectedReviewBatch: null,
+  creatingSession: false,
+  replying: false,
+  generating: false,
+  applyingBatch: false,
+})
+
 const createPendingDocActionState = () => ({
   approvingPendingId: '',
   rejectingPendingId: '',
@@ -387,6 +402,7 @@ export const useNovelStore = defineStore('novel', {
     pendingDocActions: createPendingDocActionState(),
     outlineWorkbench: createOutlineWorkbenchState(),
     brainstormWorkspace: createBrainstormWorkspaceState(),
+    settingWorkbench: createSettingWorkbenchState(),
     loadingActions: {},
     flowActivity: {
       active: false,
@@ -491,6 +507,7 @@ export const useNovelStore = defineStore('novel', {
       this.spacelines = []
       this.outlineWorkbench = createOutlineWorkbenchState()
       this.brainstormWorkspace = createBrainstormWorkspaceState()
+      this.settingWorkbench = createSettingWorkbenchState()
       this.loadingActions = {}
       this.flowActivity = { active: false, label: '', updatedAt: '' }
       this.autoRunJob = null
@@ -504,6 +521,7 @@ export const useNovelStore = defineStore('novel', {
     async loadNovel(novelId) {
       this.novelId = novelId
       this.resetDashboardSupplemental()
+      this.settingWorkbench = createSettingWorkbenchState()
       await this.refreshState()
     },
 
@@ -836,6 +854,120 @@ export const useNovelStore = defineStore('novel', {
     async fetchDocuments() {
       const pending = await api.getPendingDocs(this.novelId).catch(() => ({ items: [] }))
       this.pendingDocs = pending.items || []
+    },
+
+    async fetchSettingWorkbench() {
+      if (!this.novelId) {
+        this.settingWorkbench = createSettingWorkbenchState()
+        return
+      }
+      this.settingWorkbench.state = 'loading'
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingWorkbench(this.novelId)
+        this.settingWorkbench.sessions = payload?.sessions || []
+        this.settingWorkbench.reviewBatches = payload?.review_batches || []
+        this.settingWorkbench.state = 'ready'
+      } catch (error) {
+        this.settingWorkbench.state = 'error'
+        this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定工作台失败'
+      }
+    },
+
+    async createSettingSession(payload) {
+      if (!this.novelId) return null
+      this.settingWorkbench.creatingSession = true
+      this.settingWorkbench.error = ''
+      try {
+        const session = await api.createSettingSession(this.novelId, payload)
+        this.settingWorkbench.sessions = [
+          session,
+          ...this.settingWorkbench.sessions.filter((item) => item.id !== session.id),
+        ]
+        this.settingWorkbench.selectedSessionId = session.id
+        this.settingWorkbench.selectedSession = session
+        this.settingWorkbench.selectedMessages = []
+        return session
+      } catch (error) {
+        this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '创建设定会话失败'
+        throw error
+      } finally {
+        this.settingWorkbench.creatingSession = false
+      }
+    },
+
+    async loadSettingSession(sessionId) {
+      if (!this.novelId || !sessionId) return null
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingSession(this.novelId, sessionId)
+        this.settingWorkbench.selectedSessionId = sessionId
+        this.settingWorkbench.selectedSession = payload?.session || this.settingWorkbench.sessions.find((session) => session.id === sessionId) || null
+        this.settingWorkbench.selectedMessages = payload?.messages || payload?.recent_messages || []
+        return payload
+      } catch (error) {
+        this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定会话失败'
+        throw error
+      }
+    },
+
+    async replySettingSession(content) {
+      if (!this.novelId || !this.settingWorkbench.selectedSessionId) return null
+      this.settingWorkbench.replying = true
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.replySettingSession(this.novelId, this.settingWorkbench.selectedSessionId, { content })
+        this.settingWorkbench.selectedSession = payload?.session || this.settingWorkbench.selectedSession
+        this.settingWorkbench.sessions = this.settingWorkbench.sessions.map((session) =>
+          session.id === this.settingWorkbench.selectedSessionId
+            ? { ...session, ...this.settingWorkbench.selectedSession }
+            : session
+        )
+        this.settingWorkbench.selectedMessages.push({ role: 'user', content })
+        if (payload?.assistant_message) {
+          this.settingWorkbench.selectedMessages.push({
+            role: 'assistant',
+            content: payload.assistant_message,
+            meta: { questions: payload.questions || [] },
+          })
+        }
+        return payload
+      } catch (error) {
+        this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '发送澄清回答失败'
+        throw error
+      } finally {
+        this.settingWorkbench.replying = false
+      }
+    },
+
+    async generateSettingReviewBatch(payload = {}) {
+      if (!this.novelId || !this.settingWorkbench.selectedSessionId) return null
+      this.settingWorkbench.generating = true
+      this.settingWorkbench.error = ''
+      try {
+        const batch = await api.generateSettingReviewBatch(this.novelId, this.settingWorkbench.selectedSessionId, payload)
+        this.settingWorkbench.reviewBatches = [
+          batch,
+          ...this.settingWorkbench.reviewBatches.filter((item) => item.id !== batch.id),
+        ]
+        if (this.settingWorkbench.selectedSession) {
+          this.settingWorkbench.selectedSession = {
+            ...this.settingWorkbench.selectedSession,
+            status: 'generated',
+          }
+          this.settingWorkbench.sessions = this.settingWorkbench.sessions.map((session) =>
+            session.id === this.settingWorkbench.selectedSessionId
+              ? { ...session, status: 'generated' }
+              : session
+          )
+        }
+        return batch
+      } catch (error) {
+        this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '生成审核记录失败'
+        throw error
+      } finally {
+        this.settingWorkbench.generating = false
+      }
     },
 
     async fetchKnowledgeDomains(includeDisabled = true) {

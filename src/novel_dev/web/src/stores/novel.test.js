@@ -40,6 +40,11 @@ vi.mock('@/api.js', () => ({
   stopCurrentFlow: vi.fn(),
   getGenerationJob: vi.fn(),
   getChapterRewriteJobs: vi.fn(),
+  getSettingWorkbench: vi.fn(),
+  createSettingSession: vi.fn(),
+  getSettingSession: vi.fn(),
+  replySettingSession: vi.fn(),
+  generateSettingReviewBatch: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -204,6 +209,59 @@ describe('novel store dashboard loading', () => {
     expect(api.updateNovel).toHaveBeenCalledWith('novel-1', '新项目名')
     expect(store.novelTitle).toBe('新项目名')
     expect(store.novelState.checkpoint_data.synopsis_data.title).toBe('总纲标题')
+  })
+
+  it('loads setting workbench sessions and review batches', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.getSettingWorkbench).mockResolvedValue({
+      sessions: [{ id: 'sgs_1', title: '修炼体系', status: 'clarifying' }],
+      review_batches: [{ id: 'srb_1', summary: '新增 1 张设定卡片', status: 'pending' }],
+    })
+
+    await store.fetchSettingWorkbench()
+
+    expect(api.getSettingWorkbench).toHaveBeenCalledWith('novel-1')
+    expect(store.settingWorkbench.state).toBe('ready')
+    expect(store.settingWorkbench.sessions[0].title).toBe('修炼体系')
+    expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
+  })
+
+  it('creates, replies to, and generates a setting session review batch', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.createSettingSession).mockResolvedValue({
+      id: 'sgs_2',
+      title: '主角阵营设定',
+      status: 'clarifying',
+    })
+    vi.mocked(api.getSettingSession).mockResolvedValue({
+      session: { id: 'sgs_2', title: '主角阵营设定', status: 'clarifying' },
+      messages: [{ role: 'assistant', content: '请补充目标。' }],
+    })
+    vi.mocked(api.replySettingSession).mockResolvedValue({
+      session: { id: 'sgs_2', title: '主角阵营设定', status: 'ready_to_generate' },
+      assistant_message: '信息足够，可以生成。',
+      questions: [],
+    })
+    vi.mocked(api.generateSettingReviewBatch).mockResolvedValue({
+      id: 'srb_2',
+      summary: '新增 1 张设定卡片',
+      status: 'pending',
+    })
+
+    const session = await store.createSettingSession({
+      title: '主角阵营设定',
+      initial_idea: '废脉少年',
+      target_categories: [],
+    })
+    await store.loadSettingSession(session.id)
+    await store.replySettingSession('阵营目标是保护底层散修。')
+    await store.generateSettingReviewBatch()
+
+    expect(store.settingWorkbench.selectedSession.status).toBe('generated')
+    expect(store.settingWorkbench.selectedMessages.map((message) => message.content)).toContain('信息足够，可以生成。')
+    expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
   })
 
   it('marks a failed supplemental panel as error and clears its stale data', async () => {

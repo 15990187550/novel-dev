@@ -14,4 +14,10 @@ describe('App shell layout', () => {
     expect(appSource).not.toContain('lg:items-start')
     expect(styleSource).toMatch(/\.page-shell\s*{[\s\S]*height:\s*100%;[\s\S]*min-height:\s*0;/)
   })
+
+  it('keeps documents available and adds the setting workbench navigation entry', () => {
+    expect(appSource).toContain("path: '/documents'")
+    expect(appSource).toContain("path: '/settings'")
+    expect(appSource).toContain("label: '设定工作台'")
+  })
 })

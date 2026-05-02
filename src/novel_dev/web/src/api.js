@@ -74,6 +74,20 @@ export const uploadDocument = (id, filename, content, options = {}) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content, ...options }).then(r => r.data)
 export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
   api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
+export const getSettingWorkbench = (id) =>
+  api.get(`/novels/${id}/settings/workbench`).then(r => r.data)
+export const createSettingSession = (id, payload) =>
+  api.post(`/novels/${id}/settings/sessions`, payload, withLongTimeout()).then(r => r.data)
+export const getSettingSession = (id, sessionId) =>
+  api.get(`/novels/${id}/settings/sessions/${sessionId}`).then(r => r.data)
+export const replySettingSession = (id, sessionId, payload) =>
+  api.post(`/novels/${id}/settings/sessions/${sessionId}/reply`, payload, withLongTimeout()).then(r => r.data)
+export const generateSettingReviewBatch = (id, sessionId, payload = {}) =>
+  api.post(`/novels/${id}/settings/sessions/${sessionId}/generate`, payload, withLongTimeout()).then(r => r.data)
+export const getSettingReviewBatch = (id, batchId) =>
+  api.get(`/novels/${id}/settings/review_batches/${batchId}`).then(r => r.data)
+export const applySettingReviewBatch = (id, batchId, payload) =>
+  api.post(`/novels/${id}/settings/review_batches/${batchId}/apply`, payload).then(r => r.data)
 export const getKnowledgeDomains = (id, includeDisabled = false) =>
   api.get(`/novels/${id}/knowledge_domains`, { params: { include_disabled: includeDisabled } }).then(r => r.data)
 export const createKnowledgeDomain = (id, payload) =>
