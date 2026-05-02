@@ -28,8 +28,8 @@ def upgrade() -> None:
         sa.Column("clarification_round", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("conversation_summary", sa.Text(), nullable=True),
         sa.Column("focused_target", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.TIMESTAMP(), nullable=True),
-        sa.Column("updated_at", sa.TIMESTAMP(), nullable=True),
+        sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -45,7 +45,7 @@ def upgrade() -> None:
         sa.Column("role", sa.Text(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("meta", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.TIMESTAMP(), nullable=True),
+        sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["session_id"], ["setting_generation_sessions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -65,8 +65,8 @@ def upgrade() -> None:
         sa.Column("status", sa.Text(), nullable=False, server_default="pending"),
         sa.Column("summary", sa.Text(), nullable=False, server_default=""),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.TIMESTAMP(), nullable=True),
-        sa.Column("updated_at", sa.TIMESTAMP(), nullable=True),
+        sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["source_session_id"], ["setting_generation_sessions.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
@@ -94,8 +94,8 @@ def upgrade() -> None:
         sa.Column("conflict_hints", sa.JSON(), nullable=False, server_default=sa.text("'[]'")),
         sa.Column("source_session_id", sa.Text(), nullable=True),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("created_at", sa.TIMESTAMP(), nullable=True),
-        sa.Column("updated_at", sa.TIMESTAMP(), nullable=True),
+        sa.Column("created_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
+        sa.Column("updated_at", sa.TIMESTAMP(), nullable=False, server_default=sa.func.now()),
         sa.ForeignKeyConstraint(["batch_id"], ["setting_review_batches.id"]),
         sa.ForeignKeyConstraint(["source_session_id"], ["setting_generation_sessions.id"]),
         sa.PrimaryKeyConstraint("id"),

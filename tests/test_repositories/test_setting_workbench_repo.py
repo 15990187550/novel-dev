@@ -78,3 +78,89 @@ async def test_setting_workbench_repo_creates_review_batch_and_changes(async_ses
     assert batches[0].status == "pending"
     assert [change.target_type for change in changes] == ["setting_card", "entity"]
     assert all(change.status == "pending" for change in changes)
+
+
+async def test_setting_workbench_repo_rejects_cross_novel_review_batch_source_session(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-a",
+        title="甲小说设定",
+        target_categories=["势力"],
+    )
+
+    with pytest.raises(ValueError, match="source session belongs to a different novel"):
+        await repo.create_review_batch(
+            novel_id="novel-b",
+            source_type="ai_session",
+            source_session_id=session.id,
+        )
+
+
+async def test_setting_workbench_repo_rejects_cross_novel_review_change_source_session(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    source_session = await repo.create_session(
+        novel_id="novel-a",
+        title="甲小说设定",
+        target_categories=["势力"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-b",
+        source_type="manual_import",
+        summary="乙小说设定导入",
+    )
+
+    with pytest.raises(ValueError, match="source session belongs to a different novel"):
+        await repo.add_review_change(
+            batch_id=batch.id,
+            target_type="setting_card",
+            operation="create",
+            after_snapshot={"title": "设定", "content": "内容"},
+            source_session_id=source_session.id,
+        )
+
+
+async def test_setting_workbench_repo_rejects_review_change_for_missing_batch(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+
+    with pytest.raises(ValueError, match="Review batch not found"):
+        await repo.add_review_change(
+            batch_id="srb_missing",
+            target_type="setting_card",
+            operation="create",
+            after_snapshot={"title": "设定", "content": "内容"},
+        )
+
+
+async def test_setting_workbench_repo_status_updates_preserve_omitted_error_message(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw",
+        title="错误保留",
+        target_categories=["势力"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw",
+        source_type="ai_session",
+        source_session_id=session.id,
+        error_message="batch failed",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "设定", "content": "内容"},
+        source_session_id=session.id,
+        error_message="change failed",
+    )
+
+    await repo.update_batch_status(batch.id, "pending")
+    await repo.update_change_status(change.id, "pending")
+
+    assert (await repo.get_review_batch(batch.id)).error_message == "batch failed"
+    assert (await repo.get_review_change(change.id)).error_message == "change failed"
+
+    await repo.update_batch_status(batch.id, "approved", error_message=None)
+    await repo.update_change_status(change.id, "approved", error_message=None)
+
+    assert (await repo.get_review_batch(batch.id)).error_message is None
+    assert (await repo.get_review_change(change.id)).error_message is None

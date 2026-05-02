@@ -20,6 +20,10 @@ from novel_dev.db.models import (
     OutlineMessage,
     OutlineSession,
     PendingExtraction,
+    SettingGenerationMessage,
+    SettingGenerationSession,
+    SettingReviewBatch,
+    SettingReviewChange,
     Spaceline,
     Timeline,
 )
@@ -140,6 +144,33 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
             status="pending",
             raw_result={},
         ),
+        SettingGenerationSession(
+            id="sgs_delete",
+            novel_id=novel_id,
+            title="设定工作台",
+            status="clarifying",
+            target_categories=["势力"],
+        ),
+        SettingGenerationMessage(
+            id="sgm_delete",
+            session_id="sgs_delete",
+            role="user",
+            content="补充设定",
+        ),
+        SettingReviewBatch(
+            id="srb_delete",
+            novel_id=novel_id,
+            source_type="ai_session",
+            source_session_id="sgs_delete",
+            summary="待审核设定",
+        ),
+        SettingReviewChange(
+            id="src_delete",
+            batch_id="srb_delete",
+            target_type="setting_card",
+            operation="create",
+            source_session_id="sgs_delete",
+        ),
         AgentLog(novel_id=novel_id, agent="TestAgent", message="待删除日志", level="info"),
     ])
     await async_session.flush()
@@ -174,6 +205,8 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
             BrainstormWorkspace,
             PendingExtraction,
             AgentLog,
+            SettingReviewBatch,
+            SettingGenerationSession,
         ):
             result = await async_session.execute(
                 select(model).where(model.novel_id == novel_id)
@@ -187,6 +220,16 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
             select(OutlineMessage).where(OutlineMessage.session_id == "os1")
         )
         assert messages.scalars().first() is None
+
+        setting_changes = await async_session.execute(
+            select(SettingReviewChange).where(SettingReviewChange.batch_id == "srb_delete")
+        )
+        assert setting_changes.scalars().first() is None
+
+        setting_messages = await async_session.execute(
+            select(SettingGenerationMessage).where(SettingGenerationMessage.session_id == "sgs_delete")
+        )
+        assert setting_messages.scalars().first() is None
 
         assert not (tmp_path / "novel_output" / novel_id).exists()
 

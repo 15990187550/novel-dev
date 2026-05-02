@@ -17,6 +17,9 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex}"
 
 
+_UNSET = object()
+
+
 class SettingWorkbenchRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -120,6 +123,13 @@ class SettingWorkbenchRepository:
         status: str = "pending",
         error_message: Optional[str] = None,
     ) -> SettingReviewBatch:
+        if source_session_id is not None:
+            source_session = await self.get_session(source_session_id)
+            if source_session is None:
+                raise ValueError("Source session not found")
+            if source_session.novel_id != novel_id:
+                raise ValueError("source session belongs to a different novel")
+
         batch = SettingReviewBatch(
             id=_new_id("srb_"),
             novel_id=novel_id,
@@ -152,13 +162,14 @@ class SettingWorkbenchRepository:
         self,
         batch_id: str,
         status: str,
-        error_message: Optional[str] = None,
+        error_message: object = _UNSET,
     ) -> Optional[SettingReviewBatch]:
         batch = await self.get_review_batch(batch_id)
         if batch is None:
             return None
         batch.status = status
-        batch.error_message = error_message
+        if error_message is not _UNSET:
+            batch.error_message = error_message
         batch.updated_at = datetime.utcnow()
         await self.session.flush()
         return batch
@@ -177,6 +188,17 @@ class SettingWorkbenchRepository:
         status: str = "pending",
         error_message: Optional[str] = None,
     ) -> SettingReviewChange:
+        batch = await self.get_review_batch(batch_id)
+        if batch is None:
+            raise ValueError("Review batch not found")
+
+        if source_session_id is not None:
+            source_session = await self.get_session(source_session_id)
+            if source_session is None:
+                raise ValueError("Source session not found")
+            if source_session.novel_id != batch.novel_id:
+                raise ValueError("source session belongs to a different novel")
+
         change = SettingReviewChange(
             id=_new_id("src_"),
             batch_id=batch_id,
@@ -212,13 +234,14 @@ class SettingWorkbenchRepository:
         self,
         change_id: str,
         status: str,
-        error_message: Optional[str] = None,
+        error_message: object = _UNSET,
     ) -> Optional[SettingReviewChange]:
         change = await self.get_review_change(change_id)
         if change is None:
             return None
         change.status = status
-        change.error_message = error_message
+        if error_message is not _UNSET:
+            change.error_message = error_message
         change.updated_at = datetime.utcnow()
         await self.session.flush()
         return change
