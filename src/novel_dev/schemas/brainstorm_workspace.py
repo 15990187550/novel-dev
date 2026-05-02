@@ -113,3 +113,19 @@ class BrainstormWorkspaceSubmitResponse(BaseModel):
     volume_outline_count: int
     relationship_count: int = 0
     submit_warnings: list[str] = Field(default_factory=list)
+
+
+class BrainstormSuggestionCardUpdateRequest(BaseModel):
+    action: SuggestionCardUpdateAction
+
+
+class PendingExtractionSummary(BaseModel):
+    id: str
+    status: str
+    source_filename: Optional[str] = None
+    extraction_type: str
+
+
+class BrainstormSuggestionCardUpdateResponse(BaseModel):
+    workspace: BrainstormWorkspacePayload
+    pending_extraction: Optional[PendingExtractionSummary] = None

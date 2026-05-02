@@ -12,9 +12,11 @@ from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.schemas.brainstorm_workspace import (
+    BrainstormSuggestionCardUpdateResponse,
     BrainstormWorkspacePayload,
     BrainstormWorkspaceSubmitResponse,
     PendingExtractionPayload,
+    PendingExtractionSummary,
     SettingDocDraftPayload,
     SettingSuggestionCardMergePayload,
     SettingSuggestionCardPayload,
@@ -192,6 +194,77 @@ class BrainstormWorkspaceService:
         workspace.last_saved_at = datetime.utcnow()
         await self.session.flush()
         return [SettingSuggestionCardPayload.model_validate(item) for item in merged]
+
+    async def update_suggestion_card(
+        self,
+        novel_id: str,
+        card_id_or_merge_key: str,
+        action: str,
+    ) -> BrainstormSuggestionCardUpdateResponse:
+        workspace = await self.workspace_repo.get_active_by_novel(novel_id)
+        if workspace is None:
+            raise ValueError(f"Active brainstorm workspace not found: {novel_id}")
+
+        state = await self.state_repo.get_state(novel_id)
+        if state is None:
+            raise ValueError("Novel state not found for suggestion card update")
+        if state.current_phase != Phase.BRAINSTORMING.value:
+            raise ValueError(
+                "Suggestion cards can only be updated during the brainstorming phase"
+            )
+
+        cards = [
+            SettingSuggestionCardPayload.model_validate(item).model_dump()
+            for item in (workspace.setting_suggestion_cards or [])
+        ]
+        target_index = self._find_suggestion_card_index(cards, card_id_or_merge_key)
+        if target_index is None:
+            raise ValueError(f"Suggestion card not found: {card_id_or_merge_key}")
+
+        target = SettingSuggestionCardPayload.model_validate(cards[target_index])
+        pending_summary: PendingExtractionSummary | None = None
+
+        if action == "resolve":
+            self._ensure_suggestion_card_status(target, {"active", "unresolved"}, action)
+            cards[target_index]["status"] = "resolved"
+        elif action == "dismiss":
+            self._ensure_suggestion_card_status(target, {"active", "unresolved"}, action)
+            cards[target_index]["status"] = "dismissed"
+        elif action == "reactivate":
+            self._ensure_suggestion_card_status(target, {"resolved", "dismissed"}, action)
+            cards[target_index]["status"] = "active"
+        elif action == "submit_to_pending":
+            self._ensure_suggestion_card_status(target, {"active", "unresolved"}, action)
+            hint = self.build_suggestion_card_action_hint(target)
+            if "submit_to_pending" not in hint.available_actions:
+                raise ValueError(f"Suggestion card cannot be submitted: {target.card_id}")
+            pending_payload = (
+                await self.extraction_service.build_pending_payload_from_suggestion_card(
+                    novel_id,
+                    target,
+                )
+            )
+            pending = await self.extraction_service.persist_pending_payload(
+                novel_id,
+                pending_payload,
+            )
+            pending_summary = PendingExtractionSummary(
+                id=pending.id,
+                status=pending.status,
+                source_filename=pending.source_filename,
+                extraction_type=pending.extraction_type,
+            )
+            cards[target_index]["status"] = "submitted"
+        else:
+            raise ValueError(f"Unsupported suggestion card action: {action}")
+
+        workspace.setting_suggestion_cards = cards
+        workspace.last_saved_at = datetime.utcnow()
+        await self.session.flush()
+        return BrainstormSuggestionCardUpdateResponse(
+            workspace=self._serialize_workspace(workspace),
+            pending_extraction=pending_summary,
+        )
 
     async def submit_workspace(self, novel_id: str) -> BrainstormWorkspaceSubmitResponse:
         workspace = await self.workspace_repo.get_active_by_novel(novel_id)
@@ -436,6 +509,33 @@ class BrainstormWorkspaceService:
             for card in workspace_payload.setting_suggestion_cards
             if card.status in {"active", "unresolved"}
         ]
+
+    def _find_suggestion_card_index(
+        self,
+        cards: list[dict[str, Any]],
+        card_id_or_merge_key: str,
+    ) -> int | None:
+        for index, item in enumerate(cards):
+            if item.get("card_id") == card_id_or_merge_key:
+                return index
+            if item.get("merge_key") == card_id_or_merge_key:
+                return index
+        return None
+
+    def _ensure_suggestion_card_status(
+        self,
+        card: SettingSuggestionCardPayload,
+        allowed_statuses: set[str],
+        action: str,
+    ) -> None:
+        if card.status in {"submitted", "superseded"} and action == "reactivate":
+            raise ValueError(f"Suggestion card status {card.status} cannot be reactivated")
+        if card.status not in allowed_statuses:
+            allowed = ", ".join(sorted(allowed_statuses))
+            raise ValueError(
+                f"Suggestion card action {action} requires status in [{allowed}], "
+                f"got {card.status}"
+            )
 
     def _merge_pending_payloads(
         self,

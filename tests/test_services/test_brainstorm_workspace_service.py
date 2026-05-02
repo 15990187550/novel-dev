@@ -556,6 +556,140 @@ def test_list_active_suggestion_cards_filters_terminal_statuses():
     assert [card.status for card in payload] == ["active", "unresolved"]
 
 
+async def _prepare_workspace_card(
+    async_session,
+    *,
+    novel_id: str,
+    status: str = "active",
+    card_type: str = "character",
+    payload: dict | None = None,
+) -> BrainstormWorkspaceService:
+    director = NovelDirector(async_session)
+    await director.save_checkpoint(
+        novel_id,
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={},
+        volume_id=None,
+        chapter_id=None,
+    )
+    service = BrainstormWorkspaceService(async_session)
+    await service.merge_suggestion_cards(
+        novel_id,
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_1",
+                "card_type": card_type,
+                "merge_key": f"{card_type}:sample",
+                "title": "示例建议卡",
+                "summary": "建议补充设定。",
+                "status": status,
+                "source_outline_refs": ["synopsis"],
+                "payload": (
+                    payload if payload is not None else {"canonical_name": "林风"}
+                ),
+                "display_order": 1,
+            }
+        ],
+    )
+    return service
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_resolves_active_card(async_session):
+    service = await _prepare_workspace_card(async_session, novel_id="novel_card_resolve")
+
+    result = await service.update_suggestion_card("novel_card_resolve", "card_1", "resolve")
+
+    assert result.workspace.setting_suggestion_cards[0].status == "resolved"
+    assert result.pending_extraction is None
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_dismisses_unresolved_card(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_dismiss",
+        status="unresolved",
+    )
+
+    result = await service.update_suggestion_card("novel_card_dismiss", "card_1", "dismiss")
+
+    assert result.workspace.setting_suggestion_cards[0].status == "dismissed"
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_reactivates_resolved_card(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_reactivate",
+        status="resolved",
+    )
+
+    result = await service.update_suggestion_card(
+        "novel_card_reactivate",
+        "card_1",
+        "reactivate",
+    )
+
+    assert result.workspace.setting_suggestion_cards[0].status == "active"
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_submits_pending_and_marks_submitted(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_submit",
+        payload={"canonical_name": "林风", "identity": "外门弟子"},
+    )
+
+    result = await service.update_suggestion_card(
+        "novel_card_submit",
+        "card_1",
+        "submit_to_pending",
+    )
+
+    pending = await PendingExtractionRepository(async_session).list_by_novel("novel_card_submit")
+    card = result.workspace.setting_suggestion_cards[0]
+    assert card.status == "submitted"
+    assert len(pending) == 1
+    assert result.pending_extraction is not None
+    assert result.pending_extraction.id == pending[0].id
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_rejects_outline_revision_submit(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_revision_submit",
+        card_type="revision",
+        payload={"focus": "结尾钩子"},
+    )
+
+    with pytest.raises(ValueError, match="cannot be submitted"):
+        await service.update_suggestion_card(
+            "novel_card_revision_submit",
+            "card_1",
+            "submit_to_pending",
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_suggestion_card_rejects_submitted_reactivation(async_session):
+    service = await _prepare_workspace_card(
+        async_session,
+        novel_id="novel_card_submitted_reactivate",
+        status="submitted",
+    )
+
+    with pytest.raises(ValueError, match="cannot be reactivated"):
+        await service.update_suggestion_card(
+            "novel_card_submitted_reactivate",
+            "card_1",
+            "reactivate",
+        )
+
+
 @pytest.mark.asyncio
 async def test_brainstorm_workspace_submit_workspace_materializes_synopsis_and_pending_settings(async_session):
     director = NovelDirector(async_session)
