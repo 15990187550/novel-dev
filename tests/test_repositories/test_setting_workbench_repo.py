@@ -13,11 +13,17 @@ async def test_setting_workbench_repo_creates_session_and_messages(async_session
         title="修炼体系补全",
         target_categories=["功法", "体系设定"],
     )
-    message = await repo.add_message(
+    first_message = await repo.add_message(
         session_id=session.id,
         role="user",
         content="主角从废脉开始修炼",
         metadata={"round": 1},
+    )
+    await repo.add_message(
+        session_id=session.id,
+        role="user",
+        content="第二轮补充宗门冲突",
+        metadata={"round": 2},
     )
 
     await async_session.commit()
@@ -28,8 +34,11 @@ async def test_setting_workbench_repo_creates_session_and_messages(async_session
     assert sessions[0].id == session.id
     assert sessions[0].status == "clarifying"
     assert sessions[0].target_categories == ["功法", "体系设定"]
-    assert messages[0].id == message.id
-    assert messages[0].content == "主角从废脉开始修炼"
+    assert messages[0].id == first_message.id
+    assert [message.content for message in messages] == [
+        "主角从废脉开始修炼",
+        "第二轮补充宗门冲突",
+    ]
 
 
 async def test_setting_workbench_repo_creates_review_batch_and_changes(async_session):

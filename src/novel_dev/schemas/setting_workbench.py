@@ -9,11 +9,12 @@ BatchStatus = Literal["pending", "partially_approved", "approved", "rejected", "
 ChangeStatus = Literal["pending", "approved", "rejected", "edited_approved", "failed"]
 TargetType = Literal["setting_card", "entity", "relationship"]
 ChangeOperation = Literal["create", "update", "delete"]
+ReviewDecision = Literal["approve", "reject", "edit_approve"]
 
 
 class SettingGenerationSessionCreate(BaseModel):
-    novel_id: str
     title: str
+    initial_idea: str = ""
     target_categories: list[str] = Field(default_factory=list)
     focused_target: Optional[dict[str, Any]] = None
 
@@ -75,9 +76,11 @@ class SettingReviewBatchResponse(BaseModel):
     source_type: str
     source_file: Optional[str] = None
     source_session_id: Optional[str] = None
+    source_session_title: Optional[str] = None
     status: BatchStatus
     summary: str = ""
     error_message: Optional[str] = None
+    counts: dict[str, int] = Field(default_factory=dict)
     changes: list[SettingReviewChangeResponse] = Field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -90,16 +93,12 @@ class SettingWorkbenchPayload(BaseModel):
 
 
 class SettingBatchGenerateRequest(BaseModel):
-    novel_id: str
-    source_type: str = "ai_session"
-    source_file: Optional[str] = None
-    source_session_id: Optional[str] = None
-    summary: str = ""
+    force: bool = False
 
 
 class SettingReviewDecision(BaseModel):
     change_id: str
-    decision: ChangeStatus
+    decision: ReviewDecision
     edited_after_snapshot: Optional[dict[str, Any]] = None
 
 
