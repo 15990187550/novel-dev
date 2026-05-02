@@ -28,6 +28,12 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
 from novel_dev.schemas.outline_workbench import OutlineClearContextResponse, OutlineMessagesResponse
+from novel_dev.schemas.setting_workbench import (
+    SettingBatchGenerateRequest,
+    SettingGenerationSessionCreate,
+    SettingReviewApplyRequest,
+    SettingSessionReplyRequest,
+)
 from novel_dev.schemas.brainstorm_workspace import (
     BrainstormSuggestionCardUpdateRequest,
     BrainstormSuggestionCardUpdateResponse,
@@ -43,6 +49,7 @@ from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, 
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
+from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.schemas.knowledge_domain import (
     ConfirmDomainScopeRequest,
@@ -150,10 +157,84 @@ def _serialize_library_document(doc, *, is_active: bool = True) -> dict[str, Any
         "version": doc.version,
         "updated_at": doc.updated_at.isoformat() if doc.updated_at else None,
         "is_active": is_active,
+        "source_type": getattr(doc, "source_type", None),
+        "source_session_id": getattr(doc, "source_session_id", None),
+        "source_review_batch_id": getattr(doc, "source_review_batch_id", None),
+        "source_review_change_id": getattr(doc, "source_review_change_id", None),
     }
     if doc.doc_type == "style_profile":
         payload["style_config"] = _parse_style_config_title(doc.title)
     return payload
+
+
+def _serialize_setting_session(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "novel_id": item.novel_id,
+        "title": item.title,
+        "status": item.status,
+        "target_categories": item.target_categories or [],
+        "clarification_round": item.clarification_round,
+        "conversation_summary": item.conversation_summary,
+        "focused_target": item.focused_target,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+def _serialize_setting_message(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "session_id": item.session_id,
+        "role": item.role,
+        "content": item.content,
+        "meta": item.meta or {},
+        "created_at": item.created_at,
+    }
+
+
+def _serialize_setting_review_change(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "batch_id": item.batch_id,
+        "target_type": item.target_type,
+        "operation": item.operation,
+        "target_id": item.target_id,
+        "status": item.status,
+        "before_snapshot": item.before_snapshot,
+        "after_snapshot": item.after_snapshot,
+        "conflict_hints": item.conflict_hints or [],
+        "source_session_id": item.source_session_id,
+        "error_message": item.error_message,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
+
+
+def _count_setting_review_changes(changes: list) -> dict[str, int]:
+    counts = {"setting_card": 0, "entity": 0, "relationship": 0}
+    for change in changes:
+        if change.target_type in counts:
+            counts[change.target_type] += 1
+    return counts
+
+
+def _serialize_setting_review_batch(item, changes: list) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "novel_id": item.novel_id,
+        "source_type": item.source_type,
+        "source_file": item.source_file,
+        "source_session_id": item.source_session_id,
+        "source_session_title": getattr(item, "source_session_title", None),
+        "status": item.status,
+        "summary": item.summary,
+        "error_message": item.error_message,
+        "counts": _count_setting_review_changes(changes),
+        "changes": [_serialize_setting_review_change(change) for change in changes],
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+    }
 
 
 def _serialize_pending_document(item) -> dict[str, Any]:
@@ -275,6 +356,10 @@ def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
                     "created_at_chapter_id": None,
                     "is_active": True,
                     "is_inferred": True,
+                    "source_type": None,
+                    "source_session_id": None,
+                    "source_review_batch_id": None,
+                    "source_review_change_id": None,
                 })
     return inferred
 
@@ -373,6 +458,10 @@ async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> di
         "system_needs_review": entity.system_needs_review,
         "classification_status": _classification_status(entity),
         "search_document": entity.search_document,
+        "source_type": entity.source_type,
+        "source_session_id": entity.source_session_id,
+        "source_review_batch_id": entity.source_review_batch_id,
+        "source_review_change_id": entity.source_review_change_id,
     }
 
 
@@ -846,6 +935,10 @@ async def list_entity_relationships(novel_id: str, session: AsyncSession = Depen
             "created_at_chapter_id": rel.created_at_chapter_id,
             "is_active": rel.is_active,
             "is_inferred": False,
+            "source_type": rel.source_type,
+            "source_session_id": rel.source_session_id,
+            "source_review_batch_id": rel.source_review_batch_id,
+            "source_review_change_id": rel.source_review_change_id,
         }
         for rel in result.scalars().all()
     ]
@@ -2400,6 +2493,148 @@ async def update_brainstorm_suggestion_card(
         if "unsupported suggestion card action" in lowered:
             raise HTTPException(status_code=400, detail=detail)
         raise HTTPException(status_code=409, detail=detail)
+
+
+@router.get("/api/novels/{novel_id}/settings/workbench")
+async def get_setting_workbench(novel_id: str, session: AsyncSession = Depends(get_session)):
+    service = SettingWorkbenchService(session)
+    sessions = await service.repo.list_sessions(novel_id)
+    batches = await service.repo.list_review_batches(novel_id)
+    review_batches = []
+    for batch in batches:
+        changes = await service.repo.list_review_changes(batch.id)
+        review_batches.append(_serialize_setting_review_batch(batch, changes))
+    return {
+        "novel_id": novel_id,
+        "sessions": [_serialize_setting_session(item) for item in sessions],
+        "review_batches": review_batches,
+    }
+
+
+@router.post("/api/novels/{novel_id}/settings/sessions")
+async def create_setting_session(
+    novel_id: str,
+    req: SettingGenerationSessionCreate,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    created = await service.create_generation_session(
+        novel_id=novel_id,
+        title=req.title,
+        initial_idea=req.initial_idea,
+        target_categories=req.target_categories,
+        focused_target=req.focused_target,
+    )
+    await session.commit()
+    return _serialize_setting_session(created)
+
+
+@router.get("/api/novels/{novel_id}/settings/sessions")
+async def list_setting_sessions(novel_id: str, session: AsyncSession = Depends(get_session)):
+    service = SettingWorkbenchService(session)
+    sessions = await service.repo.list_sessions(novel_id)
+    return {"items": [_serialize_setting_session(item) for item in sessions]}
+
+
+@router.get("/api/novels/{novel_id}/settings/sessions/{session_id}")
+async def get_setting_session(novel_id: str, session_id: str, session: AsyncSession = Depends(get_session)):
+    service = SettingWorkbenchService(session)
+    item = await service.repo.get_session(session_id)
+    if item is None or item.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting generation session not found")
+    messages = await service.repo.list_messages(session_id)
+    batches = [
+        batch
+        for batch in await service.repo.list_review_batches(novel_id)
+        if batch.source_session_id == session_id
+    ]
+    review_batches = []
+    for batch in batches:
+        changes = await service.repo.list_review_changes(batch.id)
+        review_batches.append(_serialize_setting_review_batch(batch, changes))
+    return {
+        "session": _serialize_setting_session(item),
+        "messages": [_serialize_setting_message(message) for message in messages],
+        "review_batches": review_batches,
+    }
+
+
+@router.post("/api/novels/{novel_id}/settings/sessions/{session_id}/reply")
+async def reply_setting_session(
+    novel_id: str,
+    session_id: str,
+    req: SettingSessionReplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    try:
+        result = await service.reply_to_session(novel_id=novel_id, session_id=session_id, content=req.content)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "session": _serialize_setting_session(result["session"]),
+        "assistant_message": result["assistant_message"],
+        "questions": result["questions"],
+    }
+
+
+@router.post("/api/novels/{novel_id}/settings/sessions/{session_id}/generate")
+async def generate_setting_review_batch(
+    novel_id: str,
+    session_id: str,
+    req: SettingBatchGenerateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    try:
+        batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    changes = await service.repo.list_review_changes(batch.id)
+    return _serialize_setting_review_batch(batch, changes)
+
+
+@router.get("/api/novels/{novel_id}/settings/review_batches")
+async def list_setting_review_batches(novel_id: str, session: AsyncSession = Depends(get_session)):
+    service = SettingWorkbenchService(session)
+    batches = await service.repo.list_review_batches(novel_id)
+    items = []
+    for batch in batches:
+        changes = await service.repo.list_review_changes(batch.id)
+        items.append(_serialize_setting_review_batch(batch, changes))
+    return {"items": items}
+
+
+@router.get("/api/novels/{novel_id}/settings/review_batches/{batch_id}")
+async def get_setting_review_batch(novel_id: str, batch_id: str, session: AsyncSession = Depends(get_session)):
+    service = SettingWorkbenchService(session)
+    batch = await service.repo.get_review_batch(batch_id)
+    if batch is None or batch.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting review batch not found")
+    changes = await service.repo.list_review_changes(batch.id)
+    return _serialize_setting_review_batch(batch, changes)
+
+
+@router.post("/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply")
+async def apply_setting_review_batch(
+    novel_id: str,
+    batch_id: str,
+    req: SettingReviewApplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    try:
+        result = await service.apply_review_decisions(
+            novel_id=novel_id,
+            batch_id=batch_id,
+            decisions=[item.model_dump() for item in req.decisions],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return result
 
 
 @router.post("/api/novels/{novel_id}/librarian")
