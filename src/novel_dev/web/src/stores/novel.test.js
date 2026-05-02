@@ -307,6 +307,35 @@ describe('novel store dashboard loading', () => {
     expect(store.settingWorkbench.selectedMessages[0].content).toBe('新消息')
   })
 
+  it('ignores stale setting workbench responses after switching novels', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-a'
+    const staleWorkbench = createDeferred()
+    vi.mocked(api.getSettingWorkbench).mockReturnValueOnce(staleWorkbench.promise)
+
+    const firstFetch = store.fetchSettingWorkbench()
+    store.novelId = 'novel-b'
+    store.settingWorkbench = {
+      ...store.settingWorkbench,
+      sessions: [],
+      reviewBatches: [],
+      requestToken: 0,
+    }
+    vi.mocked(api.getSettingWorkbench).mockResolvedValueOnce({
+      sessions: [{ id: 'sgs_b', title: 'B 会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+
+    await store.fetchSettingWorkbench()
+    staleWorkbench.resolve({
+      sessions: [{ id: 'sgs_a', title: 'A 会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+    await firstFetch
+
+    expect(store.settingWorkbench.sessions.map((session) => session.id)).toEqual(['sgs_b'])
+  })
+
   it('does not apply reply or generation results to a newly selected session', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

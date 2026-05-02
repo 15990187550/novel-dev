@@ -29,9 +29,12 @@ vi.mock('@/api.js', () => ({
 
 const routerPushMock = vi.fn()
 const routerReplaceMock = vi.fn()
+const routeState = vi.hoisted(() => ({
+  query: {},
+}))
 
 vi.mock('vue-router', () => ({
-  useRoute: () => ({ query: {} }),
+  useRoute: () => routeState,
   useRouter: () => ({ push: routerPushMock, replace: routerReplaceMock }),
 }))
 
@@ -51,6 +54,7 @@ describe('SettingWorkbench', () => {
     vi.clearAllMocks()
     routerPushMock.mockReset()
     routerReplaceMock.mockReset()
+    routeState.query = {}
     getSettingWorkbenchMock.mockResolvedValue({
       sessions: [
         {
@@ -166,6 +170,7 @@ describe('SettingWorkbench', () => {
       initial_idea: '废脉少年建立新的修真阵营',
       target_categories: [],
     })
+    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/settings', query: { session: 'sgs_2' } })
     expect(wrapper.text()).toContain('主角阵营设定')
     expect(wrapper.text()).toContain('请补充阵营目标。')
 
@@ -236,5 +241,40 @@ describe('SettingWorkbench', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="setting-reply-input"]').element.value).toBe('这段回答不能丢')
+  })
+
+  it('does not clear a new session draft when an old reply resolves', async () => {
+    let resolveReply
+    replySettingSessionMock.mockReturnValueOnce(new Promise((resolve) => {
+      resolveReply = resolve
+    }))
+    const wrapper = mountView()
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_a'
+    store.settingWorkbench.selectedSession = {
+      id: 'sgs_a',
+      title: '会话 A',
+      status: 'clarifying',
+    }
+    await flushPromises()
+
+    await wrapper.find('[data-testid="setting-reply-input"]').setValue('A 的回答')
+    await wrapper.find('[data-testid="setting-send-reply"]').trigger('click')
+    store.settingWorkbench.selectedSessionId = 'sgs_b'
+    store.settingWorkbench.selectedSession = {
+      id: 'sgs_b',
+      title: '会话 B',
+      status: 'clarifying',
+    }
+    await wrapper.find('[data-testid="setting-reply-input"]').setValue('B 的新回答')
+    resolveReply({
+      session: { id: 'sgs_a', title: '会话 A', status: 'ready_to_generate' },
+      assistant_message: 'A 已就绪',
+      questions: [],
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="setting-reply-input"]').element.value).toBe('B 的新回答')
   })
 })

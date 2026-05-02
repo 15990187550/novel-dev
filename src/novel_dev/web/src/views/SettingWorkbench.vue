@@ -242,11 +242,16 @@ async function selectSession(id) {
 async function sendReply() {
   const content = replyDraft.value.trim()
   if (!content) return
+  const sessionId = store.settingWorkbench.selectedSessionId
   try {
     await store.replySettingSession(content)
-    replyDraft.value = ''
+    if (store.settingWorkbench.selectedSessionId === sessionId && replyDraft.value.trim() === content) {
+      replyDraft.value = ''
+    }
   } catch {
-    replyDraft.value = content
+    if (store.settingWorkbench.selectedSessionId === sessionId) {
+      replyDraft.value = content
+    }
   }
 }
 </script>

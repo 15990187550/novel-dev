@@ -865,16 +865,17 @@ export const useNovelStore = defineStore('novel', {
       }
       this.settingWorkbench.state = 'loading'
       this.settingWorkbench.error = ''
+      const requestedNovelId = this.novelId
       const token = this.settingWorkbench.requestToken + 1
       this.settingWorkbench.requestToken = token
       try {
-        const payload = await api.getSettingWorkbench(this.novelId)
-        if (token !== this.settingWorkbench.requestToken) return
+        const payload = await api.getSettingWorkbench(requestedNovelId)
+        if (token !== this.settingWorkbench.requestToken || requestedNovelId !== this.novelId) return
         this.settingWorkbench.sessions = payload?.sessions || []
         this.settingWorkbench.reviewBatches = payload?.review_batches || []
         this.settingWorkbench.state = 'ready'
       } catch (error) {
-        if (token !== this.settingWorkbench.requestToken) return
+        if (token !== this.settingWorkbench.requestToken || requestedNovelId !== this.novelId) return
         this.settingWorkbench.state = 'error'
         this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定工作台失败'
       }
@@ -906,17 +907,18 @@ export const useNovelStore = defineStore('novel', {
     async loadSettingSession(sessionId) {
       if (!this.novelId || !sessionId) return null
       this.settingWorkbench.error = ''
+      const requestedNovelId = this.novelId
       const token = this.settingWorkbench.sessionRequestToken + 1
       this.settingWorkbench.sessionRequestToken = token
       try {
-        const payload = await api.getSettingSession(this.novelId, sessionId)
-        if (token !== this.settingWorkbench.sessionRequestToken) return payload
+        const payload = await api.getSettingSession(requestedNovelId, sessionId)
+        if (token !== this.settingWorkbench.sessionRequestToken || requestedNovelId !== this.novelId) return payload
         this.settingWorkbench.selectedSessionId = sessionId
         this.settingWorkbench.selectedSession = payload?.session || this.settingWorkbench.sessions.find((session) => session.id === sessionId) || null
         this.settingWorkbench.selectedMessages = payload?.messages || payload?.recent_messages || []
         return payload
       } catch (error) {
-        if (token !== this.settingWorkbench.sessionRequestToken) return null
+        if (token !== this.settingWorkbench.sessionRequestToken || requestedNovelId !== this.novelId) return null
         this.settingWorkbench.error = error?.response?.data?.detail || error?.message || '加载设定会话失败'
         throw error
       }
