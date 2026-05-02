@@ -347,7 +347,7 @@ async def test_upload_returns_504_when_setting_extraction_times_out(async_sessio
     async def override():
         yield async_session
 
-    async def mock_extract(self, text: str, novel_id: str = ""):
+    async def mock_extract(self, text: str, novel_id: str = "", *, source_filename: str = ""):
         raise LLMTimeoutError("Request timed out")
 
     monkeypatch.setattr("novel_dev.agents.setting_extractor.SettingExtractorAgent.extract", mock_extract)

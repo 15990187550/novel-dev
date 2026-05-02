@@ -252,9 +252,11 @@ async def setup_test_db():
 @pytest_asyncio.fixture(autouse=True)
 async def cleanup_tables():
     yield
+    await engine.dispose()
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture

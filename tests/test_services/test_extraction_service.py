@@ -268,6 +268,7 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
 
         svc = ExtractionService(async_session)
         svc.entity_svc._refresh_entity_artifacts = AsyncMock()
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe1 = await svc.process_upload("n_dedup", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_dedup", "setting2.txt", "second")
@@ -320,6 +321,7 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
 
         svc = ExtractionService(async_session)
         svc.entity_svc._refresh_entity_artifacts = AsyncMock()
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe1 = await svc.process_upload("n_alias", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_alias", "setting2.txt", "second")
@@ -367,6 +369,7 @@ async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_additive", "setting.txt", "content")
         assert pe.diff_result["summary"] == "1 个可自动补充实体"
         changes = pe.diff_result["entity_diffs"][0]["field_changes"]
@@ -382,12 +385,10 @@ async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
     assert latest.state["resources"] == "道经传承"
 
     refreshed = await svc.pending_repo.get_by_id(pe.id)
-    assert refreshed.resolution_result == {
-        "field_resolutions": [
-            {"entity_type": "character", "entity_name": "陆照", "field": "appearance", "action": "auto_apply", "applied": True},
-            {"entity_type": "character", "entity_name": "陆照", "field": "resources", "action": "auto_apply", "applied": True},
-        ]
-    }
+    assert refreshed.resolution_result["field_resolutions"] == [
+        {"entity_type": "character", "entity_name": "陆照", "field": "appearance", "action": "auto_apply", "applied": True},
+        {"entity_type": "character", "entity_name": "陆照", "field": "resources", "action": "auto_apply", "applied": True},
+    ]
 
 
 @pytest.mark.asyncio
@@ -463,6 +464,7 @@ async def test_approve_setting_records_conflict_resolution_result(async_session)
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_resolution_log", "setting.txt", "content")
         await svc.approve_pending(
             pe.id,
@@ -473,12 +475,10 @@ async def test_approve_setting_records_conflict_resolution_result(async_session)
         )
 
     refreshed = await svc.pending_repo.get_by_id(pe.id)
-    assert refreshed.resolution_result == {
-        "field_resolutions": [
-            {"entity_type": "character", "entity_name": "陆照", "field": "identity", "action": "use_new", "applied": True},
-            {"entity_type": "character", "entity_name": "陆照", "field": "goal", "action": "skip", "applied": False},
-        ]
-    }
+    assert refreshed.resolution_result["field_resolutions"] == [
+        {"entity_type": "character", "entity_name": "陆照", "field": "identity", "action": "use_new", "applied": True},
+        {"entity_type": "character", "entity_name": "陆照", "field": "goal", "action": "skip", "applied": False},
+    ]
 
 
 @pytest.mark.asyncio
@@ -513,16 +513,15 @@ async def test_approve_setting_records_keep_old_resolution_result(async_session)
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_keep_old", "setting.txt", "content")
         await svc.approve_pending(pe.id)
 
     refreshed = await svc.pending_repo.get_by_id(pe.id)
-    assert refreshed.resolution_result == {
-        "field_resolutions": [
-            {"entity_type": "character", "entity_name": "陆照", "field": "identity", "action": "keep_old", "applied": False},
-            {"entity_type": "character", "entity_name": "陆照", "field": "goal", "action": "keep_old", "applied": False},
-        ]
-    }
+    assert refreshed.resolution_result["field_resolutions"] == [
+        {"entity_type": "character", "entity_name": "陆照", "field": "identity", "action": "keep_old", "applied": False},
+        {"entity_type": "character", "entity_name": "陆照", "field": "goal", "action": "keep_old", "applied": False},
+    ]
 
 
 @pytest.mark.asyncio
