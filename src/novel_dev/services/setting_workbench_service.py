@@ -444,13 +444,13 @@ class SettingWorkbenchService:
         if not draft.changes:
             raise ValueError("Draft must contain at least one change")
         same_batch_entity_ids = self._same_batch_entity_create_ids(draft.changes)
-        same_batch_entity_names_without_ids = self._same_batch_entity_create_names_without_ids(draft.changes)
+        has_same_batch_entity_create_without_id = self._has_same_batch_entity_create_without_id(draft.changes)
         for index, item in enumerate(draft.changes):
             self._validate_draft_change(
                 item,
                 index=index,
                 same_batch_entity_ids=same_batch_entity_ids,
-                same_batch_entity_names_without_ids=same_batch_entity_names_without_ids,
+                has_same_batch_entity_create_without_id=has_same_batch_entity_create_without_id,
             )
 
     @staticmethod
@@ -466,18 +466,14 @@ class SettingWorkbenchService:
         return entity_ids
 
     @staticmethod
-    def _same_batch_entity_create_names_without_ids(changes: list[SettingBatchChangeDraft]) -> set[str]:
-        entity_names: set[str] = set()
+    def _has_same_batch_entity_create_without_id(changes: list[SettingBatchChangeDraft]) -> bool:
         for item in changes:
             if item.target_type != "entity" or item.operation != "create":
                 continue
             snapshot = item.after_snapshot or {}
-            if str(snapshot.get("id") or "").strip():
-                continue
-            name = str(snapshot.get("name") or "").strip()
-            if name:
-                entity_names.add(name)
-        return entity_names
+            if not str(snapshot.get("id") or "").strip():
+                return True
+        return False
 
     @staticmethod
     def _validate_draft_change(
@@ -485,7 +481,7 @@ class SettingWorkbenchService:
         *,
         index: int,
         same_batch_entity_ids: set[str] | None = None,
-        same_batch_entity_names_without_ids: set[str] | None = None,
+        has_same_batch_entity_create_without_id: bool = False,
     ) -> None:
         if item.operation in {"update", "delete"} and not (item.target_id or "").strip():
             raise ValueError(f"Draft change {index} {item.target_type} {item.operation} target_id is required")
@@ -499,6 +495,8 @@ class SettingWorkbenchService:
             ]
             if (item.target_ref or "").strip():
                 ref_fields.append("target_ref")
+            if (getattr(item, "source_ref", None) or "").strip():
+                ref_fields.append("source_ref")
             if ref_fields:
                 raise ValueError(
                     f"Draft change {index} relationship create must not use ref fields: {', '.join(ref_fields)}"
@@ -512,20 +510,12 @@ class SettingWorkbenchService:
                 raise ValueError(
                     f"Draft change {index} relationship create after_snapshot missing: {', '.join(missing)}"
                 )
+            if has_same_batch_entity_create_without_id:
+                raise ValueError(
+                    f"Draft change {index} relationship create cannot be emitted when same-batch entity create "
+                    "is missing after_snapshot.id"
+                )
             same_batch_entity_ids = same_batch_entity_ids or set()
-            same_batch_entity_names_without_ids = same_batch_entity_names_without_ids or set()
-            endpoints = {
-                "source_id": str(snapshot.get("source_id") or "").strip(),
-                "target_id": str(snapshot.get("target_id") or "").strip(),
-            }
-            for field, endpoint in endpoints.items():
-                if endpoint in same_batch_entity_ids:
-                    continue
-                if endpoint in same_batch_entity_names_without_ids:
-                    raise ValueError(
-                        f"Draft change {index} relationship create {field} references same-batch entity create "
-                        "without after_snapshot.id"
-                    )
 
     async def _restore_generation_ready_after_failure(self, session_id: str, exc: Exception) -> None:
         if self.session.in_transaction():

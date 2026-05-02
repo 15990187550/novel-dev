@@ -14,6 +14,7 @@ class SettingClarificationDecision(BaseModel):
 class SettingBatchChangeDraft(BaseModel):
     target_type: Literal["setting_card", "entity", "relationship"]
     operation: Literal["create", "update", "delete"]
+    source_ref: Optional[str] = None
     target_ref: Optional[str] = None
     target_id: Optional[str] = None
     before_snapshot: Optional[dict[str, Any]] = None
@@ -34,6 +35,8 @@ class SettingBatchChangeDraft(BaseModel):
                 for field in ("source_ref", "target_ref")
                 if str(snapshot.get(field) or "").strip()
             ]
+            if self.source_ref:
+                ref_fields.append("source_ref")
             if self.target_ref:
                 ref_fields.append("target_ref")
             if ref_fields:

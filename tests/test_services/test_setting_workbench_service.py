@@ -1227,7 +1227,7 @@ async def test_generate_review_batch_rejects_relationship_to_same_batch_entity_w
                     target_id=None,
                     before_snapshot=None,
                     after_snapshot={
-                        "source_id": "陆照",
+                        "source_id": "ent_luzhao",
                         "target_id": "ent_seed",
                         "relation_type": "持有",
                     },

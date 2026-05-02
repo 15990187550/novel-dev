@@ -89,3 +89,24 @@ def test_setting_batch_draft_rejects_relationship_ref_fields_even_with_ids():
                 ],
             }
         )
+
+
+def test_setting_batch_draft_rejects_top_level_relationship_source_ref():
+    with pytest.raises(ValidationError, match="must not use ref fields"):
+        SettingBatchDraft.model_validate(
+            {
+                "summary": "混用了顶层名称引用",
+                "changes": [
+                    {
+                        "target_type": "relationship",
+                        "operation": "create",
+                        "source_ref": "陆照",
+                        "after_snapshot": {
+                            "source_id": "ent_luzhao",
+                            "target_id": "ent_seed",
+                            "relation_type": "持有",
+                        },
+                    },
+                ],
+            }
+        )
