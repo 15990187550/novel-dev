@@ -120,6 +120,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useNovelStore } from '@/stores/novel.js'
 import EntityGraph from '@/components/EntityGraph.vue'
@@ -128,6 +129,7 @@ import EntityGroupTable from '@/components/entities/EntityGroupTable.vue'
 import EntityDetailPanel from '@/components/entities/EntityDetailPanel.vue'
 
 const store = useNovelStore()
+const router = useRouter()
 const graphFullscreenVisible = ref(false)
 const entityLoading = ref(false)
 const workspaceView = ref('workspace')
@@ -255,9 +257,13 @@ function findNodeByEntityId(nodes = [], entityId) {
 
 function openSourceSession({ sessionId, changeId } = {}) {
   if (!sessionId) return
-  const query = new URLSearchParams({ session: sessionId })
-  if (changeId) query.set('change', changeId)
-  window.location.assign(`/settings?${query.toString()}`)
+  router.push({
+    path: '/settings',
+    query: {
+      session: sessionId,
+      ...(changeId ? { change: changeId } : {}),
+    },
+  })
 }
 
 async function runEntitySearch() {

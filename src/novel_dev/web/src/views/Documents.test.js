@@ -30,6 +30,7 @@ const {
   rollbackStyleProfileMock,
   successMessageMock,
   confirmMessageBoxMock,
+  routerPushMock,
 } = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
   deletePendingDocMock: vi.fn(),
@@ -45,6 +46,7 @@ const {
   rollbackStyleProfileMock: vi.fn(),
   successMessageMock: vi.fn(),
   confirmMessageBoxMock: vi.fn(),
+  routerPushMock: vi.fn(),
 }))
 
 vi.mock('@/api.js', () => ({
@@ -69,6 +71,12 @@ vi.mock('element-plus', () => ({
   ElMessageBox: {
     confirm: confirmMessageBoxMock,
   },
+}))
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({
+    push: routerPushMock,
+  }),
 }))
 
 const ElButtonStub = defineComponent({
@@ -138,7 +146,6 @@ const TableRowScope = defineComponent({
 
 describe('Documents', () => {
   let pinia
-  let locationAssignMock
 
   beforeEach(() => {
     pinia = createPinia()
@@ -151,11 +158,6 @@ describe('Documents', () => {
     deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
     confirmMessageBoxMock.mockResolvedValue()
     rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
-    locationAssignMock = vi.fn()
-    vi.stubGlobal('location', {
-      ...window.location,
-      assign: locationAssignMock,
-    })
   })
 
   function mountView() {
@@ -449,7 +451,10 @@ describe('Documents', () => {
 
     await badge.trigger('click')
 
-    expect(locationAssignMock).toHaveBeenCalledWith('/settings?session=sgs_1&change=chg_1')
+    expect(routerPushMock).toHaveBeenCalledWith({
+      path: '/settings',
+      query: { session: 'sgs_1', change: 'chg_1' },
+    })
   })
 
   it('renders knowledge domains and confirms suggested scope', async () => {

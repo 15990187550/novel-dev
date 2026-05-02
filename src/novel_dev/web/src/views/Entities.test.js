@@ -9,8 +9,15 @@ import Entities from './Entities.vue'
 import EntityDetailPanel from '@/components/entities/EntityDetailPanel.vue'
 import { ElMessageBox } from 'element-plus'
 
+const routerPushMock = vi.hoisted(() => vi.fn())
 const entitiesSource = readFileSync(join(process.cwd(), 'src/views/Entities.vue'), 'utf8')
 const globalStyleSource = readFileSync(join(process.cwd(), 'src/style.css'), 'utf8')
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({
+    push: routerPushMock,
+  }),
+}))
 
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
@@ -126,17 +133,11 @@ const EntityGraphStub = defineComponent({
 describe('Entities', () => {
   const radioGroupKey = Symbol('radio-group')
   let pinia
-  let locationAssignMock
 
   beforeEach(() => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.clearAllMocks()
-    locationAssignMock = vi.fn()
-    vi.stubGlobal('location', {
-      ...window.location,
-      assign: locationAssignMock,
-    })
   })
 
   function seedStore() {
@@ -440,7 +441,10 @@ describe('Entities', () => {
     await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
     await wrapper.get('.source-session-button').trigger('click')
 
-    expect(locationAssignMock).toHaveBeenCalledWith('/settings?session=sgs_1&change=chg_1')
+    expect(routerPushMock).toHaveBeenCalledWith({
+      path: '/settings',
+      query: { session: 'sgs_1', change: 'chg_1' },
+    })
   })
 
   it('asks for confirmation before deleting the selected entity', async () => {

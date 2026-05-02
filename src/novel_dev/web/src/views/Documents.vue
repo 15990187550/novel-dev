@@ -851,6 +851,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel.js'
 import {
   uploadDocumentsBatch,
@@ -874,6 +875,7 @@ const LIBRARY_GROUPS = [
 ]
 
 const store = useNovelStore()
+const router = useRouter()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
@@ -1146,9 +1148,13 @@ function openLibraryDetail(item, groupLabel = '') {
 
 function openSourceSession(sessionId, changeId = '') {
   if (!sessionId) return
-  const query = new URLSearchParams({ session: sessionId })
-  if (changeId) query.set('change', changeId)
-  window.location.assign(`/settings?${query.toString()}`)
+  router.push({
+    path: '/settings',
+    query: {
+      session: sessionId,
+      ...(changeId ? { change: changeId } : {}),
+    },
+  })
 }
 
 function openDomainDetail(domain) {
