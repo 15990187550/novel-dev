@@ -98,3 +98,11 @@ class RelationshipRepository:
             )
         )
         await self.session.flush()
+
+    async def deactivate(self, relationship_id: int) -> Optional[EntityRelationship]:
+        relationship = await self.session.get(EntityRelationship, relationship_id)
+        if relationship is None:
+            return None
+        relationship.is_active = False
+        await self.session.flush()
+        return relationship
