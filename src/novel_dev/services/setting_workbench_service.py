@@ -148,7 +148,7 @@ class SettingWorkbenchService:
         snapshot: dict,
     ):
         operation = change.operation
-        if operation == "create" or (operation == "update" and not change.target_id):
+        if operation == "create":
             name = (snapshot.get("name") or "").strip()
             if not name:
                 raise ValueError("Entity name is required")
@@ -200,7 +200,7 @@ class SettingWorkbenchService:
         snapshot: dict,
     ) -> EntityRelationship | None:
         operation = change.operation
-        if operation == "create" or (operation == "update" and not change.target_id):
+        if operation == "create":
             source_id = snapshot.get("source_id")
             target_id = snapshot.get("target_id")
             relation_type = snapshot.get("relation_type")

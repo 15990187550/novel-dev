@@ -579,3 +579,100 @@ async def test_apply_review_batch_setting_card_update_ignores_snapshot_id(async_
     assert documents[0].source_session_id == session.id
     assert documents[0].source_review_batch_id == batch.id
     assert documents[0].source_review_change_id == change.id
+
+
+async def test_apply_review_batch_entity_update_without_target_id_fails(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-entity-update-missing-target",
+        title="实体更新缺目标",
+        target_categories=["人物"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-entity-update-missing-target",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="缺少目标实体的更新",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="entity",
+        operation="update",
+        after_snapshot={"type": "character", "name": "不应创建", "state": {"identity": "噪声"}},
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-entity-update-missing-target",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    entities = (
+        await async_session.execute(
+            select(Entity).where(Entity.novel_id == "novel-sw-entity-update-missing-target")
+        )
+    ).scalars().all()
+    assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
+    assert (await repo.get_review_change(change.id)).status == "failed"
+    assert entities == []
+
+
+async def test_apply_review_batch_relationship_update_without_target_id_fails(async_session):
+    async_session.add_all(
+        [
+            Entity(
+                id="rel_missing_update_source",
+                type="character",
+                name="甲",
+                novel_id="novel-sw-rel-update-missing-target",
+            ),
+            Entity(
+                id="rel_missing_update_target",
+                type="character",
+                name="乙",
+                novel_id="novel-sw-rel-update-missing-target",
+            ),
+        ]
+    )
+    await async_session.flush()
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-sw-rel-update-missing-target",
+        title="关系更新缺目标",
+        target_categories=["关系"],
+    )
+    batch = await repo.create_review_batch(
+        novel_id="novel-sw-rel-update-missing-target",
+        source_type="ai_session",
+        source_session_id=session.id,
+        summary="缺少目标关系的更新",
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="relationship",
+        operation="update",
+        after_snapshot={
+            "source_id": "rel_missing_update_source",
+            "target_id": "rel_missing_update_target",
+            "relation_type": "ally",
+        },
+        source_session_id=session.id,
+    )
+
+    result = await SettingWorkbenchService(async_session).apply_review_decisions(
+        "novel-sw-rel-update-missing-target",
+        batch.id,
+        [{"change_id": change.id, "decision": "approve"}],
+    )
+
+    relationships = (
+        await async_session.execute(
+            select(EntityRelationship).where(
+                EntityRelationship.novel_id == "novel-sw-rel-update-missing-target"
+            )
+        )
+    ).scalars().all()
+    assert result == {"status": "failed", "applied": 0, "rejected": 0, "failed": 1}
+    assert (await repo.get_review_change(change.id)).status == "failed"
+    assert relationships == []
