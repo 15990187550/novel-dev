@@ -2661,7 +2661,7 @@ async def generate_setting_review_batch(
         batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
     except ValueError as exc:
         _raise_setting_value_error(exc)
-    except Exception as exc:
+    except (LLMError, RuntimeError) as exc:
         _raise_setting_generation_error(exc)
     await session.commit()
     return await _serialize_setting_review_batch_with_title(session, service, batch)
