@@ -66,6 +66,12 @@ async def test_patch_suggestion_card_resolves_card(async_session, test_client):
     assert data["workspace"]["setting_suggestion_cards"][0]["status"] == "resolved"
     assert data["pending_extraction"] is None
 
+    await async_session.rollback()
+    persisted = await BrainstormWorkspaceService(async_session).get_workspace_payload(
+        "n_workspace_card_patch"
+    )
+    assert persisted.setting_suggestion_cards[0].status == "resolved"
+
 
 @pytest.mark.asyncio
 async def test_patch_suggestion_card_returns_404_for_missing_card(

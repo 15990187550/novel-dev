@@ -2389,7 +2389,9 @@ async def update_brainstorm_suggestion_card(
 ):
     service = BrainstormWorkspaceService(session)
     try:
-        return await service.update_suggestion_card(novel_id, card_id, payload.action)
+        result = await service.update_suggestion_card(novel_id, card_id, payload.action)
+        await session.commit()
+        return result
     except ValueError as e:
         detail = str(e)
         lowered = detail.lower()
