@@ -22,6 +22,35 @@ class PendingExtractionPayload(BaseModel):
     diff_result: Optional[dict[str, Any]] = None
 
 
+SuggestionCardRecommendedAction = Literal[
+    "submit_to_pending",
+    "continue_outline_feedback",
+    "request_more_info",
+    "open_detail",
+]
+SuggestionCardAvailableAction = Literal[
+    "open_detail",
+    "fill_conversation",
+    "resolve",
+    "dismiss",
+    "submit_to_pending",
+    "reactivate",
+]
+SuggestionCardUpdateAction = Literal[
+    "resolve",
+    "dismiss",
+    "submit_to_pending",
+    "reactivate",
+]
+
+
+class SuggestionCardActionHint(BaseModel):
+    recommended_action: SuggestionCardRecommendedAction
+    primary_label: str
+    available_actions: list[SuggestionCardAvailableAction] = Field(default_factory=list)
+    reason: str
+
+
 class SettingSuggestionCardPayload(BaseModel):
     card_id: str
     card_type: str
@@ -32,6 +61,7 @@ class SettingSuggestionCardPayload(BaseModel):
     source_outline_refs: list[str] = Field(default_factory=list)
     payload: dict[str, Any] = Field(default_factory=dict)
     display_order: int = 0
+    action_hint: Optional[SuggestionCardActionHint] = None
 
 
 class SettingSuggestionCardMergePayload(BaseModel):

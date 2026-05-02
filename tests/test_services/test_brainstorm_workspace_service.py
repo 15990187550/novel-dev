@@ -8,6 +8,7 @@ from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
+from novel_dev.schemas.brainstorm_workspace import SettingSuggestionCardPayload
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.entity_service import EntityService
 
@@ -412,6 +413,90 @@ async def test_merge_suggestion_cards_rejects_partial_upsert(async_session):
                 }
             ],
         )
+
+
+def _suggestion_card(
+    *,
+    card_type: str,
+    payload: dict,
+    summary: str = "建议补充设定。",
+    status: str = "active",
+) -> SettingSuggestionCardPayload:
+    return SettingSuggestionCardPayload.model_validate(
+        {
+            "card_id": f"card_{card_type}",
+            "card_type": card_type,
+            "merge_key": f"{card_type}:sample",
+            "title": "示例建议卡",
+            "summary": summary,
+            "status": status,
+            "source_outline_refs": ["synopsis"],
+            "payload": payload,
+            "display_order": 1,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_suggestion_card_action_hint_recommends_pending_for_named_entity(async_session):
+    service = BrainstormWorkspaceService(async_session)
+    hint = service.build_suggestion_card_action_hint(
+        _suggestion_card(
+            card_type="character",
+            payload={"canonical_name": "林风", "goal": "逆天改命"},
+        )
+    )
+
+    assert hint.recommended_action == "submit_to_pending"
+    assert hint.primary_label == "转设定"
+    assert "submit_to_pending" in hint.available_actions
+    assert "可转为待审批设定" in hint.reason
+
+
+@pytest.mark.asyncio
+async def test_suggestion_card_action_hint_keeps_outline_revision_in_conversation(async_session):
+    service = BrainstormWorkspaceService(async_session)
+    hint = service.build_suggestion_card_action_hint(
+        _suggestion_card(
+            card_type="revision",
+            payload={"focus": "结尾钩子"},
+            summary="结尾钩子需要从开放解读改成主题闭环。",
+        )
+    )
+
+    assert hint.recommended_action == "continue_outline_feedback"
+    assert hint.primary_label == "继续优化"
+    assert "fill_conversation" in hint.available_actions
+    assert "submit_to_pending" not in hint.available_actions
+
+
+@pytest.mark.asyncio
+async def test_suggestion_card_action_hint_requests_more_info_for_sparse_entity(async_session):
+    service = BrainstormWorkspaceService(async_session)
+    hint = service.build_suggestion_card_action_hint(
+        _suggestion_card(card_type="character", payload={}, summary="角色动机不足。")
+    )
+
+    assert hint.recommended_action == "request_more_info"
+    assert hint.primary_label == "补充信息"
+    assert "fill_conversation" in hint.available_actions
+    assert "submit_to_pending" not in hint.available_actions
+
+
+@pytest.mark.asyncio
+async def test_suggestion_card_action_hint_does_not_submit_relationship_cards(async_session):
+    service = BrainstormWorkspaceService(async_session)
+    hint = service.build_suggestion_card_action_hint(
+        _suggestion_card(
+            card_type="relationship",
+            payload={"source_entity_ref": "林风", "target_entity_ref": "苏雪"},
+            summary="林风与苏雪的盟友关系需要明确。",
+        )
+    )
+
+    assert hint.recommended_action == "continue_outline_feedback"
+    assert hint.primary_label == "继续优化"
+    assert "submit_to_pending" not in hint.available_actions
 
 
 def test_list_active_suggestion_cards_filters_terminal_statuses():

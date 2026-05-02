@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 from typing import Any
@@ -17,9 +18,45 @@ from novel_dev.schemas.brainstorm_workspace import (
     SettingDocDraftPayload,
     SettingSuggestionCardMergePayload,
     SettingSuggestionCardPayload,
+    SuggestionCardActionHint,
 )
 from novel_dev.schemas.outline import SynopsisData
 from novel_dev.services.extraction_service import ExtractionService
+
+
+SETTING_SUGGESTION_ENTITY_TYPES = {
+    "character",
+    "faction",
+    "location",
+    "item",
+    "artifact",
+    "skill",
+    "artifact_or_skill",
+}
+OUTLINE_SUGGESTION_TYPES = {
+    "revision",
+    "addition",
+    "outline",
+    "structure",
+    "theme",
+    "pacing",
+    "hook",
+    "arc",
+}
+OUTLINE_SUGGESTION_KEYWORDS = (
+    "总纲",
+    "卷纲",
+    "篇幅",
+    "钩子",
+    "动机",
+    "结构",
+    "主题",
+    "闭环",
+    "转折",
+    "节奏",
+    "结尾",
+    "弧光",
+)
 
 
 class BrainstormWorkspaceService:
@@ -283,7 +320,100 @@ class BrainstormWorkspaceService:
             submit_warnings=submit_warnings,
         )
 
+    def build_suggestion_card_action_hint(
+        self,
+        card: SettingSuggestionCardPayload,
+    ) -> SuggestionCardActionHint:
+        available_actions = self._base_suggestion_card_actions(card.status)
+        card_type = (card.card_type or "").strip().lower()
+        payload = card.payload or {}
+        summary = card.summary or ""
+
+        if card.status in {"resolved", "dismissed", "submitted", "superseded"}:
+            return SuggestionCardActionHint(
+                recommended_action="open_detail",
+                primary_label="查看处理",
+                available_actions=available_actions,
+                reason=self._terminal_suggestion_card_reason(card.status),
+            )
+
+        if card_type in SETTING_SUGGESTION_ENTITY_TYPES:
+            if self._extract_suggestion_card_name_value(payload):
+                return SuggestionCardActionHint(
+                    recommended_action="submit_to_pending",
+                    primary_label="转设定",
+                    available_actions=[*available_actions, "submit_to_pending"],
+                    reason="这张卡包含可识别名称，可转为待审批设定。",
+                )
+            return SuggestionCardActionHint(
+                recommended_action="request_more_info",
+                primary_label="补充信息",
+                available_actions=available_actions,
+                reason="这张设定类建议缺少可识别名称，需要先补充信息。",
+            )
+
+        if card_type == "relationship":
+            return SuggestionCardActionHint(
+                recommended_action="continue_outline_feedback",
+                primary_label="继续优化",
+                available_actions=available_actions,
+                reason="关系建议将在最终确认时解析处理，当前适合先回填到大纲会话补充上下文。",
+            )
+
+        if card_type in OUTLINE_SUGGESTION_TYPES or self._looks_like_outline_suggestion(
+            summary,
+            payload,
+        ):
+            return SuggestionCardActionHint(
+                recommended_action="continue_outline_feedback",
+                primary_label="继续优化",
+                available_actions=available_actions,
+                reason="这张卡是大纲结构或主题表达建议，不是可落库的实体设定。",
+            )
+
+        return SuggestionCardActionHint(
+            recommended_action="request_more_info",
+            primary_label="补充信息",
+            available_actions=available_actions,
+            reason="这张卡类型或结构不明确，需要先补充信息。",
+        )
+
+    def _base_suggestion_card_actions(self, status: str) -> list[str]:
+        if status in {"active", "unresolved"}:
+            return ["open_detail", "fill_conversation", "resolve", "dismiss"]
+        if status in {"resolved", "dismissed"}:
+            return ["open_detail", "reactivate"]
+        return ["open_detail"]
+
+    def _terminal_suggestion_card_reason(self, status: str) -> str:
+        if status == "submitted":
+            return "这张卡已转为待审批设定，请在设定审批入口继续处理。"
+        if status == "superseded":
+            return "这张卡已被新建议覆盖，仅保留历史记录。"
+        if status == "resolved":
+            return "这张卡已标记解决，可重新激活后继续处理。"
+        if status == "dismissed":
+            return "这张卡已忽略，可重新激活后继续处理。"
+        return "这张卡当前只支持查看。"
+
+    def _extract_suggestion_card_name_value(self, payload: dict[str, Any]) -> str:
+        for key in ("canonical_name", "name", "title"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _looks_like_outline_suggestion(self, summary: str, payload: dict[str, Any]) -> bool:
+        text = f"{summary} {json.dumps(payload, ensure_ascii=False)}"
+        return any(keyword in text for keyword in OUTLINE_SUGGESTION_KEYWORDS)
+
     def _serialize_workspace(self, workspace: Any) -> BrainstormWorkspacePayload:
+        suggestion_cards = []
+        for item in workspace.setting_suggestion_cards or []:
+            card = SettingSuggestionCardPayload.model_validate(item)
+            card.action_hint = self.build_suggestion_card_action_hint(card)
+            suggestion_cards.append(card)
+
         return BrainstormWorkspacePayload(
             workspace_id=workspace.id,
             novel_id=workspace.novel_id,
@@ -294,10 +424,7 @@ class BrainstormWorkspaceService:
                 SettingDocDraftPayload.model_validate(item)
                 for item in (workspace.setting_docs_draft or [])
             ],
-            setting_suggestion_cards=[
-                SettingSuggestionCardPayload.model_validate(item)
-                for item in (workspace.setting_suggestion_cards or [])
-            ],
+            setting_suggestion_cards=suggestion_cards,
         )
 
     def list_active_suggestion_cards(
