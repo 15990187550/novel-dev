@@ -248,7 +248,10 @@ describe('Documents', () => {
                 h(
                   'div',
                   { class: 'el-table-column-stub' },
-                  slots.default?.({ row }) ?? (row && _.prop ? row[_.prop] : '')
+                  [
+                    _.label ? h('span', { class: 'el-table-column-stub__label' }, _.label) : null,
+                    slots.default?.({ row }) ?? (row && _.prop ? row[_.prop] : ''),
+                  ]
                 )
             },
           }),
@@ -490,6 +493,9 @@ describe('Documents', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('审核记录')
+    const auditColumnLabels = wrapper.findAll('.el-table-column-stub__label').map((label) => label.text())
+    expect(auditColumnLabels).toContain('来源对象')
+    expect(auditColumnLabels).toContain('来源类型')
     expect(wrapper.text()).toContain('AI 会话')
     expect(wrapper.text()).toContain('诸天万界设定')
     expect(wrapper.text()).toContain('新增诸天万界设定卡片和实体')

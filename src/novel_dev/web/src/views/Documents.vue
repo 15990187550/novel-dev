@@ -387,8 +387,8 @@
           这里统一显示导入资料、AI 设定会话和后续优化产生的待审核变更。
         </p>
         <el-table :data="reviewRecordRows" class="documents-pending-table">
-          <el-table-column prop="source_name" label="来源" min-width="180" />
-          <el-table-column label="来源">
+          <el-table-column prop="source_name" label="来源对象" min-width="180" />
+          <el-table-column label="来源类型">
             <template #default="{ row }">{{ row.source_label }}</template>
           </el-table-column>
           <el-table-column label="类型">
