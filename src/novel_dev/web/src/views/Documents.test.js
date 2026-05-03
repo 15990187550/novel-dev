@@ -459,6 +459,45 @@ describe('Documents', () => {
     expect(wrapper.text()).not.toContain('导入审核记录')
   })
 
+  it('shows AI generated setting batches in the unified review records', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.settingWorkbench.reviewBatches = [
+      {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        source_session_id: 'sgs_ai',
+        source_session_title: '诸天万界设定',
+        status: 'pending',
+        summary: '新增诸天万界设定卡片和实体',
+        counts: { setting_card: 4, entity: 8, relationship: 4 },
+        created_at: '2026-05-03T00:58:06Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchSettingWorkbench = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('审核记录')
+    expect(wrapper.text()).toContain('AI 会话')
+    expect(wrapper.text()).toContain('诸天万界设定')
+    expect(wrapper.text()).toContain('新增诸天万界设定卡片和实体')
+    expect(wrapper.text()).toContain('设定卡片 4 · 实体 8 · 关系 4')
+
+    const aiAction = wrapper.findAll('.documents-pending-table__action')
+      .find((button) => button.text().includes('查看会话'))
+    expect(aiAction).toBeTruthy()
+    await aiAction.trigger('click')
+
+    expect(routerPushMock).toHaveBeenCalledWith({
+      path: '/documents',
+      query: { tab: 'ai', session: 'sgs_ai' },
+    })
+  })
+
   it('shows AI badge next to AI sourced setting cards and opens the source session', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

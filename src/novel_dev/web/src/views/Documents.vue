@@ -381,24 +381,24 @@
         </div>
       </div>
 
-      <div v-if="importRecordRows.length" class="surface-card documents-pending p-5">
+      <div v-if="reviewRecordRows.length" class="surface-card documents-pending p-5">
         <h3 class="font-bold">审核记录</h3>
         <p class="mt-1 mb-3 text-sm text-gray-500 dark:text-gray-400">
           这里统一显示导入资料、AI 设定会话和后续优化产生的待审核变更。
         </p>
-        <el-table :data="importRecordRows" class="documents-pending-table">
-          <el-table-column prop="source_filename" label="来源文件" min-width="180" />
+        <el-table :data="reviewRecordRows" class="documents-pending-table">
+          <el-table-column prop="source_name" label="来源" min-width="180" />
           <el-table-column label="来源">
-            <template #default>导入资料</template>
+            <template #default="{ row }">{{ row.source_label }}</template>
           </el-table-column>
           <el-table-column label="类型">
-            <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
+            <template #default="{ row }">{{ row.type_label }}</template>
           </el-table-column>
           <el-table-column label="状态">
             <template #default="{ row }">{{ statusLabel(row.status) }}</template>
           </el-table-column>
           <el-table-column label="变更摘要" min-width="220">
-            <template #default="{ row }">{{ row.diff_result?.summary || row.error_message || '-' }}</template>
+            <template #default="{ row }">{{ row.review_summary || '-' }}</template>
           </el-table-column>
           <el-table-column label="创建时间">
             <template #default="{ row }">{{ formatTimestamp(row.created_at) }}</template>
@@ -407,6 +407,17 @@
             <template #default="{ row }">
               <div class="documents-pending-table__actions flex gap-2">
                 <el-button
+                  v-if="row.review_record_source === 'ai'"
+                  size="small"
+                  type="info"
+                  plain
+                  class="documents-pending-table__action"
+                  @click="openSourceSession(row.source_session_id)"
+                >
+                  查看会话
+                </el-button>
+                <el-button
+                  v-else
                   size="small"
                   type="info"
                   plain
@@ -416,7 +427,7 @@
                   查看详情
                 </el-button>
                 <el-button
-                  v-if="row.status === 'pending'"
+                  v-if="row.review_record_source === 'import' && row.status === 'pending'"
                   size="small"
                   type="primary"
                   :loading="approvingPendingId === row.id"
@@ -426,7 +437,7 @@
                   {{ approvingPendingId === row.id ? '批准中...' : '批准' }}
                 </el-button>
                 <el-button
-                  v-if="row.status === 'pending'"
+                  v-if="row.review_record_source === 'import' && row.status === 'pending'"
                   size="small"
                   type="danger"
                   plain
@@ -437,7 +448,7 @@
                   {{ rejectingPendingId === row.id ? '拒绝中...' : '拒绝' }}
                 </el-button>
                 <el-button
-                  v-if="row.status === 'failed'"
+                  v-if="row.review_record_source === 'import' && row.status === 'failed'"
                   size="small"
                   type="danger"
                   plain
@@ -448,7 +459,7 @@
                   {{ deletingPendingId === row.id ? '删除中...' : '删除' }}
                 </el-button>
                 <el-button
-                  v-if="row.status === 'processing'"
+                  v-if="row.review_record_source === 'import' && row.status === 'processing'"
                   size="small"
                   type="warning"
                   plain
@@ -972,7 +983,34 @@ const resolutionRows = computed(() => selectedDoc.value?.resolution_result?.fiel
 const importRecordRows = computed(() => {
   const docs = store.pendingDocs || []
   const rank = { processing: 0, pending: 1, failed: 2, approved: 3, rejected: 4 }
-  return [...docs].sort((left, right) => {
+  return [...docs].map((doc) => ({
+    ...doc,
+    review_record_source: 'import',
+    source_label: '导入资料',
+    source_name: doc.source_filename || '导入资料',
+    type_label: extractionTypeLabel(doc.extraction_type, doc.status),
+    review_summary: doc.diff_result?.summary || doc.error_message || '-',
+  })).sort((left, right) => {
+    const leftRank = rank[left.status] ?? 9
+    const rightRank = rank[right.status] ?? 9
+    if (leftRank !== rightRank) return leftRank - rightRank
+    return String(right.created_at || '').localeCompare(String(left.created_at || ''))
+  })
+})
+const aiReviewRecordRows = computed(() => {
+  const batches = store.settingWorkbench?.reviewBatches || []
+  return batches.map((batch) => ({
+    ...batch,
+    review_record_source: 'ai',
+    source_label: 'AI 会话',
+    source_name: batch.source_session_title || 'AI 设定会话',
+    type_label: countsLabel(batch.counts),
+    review_summary: batch.summary || batch.error_message || '-',
+  }))
+})
+const reviewRecordRows = computed(() => {
+  const rank = { processing: 0, pending: 1, failed: 2, approved: 3, partially_approved: 3, rejected: 4, generated: 5 }
+  return [...importRecordRows.value, ...aiReviewRecordRows.value].sort((left, right) => {
     const leftRank = rank[left.status] ?? 9
     const rightRank = rank[right.status] ?? 9
     if (leftRank !== rightRank) return leftRank - rightRank
@@ -982,9 +1020,12 @@ const importRecordRows = computed(() => {
 const activeImportDocs = computed(() => (
   importRecordRows.value.filter((doc) => ['processing', 'pending', 'failed'].includes(doc.status))
 ))
+const activeReviewRecords = computed(() => (
+  reviewRecordRows.value.filter((row) => ['processing', 'pending', 'failed'].includes(row.status))
+))
 const hasProcessingDocs = computed(() => activeImportDocs.value.some((doc) => doc.status === 'processing'))
 const pendingReviewCount = computed(() => (
-  activeImportDocs.value.filter((doc) => doc.status === 'pending' || doc.status === 'processing').length
+  activeReviewRecords.value.filter((row) => row.status === 'pending' || row.status === 'processing').length
 ))
 const isApprovingSelectedDoc = computed(() => !!selectedDoc.value?.id && approvingPendingId.value === selectedDoc.value.id)
 const mergeResolvingCount = computed(() => Object.keys(resolvingMergeKeys).length)
@@ -1064,8 +1105,18 @@ function statusLabel(status) {
     pending: '待审核',
     failed: '失败',
     approved: '已批准',
+    partially_approved: '部分批准',
+    rejected: '已拒绝',
+    generated: '已生成',
   }
   return labels[status] || status || '-'
+}
+
+function countsLabel(counts = {}) {
+  const settingCards = counts.setting_card ?? counts.setting_cards ?? counts.cards ?? 0
+  const entities = counts.entity ?? counts.entities ?? 0
+  const relationships = counts.relationship ?? counts.relationships ?? 0
+  return `设定卡片 ${settingCards} · 实体 ${entities} · 关系 ${relationships}`
 }
 
 function resolutionActionLabel(action) {
@@ -1630,6 +1681,7 @@ function fetchIfReady() {
     return
   }
   store.fetchDocuments()
+  store.fetchSettingWorkbench()
   fetchLibrary()
   fetchKnowledgeDomains()
 }
