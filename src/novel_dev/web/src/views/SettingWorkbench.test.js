@@ -173,6 +173,39 @@ describe('SettingWorkbench', () => {
     expect(wrapper.find('[data-testid="setting-generate-batch"]').exists()).toBe(true)
   })
 
+  it('renders clarification questions stored in assistant message metadata', async () => {
+    getSettingSessionMock.mockResolvedValueOnce({
+      session: {
+        id: 'sgs_questions',
+        title: '诸天万界设定',
+        status: 'clarifying',
+        target_categories: ['世界观'],
+        clarification_round: 1,
+      },
+      messages: [
+        {
+          role: 'assistant',
+          content: '还需要明确以下关键问题：',
+          meta: {
+            questions: [
+              '诸天万界的范围是原著体系内，还是包含其他小说宇宙？',
+              '主角跨界是投影、映照，还是真身穿越？',
+            ],
+          },
+        },
+      ],
+    })
+    routeState.query = { session: 'sgs_questions' }
+    const wrapper = mountView()
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('还需要明确以下关键问题：')
+    expect(wrapper.text()).toContain('诸天万界的范围是原著体系内，还是包含其他小说宇宙？')
+    expect(wrapper.text()).toContain('主角跨界是投影、映照，还是真身穿越？')
+  })
+
   it('adds a review record after generation', async () => {
     const wrapper = mountView()
     const store = useNovelStore()

@@ -56,6 +56,11 @@
           <article v-for="(message, index) in messages" :key="message.id || index" class="setting-message">
             <div class="setting-message__role">{{ message.role === 'user' ? '你' : 'AI' }}</div>
             <p class="setting-message__content">{{ message.content }}</p>
+            <ol v-if="messageQuestions(message).length" class="setting-message__questions">
+              <li v-for="(question, questionIndex) in messageQuestions(message)" :key="`${message.id || index}-q-${questionIndex}`">
+                {{ question }}
+              </li>
+            </ol>
           </article>
           <p v-if="!messages.length" class="setting-empty">
             输入初始想法并发送后会自动创建 AI 会话；AI 会基于当前资料库继续澄清。
@@ -163,6 +168,12 @@ function countsLabel(counts = {}) {
   const entities = counts.entity ?? counts.entities ?? 0
   const relationships = counts.relationship ?? counts.relationships ?? 0
   return `设定卡片 ${settingCards} · 实体 ${entities} · 关系 ${relationships}`
+}
+
+function messageQuestions(message) {
+  const questions = message?.meta?.questions
+  if (!Array.isArray(questions)) return []
+  return questions.map(item => String(item || '').trim()).filter(Boolean)
 }
 
 function deriveSessionTitle(content) {
@@ -388,6 +399,20 @@ async function sendReply() {
   margin: 0.2rem 0 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.setting-message__questions {
+  display: grid;
+  gap: 0.45rem;
+  color: var(--app-text);
+  font-size: 0.9rem;
+  line-height: 1.55;
+  margin: 0.65rem 0 0;
+  padding-left: 1.2rem;
+}
+
+.setting-message__questions li {
+  overflow-wrap: anywhere;
 }
 
 .setting-reply-form {
