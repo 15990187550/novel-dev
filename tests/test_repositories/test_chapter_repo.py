@@ -51,6 +51,34 @@ async def test_update_fast_review(async_session):
 
 
 @pytest.mark.asyncio
+async def test_update_quality_gate_fields(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_quality", "v1", 4, "Quality")
+
+    await repo.update_quality_gate(
+        "c_quality",
+        quality_status="warn",
+        quality_reasons={
+            "warning_items": [{"code": "word_count_drift", "message": "字数偏离目标"}],
+            "blocking_items": [],
+        },
+        final_review_score=76,
+        final_review_feedback={"summary_feedback": "成稿可用但偏长"},
+        draft_review_score=62,
+        draft_review_feedback={"summary_feedback": "草稿问题较多"},
+        world_state_ingested=False,
+    )
+
+    ch = await repo.get_by_id("c_quality")
+    assert ch.quality_status == "warn"
+    assert ch.final_review_score == 76
+    assert ch.final_review_feedback["summary_feedback"] == "成稿可用但偏长"
+    assert ch.draft_review_score == 62
+    assert ch.quality_reasons["warning_items"][0]["code"] == "word_count_drift"
+    assert ch.world_state_ingested is False
+
+
+@pytest.mark.asyncio
 async def test_ensure_from_plan_creates_chapter_record(async_session):
     repo = ChapterRepository(async_session)
     plan = VolumeBeat(

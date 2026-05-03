@@ -1,7 +1,46 @@
 import pytest
+from types import SimpleNamespace
 
 from novel_dev.repositories.entity_group_repo import EntityGroupRepository
 from novel_dev.repositories.entity_repo import EntityRepository
+
+
+class AmbiguousVector:
+    def __init__(self, values):
+        self.values = values
+
+    def __iter__(self):
+        return iter(self.values)
+
+    def __len__(self):
+        return len(self.values)
+
+    def __bool__(self):
+        raise ValueError("ambiguous truth value")
+
+
+class _FakeScalars:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def all(self):
+        return self.rows
+
+
+class _FakeResult:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def scalars(self):
+        return _FakeScalars(self.rows)
+
+
+class _FakeSession:
+    def __init__(self, rows):
+        self.rows = rows
+
+    async def execute(self, _stmt):
+        return _FakeResult(self.rows)
 
 
 @pytest.mark.asyncio
@@ -10,6 +49,32 @@ async def test_create_entity(async_session):
     entity = await repo.create("char_001", "character", "Lin Feng")
     assert entity.id == "char_001"
     assert entity.name == "Lin Feng"
+
+
+@pytest.mark.asyncio
+async def test_search_entities_accepts_array_like_vectors_without_truth_value_check():
+    entity = SimpleNamespace(
+        id="e1",
+        type="character",
+        name="陆照",
+        novel_id="n1",
+        system_category=None,
+        manual_category=None,
+        system_group_id=None,
+        manual_group_id=None,
+        search_document="名称：陆照",
+        search_vector_embedding=AmbiguousVector([1.0, 0.0, 0.0]),
+    )
+    repo = EntityRepository(_FakeSession([entity]))
+
+    results = await repo.search_entities(
+        "n1",
+        query="陆照",
+        query_vector=[1.0, 0.0, 0.0],
+    )
+
+    assert results[0]["entity_id"] == "e1"
+    assert results[0]["score"] > 1
 
 
 @pytest.mark.asyncio

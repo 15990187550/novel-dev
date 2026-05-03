@@ -1,10 +1,23 @@
 import { defineComponent, h, inject, provide } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useNovelStore } from '@/stores/novel.js'
 import Entities from './Entities.vue'
+import EntityDetailPanel from '@/components/entities/EntityDetailPanel.vue'
 import { ElMessageBox } from 'element-plus'
+
+const routerPushMock = vi.hoisted(() => vi.fn())
+const entitiesSource = readFileSync(join(process.cwd(), 'src/views/Entities.vue'), 'utf8')
+const globalStyleSource = readFileSync(join(process.cwd(), 'src/style.css'), 'utf8')
+
+vi.mock('vue-router', () => ({
+  useRouter: () => ({
+    push: routerPushMock,
+  }),
+}))
 
 vi.mock('element-plus', async () => {
   const actual = await vi.importActual('element-plus')
@@ -62,10 +75,20 @@ const EntityDetailPanelStub = defineComponent({
   props: {
     entity: { type: Object, default: null },
   },
-  emits: ['save-entity', 'delete-entity'],
+  emits: ['save-entity', 'delete-entity', 'open-source-session'],
   setup(props, { emit }) {
     return () => h('div', { class: 'entity-detail-panel-stub' }, [
       h('div', props.entity?.name || 'empty'),
+      props.entity?.source_type === 'ai' && props.entity?.source_session_id
+        ? h('button', {
+            class: 'source-session-button',
+            type: 'button',
+            onClick: () => emit('open-source-session', {
+              sessionId: props.entity.source_session_id,
+              changeId: props.entity.source_review_change_id,
+            }),
+          }, 'AI 生成 · 查看会话')
+        : null,
       h('button', {
         class: 'save-entity-button',
         type: 'button',
@@ -114,6 +137,7 @@ describe('Entities', () => {
   beforeEach(() => {
     pinia = createPinia()
     setActivePinia(pinia)
+    vi.clearAllMocks()
   })
 
   function seedStore() {
@@ -258,6 +282,28 @@ describe('Entities', () => {
     expect(wrapper.find('.entity-tree-stub').exists()).toBe(true)
   })
 
+  it('keeps the encyclopedia workspace inside the app panel and scrolls internally', () => {
+    seedStore()
+    const wrapper = mountView()
+
+    const content = wrapper.get('[data-testid="entities-workspace-layout"]')
+
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['entities-page', 'entities-theme', 'h-full', 'min-h-0', 'flex', 'flex-col']))
+    expect(content.classes()).toEqual(expect.arrayContaining([
+      'entities-page__content',
+      'min-h-0',
+      'flex-1',
+      'overflow-hidden',
+      'gap-4',
+      'lg:items-stretch',
+    ]))
+  })
+
+  it('does not use viewport calc heights for the entities root', () => {
+    expect(entitiesSource).not.toMatch(/\.entities-page\s*{[\s\S]*height:\s*calc\(100vh/)
+    expect(globalStyleSource).not.toMatch(/\.page-shell\s*{[\s\S]*height:\s*calc\(100vh/)
+  })
+
   it('shows an empty workspace until the user selects a node', async () => {
     seedStore()
     const wrapper = mountView()
@@ -319,6 +365,85 @@ describe('Entities', () => {
       state_fields: {
         identity: '主角',
       },
+    })
+  })
+
+  it('renders AI source backlink for AI generated entity detail', async () => {
+    const wrapper = mount(EntityDetailPanel, {
+      props: {
+        title: '青云门',
+        entity: {
+          entity_id: 'ent_1',
+          name: '青云门',
+          type: 'faction',
+          source_type: 'ai',
+          source_session_id: 'sgs_1',
+          source_review_change_id: 'chg_1',
+          latest_state: {},
+        },
+        relationships: [],
+      },
+      global: {
+        stubs: {
+          ElButton: defineComponent({
+            name: 'ElButtonStub',
+            emits: ['click'],
+            setup(_, { emit, slots }) {
+              return () => h('button', { class: 'el-button-stub', onClick: () => emit('click') }, slots.default?.())
+            },
+          }),
+          ElTag: true,
+          ElEmpty: true,
+          ElDescriptions: defineComponent({
+            name: 'ElDescriptionsStub',
+            setup(_, { slots }) {
+              return () => h('div', { class: 'el-descriptions-stub' }, slots.default?.())
+            },
+          }),
+          ElDescriptionsItem: defineComponent({
+            name: 'ElDescriptionsItemStub',
+            props: { label: { type: String, default: '' } },
+            setup(props, { slots }) {
+              return () => h('div', { class: 'el-descriptions-item-stub' }, [props.label, slots.default?.()])
+            },
+          }),
+          ElAlert: true,
+          ElSelect: true,
+          ElOption: true,
+          ElDialog: true,
+          ElInput: true,
+        },
+      },
+    })
+
+    expect(wrapper.text()).toContain('AI 生成')
+    expect(wrapper.text()).toContain('查看会话')
+
+    await wrapper.get('.entity-ai-badge').trigger('click')
+
+    expect(wrapper.emitted('open-source-session')?.[0]).toEqual([{ sessionId: 'sgs_1', changeId: 'chg_1' }])
+  })
+
+  it('opens the setting session when the selected AI entity asks for its source session', async () => {
+    const store = seedStore()
+    const aiEntity = {
+      entity_id: 'lu',
+      name: '陆照',
+      source_type: 'ai',
+      source_session_id: 'sgs_1',
+      source_review_change_id: 'chg_1',
+    }
+    store.entityTree[0].children[0].children[0].data = aiEntity
+    store.entities[0] = aiEntity
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
+    await wrapper.get('.source-session-button').trigger('click')
+
+    expect(routerPushMock).toHaveBeenCalledWith({
+      path: '/documents',
+      query: { tab: 'ai', session: 'sgs_1', change: 'chg_1' },
     })
   })
 

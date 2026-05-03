@@ -160,12 +160,12 @@ async def test_assemble_logs_specific_context_sources(async_session, mock_llm_fa
 
     entries = list(LogService._buffers["n_ctx_log"])
     source_log = next(entry for entry in entries if entry.get("node") == "context_sources")
-    assert "陆照" in source_log["message"]
-    assert "旧碑设定" in source_log["message"]
-    assert "前章道印" in source_log["message"]
+    assert source_log["message"] == "章节上下文来源已准备：实体 2 个，文档 1 个，相似章节 1 个，伏笔 1 条"
     assert source_log["metadata"]["query"].startswith("照见旧碑")
     assert source_log["metadata"]["active_entities"][0]["name"] == "陆照"
     assert source_log["metadata"]["semantic_entities"][0]["name"] == "守碑长老"
     assert source_log["metadata"]["documents"][0]["title"] == "旧碑设定"
     assert source_log["metadata"]["similar_chapters"][0]["title"] == "前章道印"
     assert source_log["metadata"]["foreshadowings"][0]["id"] == "fs_old_tablet"
+    assert source_log["metadata"]["beat_contexts"][0]["entities"] == ["陆照"]
+    assert "guardrail_count" in source_log["metadata"]["beat_contexts"][0]

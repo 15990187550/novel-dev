@@ -6,10 +6,12 @@ from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents.entity_classifier import EntityClassifierAgent
+from novel_dev.llm.exceptions import LLMTimeoutError
 
 logger = logging.getLogger(__name__)
 
 AUTO_CONFIDENCE_THRESHOLD = 0.72
+LLM_BATCH_TIMEOUT_MAX_ATTEMPTS = 2
 
 SKILL_KEYWORDS = (
     "功法", "心法", "神通", "秘术", "法门", "口诀", "法诀", "剑诀", "剑经", "经", "诀", "术", "篇", "录", "典",
@@ -99,23 +101,16 @@ class EntityClassificationService:
         if not entities:
             return []
 
-        try:
-            llm_result = await self.classifier_agent.classify_batch(
-                entities=[
-                    {
-                        **entity,
-                        "local_category": rule_results[index].system_category,
-                        "local_group_name": rule_results[index].system_group_name,
-                    }
-                    for index, entity in enumerate(entities)
-                ],
-                novel_id=novel_id or "",
-            )
-        except Exception as exc:
-            logger.warning(
-                "entity_classification_batch_llm_failed",
-                extra={"novel_id": novel_id, "entity_count": len(entities), "error": str(exc)},
-            )
+        llm_entities = [
+            {
+                **entity,
+                "local_category": rule_results[index].system_category,
+                "local_group_name": rule_results[index].system_group_name,
+            }
+            for index, entity in enumerate(entities)
+        ]
+        llm_result = await self._classify_batch_with_retry(novel_id or "", llm_entities)
+        if llm_result is None:
             return rule_results
 
         by_index = {item.index: item for item in llm_result.items}
@@ -133,6 +128,37 @@ class EntityClassificationService:
                 )
             )
         return results
+
+    async def _classify_batch_with_retry(self, novel_id: str, entities: list[dict[str, Any]]):
+        attempt = 0
+        while attempt < LLM_BATCH_TIMEOUT_MAX_ATTEMPTS:
+            attempt += 1
+            try:
+                return await self.classifier_agent.classify_batch(
+                    entities=entities,
+                    novel_id=novel_id,
+                )
+            except LLMTimeoutError as exc:
+                logger.warning(
+                    "entity_classification_batch_llm_timeout",
+                    extra={
+                        "novel_id": novel_id,
+                        "entity_count": len(entities),
+                        "attempt": attempt,
+                        "max_attempts": LLM_BATCH_TIMEOUT_MAX_ATTEMPTS,
+                        "error": str(exc),
+                    },
+                )
+                if attempt < LLM_BATCH_TIMEOUT_MAX_ATTEMPTS:
+                    continue
+                return None
+            except Exception as exc:
+                logger.warning(
+                    "entity_classification_batch_llm_failed",
+                    extra={"novel_id": novel_id, "entity_count": len(entities), "error": str(exc)},
+                )
+                return None
+        return None
 
     def _result_from_llm(
         self,

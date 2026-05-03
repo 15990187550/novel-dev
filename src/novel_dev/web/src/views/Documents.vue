@@ -30,7 +30,32 @@
 
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
     <template v-else>
-      <div class="surface-card p-5">
+      <div class="documents-tabs" role="tablist" aria-label="设定与文风工作区">
+        <button
+          type="button"
+          class="documents-tab"
+          :class="{ 'documents-tab--active': activeKnowledgeTab === 'import' }"
+          role="tab"
+          :aria-selected="activeKnowledgeTab === 'import'"
+          data-testid="documents-tab-import"
+          @click="selectKnowledgeTab('import')"
+        >
+          导入设定 / 文风
+        </button>
+        <button
+          type="button"
+          class="documents-tab"
+          :class="{ 'documents-tab--active': activeKnowledgeTab === 'ai' }"
+          role="tab"
+          :aria-selected="activeKnowledgeTab === 'ai'"
+          data-testid="documents-tab-ai"
+          @click="selectKnowledgeTab('ai')"
+        >
+          AI 生成设定
+        </button>
+      </div>
+
+      <div v-if="activeKnowledgeTab === 'import'" class="surface-card p-5">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 class="font-bold">导入设定 / 文风样本</h3>
@@ -129,6 +154,8 @@
         </div>
       </div>
 
+      <SettingWorkbench v-else embedded />
+
       <div class="surface-card p-5">
         <div class="flex items-center justify-between gap-3">
           <div>
@@ -159,7 +186,17 @@
               >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                   <div class="min-w-0">
-                    <div class="font-medium text-gray-900 dark:text-gray-100">{{ item.title || group.label }}</div>
+                    <div class="font-medium text-gray-900 dark:text-gray-100">
+                      {{ item.title || group.label }}
+                      <button
+                        v-if="item.source_type === 'ai' && item.source_session_id"
+                        type="button"
+                        class="documents-ai-badge"
+                        @click="openSourceSession(item.source_session_id, item.source_review_change_id)"
+                      >
+                        AI
+                      </button>
+                    </div>
                     <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
                       v{{ item.version || 1 }} · {{ formatTimestamp(item.updated_at) }}
                     </div>
@@ -304,6 +341,16 @@
                 >
                   禁用
                 </el-button>
+                <el-button
+                  size="small"
+                  type="danger"
+                  plain
+                  :loading="deletingDomainId === domain.id"
+                  :disabled="!!deletingDomainId && deletingDomainId !== domain.id"
+                  @click="deleteDomain(domain)"
+                >
+                  删除
+                </el-button>
               </div>
             </div>
             <div class="mt-3 text-sm text-gray-600 dark:text-gray-300">
@@ -335,9 +382,15 @@
       </div>
 
       <div v-if="importRecordRows.length" class="surface-card documents-pending p-5">
-        <h3 class="font-bold mb-3">导入审核记录</h3>
+        <h3 class="font-bold">审核记录</h3>
+        <p class="mt-1 mb-3 text-sm text-gray-500 dark:text-gray-400">
+          这里统一显示导入资料、AI 设定会话和后续优化产生的待审核变更。
+        </p>
         <el-table :data="importRecordRows" class="documents-pending-table">
           <el-table-column prop="source_filename" label="来源文件" min-width="180" />
+          <el-table-column label="来源">
+            <template #default>导入资料</template>
+          </el-table-column>
           <el-table-column label="类型">
             <template #default="{ row }">{{ extractionTypeLabel(row.extraction_type, row.status) }}</template>
           </el-table-column>
@@ -825,7 +878,9 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel.js'
+import SettingWorkbench from '@/views/SettingWorkbench.vue'
 import {
   uploadDocumentsBatch,
   approvePending,
@@ -836,7 +891,7 @@ import {
   updateLibraryDocument,
   rollbackStyleProfile,
 } from '@/api.js'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatBeijingDateTime } from '@/utils/time.js'
 
 const DOCUMENT_POLL_INTERVAL_MS = 2000
@@ -848,12 +903,16 @@ const LIBRARY_GROUPS = [
 ]
 
 const store = useNovelStore()
+const route = useRoute()
+const router = useRouter()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
+const activeKnowledgeTab = ref(route.query?.tab === 'ai' ? 'ai' : 'import')
 const knowledgeUsage = ref('auto')
 const domainName = ref('')
 const knowledgeDomainsLoading = ref(false)
+const deletingDomainId = ref('')
 const domainDetailVisible = ref(false)
 const selectedDomain = ref(null)
 const detailVisible = ref(false)
@@ -1117,6 +1176,31 @@ function openLibraryDetail(item, groupLabel = '') {
   libraryDetailVisible.value = true
 }
 
+function openSourceSession(sessionId, changeId = '') {
+  if (!sessionId) return
+  router.push({
+    path: '/documents',
+    query: {
+      tab: 'ai',
+      session: sessionId,
+      ...(changeId ? { change: changeId } : {}),
+    },
+  })
+}
+
+function selectKnowledgeTab(tab) {
+  activeKnowledgeTab.value = tab === 'ai' ? 'ai' : 'import'
+  const query = { ...route.query }
+  if (activeKnowledgeTab.value === 'ai') {
+    query.tab = 'ai'
+  } else {
+    delete query.tab
+    delete query.session
+    delete query.change
+  }
+  router.replace({ path: '/documents', query })
+}
+
 function openDomainDetail(domain) {
   selectedDomain.value = domain
   domainDetailVisible.value = true
@@ -1220,7 +1304,8 @@ function replacePendingDoc(updatedDoc) {
 }
 
 async function saveDraftFieldEdit() {
-  if (!editingDraftField.value || !store.novelId || !editingDraftField.value.pendingId) return
+  if (!editingDraftField.value) return true
+  if (!store.novelId || !editingDraftField.value.pendingId) return false
   const payload = editingDraftField.value
   savingDraftFieldKey.value = payload.key
   draftFieldError.value = ''
@@ -1233,9 +1318,11 @@ async function saveDraftFieldEdit() {
     })
     replacePendingDoc(response.item)
     cancelDraftFieldEdit()
+    return true
   } catch (error) {
     draftFieldError.value = error?.response?.data?.detail || error?.message || '保存失败'
-    savingDraftFieldKey.value = payload.key
+    savingDraftFieldKey.value = ''
+    return false
   }
 }
 
@@ -1413,6 +1500,33 @@ async function disableDomain(domain) {
   ElMessage.success('规则域已禁用')
 }
 
+async function deleteDomain(domain) {
+  if (!store.novelId || deletingDomainId.value) return
+  try {
+    await ElMessageBox.confirm(
+      `确定删除规则域“${domain.name}”吗？这会删除该规则域写入的局部文档和局部实体，无法撤销。`,
+      '删除规则域',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+      }
+    )
+  } catch {
+    return
+  }
+  deletingDomainId.value = domain.id
+  try {
+    const result = await store.deleteKnowledgeDomain(domain.id)
+    await Promise.all([store.fetchDocuments(), fetchLibrary()])
+    const deletedDocuments = result?.deleted_documents ?? 0
+    const deletedEntities = result?.deleted_entities ?? 0
+    ElMessage.success(`规则域已删除，已清理 ${deletedDocuments} 份局部文档、${deletedEntities} 个局部实体`)
+  } finally {
+    deletingDomainId.value = ''
+  }
+}
+
 function domainRuleSummary(domain) {
   const rules = domain.rules || {}
   const forbidden = rules.forbidden_now || []
@@ -1425,13 +1539,18 @@ function domainRuleSummary(domain) {
 async function approve(id) {
   if (approvingPendingId.value) return
   approvingPendingId.value = id
-  rememberConflictSelections(selectedDoc.value)
-  const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
-  const hasMergeResolution = fieldResolutions.some((resolution) => resolution.action === 'merge')
-  if (selectedDoc.value?.id === id) {
-    markResolvingMergeKeys(fieldResolutions)
-  }
   try {
+    if (selectedDoc.value?.id === id) {
+      const draftSaved = await saveDraftFieldEdit()
+      if (!draftSaved) return
+    }
+
+    rememberConflictSelections(selectedDoc.value)
+    const fieldResolutions = selectedDoc.value?.id === id ? buildFieldResolutions() : []
+    const hasMergeResolution = fieldResolutions.some((resolution) => resolution.action === 'merge')
+    if (selectedDoc.value?.id === id) {
+      markResolvingMergeKeys(fieldResolutions)
+    }
     await approvePending(store.novelId, id, fieldResolutions)
     await Promise.all([store.fetchDocuments(), fetchLibrary()])
     syncSelectedDocFromStore(id)
@@ -1544,6 +1663,9 @@ onBeforeUnmount(() => {
   stopDocumentPolling()
   syncDraftFieldEscapeListener(false)
 })
+watch(() => route.query?.tab, (tab) => {
+  activeKnowledgeTab.value = tab === 'ai' ? 'ai' : 'import'
+}, { immediate: true })
 watch(() => store.novelId, () => {
   stopDocumentPolling()
   uploadSummary.value = null
@@ -1567,6 +1689,30 @@ watch(editingDraftField, (value) => {
 </script>
 
 <style scoped>
+.documents-tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: var(--app-surface);
+  padding: 0.25rem;
+}
+
+.documents-tab {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+  padding: 0.58rem 0.9rem;
+}
+
+.documents-tab--active {
+  background: var(--app-accent);
+  color: #fff;
+}
+
 .documents-pending-table {
   --el-table-border-color: var(--app-border);
   --el-table-border: 1px solid var(--app-border);
@@ -1693,6 +1839,17 @@ watch(editingDraftField, (value) => {
   border-color: var(--app-border-strong);
   background: var(--app-surface);
   color: var(--app-text);
+}
+
+.documents-ai-badge {
+  margin-left: 0.5rem;
+  border: 1px solid color-mix(in srgb, #2563eb 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #2563eb 9%, var(--app-surface));
+  color: #2563eb;
+  padding: 0.05rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .documents-library-editor__textarea {

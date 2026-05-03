@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from novel_dev.db.models import NovelDocument, Entity, Chapter, EntityVersion
 from novel_dev.scripts.backfill_embeddings import BackfillService
@@ -106,10 +106,23 @@ async def test_backfill_documents_empty_content_skipped():
     backfill._fetch_unembedded_documents = AsyncMock(return_value=[doc])
 
     count = await backfill.backfill_documents()
-    assert count == 1
+    assert count == 0
     # No embedding generated because content is empty
     assert doc.vector_embedding is None
     mock_embedder.aembed.assert_not_awaited()
+
+
+def test_has_embedding_handles_pgvector_array():
+    class VectorLike:
+        def __len__(self):
+            return 3
+
+        def __bool__(self):
+            raise ValueError("ambiguous")
+
+    assert BackfillService._has_embedding(VectorLike()) is True
+    assert BackfillService._has_embedding([]) is False
+    assert BackfillService._has_embedding(None) is False
 
 
 @pytest.mark.asyncio
@@ -133,11 +146,17 @@ async def test_backfill_documents_fallback_on_batch_failure():
     doc.vector_embedding = None
 
     backfill._fetch_unembedded_documents = AsyncMock(return_value=[doc])
+    async def index_document(doc_id):
+        assert doc_id == "doc_1"
+        doc.vector_embedding = [0.1, 0.2, 0.3]
+
+    embedding_service.index_document = AsyncMock(side_effect=index_document)
 
     count = await backfill.backfill_documents()
     assert count == 1
     assert doc.vector_embedding == [0.1, 0.2, 0.3]
-    assert mock_embedder.aembed.await_count == 2
+    assert mock_embedder.aembed.await_count == 1
+    embedding_service.index_document.assert_awaited_once_with("doc_1")
 
 
 @pytest.mark.asyncio
@@ -159,13 +178,18 @@ async def test_backfill_entities():
 
     backfill._fetch_unembedded_entities = AsyncMock(return_value=[entity])
 
-    count = await backfill.backfill_entities()
+    with patch(
+        "novel_dev.scripts.backfill_embeddings.EntityVersionRepository.get_latest",
+        new=AsyncMock(return_value=EntityVersion(state={"身份": "剑修"})),
+    ):
+        count = await backfill.backfill_entities()
     assert count == 1
     assert entity.vector_embedding == [0.1, 0.2, 0.3]
     call_args = mock_embedder.aembed.call_args[0][0]
     assert len(call_args) == 1
     assert "名称：林风" in call_args[0]
     assert "类型：character" in call_args[0]
+    assert "身份：剑修" in call_args[0]
 
 
 @pytest.mark.asyncio
@@ -187,11 +211,50 @@ async def test_backfill_entities_no_version():
 
     backfill._fetch_unembedded_entities = AsyncMock(return_value=[entity])
 
-    count = await backfill.backfill_entities()
+    with patch(
+        "novel_dev.scripts.backfill_embeddings.EntityVersionRepository.get_latest",
+        new=AsyncMock(return_value=None),
+    ):
+        count = await backfill.backfill_entities()
     assert count == 1
     assert entity.vector_embedding == [0.1, 0.2, 0.3]
     call_args = mock_embedder.aembed.call_args[0][0]
     assert "名称：林风" in call_args[0]
+
+
+@pytest.mark.asyncio
+async def test_backfill_entity_search():
+    mock_session = MagicMock()
+    mock_session.commit = AsyncMock()
+    mock_session.flush = AsyncMock()
+    mock_embedder = AsyncMock()
+    mock_embedder.aembed = AsyncMock(return_value=[[0.1, 0.2, 0.3]])
+
+    embedding_service = EmbeddingService(mock_session, mock_embedder)
+    backfill = BackfillService(mock_session, embedding_service, batch_size=10)
+
+    entity = MagicMock(spec=Entity)
+    entity.id = "e1"
+    entity.name = "林风"
+    entity.type = "character"
+    entity.manual_category = None
+    entity.system_category = "人物"
+    entity.system_needs_review = False
+    entity.search_vector_embedding = None
+    entity.search_document = None
+
+    backfill._fetch_unembedded_entity_search = AsyncMock(return_value=[entity])
+
+    with patch(
+        "novel_dev.scripts.backfill_embeddings.EntityVersionRepository.get_latest",
+        new=AsyncMock(return_value=EntityVersion(state={"身份": "剑修"})),
+    ):
+        count = await backfill.backfill_entity_search()
+
+    assert count == 1
+    assert entity.search_vector_embedding == [0.1, 0.2, 0.3]
+    assert "名称：林风" in entity.search_document
+    assert "一级分类：人物" in entity.search_document
 
 
 @pytest.mark.asyncio
@@ -266,6 +329,11 @@ async def test_backfill_all():
     entity.name = "林风"
     entity.type = "character"
     entity.vector_embedding = None
+    entity.manual_category = None
+    entity.system_category = "人物"
+    entity.system_needs_review = False
+    entity.search_vector_embedding = None
+    entity.search_document = None
     ch = MagicMock(spec=Chapter)
     ch.id = "ch1"
     ch.polished_text = "chapter text"
@@ -274,9 +342,15 @@ async def test_backfill_all():
 
     backfill._fetch_unembedded_documents = AsyncMock(return_value=[doc])
     backfill._fetch_unembedded_entities = AsyncMock(return_value=[entity])
+    backfill._fetch_unembedded_entity_search = AsyncMock(return_value=[entity])
     backfill._fetch_unembedded_chapters = AsyncMock(return_value=[ch])
 
-    counts = await backfill.backfill_all()
+    with patch(
+        "novel_dev.scripts.backfill_embeddings.EntityVersionRepository.get_latest",
+        new=AsyncMock(return_value=None),
+    ):
+        counts = await backfill.backfill_all()
     assert counts["documents"] == 1
     assert counts["entities"] == 1
+    assert counts["entity_search"] == 1
     assert counts["chapters"] == 1

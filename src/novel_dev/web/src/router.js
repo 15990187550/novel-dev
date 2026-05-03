@@ -3,6 +3,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 const routes = [
   { path: '/', redirect: '/dashboard' },
   { path: '/dashboard', component: () => import('@/views/Dashboard.vue') },
+  { path: '/settings', redirect: (to) => ({ path: '/documents', query: { ...to.query, tab: 'ai' } }) },
   { path: '/documents', component: () => import('@/views/Documents.vue') },
   { path: '/volume-plan', component: () => import('@/views/VolumePlan.vue') },
   { path: '/chapters', component: () => import('@/views/ChapterList.vue') },

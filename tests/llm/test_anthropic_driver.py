@@ -212,3 +212,14 @@ def test_map_exception_without_overloaded_error_symbol():
             del sys.modules["anthropic"]
 
     assert isinstance(mapped, LLMRateLimitError)
+
+
+def test_map_payment_required_status_to_rate_limit_error():
+    driver = AnthropicDriver(client=MagicMock())
+
+    class FakePaymentRequired(Exception):
+        status_code = 402
+
+    mapped = driver._map_exception(FakePaymentRequired("membership unavailable"))
+
+    assert isinstance(mapped, LLMRateLimitError)

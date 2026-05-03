@@ -159,9 +159,11 @@ class EntityRepository:
         if novel_id is not None:
             stmt = stmt.where(Entity.novel_id == novel_id)
         result = await self.session.execute(stmt)
-        exact = result.scalar_one_or_none()
-        if exact is not None:
-            return exact
+        exact_matches = list(result.scalars().all())
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+        if len(exact_matches) > 1:
+            return None
 
         normalized = self.normalize_name(name)
         if not normalized:

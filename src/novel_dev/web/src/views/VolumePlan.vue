@@ -270,7 +270,7 @@ const awaitingGenerationConfirmation = computed(() => {
   const lastMessage = messages[messages.length - 1]
   return lastMessage?.role === 'assistant' &&
     lastMessage?.message_type === 'question' &&
-    lastMessage?.meta?.interaction_stage === 'generation_confirmation'
+    ['generation_confirmation', 'generation_clarification'].includes(lastMessage?.meta?.interaction_stage)
 })
 
 const conversationSubmitLabel = computed(() => (

@@ -209,6 +209,22 @@ def _split_text_into_chunks(text: str, max_chars: int = MAX_SINGLE_EXTRACT_CHARS
     return [chunk for chunk in chunks if chunk]
 
 
+def _source_metadata(source_filename: str = "") -> dict[str, str] | None:
+    source_filename = (source_filename or "").strip()
+    return {"source_filename": source_filename} if source_filename else None
+
+
+def _with_source_filename(message: str, source_filename: str = "") -> str:
+    source_filename = (source_filename or "").strip()
+    if not source_filename or source_filename in message:
+        return message
+    return f"{message}（文件: {source_filename}）"
+
+
+def _extract_step_metadata(arguments: dict) -> dict[str, str] | None:
+    return _source_metadata(str(arguments.get("source_filename") or ""))
+
+
 class ExtractedSetting(BaseModel):
     worldview: Union[str, dict, list] = ""
     power_system: Union[str, dict, list] = ""
@@ -277,17 +293,26 @@ class SettingExtractorAgent:
         *,
         chunk_index: int = 1,
         total_chunks: int = 1,
+        source_filename: str = "",
     ) -> ExtractedSetting:
         if novel_id and total_chunks > 1:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                f"开始提取设定分段 {chunk_index}/{total_chunks}，长度: {len(text)} 字",
+                _with_source_filename(
+                    f"开始提取设定分段 {chunk_index}/{total_chunks}，长度: {len(text)} 字",
+                    source_filename,
+                ),
                 event="agent.progress",
                 status="started",
                 node="setting_extract_chunk",
                 task="extract_setting",
-                metadata={"chunk_index": chunk_index, "total_chunks": total_chunks, "chars": len(text)},
+                metadata={
+                    **(_source_metadata(source_filename) or {}),
+                    "chunk_index": chunk_index,
+                    "total_chunks": total_chunks,
+                    "chars": len(text),
+                },
             )
         prompt = self._build_prompt(text)
         result = await call_and_parse_model(
@@ -297,17 +322,19 @@ class SettingExtractorAgent:
             ExtractedSetting,
             max_retries=3,
             novel_id=novel_id,
+            context_metadata=_source_metadata(source_filename),
         )
         if novel_id and total_chunks > 1:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                f"设定分段 {chunk_index}/{total_chunks} 提取完成",
+                _with_source_filename(f"设定分段 {chunk_index}/{total_chunks} 提取完成", source_filename),
                 event="agent.progress",
                 status="succeeded",
                 node="setting_extract_chunk",
                 task="extract_setting",
                 metadata={
+                    **(_source_metadata(source_filename) or {}),
                     "chunk_index": chunk_index,
                     "total_chunks": total_chunks,
                     "chars": len(text),
@@ -347,13 +374,20 @@ class SettingExtractorAgent:
             plot_synopsis=plot_synopsis,
         )
 
-    @logged_agent_step("SettingExtractorAgent", "提取设定", node="setting_extract", task="extract_setting")
-    async def extract(self, text: str, novel_id: str = "") -> ExtractedSetting:
+    @logged_agent_step(
+        "SettingExtractorAgent",
+        "提取设定",
+        node="setting_extract",
+        task="extract_setting",
+        metadata_builder=_extract_step_metadata,
+    )
+    async def extract(self, text: str, novel_id: str = "", *, source_filename: str = "") -> ExtractedSetting:
         if novel_id:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                f"开始提取设定，文本长度: {len(text)} 字",
+                _with_source_filename(f"开始提取设定，文本长度: {len(text)} 字", source_filename),
+                metadata=_source_metadata(source_filename),
             )
 
         chunks = _split_text_into_chunks(text, max_chars=MAX_SINGLE_EXTRACT_CHARS)
@@ -361,12 +395,16 @@ class SettingExtractorAgent:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                f"长文档分段提取: {len(chunks)} 段，并发 {min(MAX_PARALLEL_EXTRACT_CHUNKS, len(chunks))} 路",
+                _with_source_filename(
+                    f"长文档分段提取: {len(chunks)} 段，并发 {min(MAX_PARALLEL_EXTRACT_CHUNKS, len(chunks))} 路",
+                    source_filename,
+                ),
                 event="agent.progress",
                 status="started",
                 node="setting_extract_split",
                 task="extract_setting",
                 metadata={
+                    **(_source_metadata(source_filename) or {}),
                     "total_chunks": len(chunks),
                     "max_chunk_chars": MAX_SINGLE_EXTRACT_CHARS,
                     "parallelism": min(MAX_PARALLEL_EXTRACT_CHUNKS, len(chunks)),
@@ -375,7 +413,7 @@ class SettingExtractorAgent:
             )
 
         if len(chunks) == 1:
-            extracted_parts = [await self._extract_chunk(chunks[0], novel_id)]
+            extracted_parts = [await self._extract_chunk(chunks[0], novel_id, source_filename=source_filename)]
         else:
             semaphore = asyncio.Semaphore(MAX_PARALLEL_EXTRACT_CHUNKS)
 
@@ -386,6 +424,7 @@ class SettingExtractorAgent:
                         novel_id,
                         chunk_index=index + 1,
                         total_chunks=len(chunks),
+                        source_filename=source_filename,
                     )
 
             extracted_parts = await asyncio.gather(
@@ -397,8 +436,12 @@ class SettingExtractorAgent:
             log_service.add_log(
                 novel_id,
                 "SettingExtractorAgent",
-                "设定提取完成: "
-                f"势力 {len(result.factions)} 个, 地点 {len(result.locations)} 个, "
-                f"人物 {len(result.character_profiles)} 个, 物品 {len(result.important_items)} 个",
+                _with_source_filename(
+                    "设定提取完成: "
+                    f"势力 {len(result.factions)} 个, 地点 {len(result.locations)} 个, "
+                    f"人物 {len(result.character_profiles)} 个, 物品 {len(result.important_items)} 个",
+                    source_filename,
+                ),
+                metadata=_source_metadata(source_filename),
             )
         return result

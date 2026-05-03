@@ -29,11 +29,21 @@ class BackfillService:
         self.embedding_service = embedding_service
         self.batch_size = batch_size
 
+    @staticmethod
+    def _has_embedding(value) -> bool:
+        if value is None:
+            return False
+        try:
+            return len(value) > 0
+        except TypeError:
+            return True
+
     async def backfill_all(self, novel_id: Optional[str] = None) -> dict:
         """Backfill all types. Returns counts per type."""
         counts = {}
         counts["documents"] = await self.backfill_documents(novel_id)
         counts["entities"] = await self.backfill_entities(novel_id)
+        counts["entity_search"] = await self.backfill_entity_search(novel_id)
         counts["chapters"] = await self.backfill_chapters(novel_id)
         return counts
 
@@ -43,7 +53,10 @@ class BackfillService:
         if novel_id:
             stmt = stmt.where(NovelDocument.novel_id == novel_id)
         result = await self.session.execute(stmt)
-        return [d for d in result.scalars().all() if not d.vector_embedding]
+        return [
+            d for d in result.scalars().all()
+            if not self._has_embedding(d.vector_embedding) and bool(d.content)
+        ]
 
     async def backfill_documents(self, novel_id: Optional[str] = None) -> int:
         """Backfill document embeddings. Returns number processed."""
@@ -60,6 +73,8 @@ class BackfillService:
                 if doc.content:
                     texts.append(doc.content[: self.embedding_service.max_query_length])
                     valid_docs.append(doc)
+            if not valid_docs:
+                break
 
             if texts:
                 try:
@@ -82,6 +97,8 @@ class BackfillService:
             await self.session.commit()
             total += len(docs)
             logger.info(f"backfill_documents: {total} total processed")
+            if len(docs) < self.batch_size:
+                break
 
         logger.info(f"backfill_documents complete: {total} documents")
         return total
@@ -92,7 +109,7 @@ class BackfillService:
         if novel_id:
             stmt = stmt.where(Entity.novel_id == novel_id)
         result = await self.session.execute(stmt)
-        return [e for e in result.scalars().all() if not e.vector_embedding]
+        return [e for e in result.scalars().all() if not self._has_embedding(e.vector_embedding)]
 
     async def backfill_entities(self, novel_id: Optional[str] = None) -> int:
         """Backfill entity embeddings. Returns number processed."""
@@ -135,8 +152,67 @@ class BackfillService:
             await self.session.commit()
             total += len(entities)
             logger.info(f"backfill_entities: {total} total processed")
+            if len(entities) < self.batch_size:
+                break
 
         logger.info(f"backfill_entities complete: {total} entities")
+        return total
+
+    async def _fetch_unembedded_entity_search(self, novel_id: Optional[str] = None) -> list:
+        """Fetch entities without search embeddings."""
+        stmt = select(Entity)
+        if novel_id:
+            stmt = stmt.where(Entity.novel_id == novel_id)
+        result = await self.session.execute(stmt)
+        return [
+            e for e in result.scalars().all()
+            if not self._has_embedding(e.search_vector_embedding)
+        ]
+
+    async def backfill_entity_search(self, novel_id: Optional[str] = None) -> int:
+        """Backfill entity search documents and search embeddings."""
+        version_repo = EntityVersionRepository(self.session)
+        total = 0
+        while True:
+            entities = await self._fetch_unembedded_entity_search(novel_id)
+            entities = entities[: self.batch_size]
+            if not entities:
+                break
+
+            texts = []
+            valid_entities = []
+            for entity in entities:
+                version = await version_repo.get_latest(entity.id)
+                state = version.state if version else {}
+                text = self.embedding_service._flatten_entity_search_document(entity, state)
+                texts.append(text[: self.embedding_service.max_query_length])
+                valid_entities.append(entity)
+
+            if texts:
+                try:
+                    vectors = await self.embedding_service.embedder.aembed(texts)
+                    for entity, text, vector in zip(valid_entities, texts, vectors):
+                        entity.search_document = text
+                        entity.search_vector_embedding = vector
+                    await self.session.flush()
+                except Exception as exc:
+                    logger.error(f"batch entity search embedding failed: {exc}")
+                    for entity in valid_entities:
+                        try:
+                            await self.embedding_service.index_entity_search(entity.id)
+                        except Exception as inner_exc:
+                            logger.warning(
+                                "fallback entity search embedding failed",
+                                extra={"entity_id": entity.id, "error": str(inner_exc)},
+                            )
+
+            await self.session.commit()
+            total += len(entities)
+            logger.info(f"backfill_entity_search: {total} total processed")
+            if len(entities) < self.batch_size:
+                break
+
+        logger.info(f"backfill_entity_search complete: {total} entities")
         return total
 
     async def _fetch_unembedded_chapters(self, novel_id: Optional[str] = None) -> list:
@@ -145,7 +221,10 @@ class BackfillService:
         if novel_id:
             stmt = stmt.where(Chapter.novel_id == novel_id)
         result = await self.session.execute(stmt)
-        return [c for c in result.scalars().all() if not c.vector_embedding]
+        return [
+            c for c in result.scalars().all()
+            if not self._has_embedding(c.vector_embedding) and bool(c.polished_text or c.raw_draft)
+        ]
 
     async def backfill_chapters(self, novel_id: Optional[str] = None) -> int:
         """Backfill chapter embeddings. Returns number processed."""
@@ -163,6 +242,8 @@ class BackfillService:
                 if text:
                     texts.append(text[: self.embedding_service.max_query_length])
                     valid_chapters.append(ch)
+            if not valid_chapters:
+                break
 
             if texts:
                 try:
@@ -184,6 +265,8 @@ class BackfillService:
             await self.session.commit()
             total += len(chapters)
             logger.info(f"backfill_chapters: {total} total processed")
+            if len(chapters) < self.batch_size:
+                break
 
         logger.info(f"backfill_chapters complete: {total} chapters")
         return total
@@ -198,7 +281,7 @@ async def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument(
         "--types",
         nargs="+",
-        choices=["documents", "entities", "chapters", "all"],
+        choices=["documents", "entities", "entity_search", "chapters", "all"],
         default=["all"],
     )
     args = parser.parse_args(argv)
@@ -225,6 +308,8 @@ async def main(argv: Optional[list[str]] = None) -> int:
                 counts["documents"] = await backfill.backfill_documents(args.novel_id)
             if "entities" in types:
                 counts["entities"] = await backfill.backfill_entities(args.novel_id)
+            if "entity_search" in types:
+                counts["entity_search"] = await backfill.backfill_entity_search(args.novel_id)
             if "chapters" in types:
                 counts["chapters"] = await backfill.backfill_chapters(args.novel_id)
 

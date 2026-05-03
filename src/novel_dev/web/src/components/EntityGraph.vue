@@ -15,11 +15,29 @@
       autoresize
       @click="onClick"
     />
+    <div
+      v-if="selectedRelationship"
+      class="entity-graph__selection mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm"
+    >
+      <div class="min-w-0">
+        <span class="font-semibold">关系：</span>
+        {{ selectedRelationship.source_id || '-' }} → {{ selectedRelationship.target_id || '-' }}
+        <span class="text-slate-500"> · {{ selectedRelationship.relation_type || '-' }}</span>
+      </div>
+      <button
+        v-if="selectedRelationship.source_type === 'ai' && selectedRelationship.source_session_id"
+        type="button"
+        class="entity-ai-badge"
+        @click="emit('open-source-session', { sessionId: selectedRelationship.source_session_id, changeId: selectedRelationship.source_review_change_id })"
+      >
+        AI 生成 · 查看会话
+      </button>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { use } from 'echarts/core'
 import { SVGRenderer } from 'echarts/renderers'
 import { GraphChart } from 'echarts/charts'
@@ -34,7 +52,8 @@ const props = defineProps({
   height: { type: String, default: '26rem' },
   showFullscreenAction: { type: Boolean, default: false },
 })
-const emit = defineEmits(['select', 'fullscreen'])
+const emit = defineEmits(['select', 'fullscreen', 'open-source-session'])
+const selectedRelationship = ref(null)
 
 const visualCategoryConfig = {
   人物: { color: '#ea580c', label: '人物' },
@@ -91,6 +110,11 @@ const option = computed(() => {
     source: r.source_id,
     target: r.target_id,
     value: r.relation_type,
+    relationship_id: r.relationship_id || r.id,
+    relation_type: r.relation_type,
+    source_type: r.source_type,
+    source_session_id: r.source_session_id,
+    source_review_change_id: r.source_review_change_id,
   }))
   return {
     animationDuration: 250,
@@ -182,7 +206,27 @@ const option = computed(() => {
 })
 
 function onClick(params) {
-  if (params.dataType === 'node') emit('select', params.data.id)
+  if (params.dataType === 'node') {
+    selectedRelationship.value = null
+    emit('select', params.data.id)
+    return
+  }
+  if (params.dataType === 'edge') {
+    selectedRelationship.value = findRelationship(params.data)
+  }
+}
+
+function findRelationship(data) {
+  return props.relationships.find((relationship) => {
+    if (data.relationship_id && (relationship.relationship_id === data.relationship_id || relationship.id === data.relationship_id)) {
+      return true
+    }
+    return (
+      relationship.source_id === data.source &&
+      relationship.target_id === data.target &&
+      (relationship.relation_type || '') === (data.relation_type || data.value || '')
+    )
+  }) || null
 }
 </script>
 
@@ -200,5 +244,22 @@ function onClick(params) {
     linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(241, 245, 249, 0.96) 100%);
   background-position: 0 0, 0 0, 0 0;
   background-size: 28px 28px, 28px 28px, auto;
+}
+
+.entity-graph__selection {
+  border-color: rgba(148, 163, 184, 0.55);
+  background: rgba(248, 250, 252, 0.92);
+  color: #0f172a;
+}
+
+.entity-ai-badge {
+  border: 1px solid color-mix(in srgb, #2563eb 35%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, #2563eb 9%, white);
+  color: #2563eb;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  line-height: 1;
 }
 </style>

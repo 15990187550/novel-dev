@@ -1,12 +1,15 @@
 import re
 from typing import Any
 
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
+from novel_dev.db.models import Entity, EntityVersion, KnowledgeDomain, KnowledgeDomainUsage, NovelDocument, PendingExtraction
 from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
 from novel_dev.schemas.knowledge_domain import DEFAULT_DOMAIN_RULES, KnowledgeDomainCreate, KnowledgeDomainUpdate
 from novel_dev.schemas.outline import SynopsisData
+from novel_dev.services.entity_service import EntityService
 from novel_dev.services.log_service import log_service
 
 
@@ -53,6 +56,116 @@ class KnowledgeDomainService:
                 existing.append({"scope_type": scope_type, "scope_ref": scope_ref})
                 seen.add(key)
         return await self.repo.update(domain, confirmed_scopes=existing, scope_status="confirmed")
+
+    async def delete_domain(self, novel_id: str, domain_id: str) -> dict[str, Any]:
+        domain = await self.repo.get_by_id(domain_id)
+        if not domain or domain.novel_id != novel_id:
+            raise ValueError("Knowledge domain not found")
+
+        document_ids = await self._collect_domain_document_ids(novel_id, domain)
+        entity_ids = await self._collect_domain_entity_ids(novel_id, domain_id)
+
+        entity_service = EntityService(self.session)
+        for entity_id in entity_ids:
+            await entity_service.delete_entity(entity_id)
+
+        if document_ids:
+            await self.session.execute(
+                delete(NovelDocument).where(
+                    NovelDocument.novel_id == novel_id,
+                    NovelDocument.id.in_(document_ids),
+                )
+            )
+
+        await self.session.execute(
+            delete(KnowledgeDomainUsage).where(
+                KnowledgeDomainUsage.novel_id == novel_id,
+                KnowledgeDomainUsage.domain_id == domain_id,
+            )
+        )
+        await self.session.delete(domain)
+        await self.session.flush()
+
+        result = {
+            "deleted": True,
+            "deleted_domain_id": domain_id,
+            "deleted_documents": len(document_ids),
+            "deleted_entities": len(entity_ids),
+            "deleted_entity_ids": entity_ids,
+            "deleted_document_ids": document_ids,
+        }
+        log_service.add_log(
+            novel_id,
+            "KnowledgeDomainService",
+            f"规则域已删除: {domain.name}，删除局部文档 {len(document_ids)} 份，局部实体 {len(entity_ids)} 个",
+            event="domain.delete",
+            status="succeeded",
+            node="knowledge_domain_delete",
+            task="delete_domain",
+            metadata={
+                "domain_id": domain_id,
+                "domain_name": domain.name,
+                "deleted_documents": len(document_ids),
+                "deleted_entities": len(entity_ids),
+            },
+        )
+        return result
+
+    async def _collect_domain_document_ids(self, novel_id: str, domain: KnowledgeDomain) -> list[str]:
+        pending_ids = [str(item) for item in (domain.source_doc_ids or []) if item]
+        document_ids: list[str] = []
+        if pending_ids:
+            result = await self.session.execute(
+                select(PendingExtraction).where(
+                    PendingExtraction.novel_id == novel_id,
+                    PendingExtraction.id.in_(pending_ids),
+                )
+            )
+            for pending in result.scalars().all():
+                resolution = pending.resolution_result or {}
+                for doc_id in resolution.get("local_document_ids") or []:
+                    if doc_id and doc_id not in document_ids:
+                        document_ids.append(str(doc_id))
+
+        if document_ids:
+            existing = await self.session.execute(
+                select(NovelDocument.id).where(
+                    NovelDocument.novel_id == novel_id,
+                    NovelDocument.id.in_(document_ids),
+                )
+            )
+            return [str(row[0]) for row in existing.all()]
+
+        prefix = f"{domain.name} / "
+        fallback = await self.session.execute(
+            select(NovelDocument.id).where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type.in_([
+                    "domain_worldview",
+                    "domain_setting",
+                    "domain_synopsis",
+                    "domain_concept",
+                ]),
+                NovelDocument.title.startswith(prefix),
+            )
+        )
+        return [str(row[0]) for row in fallback.all()]
+
+    async def _collect_domain_entity_ids(self, novel_id: str, domain_id: str) -> list[str]:
+        result = await self.session.execute(
+            select(Entity.id, EntityVersion.state)
+            .join(
+                EntityVersion,
+                (EntityVersion.entity_id == Entity.id)
+                & (EntityVersion.version == Entity.current_version),
+            )
+            .where(Entity.novel_id == novel_id)
+        )
+        entity_ids: list[str] = []
+        for entity_id, state in result.all():
+            if isinstance(state, dict) and state.get("_knowledge_domain_id") == domain_id:
+                entity_ids.append(str(entity_id))
+        return entity_ids
 
     async def suggest_scopes_from_synopsis(self, novel_id: str, synopsis: SynopsisData) -> list[dict[str, Any]]:
         domains = await self.repo.list_by_novel(novel_id)

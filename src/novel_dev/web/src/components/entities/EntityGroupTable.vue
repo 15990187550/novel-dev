@@ -15,90 +15,121 @@
 
     <el-empty v-if="showEmptyState" class="entity-group-table__empty" description="该目录下暂无实体" />
 
-    <el-table v-else :data="items" class="entity-group-table__table" style="width: 100%" @row-click="emit('select-entity', $event)">
-      <el-table-column prop="name" label="名称" min-width="160" />
-      <el-table-column label="分类 / 分组" min-width="220">
-        <template #default="{ row }">
-          <div class="space-y-1 text-sm">
-            <div>{{ row.effective_category || row.system_category || row.type || '-' }}</div>
-            <div class="entity-group-table__subtext">
-              {{ currentGroupLabel(row) }}
+    <template v-else>
+      <el-table :data="paginatedItems" class="entity-group-table__table" style="width: 100%" @row-click="emit('select-entity', $event)">
+        <el-table-column prop="name" label="名称" min-width="160" />
+        <el-table-column label="分类 / 分组" min-width="220">
+          <template #default="{ row }">
+            <div class="space-y-1 text-sm">
+              <div>{{ row.effective_category || row.system_category || row.type || '-' }}</div>
+              <div class="entity-group-table__subtext">
+                {{ currentGroupLabel(row) }}
+              </div>
+              <div class="entity-group-table__subtext entity-group-table__subtext--soft text-xs">
+                自动建议：{{ row.system_category || '-' }} / {{ row.system_group_name || '-' }}
+              </div>
             </div>
-            <div class="entity-group-table__subtext entity-group-table__subtext--soft text-xs">
-              自动建议：{{ row.system_category || '-' }} / {{ row.system_group_name || '-' }}
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="120">
+          <template #default="{ row }">
+            <el-tag :type="statusTagType(row.classification_status)" size="small">
+              {{ statusLabel(row.classification_status) }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="别名" min-width="180">
+          <template #default="{ row }">
+            <div v-if="row.aliases?.length" class="flex flex-wrap gap-1">
+              <el-tag v-for="alias in row.aliases" :key="alias" size="small" type="info">{{ alias }}</el-tag>
             </div>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="状态" width="120">
-        <template #default="{ row }">
-          <el-tag :type="statusTagType(row.classification_status)" size="small">
-            {{ statusLabel(row.classification_status) }}
-          </el-tag>
-        </template>
-      </el-table-column>
-      <el-table-column label="别名" min-width="180">
-        <template #default="{ row }">
-          <div v-if="row.aliases?.length" class="flex flex-wrap gap-1">
-            <el-tag v-for="alias in row.aliases" :key="alias" size="small" type="info">{{ alias }}</el-tag>
-          </div>
-          <span v-else class="entity-group-table__empty">-</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="信息摘要" min-width="280">
-        <template #default="{ row }">
-          <div class="entity-group-table__summary space-y-1 text-sm">
-            <div v-if="row.search_match_reason">命中：{{ row.search_match_reason }}</div>
-            <div v-else-if="row.classification_reason">系统依据：{{ stringifyReason(row.classification_reason) }}</div>
-            <div v-else-if="summaryText(row.latest_state)">摘要：{{ summaryText(row.latest_state) }}</div>
-            <div v-else class="entity-group-table__empty">暂无摘要</div>
-          </div>
-        </template>
-      </el-table-column>
-      <el-table-column label="快速调整" min-width="320">
-        <template #default="{ row }">
-          <div class="space-y-2" @click.stop>
-            <el-select
-              class="entity-group-table__select"
-              v-model="draftFor(row).manualCategory"
-              placeholder="选择一级分类"
-              clearable
-              style="width: 100%"
-              @change="handleCategoryChange(row)"
-            >
-              <el-option v-for="option in CATEGORY_OPTIONS" :key="option" :label="option" :value="option" />
-            </el-select>
-            <el-select
-              class="entity-group-table__select"
-              v-model="draftFor(row).manualGroupName"
-              placeholder="选择或输入二级分组"
-              clearable
-              filterable
-              allow-create
-              default-first-option
-              style="width: 100%"
-            >
-              <el-option
-                v-for="option in groupOptionsFor(row)"
-                :key="option"
-                :label="option"
-                :value="option"
-              />
-            </el-select>
-            <div class="entity-group-table__quick-actions flex flex-wrap gap-2">
-              <el-button size="small" type="primary" @click="saveDraft(row)">保存</el-button>
-              <el-button size="small" @click="emit('clear-override', row)">清除覆盖</el-button>
-              <el-button size="small" link type="primary" @click="emit('select-entity', row)">详情</el-button>
+            <span v-else class="entity-group-table__empty">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="信息摘要" min-width="280">
+          <template #default="{ row }">
+            <div class="entity-group-table__summary space-y-1 text-sm">
+              <div v-if="row.search_match_reason">命中：{{ row.search_match_reason }}</div>
+              <div v-else-if="row.classification_reason">系统依据：{{ stringifyReason(row.classification_reason) }}</div>
+              <div v-else-if="summaryText(row.latest_state)">摘要：{{ summaryText(row.latest_state) }}</div>
+              <div v-else class="entity-group-table__empty">暂无摘要</div>
             </div>
-          </div>
-        </template>
-      </el-table-column>
-    </el-table>
+          </template>
+        </el-table-column>
+        <el-table-column label="快速调整" min-width="320">
+          <template #default="{ row }">
+            <div class="space-y-2" @click.stop>
+              <el-select
+                class="entity-group-table__select"
+                v-model="draftFor(row).manualCategory"
+                placeholder="选择一级分类"
+                clearable
+                style="width: 100%"
+                @change="handleCategoryChange(row)"
+              >
+                <el-option v-for="option in CATEGORY_OPTIONS" :key="option" :label="option" :value="option" />
+              </el-select>
+              <el-select
+                class="entity-group-table__select"
+                v-model="draftFor(row).manualGroupName"
+                placeholder="选择或输入二级分组"
+                clearable
+                filterable
+                allow-create
+                default-first-option
+                style="width: 100%"
+              >
+                <el-option
+                  v-for="option in groupOptionsFor(row)"
+                  :key="option"
+                  :label="option"
+                  :value="option"
+                />
+              </el-select>
+              <div class="entity-group-table__quick-actions flex flex-wrap gap-2">
+                <el-button size="small" type="primary" @click="saveDraft(row)">保存</el-button>
+                <el-button size="small" @click="emit('clear-override', row)">清除覆盖</el-button>
+                <el-button size="small" link type="primary" @click="emit('select-entity', row)">详情</el-button>
+              </div>
+            </div>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div v-if="items.length > pageSize" class="entity-group-table__pagination">
+        <span class="entity-group-table__pagination-total">共 {{ items.length }} 个实体</span>
+        <el-button
+          class="entity-group-table__page-jump"
+          data-testid="entity-first-page"
+          size="small"
+          :disabled="currentPage <= 1"
+          @click="goFirstPage"
+        >
+          第一页
+        </el-button>
+        <el-pagination
+          v-model:current-page="currentPage"
+          background
+          layout="prev, pager, next"
+          :page-size="pageSize"
+          :total="items.length"
+        />
+        <el-button
+          class="entity-group-table__page-jump"
+          data-testid="entity-last-page"
+          size="small"
+          :disabled="currentPage >= maxPage"
+          @click="goLastPage"
+        >
+          最后一页
+        </el-button>
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup>
-import { reactive } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 
 const CATEGORY_OPTIONS = ['人物', '势力', '功法', '法宝神兵', '天材地宝', '其他']
 const GROUP_OPTIONS = {
@@ -121,6 +152,20 @@ const props = defineProps({
 
 const emit = defineEmits(['select-entity', 'save-classification', 'clear-override'])
 const drafts = reactive({})
+const pageSize = 20
+const currentPage = ref(1)
+const maxPage = computed(() => Math.max(1, Math.ceil(props.items.length / pageSize)))
+const paginatedItems = computed(() => {
+  const start = (currentPage.value - 1) * pageSize
+  return props.items.slice(start, start + pageSize)
+})
+
+watch(
+  () => props.items,
+  () => {
+    currentPage.value = 1
+  }
+)
 
 function slugify(value) {
   return (value || '')
@@ -170,6 +215,14 @@ function saveDraft(row) {
     manual_group_slug: draft.manualGroupName ? slugify(draft.manualGroupName) : null,
     clear_manual_override: !draft.manualCategory,
   })
+}
+
+function goFirstPage() {
+  currentPage.value = 1
+}
+
+function goLastPage() {
+  currentPage.value = maxPage.value
 }
 
 function statusLabel(status) {
@@ -258,6 +311,40 @@ function summaryText(state) {
 .entity-group-table__table :deep(td.el-table__cell),
 .entity-group-table__table :deep(tr) {
   background: var(--entities-panel-bg);
+}
+
+.entity-group-table__pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding-top: 0.25rem;
+  color: var(--entities-text-muted);
+}
+
+.entity-group-table__pagination {
+  --el-pagination-button-bg-color: var(--entities-panel-bg-soft);
+  --el-pagination-button-color: var(--entities-text);
+  --el-pagination-button-disabled-color: var(--entities-text-soft);
+  --el-pagination-button-disabled-bg-color: var(--entities-panel-bg-muted);
+  --el-pagination-hover-color: var(--entities-accent);
+}
+
+.entity-group-table__pagination-total {
+  font-size: 0.78rem;
+}
+
+.entity-group-table__page-jump {
+  --el-button-bg-color: var(--entities-panel-bg-soft);
+  --el-button-border-color: var(--entities-panel-border);
+  --el-button-disabled-bg-color: var(--entities-panel-bg-muted);
+  --el-button-disabled-border-color: var(--entities-panel-border);
+  --el-button-disabled-text-color: var(--entities-text-soft);
+  --el-button-hover-bg-color: color-mix(in srgb, var(--entities-accent) 16%, var(--entities-panel-bg-soft));
+  --el-button-hover-border-color: var(--entities-accent);
+  --el-button-hover-text-color: var(--entities-text);
+  --el-button-text-color: var(--entities-text);
 }
 
 .entity-group-table__select :deep(.el-select__wrapper) {

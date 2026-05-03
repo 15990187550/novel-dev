@@ -59,7 +59,17 @@
                     <el-tag type="success" size="small">Profile</el-tag>
                   </template>
                 </el-input>
-                <el-button type="danger" size="small" text @click="removeModelProfile(name)">删除</el-button>
+                <div class="flex items-center gap-2">
+                  <el-button
+                    size="small"
+                    :loading="testingModels[name]"
+                    :data-testid="`test-model-${name}`"
+                    @click="testModelProfile(name, profile)"
+                  >
+                    测试连接
+                  </el-button>
+                  <el-button type="danger" size="small" text @click="removeModelProfile(name)">删除</el-button>
+                </div>
               </div>
               <el-form label-width="100px" size="small">
                 <el-form-item label="Provider">
@@ -79,6 +89,18 @@
                   <el-input v-model="profile.api_key" show-password placeholder="留空使用环境变量" style="width: 350px" />
                 </el-form-item>
               </el-form>
+              <div
+                v-if="modelTestResults[name]"
+                class="mt-3 rounded-md border px-3 py-2 text-xs"
+                :class="modelTestResults[name].ok
+                  ? 'border-green-200 bg-green-50 text-green-700 dark:border-green-900/60 dark:bg-green-900/20 dark:text-green-300'
+                  : 'border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300'"
+              >
+                <span class="font-medium">{{ modelTestResults[name].message }}</span>
+                <span v-if="modelTestResults[name].latency_ms !== undefined" class="ml-2 text-gray-500 dark:text-gray-400">
+                  {{ modelTestResults[name].latency_ms }}ms
+                </span>
+              </div>
             </div>
 
             <el-empty v-if="Object.keys(config.models || {}).length === 0" description="暂无模型 Profiles，点击上方按钮添加" />
@@ -194,7 +216,7 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { getLLMConfig, saveLLMConfig } from '@/api.js'
+import { getLLMConfig, saveLLMConfig, testLLMModel } from '@/api.js'
 import { ElMessage } from 'element-plus'
 import AgentModelForm from '@/components/AgentModelForm.vue'
 
@@ -203,6 +225,8 @@ const configText = ref('')
 const savingConfig = ref(false)
 const currentKey = ref('defaults')
 const modelNames = ref({})
+const modelTestResults = ref({})
+const testingModels = ref({})
 
 const config = ref({
   defaults: { timeout: 30, retries: 2, temperature: 0.7 },
@@ -275,6 +299,8 @@ function addModelProfile() {
 function removeModelProfile(name) {
   delete config.value.models[name]
   delete modelNames.value[name]
+  delete modelTestResults.value[name]
+  delete testingModels.value[name]
 }
 
 function renameModel(oldName, newName) {
@@ -288,6 +314,14 @@ function renameModel(oldName, newName) {
   delete config.value.models[oldName]
   delete modelNames.value[oldName]
   modelNames.value[newName] = newName
+  if (modelTestResults.value[oldName]) {
+    modelTestResults.value[newName] = modelTestResults.value[oldName]
+    delete modelTestResults.value[oldName]
+  }
+  if (testingModels.value[oldName]) {
+    testingModels.value[newName] = testingModels.value[oldName]
+    delete testingModels.value[oldName]
+  }
 
   // Update all agent references
   for (const agent of Object.values(config.value.agents || {})) {
@@ -344,6 +378,36 @@ function initModelNames() {
     names[name] = name
   }
   modelNames.value = names
+}
+
+function compactProfile(profile) {
+  const payload = {}
+  for (const [key, value] of Object.entries(profile || {})) {
+    if (value !== undefined && value !== '') payload[key] = value
+  }
+  return payload
+}
+
+async function testModelProfile(name, profile) {
+  testingModels.value[name] = true
+  modelTestResults.value[name] = null
+  try {
+    const result = await testLLMModel(name, compactProfile(profile))
+    modelTestResults.value[name] = result
+    if (result.ok) {
+      ElMessage.success(`${name} 连接成功`)
+    } else {
+      ElMessage.error(`${name} ${result.message || '连接失败'}`)
+    }
+  } catch (err) {
+    modelTestResults.value[name] = {
+      ok: false,
+      status: 'failed',
+      message: err?.response?.data?.detail || err?.message || '连接失败',
+    }
+  } finally {
+    testingModels.value[name] = false
+  }
 }
 
 onMounted(async () => {

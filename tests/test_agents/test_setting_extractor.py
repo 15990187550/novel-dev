@@ -61,6 +61,31 @@ async def test_extract_success():
 
 
 @pytest.mark.asyncio
+async def test_extract_logs_include_source_filename():
+    extracted = ExtractedSetting(worldview="天玄大陆")
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=extracted.model_dump_json())
+
+    with (
+        patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory,
+        patch("novel_dev.services.log_service.log_service.add_log") as add_log,
+    ):
+        mock_factory.get.return_value = mock_client
+        agent = SettingExtractorAgent()
+        await agent.extract("任意文本", novel_id="n1", source_filename="setting-a.md")
+
+    extractor_calls = [
+        call
+        for call in add_log.call_args_list
+        if len(call.args) >= 2 and call.args[1] == "SettingExtractorAgent"
+    ]
+    assert extractor_calls
+    for call in extractor_calls:
+        assert "setting-a.md" in call.args[2]
+        assert call.kwargs.get("metadata", {}).get("source_filename") == "setting-a.md"
+
+
+@pytest.mark.asyncio
 async def test_extract_prompt_requests_richer_character_fields():
     extracted = ExtractedSetting(worldview="大陆")
     mock_client = AsyncMock()

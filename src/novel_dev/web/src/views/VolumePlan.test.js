@@ -761,7 +761,7 @@ describe('VolumePlan', () => {
     })
   })
 
-  it('switches the missing-outline action label to confirmation after assistant follow-up questions', async () => {
+  it('switches the missing-outline action label to confirmation during generation clarification', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
     const store = useNovelStore()
@@ -782,7 +782,9 @@ describe('VolumePlan', () => {
         message_type: 'question',
         content: '先确认几个关键信息。',
         meta: {
-          interaction_stage: 'generation_confirmation',
+          interaction_stage: 'generation_clarification',
+          clarification_round: 1,
+          max_rounds: 5,
         },
       },
     ]

@@ -92,6 +92,9 @@ class AnthropicDriver(BaseDriver):
             return LLMRateLimitError(str(exc))
         if overloaded_error is not None and isinstance(exc, overloaded_error):
             return LLMRateLimitError(str(exc))
+        status_code = getattr(exc, "status_code", None)
+        if status_code == 402:
+            return LLMRateLimitError(str(exc))
         if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
             return LLMTimeoutError(str(exc))
         if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):

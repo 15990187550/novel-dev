@@ -20,6 +20,10 @@ from novel_dev.db.models import (
     OutlineMessage,
     OutlineSession,
     PendingExtraction,
+    SettingGenerationMessage,
+    SettingGenerationSession,
+    SettingReviewBatch,
+    SettingReviewChange,
     Spaceline,
     Timeline,
 )
@@ -37,12 +41,30 @@ class NovelDeletionService:
 
         entity_ids = select(Entity.id).where(Entity.novel_id == novel_id)
         outline_session_ids = select(OutlineSession.id).where(OutlineSession.novel_id == novel_id)
+        setting_session_ids = select(SettingGenerationSession.id).where(
+            SettingGenerationSession.novel_id == novel_id
+        )
+        setting_review_batch_ids = select(SettingReviewBatch.id).where(
+            SettingReviewBatch.novel_id == novel_id
+        )
 
         await self.session.execute(
             delete(EntityVersion).where(EntityVersion.entity_id.in_(entity_ids))
         )
         await self.session.execute(
             delete(OutlineMessage).where(OutlineMessage.session_id.in_(outline_session_ids))
+        )
+        await self.session.execute(
+            delete(SettingReviewChange).where(SettingReviewChange.batch_id.in_(setting_review_batch_ids))
+        )
+        await self.session.execute(
+            delete(SettingReviewBatch).where(SettingReviewBatch.novel_id == novel_id)
+        )
+        await self.session.execute(
+            delete(SettingGenerationMessage).where(SettingGenerationMessage.session_id.in_(setting_session_ids))
+        )
+        await self.session.execute(
+            delete(SettingGenerationSession).where(SettingGenerationSession.novel_id == novel_id)
         )
         await self.session.execute(
             delete(EntityRelationship).where(EntityRelationship.novel_id == novel_id)

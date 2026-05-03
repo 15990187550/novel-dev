@@ -1,6 +1,6 @@
 <template>
-  <div class="entity-tree surface-card p-4 space-y-3">
-    <div class="space-y-2">
+  <div class="entity-tree surface-card flex h-full min-h-0 flex-col overflow-hidden p-4">
+    <div class="space-y-2 shrink-0">
       <div class="flex items-center justify-between gap-2">
         <h3 class="font-bold">目录</h3>
         <span class="entity-tree__meta text-xs">共 {{ totalCount }} 个实体</span>
@@ -24,7 +24,12 @@
       </div>
     </div>
 
-    <div v-if="nodes.length" v-loading="loading" class="max-h-[70vh] overflow-auto pr-1">
+    <div
+      v-if="nodes.length"
+      v-loading="loading"
+      class="entity-tree__scroll min-h-0 flex-1 overflow-auto pr-1"
+      data-testid="entity-tree-scroll"
+    >
       <el-tree
         :data="nodes"
         :props="treeProps"
@@ -115,6 +120,12 @@ function nodeSubtitle(node) {
 .entity-tree {
   background: var(--entities-panel-bg);
   border-color: var(--entities-panel-border);
+}
+
+.entity-tree__scroll {
+  margin-top: 0.75rem;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .entity-tree__meta {

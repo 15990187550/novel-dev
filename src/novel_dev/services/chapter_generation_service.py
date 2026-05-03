@@ -4,6 +4,7 @@ import uuid
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from novel_dev.agents._log_helpers import log_agent_detail
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.writer_agent import WriterAgent
@@ -20,7 +21,22 @@ STOP_REASONS = {
     "volume_completed",
     "novel_completed",
     "flow_cancelled",
+    "quality_blocked",
     "failed",
+}
+
+CHAPTER_SCOPED_CHECKPOINT_KEYS = {
+    "chapter_context",
+    "context_debug_snapshot",
+    "drafting_progress",
+    "relay_history",
+    "draft_metadata",
+    "draft_rewrite_plan",
+    "beat_scores",
+    "critique_feedback",
+    "per_dim_issues",
+    "editor_feedback",
+    "fast_review_feedback",
 }
 
 
@@ -48,6 +64,13 @@ class AutoRunFailedError(RuntimeError):
     def __init__(self, result: AutoRunChaptersResult):
         self.result = result
         super().__init__(result.error or "Auto chapter generation failed")
+
+
+class QualityGateBlockedError(RuntimeError):
+    def __init__(self, chapter_id: str, reasons: dict | None = None):
+        self.chapter_id = chapter_id
+        self.reasons = reasons or {}
+        super().__init__("Chapter quality gate blocked auto-run")
 
 
 class ChapterGenerationService:
@@ -83,6 +106,7 @@ class ChapterGenerationService:
 
                 archived_id = await self._run_current_chapter(novel_id)
                 completed.append(archived_id)
+                await self.session.commit()
 
                 state = await self.director.resume(novel_id)
                 if state.current_phase == Phase.VOLUME_PLANNING.value:
@@ -102,8 +126,24 @@ class ChapterGenerationService:
             )
             await self._release_lock(novel_id, token, result)
             return result
+        except QualityGateBlockedError as exc:
+            state = await self.director.resume(novel_id)
+            result = AutoRunChaptersResult(
+                novel_id=novel_id,
+                current_phase=state.current_phase if state else "",
+                current_chapter_id=state.current_chapter_id if state else exc.chapter_id,
+                completed_chapters=completed,
+                stopped_reason="quality_blocked",
+                failed_phase=state.current_phase if state else None,
+                failed_chapter_id=exc.chapter_id,
+                error=str(exc),
+            )
+            await self._release_lock(novel_id, token, result)
+            return result
         except Exception as exc:
-            log_service.add_log(novel_id, "ChapterGenerationService", f"自动写章失败: {exc}", level="error")
+            error_message = str(exc)
+            await self.session.rollback()
+            log_service.add_log(novel_id, "ChapterGenerationService", f"自动写章失败: {error_message}", level="error")
             state = await self.director.resume(novel_id)
             result = AutoRunChaptersResult(
                 novel_id=novel_id,
@@ -113,7 +153,7 @@ class ChapterGenerationService:
                 stopped_reason="failed",
                 failed_phase=state.current_phase if state else None,
                 failed_chapter_id=state.current_chapter_id if state else None,
-                error=str(exc),
+                error=error_message,
             )
             await self._release_lock(novel_id, token, result)
             raise AutoRunFailedError(result) from exc
@@ -184,6 +224,7 @@ class ChapterGenerationService:
         state = await self.director.resume(novel_id)
         if not state or not state.current_chapter_id:
             raise ValueError("No current chapter set")
+        state = await self._sync_current_chapter_checkpoint(state)
         start_chapter_id = state.current_chapter_id
         await self._ensure_current_chapter(state)
 
@@ -218,12 +259,72 @@ class ChapterGenerationService:
                 raise ValueError(f"Cannot auto-run from phase {state.current_phase}")
 
             updated = await self.director.resume(novel_id)
+            await self._raise_if_quality_blocked(start_chapter_id)
             if updated and updated.current_chapter_id != start_chapter_id:
                 return start_chapter_id
             if updated and updated.current_phase == Phase.VOLUME_PLANNING.value:
                 return start_chapter_id
 
         raise RuntimeError("Auto chapter generation exceeded phase iteration limit")
+
+    async def _raise_if_quality_blocked(self, chapter_id: str) -> None:
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        if chapter and getattr(chapter, "quality_status", "unchecked") == "block":
+            raise QualityGateBlockedError(chapter_id, chapter.quality_reasons)
+
+    async def _sync_current_chapter_checkpoint(self, state):
+        checkpoint = dict(state.checkpoint_data or {})
+        current_chapter_id = state.current_chapter_id
+        if not current_chapter_id:
+            return state
+
+        current_plan = checkpoint.get("current_chapter_plan")
+        if isinstance(current_plan, dict) and current_plan.get("chapter_id") == current_chapter_id:
+            return state
+
+        volume_plan = checkpoint.get("current_volume_plan") or {}
+        chapters = volume_plan.get("chapters") or []
+        matching_plan = next(
+            (
+                chapter
+                for chapter in chapters
+                if isinstance(chapter, dict) and chapter.get("chapter_id") == current_chapter_id
+            ),
+            None,
+        )
+        if not matching_plan:
+            raise ValueError(f"current_chapter_plan does not match current_chapter_id {current_chapter_id}")
+
+        previous_plan_id = current_plan.get("chapter_id") if isinstance(current_plan, dict) else None
+        checkpoint["current_chapter_plan"] = matching_plan
+        removed_keys = sorted(key for key in CHAPTER_SCOPED_CHECKPOINT_KEYS if key in checkpoint)
+        for key in removed_keys:
+            checkpoint.pop(key, None)
+
+        next_phase = Phase.CONTEXT_PREPARATION
+        log_agent_detail(
+            state.novel_id,
+            "ChapterGenerationService",
+            f"章节状态已校正：{current_chapter_id}",
+            node="chapter_state_sync",
+            task="auto_run",
+            status="succeeded",
+            metadata={
+                "current_chapter_id": current_chapter_id,
+                "previous_plan_id": previous_plan_id,
+                "next_plan_title": matching_plan.get("title"),
+                "previous_phase": state.current_phase,
+                "next_phase": next_phase.value,
+                "removed_checkpoint_keys": removed_keys,
+            },
+        )
+        return await self.director.save_checkpoint(
+            state.novel_id,
+            next_phase,
+            checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=current_chapter_id,
+        )
 
     async def _ensure_current_chapter(self, state) -> None:
         checkpoint = dict(state.checkpoint_data or {})

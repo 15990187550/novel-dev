@@ -33,6 +33,16 @@ class TestBuildSystemPrompt:
         assert "禁用词" in result
         assert "禁止输出英文" in result
 
+    def test_prompt_contains_low_ai_flavor_style_controls(self):
+        ctx = _make_context(style_profile={})
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._build_system_prompt(ctx, is_last=False)
+        assert "比喻密度" in result
+        assert "抽象玄幻词" in result
+        assert "奇观堆叠" in result
+        assert "现代吐槽" in result
+        assert "style_profile" in result
+
     def test_no_worldview_or_entities(self):
         ctx = _make_context(worldview_summary="这是一段很长的世界观描述" * 100)
         agent = WriterAgent.__new__(WriterAgent)
@@ -58,6 +68,26 @@ class TestBuildContextMessage:
         assert "Test" in result
         assert "开场" in result
         assert "当前节拍目标字数" in result
+
+    def test_marks_future_beats_as_boundaries_not_content_to_write_now(self):
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(
+                chapter_number=1,
+                title="Test",
+                target_word_count=2000,
+                beats=[
+                    BeatPlan(summary="清晨山村，陆照入山采药，铺垫凡俗生活", target_mood="平静"),
+                    BeatPlan(summary="发现泛黄古经，触碰瞬间识海剧震，大量残念碎片涌入", target_mood="惊变"),
+                ],
+            )
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        result = agent._build_context_message(
+            ctx.chapter_plan.beats[0], ctx, [], "", 0, 2, False
+        )
+        assert "后续节拍只是边界" in result
+        assert "禁止提前写" in result
+        assert "节拍2（后续边界，禁止提前发生）" in result
 
     def test_includes_rewrite_plan_for_current_beat(self):
         ctx = _make_context(
@@ -310,3 +340,20 @@ class TestSelfCheck:
         result = agent._self_check_beat("风很冷。", beat, ctx, 0)
         assert result.needs_rewrite is True
         assert "秦风" in result.missing_entities
+
+    def test_self_check_marks_future_beat_event_leakage(self):
+        beat0 = BeatPlan(summary="清晨山村，陆照入山采药，铺垫凡俗生活", target_mood="平静")
+        beat1 = BeatPlan(summary="发现泛黄古经，触碰瞬间识海剧震，大量残念碎片涌入", target_mood="惊变")
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(
+                chapter_number=1,
+                title="道经初现",
+                target_word_count=2000,
+                beats=[beat0, beat1],
+            )
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+        text = "陆照扒开藤蔓，竟发现一本泛黄古经。手指刚触到书页，识海剧震，残念碎片潮水般涌入。"
+        result = agent._self_check_beat(text, beat0, ctx, 0)
+        assert result.needs_rewrite is True
+        assert any("后续节拍" in item for item in result.contradictions)

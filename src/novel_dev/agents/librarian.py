@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
+_POLICY_EVENT_LOG_LIMIT = 20
 
 
 from novel_dev.repositories.timeline_repo import TimelineRepository
@@ -29,9 +30,11 @@ from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.services.entity_service import EntityService
+from novel_dev.services.entity_state_policy import EntityStatePolicy
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
 
 
 def _parse_soft_state_json(text: str) -> dict:
@@ -186,7 +189,19 @@ class LibrarianAgent:
 
     @logged_agent_step("LibrarianAgent", "提取世界状态", node="librarian_extract", task="extract")
     async def extract(self, novel_id: str, chapter_id: str, polished_text: str) -> ExtractionResult:
-        log_service.add_log(novel_id, "LibrarianAgent", f"开始提取世界状态: {chapter_id}")
+        log_agent_detail(
+            novel_id,
+            "LibrarianAgent",
+            "世界状态抽取输入已准备",
+            node="librarian_extract_input",
+            task="extract",
+            status="started",
+            metadata={
+                "chapter_id": chapter_id,
+                "polished_chars": len(polished_text or ""),
+                "polished_preview": preview_text(polished_text, 300),
+            },
+        )
         context = await self._load_context(novel_id, chapter_id)
         prompt = self._build_prompt(polished_text, context)
         extraction = await call_and_parse_model(
@@ -210,11 +225,38 @@ class LibrarianAgent:
                 if (r.source_entity_id, r.target_entity_id, r.relation_type) not in existing_pairs
             )
             log_service.add_log(novel_id, "LibrarianAgent", f"补充关系更新: {len(soft_rels)} 条")
-        log_service.add_log(
+        log_agent_detail(
             novel_id, "LibrarianAgent",
             f"提取完成: 时间线 {len(extraction.timeline_events)} 条, 新实体 {len(extraction.new_entities)} 个, "
             f"角色更新 {len(extraction.character_updates)} 条, 回收伏笔 {len(extraction.foreshadowings_recovered)} 条, "
-            f"新伏笔 {len(extraction.new_foreshadowings)} 条, 新关系 {len(extraction.new_relationships)} 条"
+            f"新伏笔 {len(extraction.new_foreshadowings)} 条, 新关系 {len(extraction.new_relationships)} 条",
+            node="librarian_extract_result",
+            task="extract",
+            metadata={
+                "chapter_id": chapter_id,
+                "counts": {
+                    "timeline_events": len(extraction.timeline_events),
+                    "spaceline_changes": len(extraction.spaceline_changes),
+                    "new_entities": len(extraction.new_entities),
+                    "concept_updates": len(extraction.concept_updates),
+                    "character_updates": len(extraction.character_updates),
+                    "foreshadowings_recovered": len(extraction.foreshadowings_recovered),
+                    "new_foreshadowings": len(extraction.new_foreshadowings),
+                    "new_relationships": len(extraction.new_relationships),
+                },
+                "timeline_events": named_items([event.model_dump() for event in extraction.timeline_events], limit=8),
+                "new_entities": named_items([entity.model_dump() for entity in extraction.new_entities], limit=8),
+                "character_updates": named_items([update.model_dump() for update in extraction.character_updates], limit=8),
+                "new_foreshadowings": named_items([fs.model_dump() for fs in extraction.new_foreshadowings], limit=8),
+                "relationships": [
+                    {
+                        "source": rel.source_entity_id,
+                        "target": rel.target_entity_id,
+                        "type": rel.relation_type,
+                    }
+                    for rel in extraction.new_relationships[:8]
+                ],
+            },
         )
         return extraction
 
@@ -272,7 +314,27 @@ class LibrarianAgent:
 
     @logged_agent_step("LibrarianAgent", "持久化世界状态", node="librarian_persist", task="persist")
     async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
-        log_service.add_log(novel_id, "LibrarianAgent", f"开始持久化提取结果: {chapter_id}")
+        log_agent_detail(
+            novel_id,
+            "LibrarianAgent",
+            "世界状态持久化输入已准备",
+            node="librarian_persist_input",
+            task="persist",
+            status="started",
+            metadata={
+                "chapter_id": chapter_id,
+                "counts": {
+                    "timeline_events": len(extraction.timeline_events),
+                    "spaceline_changes": len(extraction.spaceline_changes),
+                    "new_entities": len(extraction.new_entities),
+                    "concept_updates": len(extraction.concept_updates),
+                    "character_updates": len(extraction.character_updates),
+                    "foreshadowings_recovered": len(extraction.foreshadowings_recovered),
+                    "new_foreshadowings": len(extraction.new_foreshadowings),
+                    "new_relationships": len(extraction.new_relationships),
+                },
+            },
+        )
         timeline_repo = TimelineRepository(self.session)
         spaceline_repo = SpacelineRepository(self.session)
         entity_svc = EntityService(self.session, self.embedding_service)
@@ -282,37 +344,141 @@ class LibrarianAgent:
 
         # Track name -> entity_id for relationship resolution
         name_to_id: dict[str, str] = {}
+        persist_stats = {
+            "created": {
+                "timeline_events": 0,
+                "spaceline_changes": 0,
+                "new_entities": 0,
+                "foreshadowings": 0,
+                "relationships": 0,
+            },
+            "updated": {
+                "timeline_events": 0,
+                "spaceline_changes": 0,
+                "entities": 0,
+                "foreshadowings_recovered": 0,
+            },
+            "normalized": {
+                "spaceline_parent_ids": [],
+            },
+            "policy_events": [],
+            "policy_event_count": 0,
+            "skipped": [],
+            "failed": [],
+        }
 
         for event in extraction.timeline_events:
-            await timeline_repo.create(event.tick, event.narrative, anchor_chapter_id=chapter_id, anchor_event_id=event.anchor_event_id, novel_id=novel_id)
+            _entry, created = await timeline_repo.create_or_merge(
+                event.tick,
+                event.narrative,
+                anchor_chapter_id=chapter_id,
+                anchor_event_id=event.anchor_event_id,
+                novel_id=novel_id,
+            )
+            if created:
+                persist_stats["created"]["timeline_events"] += 1
+            else:
+                persist_stats["updated"]["timeline_events"] += 1
 
         for change in extraction.spaceline_changes:
+            parent_id = await self._normalize_spaceline_parent_id(
+                change.location_id,
+                change.parent_id,
+                novel_id,
+                spaceline_repo,
+                persist_stats,
+            )
             node = await spaceline_repo.get_by_id(change.location_id)
             if node:
                 node.name = change.name
-                node.parent_id = change.parent_id
+                node.parent_id = parent_id
                 node.narrative = change.narrative or node.narrative
                 await self.session.flush()
+                persist_stats["updated"]["spaceline_changes"] += 1
             else:
-                await spaceline_repo.create(change.location_id, change.name, change.parent_id, change.narrative, novel_id=novel_id)
+                await spaceline_repo.create(change.location_id, change.name, parent_id, change.narrative, novel_id=novel_id)
+                persist_stats["created"]["spaceline_changes"] += 1
 
         for entity in extraction.new_entities:
             eid = str(uuid.uuid4())
-            await entity_svc.create_entity(eid, entity.type, entity.name, chapter_id=chapter_id, novel_id=novel_id)
-            await entity_svc.update_state(eid, entity.state, chapter_id=chapter_id, diff_summary={"created": True})
-            name_to_id[entity.name] = eid
+            existing, ambiguous = await self._find_existing_new_entity(
+                entity.name,
+                entity.type,
+                novel_id,
+                entity_repo,
+            )
+            if ambiguous:
+                reason = {
+                    "type": "new_entity",
+                    "entity_name": entity.name,
+                    "entity_type": entity.type,
+                    "reason": "ambiguous_existing_entity",
+                }
+                persist_stats["skipped"].append(reason)
+                log_agent_detail(
+                    novel_id,
+                    "LibrarianAgent",
+                    f"新实体跳过：同名实体不唯一 {entity.name}",
+                    node="librarian_persist_skip",
+                    task="persist",
+                    status="failed",
+                    level="warning",
+                    metadata=reason,
+                )
+                continue
+            if existing is None:
+                persisted = await entity_repo.create(eid, entity.type, entity.name, chapter_id, novel_id)
+                persist_stats["created"]["new_entities"] += 1
+            else:
+                persisted = existing
+                persist_stats["updated"]["entities"] += 1
+            name_to_id[entity.name] = persisted.id
+            await self._apply_entity_state_policy(
+                entity_svc=entity_svc,
+                entity_repo=entity_repo,
+                entity_id=persisted.id,
+                entity_ref=entity.name,
+                extracted_state=entity.state,
+                chapter_id=chapter_id,
+                diff_summary={"created": existing is None},
+                persist_stats=persist_stats,
+            )
 
         for update in extraction.concept_updates + extraction.character_updates:
             resolved = await self._resolve_entity_id(update.entity_id, novel_id, name_to_id, entity_repo)
             if not resolved:
-                log_service.add_log(novel_id, "LibrarianAgent", f"角色更新跳过，实体未找到: {update.entity_id}", level="warning")
+                reason = {"type": "entity_update", "entity_id": update.entity_id, "reason": "entity_not_found"}
+                persist_stats["skipped"].append(reason)
+                log_agent_detail(
+                    novel_id,
+                    "LibrarianAgent",
+                    f"角色更新跳过：实体未找到 {update.entity_id}",
+                    node="librarian_persist_skip",
+                    task="persist",
+                    status="failed",
+                    level="warning",
+                    metadata=reason,
+                )
                 continue
-            await entity_svc.update_state(resolved, update.state, chapter_id=chapter_id, diff_summary=update.diff_summary)
+            entity_obj = await self._apply_entity_state_policy(
+                entity_svc=entity_svc,
+                entity_repo=entity_repo,
+                entity_id=resolved,
+                entity_ref=update.entity_id,
+                extracted_state=update.state,
+                chapter_id=chapter_id,
+                diff_summary=update.diff_summary,
+                persist_stats=persist_stats,
+            )
+            if entity_obj and entity_obj.name:
+                name_to_id[entity_obj.name] = resolved
             if update.entity_id:
                 name_to_id[update.entity_id] = resolved
+            persist_stats["updated"]["entities"] += 1
 
         for fs_id in extraction.foreshadowings_recovered:
             await foreshadowing_repo.mark_recovered(fs_id, chapter_id=chapter_id)
+            persist_stats["updated"]["foreshadowings_recovered"] += 1
 
         for fs in extraction.new_foreshadowings:
             fs_id = str(uuid.uuid4())
@@ -325,16 +491,29 @@ class LibrarianAgent:
                 回收条件=fs.回收条件,
                 novel_id=novel_id,
             )
+            persist_stats["created"]["foreshadowings"] += 1
 
         for rel in extraction.new_relationships:
             source_id = await self._resolve_entity_id(rel.source_entity_id, novel_id, name_to_id, entity_repo)
             target_id = await self._resolve_entity_id(rel.target_entity_id, novel_id, name_to_id, entity_repo)
             if not source_id or not target_id:
-                log_service.add_log(
+                reason = {
+                    "type": "relationship",
+                    "source_entity_id": rel.source_entity_id,
+                    "target_entity_id": rel.target_entity_id,
+                    "relation_type": rel.relation_type,
+                    "reason": "entity_not_found",
+                }
+                persist_stats["skipped"].append(reason)
+                log_agent_detail(
                     novel_id,
                     "LibrarianAgent",
-                    f"关系跳过，实体未找到: {rel.source_entity_id} -> {rel.target_entity_id}",
+                    f"关系跳过：实体未找到 {rel.source_entity_id} -> {rel.target_entity_id}",
+                    node="librarian_persist_skip",
+                    task="persist",
+                    status="failed",
                     level="warning",
+                    metadata=reason,
                 )
                 continue
             await relationship_repo.upsert(
@@ -345,7 +524,132 @@ class LibrarianAgent:
                 chapter_id=chapter_id,
                 novel_id=novel_id,
             )
-        log_service.add_log(novel_id, "LibrarianAgent", "持久化完成")
+            persist_stats["created"]["relationships"] += 1
+        log_agent_detail(
+            novel_id,
+            "LibrarianAgent",
+            "持久化完成",
+            node="librarian_persist_result",
+            task="persist",
+            metadata=persist_stats,
+        )
+
+    async def _apply_entity_state_policy(
+        self,
+        *,
+        entity_svc: EntityService,
+        entity_repo: EntityRepository,
+        entity_id: str,
+        entity_ref: str,
+        extracted_state: dict,
+        chapter_id: str,
+        diff_summary: Optional[dict],
+        persist_stats: dict,
+    ):
+        entity_obj = await entity_repo.get_by_id(entity_id)
+        latest_version = await entity_svc.version_repo.get_latest(entity_id)
+        policy_result = EntityStatePolicy.normalize_update(
+            entity_type=entity_obj.type if entity_obj else "",
+            entity_name=entity_obj.name if entity_obj else entity_ref,
+            latest_state=latest_version.state if latest_version else None,
+            extracted_state=extracted_state,
+            chapter_id=chapter_id,
+            diff_summary=diff_summary,
+        )
+        self._record_policy_events(
+            persist_stats,
+            policy_result.events,
+            entity_id=entity_id,
+            entity_ref=entity_ref,
+        )
+        await entity_svc.update_state(
+            entity_id,
+            policy_result.state,
+            chapter_id=chapter_id,
+            diff_summary=diff_summary,
+        )
+        return entity_obj
+
+    def _record_policy_events(
+        self,
+        persist_stats: dict,
+        events: list[dict],
+        *,
+        entity_id: str,
+        entity_ref: str,
+    ) -> None:
+        if not events:
+            return
+        persist_stats["policy_event_count"] += len(events)
+        remaining = _POLICY_EVENT_LOG_LIMIT - len(persist_stats["policy_events"])
+        if remaining <= 0:
+            return
+        persist_stats["policy_events"].extend(
+            self._preview_policy_event(
+                {
+                    **event,
+                    "entity_id": entity_id,
+                    "entity_ref": entity_ref,
+                }
+            )
+            for event in events[:remaining]
+        )
+
+    def _preview_policy_event(self, event: dict) -> dict:
+        return {key: self._preview_policy_value(value) for key, value in event.items()}
+
+    def _preview_policy_value(self, value):
+        if isinstance(value, str):
+            return preview_text(value)
+        if isinstance(value, dict):
+            return {key: self._preview_policy_value(item) for key, item in value.items()}
+        if isinstance(value, list):
+            return [self._preview_policy_value(item) for item in value[:_POLICY_EVENT_LOG_LIMIT]]
+        return value
+
+    async def _find_existing_new_entity(
+        self,
+        name: str,
+        entity_type: str,
+        novel_id: str,
+        entity_repo: EntityRepository,
+    ) -> tuple[object | None, bool]:
+        candidates = [
+            entity for entity in await entity_repo.list_by_novel(novel_id)
+            if entity.type == entity_type
+        ]
+
+        exact_matches = [entity for entity in candidates if entity.name == name]
+        if len(exact_matches) > 1:
+            return None, True
+        if len(exact_matches) == 1:
+            return exact_matches[0], False
+
+        normalized = EntityRepository.normalize_name(name)
+        if not normalized:
+            return None, False
+
+        normalized_matches = [
+            entity for entity in candidates
+            if EntityRepository.normalize_name(entity.name) == normalized
+        ]
+        if len(normalized_matches) > 1:
+            return None, True
+        if len(normalized_matches) == 1:
+            return normalized_matches[0], False
+
+        close_matches = [
+            entity for entity in candidates
+            if EntityRepository._is_close_name_match(
+                EntityRepository.normalize_name(entity.name),
+                normalized,
+            )
+        ]
+        if len(close_matches) > 1:
+            return None, True
+        if len(close_matches) == 1:
+            return close_matches[0], False
+        return None, False
 
     async def _resolve_entity_id(
         self,
@@ -371,3 +675,59 @@ class LibrarianAgent:
         name_to_id[raw_ref] = entity.id
         name_to_id[entity.name] = entity.id
         return entity.id
+
+    async def _normalize_spaceline_parent_id(
+        self,
+        location_id: str,
+        parent_id: Optional[str],
+        novel_id: str,
+        spaceline_repo: SpacelineRepository,
+        persist_stats: dict,
+    ) -> Optional[str]:
+        if not parent_id:
+            return None
+
+        if parent_id == location_id:
+            reason = {
+                "type": "spaceline_parent",
+                "location_id": location_id,
+                "parent_id": parent_id,
+                "reason": "self_parent",
+                "normalized_to": None,
+            }
+            persist_stats["normalized"]["spaceline_parent_ids"].append(reason)
+            log_agent_detail(
+                novel_id,
+                "LibrarianAgent",
+                f"地点父级已清理：{location_id} 不能指向自身",
+                node="librarian_persist_normalize",
+                task="persist",
+                status="succeeded",
+                level="warning",
+                metadata=reason,
+            )
+            return None
+
+        parent = await spaceline_repo.get_by_id(parent_id)
+        if parent and parent.novel_id in {None, novel_id}:
+            return parent_id
+
+        reason = {
+            "type": "spaceline_parent",
+            "location_id": location_id,
+            "parent_id": parent_id,
+            "reason": "parent_not_found",
+            "normalized_to": None,
+        }
+        persist_stats["normalized"]["spaceline_parent_ids"].append(reason)
+        log_agent_detail(
+            novel_id,
+            "LibrarianAgent",
+            f"地点父级已清理：父地点未找到 {parent_id}",
+            node="librarian_persist_normalize",
+            task="persist",
+            status="succeeded",
+            level="warning",
+            metadata=reason,
+        )
+        return None

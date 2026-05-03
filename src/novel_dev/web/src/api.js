@@ -31,6 +31,7 @@ export const getNovelState = (id) => api.get(`/novels/${id}/state`).then(r => r.
 export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).then(r => r.data)
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
 export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/text`).then(r => r.data)
+export const getChapterQuality = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/quality`).then(r => r.data)
 export const getEntities = (id) => api.get(`/novels/${id}/entities`).then(r => r.data)
 export const searchEntities = (id, params) => api.get(`/novels/${id}/entities/search`, { params }).then(r => r.data)
 export const updateEntity = (id, entityId, payload) =>
@@ -61,6 +62,8 @@ export const getBrainstormWorkspace = (id) =>
   api.get(`/novels/${id}/brainstorm/workspace`).then(r => r.data)
 export const submitBrainstormWorkspace = (id) =>
   api.post(`/novels/${id}/brainstorm/workspace/submit`).then(r => r.data)
+export const updateBrainstormSuggestionCard = (id, cardId, payload) =>
+  api.patch(`/novels/${id}/brainstorm/suggestion_cards/${encodeURIComponent(cardId)}`, payload).then(r => r.data)
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)
@@ -71,6 +74,20 @@ export const uploadDocument = (id, filename, content, options = {}) =>
   api.post(`/novels/${id}/documents/upload`, { filename, content, ...options }).then(r => r.data)
 export const uploadDocumentsBatch = (id, items, maxConcurrency = 3) =>
   api.post(`/novels/${id}/documents/upload/batch`, { items, max_concurrency: maxConcurrency }).then(r => r.data)
+export const getSettingWorkbench = (id) =>
+  api.get(`/novels/${id}/settings/workbench`).then(r => r.data)
+export const createSettingSession = (id, payload) =>
+  api.post(`/novels/${id}/settings/sessions`, payload, withLongTimeout()).then(r => r.data)
+export const getSettingSession = (id, sessionId) =>
+  api.get(`/novels/${id}/settings/sessions/${sessionId}`).then(r => r.data)
+export const replySettingSession = (id, sessionId, payload) =>
+  api.post(`/novels/${id}/settings/sessions/${sessionId}/reply`, payload, withLongTimeout()).then(r => r.data)
+export const generateSettingReviewBatch = (id, sessionId, payload = {}) =>
+  api.post(`/novels/${id}/settings/sessions/${sessionId}/generate`, payload, withLongTimeout()).then(r => r.data)
+export const getSettingReviewBatch = (id, batchId) =>
+  api.get(`/novels/${id}/settings/review_batches/${batchId}`).then(r => r.data)
+export const applySettingReviewBatch = (id, batchId, payload) =>
+  api.post(`/novels/${id}/settings/review_batches/${batchId}/apply`, payload).then(r => r.data)
 export const getKnowledgeDomains = (id, includeDisabled = false) =>
   api.get(`/novels/${id}/knowledge_domains`, { params: { include_disabled: includeDisabled } }).then(r => r.data)
 export const createKnowledgeDomain = (id, payload) =>
@@ -81,6 +98,8 @@ export const confirmKnowledgeDomainScope = (id, domainId, payload) =>
   api.post(`/novels/${id}/knowledge_domains/${domainId}/confirm_scope`, payload).then(r => r.data)
 export const disableKnowledgeDomain = (id, domainId) =>
   api.post(`/novels/${id}/knowledge_domains/${domainId}/disable`).then(r => r.data)
+export const deleteKnowledgeDomain = (id, domainId) =>
+  api.delete(`/novels/${id}/knowledge_domains/${domainId}`).then(r => r.data)
 export const approvePending = (id, pendingId, fieldResolutions = []) =>
   api.post(`/novels/${id}/documents/pending/approve`, { pending_id: pendingId, field_resolutions: fieldResolutions }).then(r => r.data)
 export const updatePendingDraftField = (id, pendingId, payload) =>
@@ -100,6 +119,13 @@ export const prepareContext = (id, cid) =>
   api.post(`/novels/${id}/chapters/${cid}/context`, null, withLongTimeout()).then(r => r.data)
 export const draftChapter = (id, cid) =>
   api.post(`/novels/${id}/chapters/${cid}/draft`, null, withLongTimeout()).then(r => r.data)
+export const rewriteChapter = (id, cid, options = {}) => {
+  const payload = options.resume ? {
+    resume: true,
+    failed_job_id: options.failed_job_id,
+  } : null
+  return api.post(`/novels/${id}/chapters/${cid}/rewrite`, payload, withLongTimeout()).then(r => r.data)
+}
 export const advance = (id) => api.post(`/novels/${id}/advance`, null, withLongTimeout()).then(r => r.data)
 export const runLibrarian = (id) => api.post(`/novels/${id}/librarian`, null, withLongTimeout()).then(r => r.data)
 export const autoRunChapters = (id, options = {}) =>
@@ -109,11 +135,16 @@ export const autoRunChapters = (id, options = {}) =>
   }, withLongTimeout()).then(r => r.data)
 export const getGenerationJob = (id, jobId) =>
   api.get(`/novels/${id}/generation_jobs/${jobId}`).then(r => r.data)
+export const getChapterRewriteJobs = (id) =>
+  api.get(`/novels/${id}/chapters/rewrite_jobs`).then(r => r.data)
 export const stopCurrentFlow = (id) => api.post(`/novels/${id}/flow/stop`).then(r => r.data)
+export const getLogs = (id) => api.get(`/novels/${id}/logs`).then(r => r.data)
 export const clearLogs = (id) => api.delete(`/novels/${id}/logs`).then(r => r.data)
 export const exportNovel = (id, format = 'md') =>
   api.post(`/novels/${id}/export`, null, { params: { format } }).then(r => r.data)
 export const getLLMConfig = () => api.get('/config/llm').then(r => r.data)
 export const saveLLMConfig = (config) => api.post('/config/llm', { config }).then(r => r.data)
+export const testLLMModel = (name, profile) =>
+  api.post('/config/llm/test_model', { name, profile }, { timeout: 60000 }).then(r => r.data)
 export const getEnvConfig = () => api.get('/config/env').then(r => r.data)
 export const saveEnvConfig = (env) => api.post('/config/env', env).then(r => r.data)

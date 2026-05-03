@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
+from novel_dev.agents.outline_clarification_agent import OutlineClarificationAgent, OutlineClarificationDecision
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.db.models import OutlineMessage, OutlineSession
 from novel_dev.llm.models import LLMResponse
@@ -909,10 +910,10 @@ def test_classify_feedback_intent_detects_regenerate_and_negation(async_session)
 
 
 @pytest.mark.asyncio
-async def test_submit_feedback_requests_confirmation_before_generating_missing_brainstorm_synopsis(async_session, monkeypatch):
+async def test_submit_feedback_requests_dynamic_clarification_before_generating_missing_brainstorm_synopsis(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
-        "n_brainstorm_confirm",
+        "n_brainstorm_clarify",
         phase=Phase.BRAINSTORMING,
         checkpoint_data={
             "synopsis_data": {
@@ -934,12 +935,27 @@ async def test_submit_feedback_requests_confirmation_before_generating_missing_b
     service = OutlineWorkbenchService(async_session)
 
     async def fail_optimize_outline(**kwargs):
-        raise AssertionError("should not optimize before confirmation")
+        raise AssertionError("should not optimize while clarification is needed")
+
+    async def fake_clarify(self, request):
+        assert request.outline_type == "synopsis"
+        assert request.outline_ref == "synopsis"
+        assert request.round_number == 1
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.4,
+            missing_points=["题材卖点不明确"],
+            questions=["题材、基调和核心卖点更偏哪一类？"],
+            clarification_summary="用户想生成总纲，但题材卖点不明确。",
+            assumptions=[],
+            reason="缺少题材方向。",
+        )
 
     monkeypatch.setattr(service, "_optimize_outline", fail_optimize_outline)
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
 
     response = await service.submit_feedback(
-        novel_id="n_brainstorm_confirm",
+        novel_id="n_brainstorm_clarify",
         outline_type="synopsis",
         outline_ref="synopsis",
         feedback="请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
@@ -948,25 +964,77 @@ async def test_submit_feedback_requests_confirmation_before_generating_missing_b
     assert response.assistant_message.role == "assistant"
     assert response.assistant_message.message_type == "question"
     assert response.last_result_snapshot is None
-    assert "在我开始生成总纲草稿前" in response.assistant_message.content
+    assert "题材、基调和核心卖点" in response.assistant_message.content
+    assert response.assistant_message.meta["interaction_stage"] == "generation_clarification"
+    assert response.assistant_message.meta["clarification_round"] == 1
+    assert response.assistant_message.meta["max_rounds"] == 5
+    assert response.assistant_message.meta["clarification_status"] == "clarifying"
+    assert response.assistant_message.meta["missing_points"] == ["题材卖点不明确"]
 
     session = await OutlineSessionRepository(async_session).get_or_create(
-        novel_id="n_brainstorm_confirm",
+        novel_id="n_brainstorm_clarify",
         outline_type="synopsis",
         outline_ref="synopsis",
     )
     assert session.status == "awaiting_confirmation"
     assert session.last_result_snapshot is None
 
-    workspace = await BrainstormWorkspaceService(async_session).get_workspace_payload("n_brainstorm_confirm")
-    assert workspace.outline_drafts == {}
+
+@pytest.mark.asyncio
+async def test_submit_feedback_force_generates_without_calling_clarification_agent(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_force",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={"synopsis_data": {"estimated_volumes": 1}},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fail_clarify(self, request):
+        raise AssertionError("force generation should not call LLM clarification")
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append(feedback)
+        return {
+            "content": "已生成",
+            "result_snapshot": {
+                "title": "强制生成总纲",
+                "logline": "主线",
+                "core_conflict": "冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 1,
+                "estimated_total_chapters": 30,
+                "estimated_total_words": 90000,
+            },
+            "conversation_summary": "用户要求直接生成。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fail_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_force",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="不用问了，按当前设定生成",
+    )
+
+    assert response.assistant_message.message_type == "result"
+    assert "用户要求跳过进一步澄清" in optimize_calls[0]
 
 
 @pytest.mark.asyncio
-async def test_submit_feedback_generates_after_confirmation_for_missing_brainstorm_synopsis(async_session, monkeypatch):
+async def test_submit_feedback_generates_when_clarification_reports_ready(async_session, monkeypatch):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
-        "n_brainstorm_generate",
+        "n_brainstorm_ready",
         phase=Phase.BRAINSTORMING,
         checkpoint_data={
             "synopsis_data": {
@@ -986,26 +1054,22 @@ async def test_submit_feedback_generates_after_confirmation_for_missing_brainsto
     )
 
     service = OutlineWorkbenchService(async_session)
-    first_response = await service.submit_feedback(
-        novel_id="n_brainstorm_generate",
-        outline_type="synopsis",
-        outline_ref="synopsis",
-        feedback="请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
-    )
-    assert first_response.assistant_message.message_type == "question"
+
+    async def fake_clarify(self, request):
+        return OutlineClarificationDecision(
+            status="ready_to_generate",
+            confidence=0.88,
+            missing_points=[],
+            questions=[],
+            clarification_summary="用户已确认仙侠升级流、两卷、弱感情线。",
+            assumptions=[],
+            reason="信息足够。",
+        )
 
     optimize_calls = []
 
     async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
-        optimize_calls.append(
-            {
-                "novel_id": novel_id,
-                "outline_type": outline_type,
-                "outline_ref": outline_ref,
-                "feedback": feedback,
-                "context_window": context_window,
-            }
-        )
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
         return {
             "content": "已生成总纲草稿，请继续提出修改意见。",
             "result_snapshot": {
@@ -1019,33 +1083,533 @@ async def test_submit_feedback_generates_after_confirmation_for_missing_brainsto
                 "estimated_total_chapters": 120,
                 "estimated_total_words": 360000,
             },
-            "conversation_summary": "用户确认先生成完整总纲草稿。",
+            "conversation_summary": "用户已确认仙侠升级流、两卷、弱感情线。",
         }
 
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
     monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
 
     response = await service.submit_feedback(
-        novel_id="n_brainstorm_generate",
+        novel_id="n_brainstorm_ready",
         outline_type="synopsis",
         outline_ref="synopsis",
-        feedback="走仙侠升级流，预计两卷，感情线弱一些，确认按这个方向生成。",
+        feedback="走仙侠升级流，预计两卷，感情线弱一些，按这个方向生成。",
     )
 
-    assert optimize_calls and optimize_calls[0]["outline_type"] == "synopsis"
-    assert "确认按这个方向生成" in optimize_calls[0]["feedback"]
+    assert optimize_calls
+    assert "澄清摘要：用户已确认仙侠升级流、两卷、弱感情线。" in optimize_calls[0]["feedback"]
     assert response.assistant_message.message_type == "result"
     assert response.last_result_snapshot["title"] == "新总纲"
 
     session = await OutlineSessionRepository(async_session).get_or_create(
-        novel_id="n_brainstorm_generate",
+        novel_id="n_brainstorm_ready",
         outline_type="synopsis",
         outline_ref="synopsis",
     )
     assert session.status == "active"
     assert session.last_result_snapshot["title"] == "新总纲"
 
-    workspace = await BrainstormWorkspaceService(async_session).get_workspace_payload("n_brainstorm_generate")
+    workspace = await BrainstormWorkspaceService(async_session).get_workspace_payload("n_brainstorm_ready")
     assert workspace.outline_drafts["synopsis:synopsis"]["title"] == "新总纲"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_releases_transaction_before_clarification_llm(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_release",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    transaction_states = []
+
+    async def fake_clarify(self, request):
+        transaction_states.append(service.session.in_transaction())
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.5,
+            missing_points=["题材方向不明确"],
+            questions=["题材方向按哪类推进？"],
+            clarification_summary="需要确认题材方向。",
+            assumptions=[],
+            reason="等待用户补充。",
+        )
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_release",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="请生成完整总纲。",
+    )
+
+    assert response.assistant_message.message_type == "question"
+    assert response.assistant_message.meta["interaction_stage"] == "generation_clarification"
+    assert transaction_states == [False]
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_allows_fifth_visible_clarification_question(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_round5",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    outline_session = await OutlineSessionRepository(async_session).get_or_create(
+        novel_id="n_brainstorm_round5",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="awaiting_confirmation",
+    )
+    message_repo = OutlineMessageRepository(async_session)
+    for round_number in range(1, 5):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant",
+            message_type="question",
+            content=f"第 {round_number} 轮问题",
+            meta={
+                "outline_type": "synopsis",
+                "outline_ref": "synopsis",
+                "interaction_stage": "generation_clarification",
+                "clarification_round": round_number,
+                "max_rounds": 5,
+            },
+        )
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="user",
+            message_type="feedback",
+            content=f"第 {round_number} 轮回答",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    await async_session.commit()
+
+    async def fake_clarify(self, request):
+        assert request.round_number == 5
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.45,
+            missing_points=["终局方向仍不明确"],
+            questions=["终局方向更偏飞升、守护还是牺牲？"],
+            clarification_summary="仍需确认终局方向。",
+            assumptions=[],
+            reason="第五轮仍允许追问。",
+        )
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_round5",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="还需要再确认一下终局。",
+    )
+
+    assert response.assistant_message.message_type == "question"
+    assert response.assistant_message.meta["clarification_round"] == 5
+    assert response.assistant_message.meta["max_rounds"] == 5
+    assert "终局方向" in response.assistant_message.content
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_passes_round_six_after_five_clarification_questions(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_round6",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    outline_session = await OutlineSessionRepository(async_session).get_or_create(
+        novel_id="n_brainstorm_round6",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="awaiting_confirmation",
+    )
+    message_repo = OutlineMessageRepository(async_session)
+    for round_number in range(1, 6):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant",
+            message_type="question",
+            content=f"第 {round_number} 轮问题",
+            meta={
+                "outline_type": "synopsis",
+                "outline_ref": "synopsis",
+                "interaction_stage": "generation_clarification",
+                "clarification_round": round_number,
+                "max_rounds": 5,
+            },
+        )
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="user",
+            message_type="feedback",
+            content=f"第 {round_number} 轮回答",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    await async_session.commit()
+
+    seen_rounds = []
+
+    async def fake_clarify(self, request):
+        seen_rounds.append(request.round_number)
+        return OutlineClarificationDecision(
+            status="force_generate",
+            confidence=1.0,
+            missing_points=[],
+            questions=[],
+            clarification_summary="达到澄清上限，按当前设定生成。",
+            assumptions=["已完成 5 轮澄清，当前回复作为最终生成依据。"],
+            reason="round 6 forces generation",
+        )
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
+        return {
+            "content": "已生成总纲草稿。",
+            "result_snapshot": {
+                "title": "第六轮强制生成总纲",
+                "logline": "新的故事主线",
+                "core_conflict": "新的冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 120,
+                "estimated_total_words": 360000,
+            },
+            "conversation_summary": "达到澄清上限，按当前设定生成。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_round6",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="第五轮后按现在这些答案生成。",
+    )
+
+    assert seen_rounds == [6]
+    assert optimize_calls
+    assert "生成假设：" in optimize_calls[0]["feedback"]
+    assert "已完成 5 轮澄清，当前回复作为最终生成依据。" in optimize_calls[0]["feedback"]
+    assert response.assistant_message.message_type == "result"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_clarifies_missing_volume_with_volume_context(async_session, monkeypatch):
+    synopsis = SynopsisData(
+        title="九霄行",
+        logline="主角逆势而上",
+        core_conflict="家仇与天命相撞",
+        estimated_volumes=2,
+        estimated_total_chapters=20,
+        estimated_total_words=60000,
+    )
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_volume_clarify",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+
+    async def fail_optimize_outline(**kwargs):
+        raise AssertionError("volume should wait for clarification")
+
+    async def fake_clarify(self, request):
+        assert request.outline_type == "volume"
+        assert request.outline_ref == "vol_1"
+        assert request.checkpoint_snapshot is None
+        return OutlineClarificationDecision(
+            status="clarifying",
+            confidence=0.5,
+            missing_points=["卷末钩子不明确"],
+            questions=["第一卷末尾要留下什么钩子？"],
+            clarification_summary="缺少卷末钩子。",
+            assumptions=[],
+            reason="影响章节收束。",
+        )
+
+    monkeypatch.setattr(service, "_optimize_outline", fail_optimize_outline)
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_volume_clarify",
+        outline_type="volume",
+        outline_ref="vol_1",
+        feedback="生成第一卷卷纲",
+    )
+
+    assert response.assistant_message.message_type == "question"
+    assert "第一卷末尾" in response.assistant_message.content
+    assert response.assistant_message.meta["outline_type"] == "volume"
+    assert response.assistant_message.meta["outline_ref"] == "vol_1"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_counts_clarification_rounds_outside_context_window(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_round_history",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    outline_session = await OutlineSessionRepository(async_session).get_or_create(
+        novel_id="n_brainstorm_round_history",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="awaiting_confirmation",
+    )
+    message_repo = OutlineMessageRepository(async_session)
+    for round_number in range(1, 6):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant",
+            message_type="question",
+            content=f"第 {round_number} 轮问题",
+            meta={
+                "outline_type": "synopsis",
+                "outline_ref": "synopsis",
+                "interaction_stage": "generation_clarification",
+                "clarification_round": round_number,
+                "max_rounds": 5,
+            },
+        )
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="user",
+            message_type="feedback",
+            content=f"第 {round_number} 轮回答",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    for index in range(210):
+        await message_repo.create(
+            session_id=outline_session.id,
+            role="assistant" if index % 2 else "user",
+            message_type="note",
+            content=f"后续非澄清消息 {index}",
+            meta={"outline_type": "synopsis", "outline_ref": "synopsis"},
+        )
+    await async_session.commit()
+
+    seen_rounds = []
+
+    async def fake_clarify(self, request):
+        assert not any(
+            (message.meta or {}).get("interaction_stage") == "generation_clarification"
+            for message in request.context_window.recent_messages
+        )
+        seen_rounds.append(request.round_number)
+        return OutlineClarificationDecision(
+            status="force_generate",
+            confidence=1.0,
+            missing_points=[],
+            questions=[],
+            clarification_summary="达到澄清上限，按当前设定生成。",
+            assumptions=["历史澄清轮次已达到上限。"],
+            reason="round 6 forces generation",
+        )
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
+        return {
+            "content": "已生成总纲草稿。",
+            "result_snapshot": {
+                "title": "历史轮次强制生成总纲",
+                "logline": "新的故事主线",
+                "core_conflict": "新的冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 120,
+                "estimated_total_words": 360000,
+            },
+            "conversation_summary": "达到澄清上限，按当前设定生成。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_round_history",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="根据前面所有澄清生成。",
+    )
+
+    assert seen_rounds == [6]
+    assert optimize_calls
+    assert response.assistant_message.message_type == "result"
+
+
+@pytest.mark.asyncio
+async def test_submit_feedback_generates_on_second_reply_after_clarification_question(async_session, monkeypatch):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_brainstorm_second_reply",
+        phase=Phase.BRAINSTORMING,
+        checkpoint_data={
+            "synopsis_data": {
+                "title": "旧总纲",
+                "logline": "",
+                "core_conflict": "",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 10,
+                "estimated_total_words": 30000,
+            }
+        },
+        volume_id=None,
+        chapter_id=None,
+    )
+
+    service = OutlineWorkbenchService(async_session)
+    outline_session = await OutlineSessionRepository(async_session).get_or_create(
+        novel_id="n_brainstorm_second_reply",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        status="awaiting_confirmation",
+    )
+    await OutlineMessageRepository(async_session).create(
+        session_id=outline_session.id,
+        role="assistant",
+        message_type="question",
+        content="题材方向按哪类推进？",
+        meta={
+            "outline_type": "synopsis",
+            "outline_ref": "synopsis",
+            "interaction_stage": "generation_clarification",
+            "clarification_round": 1,
+            "max_rounds": 5,
+        },
+    )
+    await async_session.commit()
+
+    async def fake_clarify(self, request):
+        assert request.round_number == 2
+        return OutlineClarificationDecision(
+            status="ready_to_generate",
+            confidence=0.9,
+            missing_points=[],
+            questions=[],
+            clarification_summary="用户补充了仙侠升级流和弱感情线。",
+            assumptions=[],
+            reason="信息足够。",
+        )
+
+    optimize_calls = []
+
+    async def fake_optimize_outline(*, novel_id, outline_type, outline_ref, feedback, context_window):
+        optimize_calls.append({"feedback": feedback, "context_window": context_window})
+        return {
+            "content": "已生成总纲草稿。",
+            "result_snapshot": {
+                "title": "二次回复生成总纲",
+                "logline": "新的故事主线",
+                "core_conflict": "新的冲突",
+                "themes": [],
+                "character_arcs": [],
+                "milestones": [],
+                "estimated_volumes": 2,
+                "estimated_total_chapters": 120,
+                "estimated_total_words": 360000,
+            },
+            "conversation_summary": "用户补充了仙侠升级流和弱感情线。",
+        }
+
+    monkeypatch.setattr(OutlineClarificationAgent, "clarify", fake_clarify)
+    monkeypatch.setattr(service, "_optimize_outline", fake_optimize_outline)
+
+    response = await service.submit_feedback(
+        novel_id="n_brainstorm_second_reply",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="仙侠升级流，两卷，感情线弱一些。",
+    )
+
+    assert optimize_calls
+    assert response.assistant_message.message_type == "result"
+    assert response.last_result_snapshot["title"] == "二次回复生成总纲"
 
 
 @pytest.mark.asyncio

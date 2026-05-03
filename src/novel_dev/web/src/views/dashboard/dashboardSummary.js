@@ -67,6 +67,7 @@ function scoreValue(value) {
 }
 
 function hasScore(chapter) {
+  if (chapter?.final_review_score != null && chapter.final_review_score !== '' && Number.isFinite(Number(chapter.final_review_score))) return true
   if (chapter?.score_overall != null && chapter.score_overall !== '' && Number.isFinite(Number(chapter.score_overall))) return true
   return Object.values(chapter?.score_breakdown || {}).some((value) => scoreValue(value) > 0)
 }
@@ -85,8 +86,10 @@ function buildScoreSummary(chapters = []) {
     .filter(hasScore)
     .map((chapter) => ({
       ...chapter,
-      displayScore: chapter?.score_overall != null && chapter.score_overall !== '' && Number.isFinite(Number(chapter.score_overall))
-        ? normalizeNumber(chapter.score_overall)
+      displayScore: chapter?.final_review_score != null && chapter.final_review_score !== '' && Number.isFinite(Number(chapter.final_review_score))
+        ? normalizeNumber(chapter.final_review_score)
+        : chapter?.score_overall != null && chapter.score_overall !== '' && Number.isFinite(Number(chapter.score_overall))
+          ? normalizeNumber(chapter.score_overall)
         : Math.round(
           Object.values(chapter?.score_breakdown || {})
             .map(scoreValue)

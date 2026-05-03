@@ -15,6 +15,30 @@ class ExamplePayload(BaseModel):
     tags: list[str] = []
 
 
+class DummyLLMClient:
+    def __init__(
+        self,
+        *,
+        agent: str = "ConfigAgent",
+        task: str = "config_task",
+        config: TaskConfig | None = None,
+        response: LLMResponse | None = None,
+        primary=None,
+        fallback=None,
+    ):
+        self.agent = agent
+        self.task = task
+        self.config = config
+        self.response = response or LLMResponse(text='{"title": "主线", "tags": ["成长"]}')
+        self.primary = primary
+        self.fallback = fallback
+        self.calls = []
+
+    async def acomplete(self, messages, **kwargs):
+        self.calls.append((messages, kwargs))
+        return self.response
+
+
 @pytest.fixture(autouse=True)
 def clear_log_buffers():
     LogService._buffers.clear()
@@ -120,6 +144,116 @@ async def test_call_and_parse_model_prefers_structured_payload():
     assert call_kwargs["config"].response_json_schema["type"] == "object"
     assert "$defs" not in call_kwargs["config"].response_json_schema
     assert "title" not in call_kwargs["config"].response_json_schema
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_can_inherit_config_from_another_agent():
+    mock_client = AsyncMock()
+    mock_client.agent = "VolumePlannerAgent"
+    mock_client.task = "generate_volume_plan"
+    mock_client.config = TaskConfig(provider="anthropic", model="volume-model")
+    mock_client.acomplete.return_value = LLMResponse(
+        text="",
+        structured_payload={"title": "澄清结果", "tags": ["继承配置"]},
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            novel_id="novel-config-alias",
+            context_metadata={"purpose": "clarification"},
+            config_agent_name="VolumePlannerAgent",
+            config_task="generate_volume_plan",
+        )
+
+    assert result.title == "澄清结果"
+    mock_factory.get.assert_called_once_with("VolumePlannerAgent", task="generate_volume_plan")
+    call_kwargs = mock_client.acomplete.call_args.kwargs
+    assert call_kwargs["config"].response_tool_name == "emit_outline_clarify"
+    assert mock_client.agent == "OutlineClarificationAgent"
+    assert mock_client.task == "outline_clarify"
+
+    entries = LogService._buffers["novel-config-alias"]
+    assert any(
+        entry.get("agent") == "OutlineClarificationAgent"
+        and entry.get("task") == "outline_clarify"
+        and entry.get("metadata", {}).get("purpose") == "clarification"
+        for entry in entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_retags_nested_usage_identity_for_config_inheritance():
+    primary = DummyLLMClient(agent="VolumePlannerAgent", task="generate_volume_plan")
+    fallback = DummyLLMClient(agent="VolumePlannerAgent", task="generate_volume_plan")
+    client = DummyLLMClient(
+        agent="VolumePlannerAgent",
+        task="generate_volume_plan",
+        config=TaskConfig(provider="anthropic", model="volume-model"),
+        response=LLMResponse(text="", structured_payload={"title": "澄清结果", "tags": ["继承配置"]}),
+        primary=primary,
+        fallback=fallback,
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            config_agent_name="VolumePlannerAgent",
+            config_task="generate_volume_plan",
+        )
+
+    assert result.title == "澄清结果"
+    assert client.agent == "OutlineClarificationAgent"
+    assert client.task == "outline_clarify"
+    assert primary.agent == "OutlineClarificationAgent"
+    assert primary.task == "outline_clarify"
+    assert fallback.agent == "OutlineClarificationAgent"
+    assert fallback.task == "outline_clarify"
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_uses_config_identity_for_text_fallback():
+    mock_client = AsyncMock()
+    mock_client.config = None
+    mock_client.acomplete.return_value = LLMResponse(
+        text='{"title": "文本结果", "tags": ["继承配置"]}',
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "OutlineClarificationAgent",
+            "outline_clarify",
+            "prompt",
+            ExamplePayload,
+            max_retries=1,
+            novel_id="novel-config-text-alias",
+            context_metadata={"purpose": "text fallback"},
+            config_agent_name="BrainstormAgent",
+            config_task="generate_synopsis",
+        )
+
+    assert result.title == "文本结果"
+    assert result.tags == ["继承配置"]
+    mock_factory.get.assert_called_once_with("BrainstormAgent", task="generate_synopsis")
+
+    entries = LogService._buffers["novel-config-text-alias"]
+    assert any(
+        entry.get("agent") == "OutlineClarificationAgent"
+        and entry.get("task") == "outline_clarify"
+        and entry.get("metadata", {}).get("purpose") == "text fallback"
+        for entry in entries
+    )
 
 
 @pytest.mark.asyncio
@@ -307,13 +441,14 @@ async def test_call_and_parse_model_uses_regenerate_prompt_after_repair_attempt_
 async def test_call_and_parse_model_emits_frontend_visible_llm_node_logs():
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(text='{"title": "主线", "tags": ["成长"]}')
+    prompt = "prompt-" + ("很长的提示" * 80)
 
     with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
         result = await call_and_parse_model(
             "TestAgent",
             "test_task",
-            "prompt",
+            prompt,
             ExamplePayload,
             max_retries=3,
             novel_id="novel-logs",
@@ -326,6 +461,14 @@ async def test_call_and_parse_model_emits_frontend_visible_llm_node_logs():
     assert "succeeded" in statuses
     assert any(entry.get("event") == "agent.llm" and entry.get("node") == "llm_call" for entry in entries)
     assert any(entry.get("task") == "test_task" for entry in entries)
+    started = next(entry for entry in entries if entry.get("status") == "started")
+    metadata = started["metadata"]
+    assert metadata["prompt_chars"] == len(prompt)
+    assert len(metadata["prompt_preview"]) <= 300
+    assert metadata["prompt_preview"] != prompt
+    succeeded = next(entry for entry in entries if entry.get("status") == "succeeded")
+    assert succeeded["metadata"]["output_source"] == "text"
+    assert "finish_reason" in succeeded["metadata"]
 
 
 @pytest.mark.asyncio
@@ -393,6 +536,37 @@ async def test_call_and_parse_model_falls_back_to_json_text_when_tool_payload_mi
     assert second_config.response_tool_name is None
     assert second_config.response_json_schema is None
     assert any(entry.get("node") == "llm_text_fallback" for entry in LogService._buffers["novel-text-fallback"])
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_model_falls_back_to_json_text_when_tool_payload_is_empty_dict():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="primary")
+    markdown_score = "### plot_tension - 80/100\n理由: 有推进, 但不是 JSON。"
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=markdown_score, structured_payload={}, finish_reason="end_turn"),
+        LLMResponse(text='{"title": "文本模式", "tags": ["稳定"]}', finish_reason="end_turn"),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "TestAgent",
+            "empty_payload_task",
+            "prompt",
+            ExamplePayload,
+            max_retries=3,
+            novel_id="novel-empty-payload",
+        )
+
+    assert result.title == "文本模式"
+    assert mock_client.acomplete.call_count == 2
+    first_config = mock_client.acomplete.call_args_list[0].kwargs["config"]
+    second_config = mock_client.acomplete.call_args_list[1].kwargs["config"]
+    assert first_config.response_tool_name == "emit_empty_payload_task"
+    assert second_config.response_tool_name is None
+    assert second_config.response_json_schema is None
+    assert any(entry.get("node") == "llm_text_fallback" for entry in LogService._buffers["novel-empty-payload"])
 
 
 @pytest.mark.asyncio

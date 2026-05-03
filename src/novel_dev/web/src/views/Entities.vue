@@ -1,5 +1,5 @@
 <template>
-  <div class="entities-page entities-theme space-y-4">
+  <div class="entities-page entities-theme flex h-full min-h-0 flex-col gap-4">
     <div class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h2 class="text-xl font-bold">实体百科</h2>
@@ -16,7 +16,10 @@
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
 
     <template v-else>
-      <div class="grid gap-4 lg:grid-cols-[320px,minmax(0,1fr)] items-start">
+      <div
+        class="entities-page__content grid min-h-0 flex-1 overflow-hidden gap-4 lg:grid-cols-[320px,minmax(0,1fr)] lg:items-stretch"
+        data-testid="entities-workspace-layout"
+      >
         <EntityTree
           :nodes="store.entityTree"
           :search-query="store.entitySearchQuery"
@@ -30,7 +33,7 @@
           @select="handleNodeSelect"
         />
 
-        <div class="space-y-4 min-w-0">
+        <div class="min-w-0 min-h-0 space-y-4 overflow-auto pr-1">
           <div class="flex flex-wrap items-center justify-between gap-3">
             <div class="entities-page__meta text-sm">
               {{ workspaceStatusText }}
@@ -73,6 +76,7 @@
               @clear-override="clearOverride"
               @reclassify="reclassifyEntity"
               @select-entity="selectEntityById"
+              @open-source-session="openSourceSession"
             />
           </template>
 
@@ -89,6 +93,7 @@
               height="28rem"
               show-fullscreen-action
               @fullscreen="graphFullscreenVisible = true"
+              @open-source-session="openSourceSession"
             />
           </div>
         </div>
@@ -106,6 +111,7 @@
           :entities="graphEntities"
           :relationships="graphRelationships"
           height="calc(100vh - 10rem)"
+          @open-source-session="openSourceSession"
         />
       </el-dialog>
     </template>
@@ -114,6 +120,7 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { useNovelStore } from '@/stores/novel.js'
 import EntityGraph from '@/components/EntityGraph.vue'
@@ -122,6 +129,7 @@ import EntityGroupTable from '@/components/entities/EntityGroupTable.vue'
 import EntityDetailPanel from '@/components/entities/EntityDetailPanel.vue'
 
 const store = useNovelStore()
+const router = useRouter()
 const graphFullscreenVisible = ref(false)
 const entityLoading = ref(false)
 const workspaceView = ref('workspace')
@@ -245,6 +253,18 @@ function findNodeByEntityId(nodes = [], entityId) {
     if (match) return match
   }
   return null
+}
+
+function openSourceSession({ sessionId, changeId } = {}) {
+  if (!sessionId) return
+  router.push({
+    path: '/documents',
+    query: {
+      tab: 'ai',
+      session: sessionId,
+      ...(changeId ? { change: changeId } : {}),
+    },
+  })
 }
 
 async function runEntitySearch() {

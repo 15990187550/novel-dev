@@ -1,6 +1,8 @@
 import { defineComponent, h } from 'vue'
 import { mount } from '@vue/test-utils'
 import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import path from 'node:path'
 import EntityTree from './EntityTree.vue'
 
 const ElTreeStub = defineComponent({
@@ -92,6 +94,24 @@ describe('EntityTree', () => {
 
     expect(tree.props('defaultExpandAll')).not.toBe(true)
     expect(tree.props('defaultExpandedKeys')).toEqual(['category:other'])
+  })
+
+  it('keeps the catalog card full-height while only the tree body scrolls', () => {
+    const wrapper = mountTree()
+
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['h-full', 'min-h-0', 'flex', 'flex-col', 'overflow-hidden']))
+    expect(wrapper.get('[data-testid="entity-tree-scroll"]').classes()).toEqual(expect.arrayContaining([
+      'min-h-0',
+      'flex-1',
+      'overflow-auto',
+    ]))
+  })
+
+  it('contains wheel scrolling inside the tree body', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, './EntityTree.vue'), 'utf8')
+
+    expect(source).toMatch(/\.entity-tree__scroll\s*{[\s\S]*overscroll-behavior:\s*contain;/)
+    expect(source).toMatch(/\.entity-tree__scroll\s*{[\s\S]*scrollbar-gutter:\s*stable;/)
   })
 
   it('does not render internal group slugs in the group subtitle', () => {

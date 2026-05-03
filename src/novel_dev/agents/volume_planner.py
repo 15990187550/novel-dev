@@ -21,6 +21,7 @@ from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model, coerce_to_str_list, coerce_to_text
+from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
@@ -332,7 +333,23 @@ class VolumePlannerAgent:
 
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)
-        log_service.add_log(novel_id, "VolumePlannerAgent", f"规划第 {volume_number} 卷")
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            f"卷纲规划输入已准备：第 {volume_number} 卷",
+            node="volume_plan_input",
+            task="plan",
+            status="started",
+            metadata={
+                "volume_number": volume_number,
+                "synopsis_title": synopsis.title,
+                "estimated_volumes": synopsis.estimated_volumes,
+                "estimated_total_chapters": synopsis.estimated_total_chapters,
+                "current_volume_id": state.current_volume_id,
+                "current_chapter_id": state.current_chapter_id,
+                "checkpoint_keys": sorted(checkpoint.keys()),
+            },
+        )
 
         world_snapshot = await self._load_world_snapshot(novel_id) if volume_number > 1 else None
         await self._release_connection_before_external_call()
@@ -343,7 +360,24 @@ class VolumePlannerAgent:
         skip_full_revise = len(volume_plan.chapters) > self.MAX_AUTOREVISE_CHAPTERS
         while True:
             score = await self._generate_score(volume_plan, novel_id)
-            log_service.add_log(novel_id, "VolumePlannerAgent", f"第 {attempt + 1} 次评分: overall={score.overall}")
+            log_agent_detail(
+                novel_id,
+                "VolumePlannerAgent",
+                f"卷纲评分完成：overall={score.overall}",
+                node="volume_score",
+                task="score_volume_plan",
+                metadata={
+                    "attempt": attempt + 1,
+                    "overall": score.overall,
+                    "outline_fidelity": score.outline_fidelity,
+                    "character_plot_alignment": score.character_plot_alignment,
+                    "hook_distribution": score.hook_distribution,
+                    "foreshadowing_management": score.foreshadowing_management,
+                    "chapter_hooks": score.chapter_hooks,
+                    "page_turning": score.page_turning,
+                    "summary_feedback": score.summary_feedback,
+                },
+            )
             if self._is_acceptable(score):
                 log_service.add_log(novel_id, "VolumePlannerAgent", f"评分通过，overall={score.overall}")
                 break
@@ -357,7 +391,20 @@ class VolumePlannerAgent:
                 break
             attempt += 1
             checkpoint["volume_plan_attempt_count"] = attempt
-            log_service.add_log(novel_id, "VolumePlannerAgent", f"评分未通过，开始第 {attempt} 次修订")
+            log_agent_detail(
+                novel_id,
+                "VolumePlannerAgent",
+                f"卷纲评分未通过，开始第 {attempt} 次修订",
+                node="volume_revision",
+                task="revise_volume_plan",
+                status="started",
+                level="warning",
+                metadata={
+                    "attempt": attempt,
+                    "overall": score.overall,
+                    "reason": self._build_revise_feedback(score),
+                },
+            )
             if attempt >= 3:
                 log_service.add_log(novel_id, "VolumePlannerAgent", "已达最大修订次数", level="error")
                 checkpoint["current_volume_plan"] = self._build_reviewed_volume_plan_payload(
@@ -407,7 +454,28 @@ class VolumePlannerAgent:
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
         checkpoint["volume_plan_attempt_count"] = 0
         await self._persist_volume_plan_artifacts(novel_id, volume_plan)
-        log_service.add_log(novel_id, "VolumePlannerAgent", f"分卷规划完成: {volume_plan.title}，共 {len(volume_plan.chapters)} 章")
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            f"分卷规划完成：{volume_plan.title}，共 {len(volume_plan.chapters)} 章",
+            node="volume_plan_result",
+            task="plan",
+            metadata={
+                "volume_id": volume_plan.volume_id,
+                "title": volume_plan.title,
+                "chapter_count": len(volume_plan.chapters),
+                "estimated_total_words": volume_plan.estimated_total_words,
+                "chapters": [
+                    {
+                        "chapter_id": chapter.chapter_id,
+                        "chapter_number": chapter.chapter_number,
+                        "title": chapter.title,
+                        "summary_preview": preview_text(chapter.summary),
+                    }
+                    for chapter in volume_plan.chapters[:12]
+                ],
+            },
+        )
 
         await self.director.save_checkpoint(
             novel_id,
@@ -589,7 +657,22 @@ class VolumePlannerAgent:
         generation_instruction: str = "",
         target_chapters: Optional[int] = None,
     ) -> VolumePlan:
-        log_service.add_log(novel_id, "VolumePlannerAgent", "开始生成卷纲")
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲生成输入摘要已准备",
+            node="volume_generate_input",
+            task="generate_volume_plan",
+            status="started",
+            metadata={
+                "volume_number": volume_number,
+                "synopsis_title": synopsis.title,
+                "synopsis_chars": len(synopsis.model_dump_json()),
+                "world_snapshot_present": bool(world_snapshot),
+                "generation_instruction_preview": preview_text(generation_instruction, 300),
+                "target_chapters": target_chapters,
+            },
+        )
         MAX_CHARS = 8000
         truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
         chapter_range = self._suggest_volume_chapter_range(synopsis, target_chapters=target_chapters)
@@ -765,7 +848,20 @@ class VolumePlannerAgent:
             entity_highlights=blueprint.entity_highlights,
             relationship_highlights=blueprint.relationship_highlights,
         )
-        log_service.add_log(novel_id, "VolumePlannerAgent", f"卷纲生成完成: {result.title}")
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            f"卷纲生成完成：{result.title}",
+            node="volume_generate_result",
+            task="generate_volume_plan",
+            metadata={
+                "volume_id": result.volume_id,
+                "title": result.title,
+                "chapter_count": len(result.chapters),
+                "chapter_batch_count": math.ceil(len(result.chapters) / self.CHAPTER_BATCH_SIZE) if result.chapters else 0,
+                "chapters": named_items([chapter.model_dump() for chapter in result.chapters[:12]]),
+            },
+        )
         return result
 
     async def _repair_blueprint_constraint_violations(

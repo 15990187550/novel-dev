@@ -33,10 +33,18 @@ vi.mock('@/api.js', () => ({
   getBrainstormWorkspace: vi.fn(),
   startBrainstormWorkspace: vi.fn(),
   submitBrainstormWorkspace: vi.fn(),
+  updateBrainstormSuggestionCard: vi.fn(),
   submitOutlineFeedback: vi.fn(),
   autoRunChapters: vi.fn(),
+  rewriteChapter: vi.fn(),
   stopCurrentFlow: vi.fn(),
   getGenerationJob: vi.fn(),
+  getChapterRewriteJobs: vi.fn(),
+  getSettingWorkbench: vi.fn(),
+  createSettingSession: vi.fn(),
+  getSettingSession: vi.fn(),
+  replySettingSession: vi.fn(),
+  generateSettingReviewBatch: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -45,6 +53,7 @@ describe('novel store dashboard loading', () => {
     vi.clearAllMocks()
     vi.mocked(api.getSynopsis).mockResolvedValue(null)
     vi.mocked(api.getVolumePlan).mockResolvedValue(null)
+    vi.mocked(api.getChapterRewriteJobs).mockResolvedValue({ items: [] })
   })
 
   it('marks every dashboard panel ready after loadDashboardSupplemental succeeds', async () => {
@@ -125,6 +134,43 @@ describe('novel store dashboard loading', () => {
     expect(store.synopsisData).toEqual({ title: '道照诸天' })
   })
 
+  it('loads persisted rewrite jobs so failed chapters can continue after refresh', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    vi.mocked(api.getNovelState).mockResolvedValue({
+      current_phase: 'context_preparation',
+      current_chapter_id: 'ch-1',
+      checkpoint_data: {
+        current_volume_plan: {
+          chapters: [{ chapter_id: 'ch-1', summary: '第一章计划摘要' }],
+        },
+      },
+    })
+    vi.mocked(api.getArchiveStats).mockResolvedValue({})
+    vi.mocked(api.getChapters).mockResolvedValue({
+      items: [{ chapter_id: 'ch-1', title: '第一章', status: 'edited', word_count: 4401 }],
+    })
+    vi.mocked(api.getChapterRewriteJobs).mockResolvedValue({
+      items: [{
+        chapter_id: 'ch-1',
+        job: {
+          job_id: 'job-failed-rewrite',
+          status: 'failed',
+          job_type: 'chapter_rewrite',
+          request_payload: { chapter_id: 'ch-1' },
+          result_payload: { resume_from_stage: 'librarian_archive' },
+        },
+      }],
+    })
+
+    await store.refreshState()
+
+    expect(api.getChapterRewriteJobs).toHaveBeenCalledWith('novel-1')
+    expect(store.chapterRewriteJobs['ch-1'].job_id).toBe('job-failed-rewrite')
+    expect(store.chapterRewriteJobs['ch-1'].status).toBe('failed')
+  })
+
   it('uses explicit novel title instead of synopsis title for display', () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -163,6 +209,165 @@ describe('novel store dashboard loading', () => {
     expect(api.updateNovel).toHaveBeenCalledWith('novel-1', '新项目名')
     expect(store.novelTitle).toBe('新项目名')
     expect(store.novelState.checkpoint_data.synopsis_data.title).toBe('总纲标题')
+  })
+
+  it('loads setting workbench sessions and review batches', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.getSettingWorkbench).mockResolvedValue({
+      sessions: [{ id: 'sgs_1', title: '修炼体系', status: 'clarifying' }],
+      review_batches: [{ id: 'srb_1', summary: '新增 1 张设定卡片', status: 'pending' }],
+    })
+
+    await store.fetchSettingWorkbench()
+
+    expect(api.getSettingWorkbench).toHaveBeenCalledWith('novel-1')
+    expect(store.settingWorkbench.state).toBe('ready')
+    expect(store.settingWorkbench.sessions[0].title).toBe('修炼体系')
+    expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
+  })
+
+  it('creates, replies to, and generates a setting session review batch', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.createSettingSession).mockResolvedValue({
+      id: 'sgs_2',
+      title: '主角阵营设定',
+      status: 'clarifying',
+    })
+    vi.mocked(api.getSettingSession).mockResolvedValue({
+      session: { id: 'sgs_2', title: '主角阵营设定', status: 'clarifying' },
+      messages: [{ role: 'assistant', content: '请补充目标。' }],
+    })
+    vi.mocked(api.replySettingSession).mockResolvedValue({
+      session: { id: 'sgs_2', title: '主角阵营设定', status: 'ready_to_generate' },
+      assistant_message: '信息足够，可以生成。',
+      questions: [],
+    })
+    vi.mocked(api.generateSettingReviewBatch).mockResolvedValue({
+      id: 'srb_2',
+      summary: '新增 1 张设定卡片',
+      status: 'pending',
+    })
+
+    const session = await store.createSettingSession({
+      title: '主角阵营设定',
+      initial_idea: '废脉少年',
+      target_categories: [],
+    })
+    await store.loadSettingSession(session.id)
+    await store.replySettingSession('阵营目标是保护底层散修。')
+    await store.generateSettingReviewBatch()
+
+    expect(store.settingWorkbench.selectedSession.status).toBe('generated')
+    expect(store.settingWorkbench.selectedMessages.map((message) => message.content)).toContain('信息足够，可以生成。')
+    expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
+  })
+
+  it('ignores stale setting workbench and session responses', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const staleWorkbench = createDeferred()
+    vi.mocked(api.getSettingWorkbench)
+      .mockReturnValueOnce(staleWorkbench.promise)
+      .mockResolvedValueOnce({
+        sessions: [{ id: 'sgs_new', title: '新会话', status: 'clarifying' }],
+        review_batches: [],
+      })
+
+    const firstFetch = store.fetchSettingWorkbench()
+    const secondFetch = store.fetchSettingWorkbench()
+    await secondFetch
+    staleWorkbench.resolve({
+      sessions: [{ id: 'sgs_old', title: '旧会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+    await firstFetch
+
+    expect(store.settingWorkbench.sessions.map((session) => session.id)).toEqual(['sgs_new'])
+
+    const staleSession = createDeferred()
+    vi.mocked(api.getSettingSession)
+      .mockReturnValueOnce(staleSession.promise)
+      .mockResolvedValueOnce({
+        session: { id: 'sgs_new', title: '新会话', status: 'ready_to_generate' },
+        messages: [{ role: 'assistant', content: '新消息' }],
+      })
+
+    const firstLoad = store.loadSettingSession('sgs_old')
+    const secondLoad = store.loadSettingSession('sgs_new')
+    await secondLoad
+    staleSession.resolve({
+      session: { id: 'sgs_old', title: '旧会话', status: 'clarifying' },
+      messages: [{ role: 'assistant', content: '旧消息' }],
+    })
+    await firstLoad
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_new')
+    expect(store.settingWorkbench.selectedMessages[0].content).toBe('新消息')
+  })
+
+  it('ignores stale setting workbench responses after switching novels', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-a'
+    const staleWorkbench = createDeferred()
+    vi.mocked(api.getSettingWorkbench).mockReturnValueOnce(staleWorkbench.promise)
+
+    const firstFetch = store.fetchSettingWorkbench()
+    store.novelId = 'novel-b'
+    store.settingWorkbench = {
+      ...store.settingWorkbench,
+      sessions: [],
+      reviewBatches: [],
+      requestToken: 0,
+    }
+    vi.mocked(api.getSettingWorkbench).mockResolvedValueOnce({
+      sessions: [{ id: 'sgs_b', title: 'B 会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+
+    await store.fetchSettingWorkbench()
+    staleWorkbench.resolve({
+      sessions: [{ id: 'sgs_a', title: 'A 会话', status: 'clarifying' }],
+      review_batches: [],
+    })
+    await firstFetch
+
+    expect(store.settingWorkbench.sessions.map((session) => session.id)).toEqual(['sgs_b'])
+  })
+
+  it('does not apply reply or generation results to a newly selected session', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_a'
+    store.settingWorkbench.selectedSession = { id: 'sgs_a', title: '会话 A', status: 'clarifying' }
+    vi.mocked(api.replySettingSession).mockImplementation(async () => {
+      store.settingWorkbench.selectedSessionId = 'sgs_b'
+      store.settingWorkbench.selectedSession = { id: 'sgs_b', title: '会话 B', status: 'clarifying' }
+      return {
+        session: { id: 'sgs_a', title: '会话 A', status: 'ready_to_generate' },
+        assistant_message: 'A 已就绪',
+        questions: [],
+      }
+    })
+
+    await store.replySettingSession('回答 A')
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_b')
+    expect(store.settingWorkbench.selectedSession.status).toBe('clarifying')
+    expect(store.settingWorkbench.selectedMessages).toEqual([])
+
+    vi.mocked(api.generateSettingReviewBatch).mockImplementation(async () => {
+      store.settingWorkbench.selectedSessionId = 'sgs_c'
+      store.settingWorkbench.selectedSession = { id: 'sgs_c', title: '会话 C', status: 'clarifying' }
+      return { id: 'srb_a', summary: 'A 的审核记录', status: 'pending' }
+    })
+
+    await store.generateSettingReviewBatch()
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs_c')
+    expect(store.settingWorkbench.selectedSession.status).toBe('clarifying')
+    expect(store.settingWorkbench.reviewBatches[0].id).toBe('srb_a')
   })
 
   it('marks a failed supplemental panel as error and clears its stale data', async () => {
@@ -992,6 +1197,55 @@ describe('novel store dashboard loading', () => {
     expect(store.brainstormWorkspace.data).toBeNull()
   })
 
+  it('updateBrainstormSuggestionCard updates workspace data from API response', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      setting_suggestion_cards: [{ card_id: 'card-1', status: 'active' }],
+    }
+    vi.mocked(api.updateBrainstormSuggestionCard).mockResolvedValue({
+      workspace: {
+        workspace_id: 'ws-1',
+        novel_id: 'novel-1',
+        status: 'active',
+        setting_suggestion_cards: [{ card_id: 'card-1', status: 'resolved' }],
+      },
+      pending_extraction: null,
+    })
+
+    const result = await store.updateBrainstormSuggestionCard('card-1', 'resolve')
+
+    expect(api.updateBrainstormSuggestionCard).toHaveBeenCalledWith(
+      'novel-1',
+      'card-1',
+      { action: 'resolve' }
+    )
+    expect(result.pending_extraction).toBeNull()
+    expect(store.brainstormWorkspace.data.setting_suggestion_cards[0].status).toBe('resolved')
+    expect(store.brainstormWorkspace.updatingCardId).toBe('')
+  })
+
+  it('updateBrainstormSuggestionCard keeps workspace and records error on failure', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      setting_suggestion_cards: [{ card_id: 'card-1', status: 'active' }],
+    }
+    vi.mocked(api.updateBrainstormSuggestionCard).mockRejectedValue(new Error('状态不允许'))
+
+    await expect(store.updateBrainstormSuggestionCard('card-1', 'resolve')).rejects.toThrow('状态不允许')
+
+    expect(store.brainstormWorkspace.data.setting_suggestion_cards[0].status).toBe('active')
+    expect(store.brainstormWorkspace.error).toBe('状态不允许')
+    expect(store.brainstormWorkspace.updatingCardId).toBe('')
+  })
+
   it('stopCurrentFlow requests backend stop and refreshes state', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -1077,6 +1331,69 @@ describe('novel store dashboard loading', () => {
     expect(api.getGenerationJob).toHaveBeenCalledWith('novel-1', 'job-1')
     expect(store.autoRunJob.status).toBe('failed')
     expect(store.autoRunLastResult.error).toBe('draft exploded')
+  })
+
+  it('starts and refreshes chapter rewrite jobs independently from auto-run state', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshState = vi.fn().mockResolvedValue()
+    store.fetchEntities = vi.fn().mockResolvedValue()
+    store.fetchTimelines = vi.fn().mockResolvedValue()
+    store.fetchSpacelines = vi.fn().mockResolvedValue()
+    store.fetchForeshadowings = vi.fn().mockResolvedValue()
+    vi.mocked(api.rewriteChapter).mockResolvedValue({
+      job_id: 'job-rewrite-1',
+      status: 'queued',
+      job_type: 'chapter_rewrite',
+      request_payload: { chapter_id: 'ch-1' },
+    })
+    vi.mocked(api.getGenerationJob).mockResolvedValue({
+      job_id: 'job-rewrite-1',
+      status: 'succeeded',
+      result_payload: { chapter_id: 'ch-1', status: 'succeeded' },
+    })
+
+    const job = await store.rewriteChapter('ch-1')
+    await store.refreshChapterRewriteJob('ch-1')
+
+    expect(api.rewriteChapter).toHaveBeenCalledWith('novel-1', 'ch-1')
+    expect(job.job_type).toBe('chapter_rewrite')
+    expect(store.autoRunJob).toBeNull()
+    expect(store.chapterRewriteJobs['ch-1'].status).toBe('succeeded')
+    expect(store.chapterRewriteLastResults['ch-1']).toEqual({ chapter_id: 'ch-1', status: 'succeeded' })
+    expect(store.fetchEntities).toHaveBeenCalledTimes(1)
+    expect(store.fetchTimelines).toHaveBeenCalledTimes(1)
+    expect(store.fetchSpacelines).toHaveBeenCalledTimes(1)
+    expect(store.fetchForeshadowings).toHaveBeenCalledTimes(1)
+    expect(store.loadingActions['rewrite:ch-1']).toBe(false)
+  })
+
+  it('passes resume options when continuing a failed chapter rewrite', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.refreshState = vi.fn().mockResolvedValue()
+    vi.mocked(api.rewriteChapter).mockResolvedValue({
+      job_id: 'job-resume-1',
+      status: 'queued',
+      job_type: 'chapter_rewrite',
+      request_payload: {
+        chapter_id: 'ch-1',
+        resume: true,
+        failed_job_id: 'job-failed-1',
+      },
+    })
+
+    const job = await store.rewriteChapter('ch-1', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    })
+
+    expect(api.rewriteChapter).toHaveBeenCalledWith('novel-1', 'ch-1', {
+      resume: true,
+      failed_job_id: 'job-failed-1',
+    })
+    expect(job.job_id).toBe('job-resume-1')
+    expect(store.chapterRewriteJobs['ch-1'].request_payload.resume).toBe(true)
   })
 
   it('executeAction stores structured auto-run failure details', async () => {

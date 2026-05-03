@@ -68,4 +68,43 @@ describe('EntityGraph', () => {
 
     expect(wrapper.text()).toContain('暂无关系图谱数据')
   })
+
+  it('renders source backlink action for a selected AI generated relationship', async () => {
+    const wrapper = mount(EntityGraph, {
+      props: {
+        entities: [
+          { entity_id: 'hero', name: '陆照', type: 'character' },
+          { entity_id: 'manual', name: '道经', type: 'item' },
+        ],
+        relationships: [
+          {
+            source_id: 'hero',
+            target_id: 'manual',
+            relation_type: '持有',
+            source_type: 'ai',
+            source_session_id: 'sgs_1',
+            source_review_change_id: 'chg_1',
+          },
+        ],
+      },
+      global: { stubs: { ElButton: true } },
+    })
+
+    wrapper.vm.onClick({
+      dataType: 'edge',
+      data: {
+        source: 'hero',
+        target: 'manual',
+        value: '持有',
+      },
+    })
+    await wrapper.vm.$nextTick()
+
+    const button = wrapper.get('.entity-ai-badge')
+    expect(button.text()).toBe('AI 生成 · 查看会话')
+
+    await button.trigger('click')
+
+    expect(wrapper.emitted('open-source-session')?.[0]).toEqual([{ sessionId: 'sgs_1', changeId: 'chg_1' }])
+  })
 })

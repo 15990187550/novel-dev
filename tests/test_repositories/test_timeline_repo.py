@@ -14,6 +14,17 @@ async def test_timeline_crud(async_session):
 
 
 @pytest.mark.asyncio
+async def test_get_current_tick_returns_latest_when_novel_has_multiple_events(async_session):
+    repo = TimelineRepository(async_session)
+    await repo.create(tick=1, narrative="event 1", novel_id="n_multi_tick")
+    await repo.create(tick=3, narrative="event 3", novel_id="n_multi_tick")
+
+    latest = await repo.get_current_tick(novel_id="n_multi_tick")
+
+    assert latest == 3
+
+
+@pytest.mark.asyncio
 async def test_spaceline_chain(async_session):
     repo = SpacelineRepository(async_session)
     await repo.create("continent_1", "Tianxuan", parent_id=None)

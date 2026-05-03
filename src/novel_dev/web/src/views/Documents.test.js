@@ -25,9 +25,18 @@ const {
   getKnowledgeDomainsMock,
   confirmKnowledgeDomainScopeMock,
   disableKnowledgeDomainMock,
+  deleteKnowledgeDomainMock,
   updateLibraryDocumentMock,
   rollbackStyleProfileMock,
+  getSettingWorkbenchMock,
+  getSettingSessionMock,
+  createSettingSessionMock,
+  replySettingSessionMock,
+  generateSettingReviewBatchMock,
   successMessageMock,
+  confirmMessageBoxMock,
+  routerPushMock,
+  routerReplaceMock,
 } = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
   deletePendingDocMock: vi.fn(),
@@ -38,9 +47,22 @@ const {
   getKnowledgeDomainsMock: vi.fn(),
   confirmKnowledgeDomainScopeMock: vi.fn(),
   disableKnowledgeDomainMock: vi.fn(),
+  deleteKnowledgeDomainMock: vi.fn(),
   updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
+  getSettingWorkbenchMock: vi.fn(),
+  getSettingSessionMock: vi.fn(),
+  createSettingSessionMock: vi.fn(),
+  replySettingSessionMock: vi.fn(),
+  generateSettingReviewBatchMock: vi.fn(),
   successMessageMock: vi.fn(),
+  confirmMessageBoxMock: vi.fn(),
+  routerPushMock: vi.fn(),
+  routerReplaceMock: vi.fn(),
+}))
+
+const routeState = vi.hoisted(() => ({
+  query: {},
 }))
 
 vi.mock('@/api.js', () => ({
@@ -53,14 +75,31 @@ vi.mock('@/api.js', () => ({
   getKnowledgeDomains: getKnowledgeDomainsMock,
   confirmKnowledgeDomainScope: confirmKnowledgeDomainScopeMock,
   disableKnowledgeDomain: disableKnowledgeDomainMock,
+  deleteKnowledgeDomain: deleteKnowledgeDomainMock,
   updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
+  getSettingWorkbench: getSettingWorkbenchMock,
+  getSettingSession: getSettingSessionMock,
+  createSettingSession: createSettingSessionMock,
+  replySettingSession: replySettingSessionMock,
+  generateSettingReviewBatch: generateSettingReviewBatchMock,
 }))
 
 vi.mock('element-plus', () => ({
   ElMessage: {
     success: successMessageMock,
   },
+  ElMessageBox: {
+    confirm: confirmMessageBoxMock,
+  },
+}))
+
+vi.mock('vue-router', () => ({
+  useRoute: () => routeState,
+  useRouter: () => ({
+    push: routerPushMock,
+    replace: routerReplaceMock,
+  }),
 }))
 
 const ElButtonStub = defineComponent({
@@ -135,10 +174,21 @@ describe('Documents', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.clearAllMocks()
+    routeState.query = {}
     getDocumentLibraryMock.mockResolvedValue({ items: [], active_style_profile_version: null })
     getKnowledgeDomainsMock.mockResolvedValue({ items: [] })
+    getSettingWorkbenchMock.mockResolvedValue({ sessions: [], review_batches: [] })
+    getSettingSessionMock.mockResolvedValue({ session: null, messages: [], review_batches: [] })
+    createSettingSessionMock.mockResolvedValue({ id: 'sgs_new', title: '新设定', status: 'clarifying' })
+    replySettingSessionMock.mockResolvedValue({
+      session: { id: 'sgs_new', title: '新设定', status: 'clarifying' },
+      assistant_message: '请继续补充。',
+      questions: ['还需要什么势力？'],
+    })
     confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
     disableKnowledgeDomainMock.mockResolvedValue({ item: {} })
+    deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
+    confirmMessageBoxMock.mockResolvedValue()
     rollbackStyleProfileMock.mockResolvedValue({ rolled_back_to_version: 1 })
   })
 
@@ -332,7 +382,16 @@ describe('Documents', () => {
   it('renders imported setting docs and style profile in the library section', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
-    store.pendingDocs = []
+    store.pendingDocs = [
+      {
+        id: 'doc-tab',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
     store.fetchDocuments = vi.fn().mockResolvedValue()
 
     getDocumentLibraryMock.mockResolvedValue({
@@ -373,6 +432,101 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('轻快吐槽里包着热血推进。')
     expect(wrapper.text()).toContain('当前生效')
     expect(wrapper.text()).toContain('短句推进')
+  })
+
+  it('renames import review records to unified review records and marks import rows by source', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-1',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('审核记录')
+    expect(wrapper.text()).toContain('导入资料')
+    expect(wrapper.text()).toContain('AI 设定会话')
+    expect(wrapper.text()).toContain('后续优化')
+    expect(wrapper.text()).not.toContain('导入审核记录')
+  })
+
+  it('shows AI badge next to AI sourced setting cards and opens the source session', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    getDocumentLibraryMock.mockResolvedValue({
+      items: [
+        {
+          id: 'doc-ai',
+          doc_type: 'setting',
+          title: '修炼体系',
+          content: '九境。',
+          version: 1,
+          updated_at: '2026-04-23T00:00:00Z',
+          is_active: true,
+          source_type: 'ai',
+          source_session_id: 'sgs_1',
+          source_review_change_id: 'chg_1',
+        },
+      ],
+      active_style_profile_version: null,
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('修炼体系')
+    const badge = wrapper.get('.documents-ai-badge')
+    expect(badge.text()).toBe('AI')
+
+    await badge.trigger('click')
+
+    expect(routerPushMock).toHaveBeenCalledWith({
+      path: '/documents',
+      query: { tab: 'ai', session: 'sgs_1', change: 'chg_1' },
+    })
+  })
+
+  it('switches to the AI setting tab and keeps the shared library area below', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-tab',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('导入设定 / 文风样本')
+    expect(wrapper.text()).toContain('当前资料库')
+
+    await wrapper.get('[data-testid="documents-tab-ai"]').trigger('click')
+    await flushPromises()
+
+    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/documents', query: { tab: 'ai' } })
+    expect(wrapper.find('[data-testid="setting-ai-panel"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('导入设定 / 文风样本')
+    expect(wrapper.text()).toContain('当前资料库')
+    expect(wrapper.text()).toContain('审核记录')
   })
 
   it('renders knowledge domains and confirms suggested scope', async () => {
@@ -1003,6 +1157,83 @@ describe('Documents', () => {
     expect(wrapper.text()).toContain('彼岸传承者')
   })
 
+  it('saves the active draft field before approving the pending document', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-significance',
+        source_filename: '道经.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        created_at: '2026-04-22T00:00:00Z',
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'create',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '', new_value: '核心功法' },
+                { field: 'significance', label: '重要性', old_value: '', new_value: '旧的重要性' },
+              ],
+            },
+          ],
+        },
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    const editedSignificance = '让主角提前获得高阶特征，是核心外挂与正统修炼的象征'
+    updatePendingDraftFieldMock.mockResolvedValue({
+      item: {
+        ...store.pendingDocs[0],
+        diff_result: {
+          summary: '1 个新增实体',
+          entity_diffs: [
+            {
+              entity_type: 'item',
+              entity_name: '道经',
+              operation: 'create',
+              field_changes: [
+                { field: 'description', label: '描述', old_value: '', new_value: '核心功法' },
+                { field: 'significance', label: '重要性', old_value: '', new_value: editedSignificance },
+              ],
+            },
+          ],
+        },
+      },
+    })
+    approvePendingMock.mockResolvedValue({})
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const detailButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    const editButtons = wrapper.findAll('.documents-draft-field__edit')
+    await editButtons[1].trigger('click')
+    await nextTick()
+
+    await wrapper.find('.documents-draft-field__input').setValue(editedSignificance)
+    const approveButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '批准')
+    await approveButton.trigger('click')
+    await flushPromises()
+
+    expect(updatePendingDraftFieldMock).toHaveBeenCalledWith('novel-1', 'doc-significance', {
+      entity_type: 'item',
+      entity_name: '道经',
+      field: 'significance',
+      value: editedSignificance,
+    })
+    expect(approvePendingMock).toHaveBeenCalledWith('novel-1', 'doc-significance', [])
+    expect(updatePendingDraftFieldMock.mock.invocationCallOrder[0]).toBeLessThan(
+      approvePendingMock.mock.invocationCallOrder[0]
+    )
+  })
+
   it('cancels a draft field edit on Escape without closing the detail content', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -1346,5 +1577,44 @@ describe('Documents', () => {
       global.FileReader = originalFileReader
       vi.useRealTimers()
     }
+  })
+
+  it('confirms and deletes a knowledge domain with its local documents and entities', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.knowledgeDomains = [
+      {
+        id: 'domain-1',
+        name: '仙逆',
+        is_active: true,
+        scope_status: 'confirmed',
+        activation_mode: 'auto',
+        activation_keywords: ['仙逆'],
+        suggested_scopes: [],
+        confirmed_scopes: [],
+        rules: {},
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchKnowledgeDomains = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const deleteButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '删除')
+    expect(deleteButton).toBeTruthy()
+    await deleteButton.trigger('click')
+    await flushPromises()
+
+    expect(confirmMessageBoxMock).toHaveBeenCalledWith(
+      expect.stringContaining('仙逆'),
+      '删除规则域',
+      expect.objectContaining({ type: 'warning' })
+    )
+    expect(deleteKnowledgeDomainMock).toHaveBeenCalledWith('novel-1', 'domain-1')
+    expect(store.fetchDocuments).toHaveBeenCalled()
+    expect(store.fetchKnowledgeDomains).toHaveBeenCalledWith(true)
+    expect(successMessageMock).toHaveBeenCalledWith('规则域已删除，已清理 2 份局部文档、3 个局部实体')
   })
 })

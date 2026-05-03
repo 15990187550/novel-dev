@@ -10,7 +10,9 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QualityGateService
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +120,10 @@ class FastReviewAgent:
             "检查两点并返回严格 JSON:\n"
             "1. consistency_fixed: 精修文本是否修复了与设定/上下文的不一致\n"
             "2. beat_cohesion_ok: 节拍之间是否连贯\n"
-            "3. notes: 问题列表(字符串数组)\n"
+            "3. notes: 问题列表(字符串数组),最多 3 条,每条不超过 60 个汉字。"
+            "只写结论短句,不要展开长段分析。若没有问题返回空数组。"
+            "如果精修文本仍有 AI 味残留,必须写入 notes,"
+            "尤其是比喻过密、抽象玄幻词复读、感官平均用力、模板化奇遇/入体演出或现代吐槽突兀。\n"
             "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
             f"### 章节上下文\n{json.dumps(chapter_context, ensure_ascii=False)}\n\n"
             f"### 原始草稿\n{raw}\n\n"
@@ -138,8 +143,76 @@ class FastReviewAgent:
                 novel_id,
                 "FastReviewAgent",
                 f"LLM 一致性检查: consistency={result.consistency_fixed}, cohesion={result.beat_cohesion_ok}",
-            )
+        )
         return result
+
+    async def _safe_llm_check_consistency_and_cohesion(
+        self, polished: str, raw: str, chapter_context: dict, novel_id: str = ""
+    ) -> FastReviewLLMCheck:
+        try:
+            return await self._llm_check_consistency_and_cohesion(polished, raw, chapter_context, novel_id)
+        except Exception as exc:
+            log_agent_detail(
+                novel_id,
+                "FastReviewAgent",
+                "快速评审模型解析失败，退回 editing",
+                node="fast_review_llm_fallback",
+                task="review",
+                status="failed",
+                level="warning",
+                metadata={"error": f"{type(exc).__name__}: {exc}"},
+            )
+            return FastReviewLLMCheck(
+                consistency_fixed=False,
+                beat_cohesion_ok=False,
+                notes=["快速评审模型输出解析失败，需退回精修复核"],
+            )
+
+    async def _score_final_text(
+        self,
+        *,
+        novel_id: str,
+        chapter_id: str,
+        polished: str,
+        chapter_context: dict,
+        fallback_score: int | None,
+        fallback_feedback: dict | None,
+    ) -> tuple[int | None, dict]:
+        if not polished:
+            return fallback_score, fallback_feedback or {}
+        try:
+            from novel_dev.agents.critic_agent import CriticAgent
+
+            score = await CriticAgent(self.session)._generate_score(polished, chapter_context, novel_id)
+            feedback = {
+                "summary_feedback": score.summary_feedback,
+                "breakdown": {
+                    dim.name: {"score": dim.score, "comment": dim.comment}
+                    for dim in score.dimensions
+                },
+                "per_dim_issues": [issue.model_dump() for issue in score.per_dim_issues],
+            }
+            log_agent_detail(
+                novel_id,
+                "FastReviewAgent",
+                f"成稿复评完成：overall={score.overall}",
+                node="final_review_score",
+                task="review",
+                metadata={"chapter_id": chapter_id, "overall": score.overall},
+            )
+            return score.overall, feedback
+        except Exception as exc:
+            log_agent_detail(
+                novel_id,
+                "FastReviewAgent",
+                "成稿复评失败，回退到草稿评分",
+                node="final_review_score",
+                task="review",
+                status="failed",
+                level="warning",
+                metadata={"chapter_id": chapter_id, "error": f"{type(exc).__name__}: {exc}"},
+            )
+            return fallback_score, fallback_feedback or {}
 
     @logged_agent_step("FastReviewAgent", "快速评审章节", node="fast_review", task="review")
     async def review(self, novel_id: str, chapter_id: str) -> FastReviewReport:
@@ -161,6 +234,22 @@ class FastReviewAgent:
         target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
+        log_agent_detail(
+            novel_id,
+            "FastReviewAgent",
+            "快速评审输入已准备",
+            node="fast_review_input",
+            task="review",
+            status="started",
+            metadata={
+                "chapter_id": chapter_id,
+                "target_word_count": target,
+                "raw_chars": len(raw),
+                "polished_chars": len(polished),
+                "polished_preview": preview_text(polished, 300),
+                "edit_attempt_count": checkpoint.get("edit_attempt_count", 0),
+            },
+        )
 
         word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
@@ -181,7 +270,7 @@ class FastReviewAgent:
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
         }
         if language_style_ok:
-            llm_result = await self._llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            llm_result = await self._safe_llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
             consistency_fixed = llm_result.consistency_fixed
             beat_cohesion_ok = llm_result.beat_cohesion_ok
             notes = list(llm_result.notes)
@@ -204,12 +293,29 @@ class FastReviewAgent:
         )
 
         passed = all([word_count_ok, consistency_fixed, ai_flavor_reduced, beat_cohesion_ok, language_style_ok])
-        log_service.add_log(
+        log_agent_detail(
             novel_id,
             "FastReviewAgent",
             f"快速评审结果: {'通过' if passed else '未通过'} "
             f"(字数={word_count_ok}, 一致性={consistency_fixed}, AI腔={ai_flavor_reduced}, "
             f"连贯={beat_cohesion_ok}, 语言={language_style_ok})",
+            node="fast_review_result",
+            task="review",
+            status="succeeded" if passed else "failed",
+            level="info" if passed else "warning",
+            metadata={
+                "chapter_id": chapter_id,
+                "passed": passed,
+                "word_count_ok": word_count_ok,
+                "consistency_fixed": consistency_fixed,
+                "ai_flavor_reduced": ai_flavor_reduced,
+                "beat_cohesion_ok": beat_cohesion_ok,
+                "language_style_ok": language_style_ok,
+                "notes": notes,
+                "target_word_count": target,
+                "raw_word_count": _word_count(raw),
+                "polished_word_count": _word_count(polished),
+            },
         )
 
         await self.chapter_repo.update_fast_review(
@@ -220,24 +326,112 @@ class FastReviewAgent:
 
         edit_attempts = checkpoint.get("edit_attempt_count", 0)
         if passed or edit_attempts >= MAX_EDIT_ATTEMPTS:
-            # 通过或已达编辑上限,都放行进 Librarian,避免死循环阻塞连载
-            if not passed:
+            final_score, final_feedback = await self._score_final_text(
+                novel_id=novel_id,
+                chapter_id=chapter_id,
+                polished=polished,
+                chapter_context=checkpoint.get("chapter_context", {}),
+                fallback_score=ch.final_review_score if ch.final_review_score is not None else ch.score_overall,
+                fallback_feedback=ch.final_review_feedback or ch.review_feedback,
+            )
+            gate = QualityGateService.evaluate_fast_review(
+                report,
+                target_word_count=target,
+                polished_word_count=_word_count(polished),
+                final_review_score=final_score,
+            )
+            checkpoint["quality_gate"] = gate.model_dump()
+            await self.chapter_repo.update_quality_gate(
+                chapter_id,
+                quality_status=gate.status,
+                quality_reasons=gate.model_dump(),
+                final_review_score=final_score,
+                final_review_feedback=final_feedback,
+                draft_review_score=ch.draft_review_score if ch.draft_review_score is not None else ch.score_overall,
+                draft_review_feedback=ch.draft_review_feedback or ch.review_feedback,
+                world_state_ingested=False,
+            )
+
+            if gate.status == QUALITY_BLOCK:
+                log_agent_detail(
+                    novel_id,
+                    "FastReviewAgent",
+                    "质量门禁阻断，停止进入 librarian",
+                    node="quality_gate_decision",
+                    task="review",
+                    status="failed",
+                    level="warning",
+                    metadata=gate.model_dump(),
+                )
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.FAST_REVIEWING,
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
+            elif not passed:
                 report.notes.append(
                     f"edit_attempts={edit_attempts} 已达上限 {MAX_EDIT_ATTEMPTS},跳过精修轮转"
                 )
-                log_service.add_log(novel_id, "FastReviewAgent", f"未通过但已达编辑上限({edit_attempts}/{MAX_EDIT_ATTEMPTS})，放行进入 librarian")
+                log_agent_detail(
+                    novel_id,
+                    "FastReviewAgent",
+                    "未通过但质量门禁为告警，放行进入 librarian",
+                    node="fast_review_decision",
+                    task="review",
+                    level="warning",
+                    metadata={
+                        "passed": passed,
+                        "edit_attempts": edit_attempts,
+                        "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                        "target_phase": Phase.LIBRARIAN.value,
+                        "quality_gate": gate.model_dump(),
+                        "notes": report.notes,
+                    },
+                )
+                checkpoint.pop("edit_attempt_count", None)
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.LIBRARIAN,
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
             else:
-                log_service.add_log(novel_id, "FastReviewAgent", "快速评审通过，进入 librarian 阶段")
-            checkpoint.pop("edit_attempt_count", None)
-            await self.director.save_checkpoint(
-                novel_id,
-                phase=Phase.LIBRARIAN,
-                checkpoint_data=checkpoint,
-                volume_id=state.current_volume_id,
-                chapter_id=state.current_chapter_id,
-            )
+                log_agent_detail(
+                    novel_id,
+                    "FastReviewAgent",
+                    "快速评审通过，进入 librarian 阶段",
+                    node="fast_review_decision",
+                    task="review",
+                    metadata={"passed": passed, "target_phase": Phase.LIBRARIAN.value, "quality_gate": gate.model_dump()},
+                )
+                checkpoint.pop("edit_attempt_count", None)
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.LIBRARIAN,
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
         else:
-            log_service.add_log(novel_id, "FastReviewAgent", "快速评审未通过，退回 editing 阶段")
+            log_agent_detail(
+                novel_id,
+                "FastReviewAgent",
+                "快速评审未通过，退回 editing 阶段",
+                node="fast_review_decision",
+                task="review",
+                status="failed",
+                level="warning",
+                metadata={
+                    "passed": passed,
+                    "edit_attempts": edit_attempts,
+                    "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                    "target_phase": Phase.EDITING.value,
+                    "notes": report.notes,
+                },
+            )
             await self.director.save_checkpoint(
                 novel_id,
                 phase=Phase.EDITING,
@@ -245,5 +439,92 @@ class FastReviewAgent:
                 volume_id=state.current_volume_id,
                 chapter_id=state.current_chapter_id,
             )
+        return report
 
+    async def review_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> FastReviewReport:
+        log_service.add_log(novel_id, "FastReviewAgent", f"开始独立快速评审: {chapter_id}")
+        ch = await self.chapter_repo.get_by_id(chapter_id)
+        if not ch:
+            raise ValueError(f"Chapter not found: {chapter_id}")
+
+        target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
+        raw = ch.raw_draft or ""
+        polished = ch.polished_text or ""
+
+        word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
+        ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
+        language_issues = _find_language_style_issues(polished)
+        language_style_ok = not language_issues
+
+        chapter_context = checkpoint.get("chapter_context", {})
+        trimmed_context = {
+            "chapter_plan": chapter_context.get("chapter_plan", {}),
+            "style_profile": chapter_context.get("style_profile", {}),
+            "worldview_summary": chapter_context.get("worldview_summary", ""),
+            "previous_chapter_summary": chapter_context.get("previous_chapter_summary", ""),
+            "active_entities": [
+                {"name": e.get("name"), "type": e.get("type"), "current_state": e.get("current_state", "")[:200]}
+                for e in chapter_context.get("active_entities", [])
+            ],
+            "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
+        }
+        if language_style_ok:
+            llm_result = await self._safe_llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            consistency_fixed = llm_result.consistency_fixed
+            beat_cohesion_ok = llm_result.beat_cohesion_ok
+            notes = list(llm_result.notes)
+        else:
+            consistency_fixed = True
+            beat_cohesion_ok = True
+            notes = []
+        if not word_count_ok:
+            notes.append("字数偏离目标超过10%")
+        notes.extend(language_issues)
+        report = FastReviewReport(
+            word_count_ok=word_count_ok,
+            consistency_fixed=consistency_fixed,
+            ai_flavor_reduced=ai_flavor_reduced,
+            beat_cohesion_ok=beat_cohesion_ok,
+            language_style_ok=language_style_ok,
+            notes=notes,
+        )
+        passed = all([
+            word_count_ok,
+            report.consistency_fixed,
+            ai_flavor_reduced,
+            report.beat_cohesion_ok,
+            language_style_ok,
+        ])
+        await self.chapter_repo.update_fast_review(
+            chapter_id,
+            score=FAST_REVIEW_PASS_SCORE if passed else FAST_REVIEW_FAIL_SCORE,
+            feedback=report.model_dump(),
+        )
+        edit_attempts = checkpoint.get("edit_attempt_count", 0)
+        if passed or edit_attempts >= MAX_EDIT_ATTEMPTS:
+            final_score, final_feedback = await self._score_final_text(
+                novel_id=novel_id,
+                chapter_id=chapter_id,
+                polished=polished,
+                chapter_context=checkpoint.get("chapter_context", {}),
+                fallback_score=ch.final_review_score if ch.final_review_score is not None else ch.score_overall,
+                fallback_feedback=ch.final_review_feedback or ch.review_feedback,
+            )
+            gate = QualityGateService.evaluate_fast_review(
+                report,
+                target_word_count=target,
+                polished_word_count=_word_count(polished),
+                final_review_score=final_score,
+            )
+            checkpoint["quality_gate"] = gate.model_dump()
+            await self.chapter_repo.update_quality_gate(
+                chapter_id,
+                quality_status=gate.status,
+                quality_reasons=gate.model_dump(),
+                final_review_score=final_score,
+                final_review_feedback=final_feedback,
+                draft_review_score=ch.draft_review_score if ch.draft_review_score is not None else ch.score_overall,
+                draft_review_feedback=ch.draft_review_feedback or ch.review_feedback,
+                world_state_ingested=False,
+            )
         return report
