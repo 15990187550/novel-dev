@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -790,6 +791,69 @@ async def test_reply_to_session_ready_decision_moves_session_to_ready_to_generat
     assert result["session"].clarification_round == 1
 
 
+async def test_reply_to_session_includes_existing_setting_context(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    await DocumentRepository(async_session).create(
+        "doc_clarify_world",
+        "novel-ai-clarify-context",
+        "worldview",
+        "世界观",
+        "北境由雪庭统治。",
+    )
+    entity_service = EntityService(async_session)
+    entity_service._refresh_entity_artifacts = AsyncMock()
+    await entity_service.create_entity(
+        "ent_clarify_snow",
+        "faction",
+        "雪庭",
+        novel_id="novel-ai-clarify-context",
+        initial_state={"description": "北境势力"},
+    )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-clarify-context",
+        title="补充北境人物",
+        initial_idea="想补一个北境人物",
+        target_categories=["人物"],
+    )
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingClarificationDecision
+
+        assert task == "setting_workbench_clarify"
+        assert "当前已生效设定上下文" in prompt
+        assert "北境由雪庭统治" in prompt
+        assert "ent_clarify_snow" in prompt
+        return SettingClarificationDecision(
+            status="needs_clarification",
+            assistant_message="这个人物与雪庭是什么关系？",
+            questions=["这个人物与雪庭是什么关系？"],
+            target_categories=["人物"],
+            conversation_summary="北境人物待补充。",
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    result = await service.reply_to_session(
+        novel_id="novel-ai-clarify-context",
+        session_id=session.id,
+        content="他来自北境",
+    )
+
+    assert result["questions"] == ["这个人物与雪庭是什么关系？"]
+
+
 async def test_reply_to_session_fifth_clarification_round_becomes_ready_even_if_more_questions(
     async_session,
     monkeypatch,
@@ -922,6 +986,100 @@ async def test_generate_review_batch_creates_changes_from_agent(async_session, m
     ).scalars().all()
     assert documents == []
     assert entities == []
+
+
+async def test_generate_review_batch_includes_existing_setting_context(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    await DocumentRepository(async_session).create(
+        "doc_ctx_world",
+        "novel-ai-context",
+        "worldview",
+        "世界观",
+        "中央大陆被九宗共同治理。",
+    )
+    await DocumentRepository(async_session).create(
+        "doc_ctx_setting",
+        "novel-ai-context",
+        "setting",
+        "修炼体系",
+        "炼气、筑基、金丹三境。",
+    )
+    entity_service = EntityService(async_session)
+    entity_service._refresh_entity_artifacts = AsyncMock()
+    await entity_service.create_entity(
+        "ent_ctx_luzhao",
+        "character",
+        "陆照",
+        novel_id="novel-ai-context",
+        initial_state={"identity": "主角", "goal": "寻找道经"},
+    )
+    await entity_service.create_entity(
+        "ent_ctx_daojing",
+        "item",
+        "道经",
+        novel_id="novel-ai-context",
+        initial_state={"description": "陆照所得功法"},
+    )
+    await service.relationship_repo.create(
+        "ent_ctx_luzhao",
+        "ent_ctx_daojing",
+        "修炼功法",
+        novel_id="novel-ai-context",
+    )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-context",
+        title="补充宗门设定",
+        initial_idea="生成一个与陆照有关的宗门。",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        assert task == "setting_workbench_generate_batch"
+        assert model_cls is SettingBatchDraft
+        assert "当前已生效设定上下文" in prompt
+        assert "中央大陆被九宗共同治理" in prompt
+        assert "炼气、筑基、金丹三境" in prompt
+        assert "ent_ctx_luzhao" in prompt
+        assert "陆照" in prompt
+        assert "ent_ctx_daojing" in prompt
+        assert "修炼功法" in prompt
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "新增宗门实体",
+                "changes": [
+                    {
+                        "target_type": "entity",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "type": "faction",
+                            "name": "玄天宗",
+                            "state": {"description": "守护中央大陆的宗门"},
+                        },
+                    },
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(novel_id="novel-ai-context", session_id=session.id)
+
+    assert batch.summary == "新增宗门实体"
 
 
 @pytest.mark.parametrize("status", ["clarifying", "generating", "failed", "archived"])

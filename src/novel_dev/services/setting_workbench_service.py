@@ -1,6 +1,7 @@
 import uuid
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.agents._llm_helpers import call_and_parse_model
@@ -66,12 +67,14 @@ class SettingWorkbenchService:
 
         await self.repo.add_message(session_id=session_id, role="user", content=content.strip())
         messages = await self.repo.list_messages(session_id)
+        current_setting_context = await self._build_generation_context(novel_id)
         prompt = SettingWorkbenchAgent.build_clarification_prompt(
             title=setting_session.title,
             target_categories=setting_session.target_categories or [],
             messages=self._message_items(messages),
             conversation_summary=setting_session.conversation_summary,
             max_rounds=self.MAX_CLARIFICATION_ROUNDS,
+            current_setting_context=current_setting_context,
         )
         await self._release_connection_before_external_call()
         decision = await call_and_parse_model(
@@ -126,12 +129,14 @@ class SettingWorkbenchService:
 
         await self.repo.update_session_state(session_id, status="generating")
         messages = await self.repo.list_messages(session_id)
+        current_setting_context = await self._build_generation_context(novel_id)
         prompt = SettingWorkbenchAgent.build_generation_prompt(
             title=setting_session.title,
             target_categories=setting_session.target_categories or [],
             messages=self._message_items(messages),
             conversation_summary=setting_session.conversation_summary,
             focused_context=setting_session.focused_target,
+            current_setting_context=current_setting_context,
         )
         await self._release_connection_before_external_call()
         try:
@@ -235,6 +240,84 @@ class SettingWorkbenchService:
         batch_status = self._resolve_batch_status(changes, batch.status)
         await self.repo.update_batch_status(batch.id, batch_status, error_message=None)
         return {"status": batch_status, "applied": applied, "rejected": rejected, "failed": failed}
+
+    async def _build_generation_context(self, novel_id: str) -> dict[str, Any]:
+        document_items: list[dict[str, Any]] = []
+        for doc_type in (
+            "worldview",
+            "setting",
+            "synopsis",
+            "concept",
+            "domain_worldview",
+            "domain_setting",
+            "domain_synopsis",
+            "domain_concept",
+        ):
+            docs = await self.doc_repo.get_current_by_type(novel_id, doc_type)
+            for doc in docs[:4]:
+                document_items.append({
+                    "id": doc.id,
+                    "doc_type": doc.doc_type,
+                    "title": doc.title,
+                    "version": doc.version,
+                    "content_preview": self._trim_text(doc.content, 900),
+                })
+            if len(document_items) >= 12:
+                break
+
+        entities = await self.entity_service.entity_repo.list_by_novel(novel_id)
+        entities = sorted(
+            entities,
+            key=lambda item: (item.current_version or 0, item.name or ""),
+            reverse=True,
+        )[:30]
+        latest_states = await self.entity_service.get_latest_states([entity.id for entity in entities])
+        entity_items = [
+            {
+                "id": entity.id,
+                "type": entity.type,
+                "name": entity.name,
+                "current_version": entity.current_version,
+                "state": self._trim_struct(latest_states.get(entity.id) or {}, max_text=260),
+            }
+            for entity in entities
+        ]
+
+        relationship_result = await self.session.execute(
+            select(EntityRelationship)
+            .where(
+                EntityRelationship.novel_id == novel_id,
+                EntityRelationship.is_active == True,
+            )
+            .order_by(EntityRelationship.id.desc())
+            .limit(50)
+        )
+        relationships = list(relationship_result.scalars().all())
+        entity_name_by_id = {entity.id: entity.name for entity in entities}
+        relationship_items = [
+            {
+                "id": relationship.id,
+                "source_id": relationship.source_id,
+                "source_name": entity_name_by_id.get(relationship.source_id, ""),
+                "target_id": relationship.target_id,
+                "target_name": entity_name_by_id.get(relationship.target_id, ""),
+                "relation_type": relationship.relation_type,
+                "meta": self._trim_struct(relationship.meta or {}, max_text=180),
+            }
+            for relationship in relationships
+        ]
+
+        return {
+            "documents": document_items,
+            "entities": entity_items,
+            "relationships": relationship_items,
+            "limits": {
+                "documents": 12,
+                "entities": 30,
+                "relationships": 50,
+                "content_preview_chars": 900,
+            },
+        }
 
     async def _apply_change(
         self,
@@ -435,6 +518,29 @@ class SettingWorkbenchService:
         target.source_session_id = change.source_session_id or batch.source_session_id
         target.source_review_batch_id = batch.id
         target.source_review_change_id = change.id
+
+    @staticmethod
+    def _trim_text(value: Any, limit: int) -> str:
+        text = str(value or "").strip()
+        if len(text) <= limit:
+            return text
+        return f"{text[:limit]}..."
+
+    @classmethod
+    def _trim_struct(cls, value: Any, *, max_text: int) -> Any:
+        if isinstance(value, str):
+            return cls._trim_text(value, max_text)
+        if isinstance(value, list):
+            return [cls._trim_struct(item, max_text=max_text) for item in value[:8]]
+        if isinstance(value, dict):
+            result: dict[str, Any] = {}
+            for index, (key, item) in enumerate(value.items()):
+                if index >= 12:
+                    result["_truncated"] = True
+                    break
+                result[str(key)] = cls._trim_struct(item, max_text=max_text)
+            return result
+        return value
 
     @staticmethod
     def _message_items(messages: list[Any]) -> list[dict[str, Any]]:
