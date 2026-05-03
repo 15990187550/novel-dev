@@ -30,7 +30,32 @@
 
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
     <template v-else>
-      <div class="surface-card p-5">
+      <div class="documents-tabs" role="tablist" aria-label="设定与文风工作区">
+        <button
+          type="button"
+          class="documents-tab"
+          :class="{ 'documents-tab--active': activeKnowledgeTab === 'import' }"
+          role="tab"
+          :aria-selected="activeKnowledgeTab === 'import'"
+          data-testid="documents-tab-import"
+          @click="selectKnowledgeTab('import')"
+        >
+          导入设定 / 文风
+        </button>
+        <button
+          type="button"
+          class="documents-tab"
+          :class="{ 'documents-tab--active': activeKnowledgeTab === 'ai' }"
+          role="tab"
+          :aria-selected="activeKnowledgeTab === 'ai'"
+          data-testid="documents-tab-ai"
+          @click="selectKnowledgeTab('ai')"
+        >
+          AI 生成设定
+        </button>
+      </div>
+
+      <div v-if="activeKnowledgeTab === 'import'" class="surface-card p-5">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 class="font-bold">导入设定 / 文风样本</h3>
@@ -128,6 +153,8 @@
           </div>
         </div>
       </div>
+
+      <SettingWorkbench v-else embedded />
 
       <div class="surface-card p-5">
         <div class="flex items-center justify-between gap-3">
@@ -851,8 +878,9 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel.js'
+import SettingWorkbench from '@/views/SettingWorkbench.vue'
 import {
   uploadDocumentsBatch,
   approvePending,
@@ -875,10 +903,12 @@ const LIBRARY_GROUPS = [
 ]
 
 const store = useNovelStore()
+const route = useRoute()
 const router = useRouter()
 const fileInput = ref(null)
 const selectedFiles = ref([])
 const uploading = ref(false)
+const activeKnowledgeTab = ref(route.query?.tab === 'ai' ? 'ai' : 'import')
 const knowledgeUsage = ref('auto')
 const domainName = ref('')
 const knowledgeDomainsLoading = ref(false)
@@ -1149,12 +1179,26 @@ function openLibraryDetail(item, groupLabel = '') {
 function openSourceSession(sessionId, changeId = '') {
   if (!sessionId) return
   router.push({
-    path: '/settings',
+    path: '/documents',
     query: {
+      tab: 'ai',
       session: sessionId,
       ...(changeId ? { change: changeId } : {}),
     },
   })
+}
+
+function selectKnowledgeTab(tab) {
+  activeKnowledgeTab.value = tab === 'ai' ? 'ai' : 'import'
+  const query = { ...route.query }
+  if (activeKnowledgeTab.value === 'ai') {
+    query.tab = 'ai'
+  } else {
+    delete query.tab
+    delete query.session
+    delete query.change
+  }
+  router.replace({ path: '/documents', query })
 }
 
 function openDomainDetail(domain) {
@@ -1619,6 +1663,9 @@ onBeforeUnmount(() => {
   stopDocumentPolling()
   syncDraftFieldEscapeListener(false)
 })
+watch(() => route.query?.tab, (tab) => {
+  activeKnowledgeTab.value = tab === 'ai' ? 'ai' : 'import'
+}, { immediate: true })
 watch(() => store.novelId, () => {
   stopDocumentPolling()
   uploadSummary.value = null
@@ -1642,6 +1689,30 @@ watch(editingDraftField, (value) => {
 </script>
 
 <style scoped>
+.documents-tabs {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: var(--app-surface);
+  padding: 0.25rem;
+}
+
+.documents-tab {
+  border: 0;
+  border-radius: 0.55rem;
+  background: transparent;
+  color: var(--app-text-muted);
+  font-size: 0.9rem;
+  font-weight: 800;
+  padding: 0.58rem 0.9rem;
+}
+
+.documents-tab--active {
+  background: var(--app-accent);
+  color: #fff;
+}
+
 .documents-pending-table {
   --el-table-border-color: var(--app-border);
   --el-table-border: 1px solid var(--app-border);

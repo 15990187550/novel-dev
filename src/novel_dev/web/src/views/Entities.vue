@@ -258,8 +258,9 @@ function findNodeByEntityId(nodes = [], entityId) {
 function openSourceSession({ sessionId, changeId } = {}) {
   if (!sessionId) return
   router.push({
-    path: '/settings',
+    path: '/documents',
     query: {
+      tab: 'ai',
       session: sessionId,
       ...(changeId ? { change: changeId } : {}),
     },

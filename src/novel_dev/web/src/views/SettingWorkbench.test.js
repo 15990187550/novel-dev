@@ -135,52 +135,39 @@ describe('SettingWorkbench', () => {
     })
   }
 
-  it('shows import and AI entries plus review records', async () => {
+  it('shows the AI conversation and review records', async () => {
     const wrapper = mountView()
     const store = useNovelStore()
     store.novelId = 'novel-1'
     await flushPromises()
 
-    expect(wrapper.text()).toContain('导入已有资料')
-    expect(wrapper.text()).toContain('从想法生成设定')
+    expect(wrapper.text()).toContain('AI 生成设定')
     expect(wrapper.text()).toContain('审核记录')
-    expect(wrapper.text()).toContain('AI 会话')
     expect(wrapper.text()).toContain('导入资料')
     expect(wrapper.text()).toContain('新增 1 张设定卡片，1 个实体')
     expect(wrapper.text()).toContain('导入 2 条世界观设定')
-
-    await wrapper.find('[data-testid="setting-import-entry"]').trigger('click')
-    expect(routerPushMock).toHaveBeenCalledWith('/documents')
   })
 
-  it('creates an AI session, sends a reply, and shows the generation action', async () => {
+  it('creates an AI session from the reply input and shows the generation action', async () => {
     const wrapper = mountView()
     const store = useNovelStore()
     store.novelId = 'novel-1'
     await flushPromises()
 
-    await wrapper.find('[data-testid="setting-ai-entry"]').trigger('click')
-    await wrapper.find('[data-testid="setting-session-title"]').setValue('主角阵营设定')
-    await wrapper.find('[data-testid="setting-session-idea"]').setValue('废脉少年建立新的修真阵营')
-    await wrapper.find('[data-testid="setting-create-session"]').trigger('click')
-    await flushPromises()
-
-    expect(createSettingSessionMock).toHaveBeenCalledWith('novel-1', {
-      title: '主角阵营设定',
-      initial_idea: '废脉少年建立新的修真阵营',
-      target_categories: [],
-    })
-    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/settings', query: { session: 'sgs_2' } })
-    expect(wrapper.text()).toContain('主角阵营设定')
-    expect(wrapper.text()).toContain('请补充阵营目标。')
-
-    await wrapper.find('[data-testid="setting-reply-input"]').setValue('阵营目标是保护底层散修。')
+    await wrapper.find('[data-testid="setting-reply-input"]').setValue('废脉少年建立新的修真阵营')
     await wrapper.find('[data-testid="setting-send-reply"]').trigger('click')
     await flushPromises()
 
-    expect(replySettingSessionMock).toHaveBeenCalledWith('novel-1', 'sgs_2', {
-      content: '阵营目标是保护底层散修。',
+    expect(createSettingSessionMock).toHaveBeenCalledWith('novel-1', {
+      title: '废脉少年建立新的修真阵营',
+      initial_idea: '',
+      target_categories: [],
     })
+    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'ai', session: 'sgs_2' } })
+    expect(replySettingSessionMock).toHaveBeenCalledWith('novel-1', 'sgs_2', {
+      content: '废脉少年建立新的修真阵营',
+    })
+    expect(wrapper.text()).toContain('主角阵营设定')
     expect(wrapper.text()).toContain('信息足够，可以生成。')
     expect(wrapper.text()).toContain('可生成')
     expect(wrapper.find('[data-testid="setting-generate-batch"]').exists()).toBe(true)
@@ -198,7 +185,6 @@ describe('SettingWorkbench', () => {
     }
     await flushPromises()
 
-    await wrapper.find('[data-testid="setting-ai-entry"]').trigger('click')
     await wrapper.find('[data-testid="setting-generate-batch"]').trigger('click')
     await flushPromises()
 

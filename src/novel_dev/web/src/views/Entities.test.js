@@ -442,8 +442,8 @@ describe('Entities', () => {
     await wrapper.get('.source-session-button').trigger('click')
 
     expect(routerPushMock).toHaveBeenCalledWith({
-      path: '/settings',
-      query: { session: 'sgs_1', change: 'chg_1' },
+      path: '/documents',
+      query: { tab: 'ai', session: 'sgs_1', change: 'chg_1' },
     })
   })
 

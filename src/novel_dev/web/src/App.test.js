@@ -15,9 +15,9 @@ describe('App shell layout', () => {
     expect(styleSource).toMatch(/\.page-shell\s*{[\s\S]*height:\s*100%;[\s\S]*min-height:\s*0;/)
   })
 
-  it('keeps documents available and adds the setting workbench navigation entry', () => {
+  it('keeps the setting and style workspace as the single navigation entry', () => {
     expect(appSource).toContain("path: '/documents'")
-    expect(appSource).toContain("path: '/settings'")
-    expect(appSource).toContain("label: '设定工作台'")
+    expect(appSource).toContain("label: '设定与文风'")
+    expect(appSource).not.toContain("label: '设定工作台'")
   })
 })

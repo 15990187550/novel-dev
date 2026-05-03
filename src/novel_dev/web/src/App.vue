@@ -114,7 +114,6 @@ watch(appLogs, (logs) => {
 
 const menuItems = [
   { path: '/dashboard', label: '仪表盘', eyebrow: 'Overview', detail: '总览项目状态、风险、建议动作与实时更新。' },
-  { path: '/settings', label: '设定工作台', eyebrow: 'Settings', detail: '导入资料，或从初始想法生成可审核设定。' },
   { path: '/documents', label: '设定与文风', eyebrow: 'Knowledge Base', detail: '管理资料导入、审核和已生效的设定与文风档案。' },
   { path: '/volume-plan', label: '大纲规划', eyebrow: 'Outline Workbench', detail: '围绕总纲和卷纲持续迭代，沉淀工作区草稿。' },
   { path: '/chapters', label: '章节列表', eyebrow: 'Chapters', detail: '查看章节状态、推进节奏和当前创作进度。' },

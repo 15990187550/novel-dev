@@ -28,9 +28,15 @@ const {
   deleteKnowledgeDomainMock,
   updateLibraryDocumentMock,
   rollbackStyleProfileMock,
+  getSettingWorkbenchMock,
+  getSettingSessionMock,
+  createSettingSessionMock,
+  replySettingSessionMock,
+  generateSettingReviewBatchMock,
   successMessageMock,
   confirmMessageBoxMock,
   routerPushMock,
+  routerReplaceMock,
 } = vi.hoisted(() => ({
   approvePendingMock: vi.fn(),
   deletePendingDocMock: vi.fn(),
@@ -44,9 +50,19 @@ const {
   deleteKnowledgeDomainMock: vi.fn(),
   updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
+  getSettingWorkbenchMock: vi.fn(),
+  getSettingSessionMock: vi.fn(),
+  createSettingSessionMock: vi.fn(),
+  replySettingSessionMock: vi.fn(),
+  generateSettingReviewBatchMock: vi.fn(),
   successMessageMock: vi.fn(),
   confirmMessageBoxMock: vi.fn(),
   routerPushMock: vi.fn(),
+  routerReplaceMock: vi.fn(),
+}))
+
+const routeState = vi.hoisted(() => ({
+  query: {},
 }))
 
 vi.mock('@/api.js', () => ({
@@ -62,6 +78,11 @@ vi.mock('@/api.js', () => ({
   deleteKnowledgeDomain: deleteKnowledgeDomainMock,
   updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
+  getSettingWorkbench: getSettingWorkbenchMock,
+  getSettingSession: getSettingSessionMock,
+  createSettingSession: createSettingSessionMock,
+  replySettingSession: replySettingSessionMock,
+  generateSettingReviewBatch: generateSettingReviewBatchMock,
 }))
 
 vi.mock('element-plus', () => ({
@@ -74,8 +95,10 @@ vi.mock('element-plus', () => ({
 }))
 
 vi.mock('vue-router', () => ({
+  useRoute: () => routeState,
   useRouter: () => ({
     push: routerPushMock,
+    replace: routerReplaceMock,
   }),
 }))
 
@@ -151,8 +174,17 @@ describe('Documents', () => {
     pinia = createPinia()
     setActivePinia(pinia)
     vi.clearAllMocks()
+    routeState.query = {}
     getDocumentLibraryMock.mockResolvedValue({ items: [], active_style_profile_version: null })
     getKnowledgeDomainsMock.mockResolvedValue({ items: [] })
+    getSettingWorkbenchMock.mockResolvedValue({ sessions: [], review_batches: [] })
+    getSettingSessionMock.mockResolvedValue({ session: null, messages: [], review_batches: [] })
+    createSettingSessionMock.mockResolvedValue({ id: 'sgs_new', title: '新设定', status: 'clarifying' })
+    replySettingSessionMock.mockResolvedValue({
+      session: { id: 'sgs_new', title: '新设定', status: 'clarifying' },
+      assistant_message: '请继续补充。',
+      questions: ['还需要什么势力？'],
+    })
     confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
     disableKnowledgeDomainMock.mockResolvedValue({ item: {} })
     deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
@@ -350,7 +382,16 @@ describe('Documents', () => {
   it('renders imported setting docs and style profile in the library section', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
-    store.pendingDocs = []
+    store.pendingDocs = [
+      {
+        id: 'doc-tab',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
     store.fetchDocuments = vi.fn().mockResolvedValue()
 
     getDocumentLibraryMock.mockResolvedValue({
@@ -452,9 +493,40 @@ describe('Documents', () => {
     await badge.trigger('click')
 
     expect(routerPushMock).toHaveBeenCalledWith({
-      path: '/settings',
-      query: { session: 'sgs_1', change: 'chg_1' },
+      path: '/documents',
+      query: { tab: 'ai', session: 'sgs_1', change: 'chg_1' },
     })
+  })
+
+  it('switches to the AI setting tab and keeps the shared library area below', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      {
+        id: 'doc-tab',
+        source_filename: '设定.md',
+        extraction_type: 'setting',
+        status: 'pending',
+        diff_result: { summary: '1 个新增实体' },
+        created_at: '2026-04-22T00:00:00Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('导入设定 / 文风样本')
+    expect(wrapper.text()).toContain('当前资料库')
+
+    await wrapper.get('[data-testid="documents-tab-ai"]').trigger('click')
+    await flushPromises()
+
+    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/documents', query: { tab: 'ai' } })
+    expect(wrapper.find('[data-testid="setting-ai-panel"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('导入设定 / 文风样本')
+    expect(wrapper.text()).toContain('当前资料库')
+    expect(wrapper.text()).toContain('审核记录')
   })
 
   it('renders knowledge domains and confirms suggested scope', async () => {
