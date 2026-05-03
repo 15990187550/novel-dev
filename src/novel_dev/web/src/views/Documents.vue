@@ -409,6 +409,16 @@
                 <el-button
                   v-if="row.review_record_source === 'ai'"
                   size="small"
+                  type="primary"
+                  plain
+                  class="documents-pending-table__action"
+                  @click="openSettingReviewBatch(row)"
+                >
+                  审核
+                </el-button>
+                <el-button
+                  v-if="row.review_record_source === 'ai'"
+                  size="small"
                   type="info"
                   plain
                   class="documents-pending-table__action"
@@ -883,6 +893,69 @@
           </div>
         </div>
       </el-dialog>
+
+      <el-dialog
+        v-model="settingReviewVisible"
+        title="审核设定变更"
+        width="1080px"
+        top="5vh"
+        append-to-body
+      >
+        <div v-if="settingReviewVisible" class="max-h-[76vh] space-y-4 overflow-y-auto pr-2">
+          <div v-if="settingReviewLoading" class="text-sm text-gray-500 dark:text-gray-400">加载审核记录中...</div>
+          <template v-else-if="selectedSettingReviewBatch">
+            <div class="rounded-xl border border-gray-200 p-3 text-sm dark:border-gray-700">
+              <div class="font-semibold text-gray-900 dark:text-gray-100">{{ selectedSettingReviewBatch.summary || '未命名审核记录' }}</div>
+              <div class="mt-2 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+                <span>状态：{{ statusLabel(selectedSettingReviewBatch.status) }}</span>
+                <span>{{ countsLabel(selectedSettingReviewBatch.counts) }}</span>
+              </div>
+            </div>
+
+            <div class="space-y-3">
+              <article
+                v-for="change in selectedSettingReviewBatch.changes || []"
+                :key="change.id"
+                class="documents-setting-review-change"
+              >
+                <div class="flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="font-semibold text-gray-900 dark:text-gray-100">{{ settingChangeTitle(change) }}</div>
+                    <div class="mt-1 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+                      <span>{{ settingChangeTargetLabel(change.target_type) }}</span>
+                      <span>{{ settingChangeOperationLabel(change.operation) }}</span>
+                      <span>{{ statusLabel(change.status) }}</span>
+                    </div>
+                  </div>
+                </div>
+                <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
+                  {{ settingChangeSummary(change) }}
+                </p>
+              </article>
+            </div>
+
+            <div class="flex flex-wrap justify-end gap-2">
+              <el-button
+                type="danger"
+                plain
+                :loading="settingReviewApplying"
+                :disabled="!pendingSettingReviewChanges.length || settingReviewApplying"
+                @click="applySettingReviewDecision('reject')"
+              >
+                拒绝全部
+              </el-button>
+              <el-button
+                type="primary"
+                :loading="settingReviewApplying"
+                :disabled="!pendingSettingReviewChanges.length || settingReviewApplying"
+                @click="applySettingReviewDecision('approve')"
+              >
+                批准全部
+              </el-button>
+            </div>
+          </template>
+        </div>
+      </el-dialog>
     </template>
   </div>
 </template>
@@ -901,6 +974,8 @@ import {
   getDocumentLibrary,
   updateLibraryDocument,
   rollbackStyleProfile,
+  getSettingReviewBatch,
+  applySettingReviewBatch,
 } from '@/api.js'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { formatBeijingDateTime } from '@/utils/time.js'
@@ -946,6 +1021,10 @@ const libraryEditorTarget = ref(null)
 const libraryEditorContent = ref('')
 const libraryEditorError = ref('')
 const libraryEditorSaving = ref(false)
+const settingReviewVisible = ref(false)
+const settingReviewLoading = ref(false)
+const settingReviewApplying = ref(false)
+const selectedSettingReviewBatch = ref(null)
 const editingDraftField = ref(null)
 const draftFieldInput = ref('')
 const draftFieldError = ref('')
@@ -1053,6 +1132,9 @@ const libraryGroups = computed(() =>
     }))
     .filter((group) => group.items.length)
 )
+const pendingSettingReviewChanges = computed(() =>
+  (selectedSettingReviewBatch.value?.changes || []).filter((change) => change.status === 'pending')
+)
 
 const fieldLabels = {
   name: '名称',
@@ -1117,6 +1199,44 @@ function countsLabel(counts = {}) {
   const entities = counts.entity ?? counts.entities ?? 0
   const relationships = counts.relationship ?? counts.relationships ?? 0
   return `设定卡片 ${settingCards} · 实体 ${entities} · 关系 ${relationships}`
+}
+
+function settingChangeTargetLabel(targetType) {
+  const labels = {
+    setting_card: '设定卡片',
+    entity: '实体',
+    relationship: '关系',
+  }
+  return labels[targetType] || targetType || '-'
+}
+
+function settingChangeOperationLabel(operation) {
+  const labels = {
+    create: '新增',
+    update: '修改',
+    delete: '删除',
+  }
+  return labels[operation] || operation || '-'
+}
+
+function settingChangeTitle(change) {
+  const snapshot = change.after_snapshot || change.before_snapshot || {}
+  if (change.target_type === 'setting_card') return snapshot.title || change.target_id || '未命名设定卡片'
+  if (change.target_type === 'entity') return snapshot.name || change.target_id || '未命名实体'
+  if (change.target_type === 'relationship') {
+    return [snapshot.source_name || snapshot.source_id, snapshot.relation_type, snapshot.target_name || snapshot.target_id]
+      .filter(Boolean)
+      .join(' / ') || '实体关系'
+  }
+  return change.target_id || '未命名变更'
+}
+
+function settingChangeSummary(change) {
+  const snapshot = change.after_snapshot || change.before_snapshot || {}
+  if (change.target_type === 'setting_card') return summarizeContent(snapshot.content || snapshot.doc_type || '', 360)
+  if (change.target_type === 'entity') return summarizeContent(snapshot.state || snapshot.data || snapshot, 360)
+  if (change.target_type === 'relationship') return summarizeContent(snapshot, 260)
+  return summarizeContent(snapshot, 260)
 }
 
 function resolutionActionLabel(action) {
@@ -1237,6 +1357,37 @@ function openSourceSession(sessionId, changeId = '') {
       ...(changeId ? { change: changeId } : {}),
     },
   })
+}
+
+async function openSettingReviewBatch(row) {
+  if (!store.novelId || !row?.id) return
+  settingReviewVisible.value = true
+  settingReviewLoading.value = true
+  selectedSettingReviewBatch.value = null
+  try {
+    selectedSettingReviewBatch.value = await getSettingReviewBatch(store.novelId, row.id)
+  } finally {
+    settingReviewLoading.value = false
+  }
+}
+
+async function applySettingReviewDecision(decision) {
+  const batch = selectedSettingReviewBatch.value
+  if (!store.novelId || !batch?.id || settingReviewApplying.value) return
+  const decisions = pendingSettingReviewChanges.value.map((change) => ({
+    change_id: change.id,
+    decision,
+  }))
+  if (!decisions.length) return
+  settingReviewApplying.value = true
+  try {
+    await applySettingReviewBatch(store.novelId, batch.id, { decisions })
+    await Promise.all([store.fetchSettingWorkbench(), store.fetchDocuments(), fetchLibrary()])
+    selectedSettingReviewBatch.value = await getSettingReviewBatch(store.novelId, batch.id)
+    ElMessage.success(decision === 'approve' ? 'AI 设定变更已批准' : 'AI 设定变更已拒绝')
+  } finally {
+    settingReviewApplying.value = false
+  }
 }
 
 function selectKnowledgeTab(tab) {
@@ -1843,6 +1994,13 @@ watch(editingDraftField, (value) => {
   justify-content: flex-end;
   padding-right: 0.75rem;
   box-sizing: border-box;
+}
+
+.documents-setting-review-change {
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: var(--app-surface-soft);
+  padding: 0.9rem;
 }
 
 .documents-detail-table {

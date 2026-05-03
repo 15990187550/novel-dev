@@ -33,6 +33,8 @@ const {
   createSettingSessionMock,
   replySettingSessionMock,
   generateSettingReviewBatchMock,
+  getSettingReviewBatchMock,
+  applySettingReviewBatchMock,
   successMessageMock,
   confirmMessageBoxMock,
   routerPushMock,
@@ -55,6 +57,8 @@ const {
   createSettingSessionMock: vi.fn(),
   replySettingSessionMock: vi.fn(),
   generateSettingReviewBatchMock: vi.fn(),
+  getSettingReviewBatchMock: vi.fn(),
+  applySettingReviewBatchMock: vi.fn(),
   successMessageMock: vi.fn(),
   confirmMessageBoxMock: vi.fn(),
   routerPushMock: vi.fn(),
@@ -83,6 +87,8 @@ vi.mock('@/api.js', () => ({
   createSettingSession: createSettingSessionMock,
   replySettingSession: replySettingSessionMock,
   generateSettingReviewBatch: generateSettingReviewBatchMock,
+  getSettingReviewBatch: getSettingReviewBatchMock,
+  applySettingReviewBatch: applySettingReviewBatchMock,
 }))
 
 vi.mock('element-plus', () => ({
@@ -185,6 +191,8 @@ describe('Documents', () => {
       assistant_message: '请继续补充。',
       questions: ['还需要什么势力？'],
     })
+    getSettingReviewBatchMock.mockResolvedValue({ id: 'srb_empty', changes: [] })
+    applySettingReviewBatchMock.mockResolvedValue({ status: 'approved', applied: 0, rejected: 0, failed: 0 })
     confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
     disableKnowledgeDomainMock.mockResolvedValue({ item: {} })
     deleteKnowledgeDomainMock.mockResolvedValue({ deleted: true, deleted_documents: 2, deleted_entities: 3 })
@@ -496,6 +504,83 @@ describe('Documents', () => {
       path: '/documents',
       query: { tab: 'ai', session: 'sgs_ai' },
     })
+  })
+
+  it('opens an audit entry for AI generated setting batches and can approve all changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.settingWorkbench.reviewBatches = [
+      {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        source_session_id: 'sgs_ai',
+        source_session_title: '诸天万界设定',
+        status: 'pending',
+        summary: '新增诸天万界设定卡片和实体',
+        counts: { setting_card: 1, entity: 1, relationship: 0 },
+        created_at: '2026-05-03T00:58:06Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchSettingWorkbench = vi.fn().mockResolvedValue()
+    getSettingReviewBatchMock.mockResolvedValueOnce({
+      id: 'srb_ai',
+      source_type: 'ai_session',
+      status: 'pending',
+      summary: '新增诸天万界设定卡片和实体',
+      changes: [
+        {
+          id: 'chg_card',
+          target_type: 'setting_card',
+          operation: 'create',
+          status: 'pending',
+          after_snapshot: {
+            title: '诸天万界层级架构',
+            doc_type: 'worldview',
+            content: '真实界为核心。',
+          },
+        },
+        {
+          id: 'chg_entity',
+          target_type: 'entity',
+          operation: 'create',
+          status: 'pending',
+          after_snapshot: {
+            name: '封神遗界·万神墟',
+            type: 'location',
+            state: { description: '封神大战后的破碎世界。' },
+          },
+        },
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const reviewButton = wrapper.findAll('.documents-pending-table__action')
+      .find((button) => button.text().includes('审核'))
+    expect(reviewButton).toBeTruthy()
+    await reviewButton.trigger('click')
+    await flushPromises()
+
+    expect(getSettingReviewBatchMock).toHaveBeenCalledWith('novel-1', 'srb_ai')
+    expect(wrapper.text()).toContain('诸天万界层级架构')
+    expect(wrapper.text()).toContain('封神遗界·万神墟')
+
+    const approveAllButton = wrapper.findAll('.el-button-stub')
+      .find((button) => button.text().includes('批准全部'))
+    expect(approveAllButton).toBeTruthy()
+    await approveAllButton.trigger('click')
+    await flushPromises()
+
+    expect(applySettingReviewBatchMock).toHaveBeenCalledWith('novel-1', 'srb_ai', {
+      decisions: [
+        { change_id: 'chg_card', decision: 'approve' },
+        { change_id: 'chg_entity', decision: 'approve' },
+      ],
+    })
+    expect(store.fetchSettingWorkbench).toHaveBeenCalled()
   })
 
   it('shows AI badge next to AI sourced setting cards and opens the source session', async () => {
