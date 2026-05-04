@@ -27,6 +27,36 @@ async def test_get_llm_config(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_llm_config_masks_profile_api_keys(tmp_path, monkeypatch):
+    config_path = tmp_path / "llm_config.yaml"
+    config_path.write_text(
+        "models:\n"
+        "  kimi:\n"
+        "    provider: anthropic\n"
+        "    model: kimi-test\n"
+        "    api_key: sk-live-secret\n"
+        "agents:\n"
+        "  writer_agent:\n"
+        "    model: kimi\n",
+        encoding="utf-8",
+    )
+
+    from novel_dev.config import Settings
+
+    settings = Settings(llm_config_path=str(config_path))
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/config/llm")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models"]["kimi"]["api_key"] == "********"
+    assert "sk-live-secret" not in str(data)
+
+
+@pytest.mark.asyncio
 async def test_save_llm_config(tmp_path, monkeypatch):
     config_path = tmp_path / "llm_config.yaml"
     from novel_dev.config import Settings
@@ -40,6 +70,35 @@ async def test_save_llm_config(tmp_path, monkeypatch):
         assert resp.json()["saved"] is True
         content = config_path.read_text()
         assert "openai_compatible" in content
+
+
+@pytest.mark.asyncio
+async def test_save_llm_config_requires_admin_token_when_configured(tmp_path, monkeypatch):
+    config_path = tmp_path / "llm_config.yaml"
+
+    from novel_dev.config import Settings
+
+    settings = Settings(llm_config_path=str(config_path), config_admin_token="secret-token")
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post("/api/config/llm", json={"config": {"defaults": {"timeout": 30}}})
+        wrong = await client.post(
+            "/api/config/llm",
+            json={"config": {"defaults": {"timeout": 30}}},
+            headers={"X-Novel-Config-Token": "wrong"},
+        )
+        ok = await client.post(
+            "/api/config/llm",
+            json={"config": {"defaults": {"timeout": 30}}},
+            headers={"X-Novel-Config-Token": "secret-token"},
+        )
+
+    assert missing.status_code == 403
+    assert wrong.status_code == 403
+    assert ok.status_code == 200
+    assert ok.json()["saved"] is True
 
 
 @pytest.mark.asyncio
@@ -154,6 +213,35 @@ async def test_get_env_config(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_env_config_masks_api_keys(monkeypatch):
+    from novel_dev.config import Settings
+
+    settings = Settings(
+        anthropic_api_key="sk-anthropic-secret",
+        openai_api_key="sk-openai-secret",
+        moonshot_api_key="sk-moonshot-secret",
+        minimax_api_key="sk-minimax-secret",
+        zhipu_api_key="sk-zhipu-secret",
+    )
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/config/env")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data == {
+        "anthropic_api_key": "********",
+        "openai_api_key": "********",
+        "moonshot_api_key": "********",
+        "minimax_api_key": "********",
+        "zhipu_api_key": "********",
+    }
+    assert "sk-anthropic-secret" not in str(data)
+
+
+@pytest.mark.asyncio
 async def test_save_env_config(tmp_path, monkeypatch):
     env_file = tmp_path / ".env"
     env_file.write_text("")
@@ -170,3 +258,28 @@ async def test_save_env_config(tmp_path, monkeypatch):
         assert resp.json()["saved"] is True
         content = env_file.read_text()
         assert "sk-test" in content
+
+
+@pytest.mark.asyncio
+async def test_save_env_config_requires_admin_token_when_configured(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    from novel_dev.config import Settings
+
+    settings = Settings(config_admin_token="secret-token")
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        missing = await client.post("/api/config/env", json={"anthropic_api_key": "sk-test"})
+        ok = await client.post(
+            "/api/config/env",
+            json={"anthropic_api_key": "sk-test"},
+            headers={"X-Novel-Config-Token": "secret-token"},
+        )
+
+    assert missing.status_code == 403
+    assert ok.status_code == 200
+    assert "sk-test" in env_file.read_text(encoding="utf-8")

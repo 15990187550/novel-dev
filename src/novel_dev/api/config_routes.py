@@ -1,8 +1,9 @@
 import os
+import secrets
 import time
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from novel_dev.config import settings
 from novel_dev.llm.models import ChatMessage, TaskConfig
@@ -10,6 +11,15 @@ from dotenv import set_key, find_dotenv
 from novel_dev.llm import llm_factory
 
 router = APIRouter()
+
+MASKED_SECRET = "********"
+ENV_SECRET_FIELDS = {
+    "anthropic_api_key",
+    "openai_api_key",
+    "moonshot_api_key",
+    "minimax_api_key",
+    "zhipu_api_key",
+}
 
 
 class LLMConfigPayload(BaseModel):
@@ -29,6 +39,40 @@ class EnvConfigPayload(BaseModel):
     zhipu_api_key: Optional[str] = None
 
 
+def _mask_secret_value(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    return MASKED_SECRET
+
+
+def _is_secret_config_key(key: str) -> bool:
+    normalized_key = key.lower()
+    return (
+        normalized_key == "api_key"
+        or normalized_key.endswith("_api_key")
+        or normalized_key in ENV_SECRET_FIELDS
+    )
+
+
+def _mask_config_secrets(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: _mask_secret_value(item) if _is_secret_config_key(str(key)) else _mask_config_secrets(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_mask_config_secrets(item) for item in value]
+    return value
+
+
+def _require_config_admin_token(x_novel_config_token: Optional[str]) -> None:
+    expected_token = settings.config_admin_token
+    if not expected_token:
+        return
+    if not x_novel_config_token or not secrets.compare_digest(x_novel_config_token, expected_token):
+        raise HTTPException(status_code=403, detail="Config admin token required")
+
+
 @router.get("/api/config/llm")
 async def get_llm_config():
     import yaml
@@ -37,11 +81,15 @@ async def get_llm_config():
         return {}
     with open(settings.llm_config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
-    return data
+    return _mask_config_secrets(data)
 
 
 @router.post("/api/config/llm")
-async def save_llm_config(payload: LLMConfigPayload):
+async def save_llm_config(
+    payload: LLMConfigPayload,
+    x_novel_config_token: Optional[str] = Header(default=None),
+):
+    _require_config_admin_token(x_novel_config_token)
     import yaml
     config_dir = os.path.dirname(settings.llm_config_path)
     if config_dir:
@@ -61,7 +109,11 @@ def _clean_error_message(exc: Exception, profile: dict) -> str:
 
 
 @router.post("/api/config/llm/test_model")
-async def test_llm_model(payload: LLMModelTestPayload):
+async def test_llm_model(
+    payload: LLMModelTestPayload,
+    x_novel_config_token: Optional[str] = Header(default=None),
+):
+    _require_config_admin_token(x_novel_config_token)
     profile = payload.profile or {}
     provider = profile.get("provider")
     model = profile.get("model")
@@ -118,16 +170,20 @@ async def test_llm_model(payload: LLMModelTestPayload):
 @router.get("/api/config/env")
 async def get_env_config():
     return {
-        "anthropic_api_key": settings.anthropic_api_key or "",
-        "openai_api_key": settings.openai_api_key or "",
-        "moonshot_api_key": settings.moonshot_api_key or "",
-        "minimax_api_key": settings.minimax_api_key or "",
-        "zhipu_api_key": settings.zhipu_api_key or "",
+        "anthropic_api_key": _mask_secret_value(settings.anthropic_api_key),
+        "openai_api_key": _mask_secret_value(settings.openai_api_key),
+        "moonshot_api_key": _mask_secret_value(settings.moonshot_api_key),
+        "minimax_api_key": _mask_secret_value(settings.minimax_api_key),
+        "zhipu_api_key": _mask_secret_value(settings.zhipu_api_key),
     }
 
 
 @router.post("/api/config/env")
-async def save_env_config(payload: EnvConfigPayload):
+async def save_env_config(
+    payload: EnvConfigPayload,
+    x_novel_config_token: Optional[str] = Header(default=None),
+):
+    _require_config_admin_token(x_novel_config_token)
     env_path = find_dotenv() or ".env"
     for key, value in payload.model_dump().items():
         if value is not None:
