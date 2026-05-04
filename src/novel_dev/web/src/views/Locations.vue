@@ -3,7 +3,7 @@
     <h2 class="text-xl font-bold">地点</h2>
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
     <div v-else class="locations-table-panel overflow-hidden rounded-xl">
-      <el-table :data="store.spacelines" row-key="id" :tree-props="{ children: 'children' }" class="locations-table">
+      <el-table :data="store.spacelines" row-key="id" :tree-props="{ children: 'children' }" class="app-themed-table locations-table">
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="narrative" label="描述" />
       </el-table>
