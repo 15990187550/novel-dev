@@ -75,10 +75,9 @@
             · {{ statusLabel(store.settingWorkbench.consolidationJob.status) }}
           </span>
         </div>
-      </section>
 
-      <section class="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
-        <aside class="surface-card p-4">
+        <div class="setting-ai-grid mt-4">
+        <aside class="setting-sub-card p-4">
           <div class="flex items-center justify-between gap-3">
             <div class="font-semibold text-gray-900 dark:text-gray-100">会话列表</div>
             <button type="button" class="setting-secondary" @click="store.fetchSettingSessions()">刷新</button>
@@ -102,12 +101,23 @@
           </div>
         </aside>
 
-        <section class="surface-card p-4">
-          <div>
-            <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Session</div>
-            <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">
-              {{ selectedSession?.title || '选择或新建会话' }}
-            </h2>
+        <section class="setting-sub-card p-4">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Session</div>
+              <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">
+                {{ selectedSession?.title || '选择或新建会话' }}
+              </h2>
+            </div>
+            <button
+              type="button"
+              class="setting-secondary"
+              data-testid="setting-generate-review"
+              :disabled="!selectedSession || store.settingWorkbench.generating"
+              @click="generateReviewBatch"
+            >
+              {{ store.settingWorkbench.generating ? '生成中...' : '生成到审核记录' }}
+            </button>
           </div>
 
           <div class="setting-message-log mt-4 max-h-80 space-y-3 overflow-auto rounded-xl border p-4">
@@ -119,72 +129,31 @@
               <div class="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">{{ message.content }}</div>
             </article>
           </div>
-        </section>
-      </section>
 
-      <section class="surface-card p-4">
-        <div class="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Review Batches</div>
-            <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">设定审核批次</h2>
-          </div>
-          <button type="button" class="setting-secondary" @click="store.fetchSettingReviewBatches()">刷新</button>
-        </div>
-
-        <div class="mt-4 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
-          <div>
-            <div v-if="!store.settingWorkbench.reviewBatches.length" class="rounded-xl border border-dashed px-4 py-6 text-sm text-gray-500">
-              暂无设定审核批次。
-            </div>
-            <div v-else class="space-y-2">
+          <div class="setting-reply-box mt-4 rounded-xl border p-3">
+            <label class="setting-field">
+              <span>继续调整设定</span>
+              <textarea
+                v-model="replyContent"
+                data-testid="setting-session-reply"
+                class="setting-input min-h-[86px]"
+                :disabled="!selectedSession || store.settingWorkbench.replying"
+                placeholder="补充回答、修正方向，或说明下一步希望 AI 继续扩展的内容"
+              />
+            </label>
+            <div class="mt-3 flex justify-end">
               <button
-                v-for="batch in store.settingWorkbench.reviewBatches"
-                :key="batch.id"
                 type="button"
-                class="setting-session-item"
-                :class="{ 'setting-session-item--active': batch.id === store.settingWorkbench.selectedReviewBatch?.id }"
-                @click="store.loadSettingReviewBatch(batch.id)"
+                class="setting-primary"
+                data-testid="setting-session-reply-submit"
+                :disabled="!selectedSession || store.settingWorkbench.replying || !canReply"
+                @click="submitReply"
               >
-                <span>{{ batch.summary || batch.id }}</span>
-                <small>{{ statusLabel(batch.status) }}</small>
+                {{ store.settingWorkbench.replying ? '发送中...' : '发送调整' }}
               </button>
             </div>
           </div>
-
-          <div class="setting-review-detail rounded-xl border p-4">
-            <div v-if="!store.settingWorkbench.selectedReviewBatch" class="text-sm text-gray-500">
-              选择一个审核批次查看变更明细。
-            </div>
-            <template v-else>
-              <div class="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div class="font-semibold text-gray-900 dark:text-gray-100">
-                    {{ store.settingWorkbench.selectedReviewBatch.summary || store.settingWorkbench.selectedReviewBatch.id }}
-                  </div>
-                  <div class="mt-1 text-xs text-gray-500">
-                    {{ statusLabel(store.settingWorkbench.selectedReviewBatch.status) }}
-                  </div>
-                </div>
-              </div>
-              <div class="mt-4 space-y-2">
-                <article
-                  v-for="change in store.settingWorkbench.selectedReviewChanges"
-                  :key="change.id"
-                  class="setting-review-change rounded-lg border px-3 py-2 text-sm"
-                >
-                  <div class="font-semibold text-gray-800 dark:text-gray-100">
-                    {{ change.target_type || 'change' }} · {{ change.operation || 'update' }}
-                  </div>
-                  <div v-if="change.after_snapshot?.title || change.before_snapshot?.title" class="mt-1 text-gray-500">
-                    {{ change.after_snapshot?.title || change.before_snapshot?.title }}
-                  </div>
-                </article>
-                <div v-if="!store.settingWorkbench.selectedReviewChanges.length" class="text-sm text-gray-500">
-                  暂无变更明细。
-                </div>
-              </div>
-            </template>
-          </div>
+        </section>
         </div>
       </section>
 
@@ -245,12 +214,14 @@ const store = useNovelStore()
 const showCreateForm = ref(false)
 const showConsolidationDialog = ref(false)
 const newIdea = ref('')
+const replyContent = ref('')
 const selectedPendingIds = ref([])
 
 const selectedSession = computed(() => store.settingWorkbench.selectedSession)
 const messages = computed(() => store.settingWorkbench.selectedMessages || [])
 const pendingSettingDocs = computed(() => (store.pendingDocs || []).filter(isSettingPendingDoc))
 const canCreateSession = computed(() => Boolean(newIdea.value.trim()))
+const canReply = computed(() => Boolean(replyContent.value.trim()))
 
 watch(() => store.novelId, (novelId) => {
   if (novelId) {
@@ -310,6 +281,23 @@ async function createSession() {
   }
 }
 
+async function submitReply() {
+  const content = replyContent.value.trim()
+  if (!content || !selectedSession.value) return
+  const result = await store.replySettingSession(content)
+  if (result) {
+    replyContent.value = ''
+  }
+}
+
+async function generateReviewBatch() {
+  if (!selectedSession.value) return
+  const batch = await store.generateSettingReviewBatch()
+  if (batch) {
+    await store.fetchSettingReviewBatches()
+  }
+}
+
 function deriveSessionTitle(content) {
   const firstLine = String(content || '')
     .split(/\r?\n/)
@@ -353,11 +341,28 @@ function deriveSessionTitle(content) {
 .setting-create-box,
 .setting-message-log,
 .setting-job,
-.setting-review-detail,
-.setting-review-change,
+.setting-reply-box,
+.setting-sub-card,
 .setting-session-item {
   border-color: var(--app-border);
   background: var(--app-surface-soft);
+}
+
+.setting-ai-grid {
+  display: grid;
+  gap: 1rem;
+}
+
+.setting-sub-card {
+  min-width: 0;
+  border: 1px solid var(--app-border);
+  border-radius: 12px;
+}
+
+@media (min-width: 1280px) {
+  .setting-ai-grid {
+    grid-template-columns: 320px minmax(0, 1fr);
+  }
 }
 
 .setting-field {

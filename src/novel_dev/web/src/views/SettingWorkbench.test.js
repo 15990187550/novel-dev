@@ -15,6 +15,20 @@ vi.mock('@/api.js', () => ({
   getDocuments: vi.fn().mockResolvedValue({ items: [] }),
   getSettingSessions: vi.fn().mockResolvedValue({ items: [] }),
   getSettingReviewBatches: vi.fn().mockResolvedValue({ items: [] }),
+  replySettingSession: vi.fn().mockResolvedValue({
+    session: {
+      id: 'sgs-1',
+      novel_id: 'novel-1',
+      title: '废脉少年',
+      status: 'ready_to_generate',
+    },
+    assistant_message: '已记录这次调整。',
+  }),
+  generateSettingReviewBatch: vi.fn().mockResolvedValue({
+    id: 'srb-1',
+    status: 'pending',
+    summary: '新增设定审核记录',
+  }),
   createSettingSession: vi.fn().mockResolvedValue({
     id: 'sgs-1',
     novel_id: 'novel-1',
@@ -102,6 +116,46 @@ describe('SettingWorkbench', () => {
     expect(wrapper.find('.page-header').exists()).toBe(false)
     expect(wrapper.text()).toContain('AI 生成设定')
     expect(wrapper.text()).not.toContain('设定工作台')
+  })
+
+  it('keeps review batches out of the AI card and sends follow-up adjustments', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.sessions = [
+      { id: 'sgs-1', title: '废脉少年', status: 'clarifying' },
+    ]
+    store.settingWorkbench.selectedSessionId = 'sgs-1'
+    store.settingWorkbench.selectedSession = { id: 'sgs-1', title: '废脉少年', status: 'clarifying' }
+    store.settingWorkbench.selectedMessages = [
+      { id: 'msg-1', role: 'assistant', content: '请补充主角和势力关系。' },
+    ]
+
+    const wrapper = mount(SettingWorkbench, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          ElAlert: true,
+          ElDialog: {
+            template: '<div><slot /><slot name="footer" /></div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="setting-review-batches"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('设定审核批次')
+
+    await wrapper.get('[data-testid="setting-session-reply"]').setValue('主角后续会加入散修盟。')
+    await wrapper.get('[data-testid="setting-session-reply-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(api.replySettingSession).toHaveBeenCalledWith('novel-1', 'sgs-1', {
+      content: '主角后续会加入散修盟。',
+    })
+    expect(wrapper.text()).toContain('已记录这次调整。')
   })
 
   it('opens consolidation dialog, selects pending records, and submits selected ids', async () => {
