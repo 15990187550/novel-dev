@@ -65,9 +65,11 @@ function getVisualCategory(entity) {
 
 const option = computed(() => {
   const activeCategories = [...new Set(props.entities.map((entity) => getVisualCategory(entity)))]
+  const entityNameById = new Map(props.entities.map((entity) => [entity.entity_id, entity.name]))
   const nodes = props.entities.map(e => ({
     id: e.entity_id,
-    name: e.name,
+    name: e.entity_id,
+    displayName: e.name,
     category: getVisualCategory(e),
     symbolSize: 38 + Math.min((e.current_version || 1) * 4, 12),
     draggable: true,
@@ -90,6 +92,8 @@ const option = computed(() => {
   const links = props.relationships.map(r => ({
     source: r.source_id,
     target: r.target_id,
+    sourceName: entityNameById.get(r.source_id) || r.source_id,
+    targetName: entityNameById.get(r.target_id) || r.target_id,
     value: r.relation_type,
   }))
   return {
@@ -114,9 +118,9 @@ const option = computed(() => {
       textStyle: { color: '#f8fafc' },
       formatter(params) {
         if (params.dataType === 'edge') {
-          return `${params.data.source} → ${params.data.target}<br/>关系：${params.data.value || '-'}`
+          return `${params.data.sourceName || params.data.source} → ${params.data.targetName || params.data.target}<br/>关系：${params.data.value || '-'}`
         }
-        return `${params.data.name}<br/>类型：${params.data.category || '其他'}`
+        return `${params.data.displayName || params.data.name}<br/>类型：${params.data.category || '其他'}`
       },
     },
     series: [{
@@ -139,6 +143,7 @@ const option = computed(() => {
         position: 'bottom',
         distance: 10,
         fontWeight: 700,
+        formatter: ({ data }) => data.displayName || data.name,
       },
       lineStyle: {
         color: 'rgba(59, 130, 246, 0.55)',

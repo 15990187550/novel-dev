@@ -5,7 +5,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
@@ -38,7 +38,12 @@ from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceS
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.chapter_generation_service import AutoRunChaptersRequest
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
-from novel_dev.services.generation_job_service import CHAPTER_AUTO_RUN_JOB, CHAPTER_REWRITE_JOB, schedule_generation_job
+from novel_dev.services.generation_job_service import (
+    CHAPTER_AUTO_RUN_JOB,
+    CHAPTER_REWRITE_JOB,
+    SETTING_CONSOLIDATION_JOB,
+    schedule_generation_job,
+)
 from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
@@ -50,6 +55,20 @@ from novel_dev.schemas.knowledge_domain import (
     KnowledgeDomainUpdate,
     serialize_knowledge_domain,
 )
+from novel_dev.schemas.setting_workbench import (
+    SettingConsolidationStartRequest,
+    SettingConsolidationStartResponse,
+    SettingConflictResolutionRequest,
+    SettingGenerationSessionCreateRequest,
+    SettingGenerationSessionDetailResponse,
+    SettingGenerationSessionListResponse,
+    SettingGenerationSessionResponse,
+    SettingReviewApproveRequest,
+    SettingReviewBatchDetailResponse,
+    SettingReviewBatchListResponse,
+)
+from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+from novel_dev.services.setting_consolidation_service import SettingConsolidationService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 import re
@@ -76,6 +95,79 @@ async def _raise_flow_cancelled(session: AsyncSession, novel_id: str):
 
 class CreateNovelRequest(BaseModel):
     title: str
+
+
+def _isoformat(value):
+    return value.isoformat() if value else None
+
+
+def _serialize_setting_generation_session(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "novel_id": item.novel_id,
+        "title": item.title,
+        "status": item.status,
+        "target_categories": item.target_categories or [],
+        "clarification_round": item.clarification_round or 0,
+        "conversation_summary": item.conversation_summary,
+        "created_at": _isoformat(item.created_at),
+        "updated_at": _isoformat(item.updated_at),
+    }
+
+
+def _serialize_setting_generation_message(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "session_id": item.session_id,
+        "role": item.role,
+        "content": item.content,
+        "meta": item.meta or {},
+        "created_at": _isoformat(item.created_at),
+    }
+
+
+def _serialize_setting_review_batch(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "novel_id": item.novel_id,
+        "source_type": item.source_type,
+        "source_file": item.source_file,
+        "source_session_id": item.source_session_id,
+        "job_id": item.job_id,
+        "status": item.status,
+        "summary": item.summary or "",
+        "input_snapshot": item.input_snapshot or {},
+        "error_message": item.error_message,
+        "created_at": _isoformat(item.created_at),
+        "updated_at": _isoformat(item.updated_at),
+    }
+
+
+def _serialize_setting_review_change(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "batch_id": item.batch_id,
+        "target_type": item.target_type,
+        "operation": item.operation,
+        "target_id": item.target_id,
+        "status": item.status,
+        "before_snapshot": item.before_snapshot,
+        "after_snapshot": item.after_snapshot,
+        "conflict_hints": item.conflict_hints or [],
+        "error_message": item.error_message,
+        "created_at": _isoformat(item.created_at),
+        "updated_at": _isoformat(item.updated_at),
+    }
+
+
+async def _lock_setting_consolidation_start(session: AsyncSession, novel_id: str) -> None:
+    bind = session.get_bind()
+    if getattr(bind.dialect, "name", "") != "postgresql":
+        return
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+        {"key": f"setting_consolidation:{novel_id}"},
+    )
 
 
 class UpdateNovelRequest(BaseModel):
@@ -197,6 +289,10 @@ def _latest_documents_by_title(docs: list) -> list:
     )
 
 
+def _active_documents(docs: list) -> list:
+    return [doc for doc in docs if getattr(doc, "archived_at", None) is None]
+
+
 def _word_count(text: Optional[str]) -> int:
     if not text:
         return 0
@@ -246,6 +342,21 @@ def _iter_inference_text_fragments(latest_state: dict) -> list[tuple[str, str]]:
     return fragments
 
 
+def _inference_domain_key(entity_row: dict) -> str | None:
+    latest_state = entity_row.get("latest_state") or {}
+    domain_id = latest_state.get("_knowledge_domain_id")
+    if isinstance(domain_id, str) and domain_id.strip():
+        return f"id:{domain_id.strip()}"
+    domain_name = latest_state.get("_knowledge_domain_name")
+    if isinstance(domain_name, str) and domain_name.strip():
+        return f"name:{domain_name.strip()}"
+    return None
+
+
+def _same_inference_domain(source_row: dict, target_row: dict) -> bool:
+    return _inference_domain_key(source_row) == _inference_domain_key(target_row)
+
+
 def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
     inferred = []
     seen = set()
@@ -261,6 +372,8 @@ def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
                     continue
                 if target["name"] not in relation_text:
                     continue
+                if not _same_inference_domain(source, target):
+                    continue
                 relation_type = _normalize_inferred_relationship_type(source, target, relation_text)
                 dedup_key = (source["entity_id"], target["entity_id"], relation_type)
                 if dedup_key in seen:
@@ -275,6 +388,10 @@ def _build_inferred_relationships(entity_rows: list[dict]) -> list[dict]:
                     "created_at_chapter_id": None,
                     "is_active": True,
                     "is_inferred": True,
+                    "archived_at": None,
+                    "archive_reason": None,
+                    "archived_by_consolidation_batch_id": None,
+                    "archived_by_consolidation_change_id": None,
                 })
     return inferred
 
@@ -373,6 +490,10 @@ async def _serialize_entity_payload(session: AsyncSession, entity: Entity) -> di
         "system_needs_review": entity.system_needs_review,
         "classification_status": _classification_status(entity),
         "search_document": entity.search_document,
+        "archived_at": _isoformat(entity.archived_at),
+        "archive_reason": entity.archive_reason,
+        "archived_by_consolidation_batch_id": entity.archived_by_consolidation_batch_id,
+        "archived_by_consolidation_change_id": entity.archived_by_consolidation_change_id,
     }
 
 
@@ -554,9 +675,16 @@ async def delete_novel(novel_id: str, session: AsyncSession = Depends(get_sessio
 
 
 @router.get("/api/novels/{novel_id}/entities")
-async def list_entities(novel_id: str, session: AsyncSession = Depends(get_session)):
+async def list_entities(
+    novel_id: str,
+    include_archived: bool = False,
+    session: AsyncSession = Depends(get_session),
+):
+    filters = [Entity.novel_id == novel_id]
+    if not include_archived:
+        filters.append(Entity.archived_at.is_(None))
     result = await session.execute(
-        select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
+        select(Entity).where(*filters).order_by(Entity.name)
     )
     entities = list(result.scalars().all())
     svc = EntityService(session)
@@ -600,6 +728,7 @@ async def list_entities(novel_id: str, session: AsyncSession = Depends(get_sessi
 async def search_entities(
     novel_id: str,
     q: str,
+    include_archived: bool = False,
     session: AsyncSession = Depends(get_session),
 ):
     query = q.strip()
@@ -615,6 +744,7 @@ async def search_entities(
         query=query,
         query_vector=query_vector,
         limit=20,
+        include_archived=include_archived,
     )
     group_ids = []
     for hit in hits:
@@ -830,10 +960,20 @@ async def reclassify_entities_for_novel(novel_id: str, session: AsyncSession = D
 
 
 @router.get("/api/novels/{novel_id}/entity_relationships")
-async def list_entity_relationships(novel_id: str, session: AsyncSession = Depends(get_session)):
+async def list_entity_relationships(
+    novel_id: str,
+    include_archived: bool = False,
+    session: AsyncSession = Depends(get_session),
+):
+    relationship_filters = [
+        EntityRelationship.novel_id == novel_id,
+        EntityRelationship.is_active.is_(True),
+    ]
+    if not include_archived:
+        relationship_filters.append(EntityRelationship.archived_at.is_(None))
     result = await session.execute(
         select(EntityRelationship)
-        .where(EntityRelationship.novel_id == novel_id, EntityRelationship.is_active.is_(True))
+        .where(*relationship_filters)
         .order_by(EntityRelationship.id)
     )
     items = [
@@ -846,16 +986,26 @@ async def list_entity_relationships(novel_id: str, session: AsyncSession = Depen
             "created_at_chapter_id": rel.created_at_chapter_id,
             "is_active": rel.is_active,
             "is_inferred": False,
+            "archived_at": _isoformat(rel.archived_at),
+            "archive_reason": rel.archive_reason,
+            "archived_by_consolidation_batch_id": rel.archived_by_consolidation_batch_id,
+            "archived_by_consolidation_change_id": rel.archived_by_consolidation_change_id,
         }
         for rel in result.scalars().all()
     ]
-    if items:
-        return {"items": items}
-
+    entity_filters = [Entity.novel_id == novel_id]
+    if not include_archived:
+        entity_filters.append(Entity.archived_at.is_(None))
     entities_result = await session.execute(
-        select(Entity).where(Entity.novel_id == novel_id).order_by(Entity.name)
+        select(Entity).where(*entity_filters).order_by(Entity.name)
     )
     entities = list(entities_result.scalars().all())
+    if not include_archived:
+        visible_entity_ids = {entity.id for entity in entities}
+        items = [
+            item for item in items
+            if item["source_id"] in visible_entity_ids and item["target_id"] in visible_entity_ids
+        ]
     svc = EntityService(session)
     states = await svc.get_latest_states([ent.id for ent in entities])
     entity_rows = [
@@ -867,7 +1017,29 @@ async def list_entity_relationships(novel_id: str, session: AsyncSession = Depen
         }
         for ent in entities
     ]
-    items = _build_inferred_relationships(entity_rows)
+    entity_scope_keys = {
+        row["entity_id"]: _inference_domain_key(row)
+        for row in entity_rows
+    }
+    scopes_with_explicit_relationships = set()
+    for item in items:
+        source_scope = entity_scope_keys.get(item["source_id"])
+        target_scope = entity_scope_keys.get(item["target_id"])
+        if source_scope == target_scope:
+            scopes_with_explicit_relationships.add(source_scope)
+        else:
+            scopes_with_explicit_relationships.update(scope for scope in (source_scope, target_scope) if scope is not None)
+    explicit_keys = {
+        (item["source_id"], item["target_id"], item["relation_type"])
+        for item in items
+    }
+    for inferred in _build_inferred_relationships(entity_rows):
+        if entity_scope_keys.get(inferred["source_id"]) in scopes_with_explicit_relationships:
+            continue
+        dedup_key = (inferred["source_id"], inferred["target_id"], inferred["relation_type"])
+        if dedup_key not in explicit_keys:
+            items.append(inferred)
+            explicit_keys.add(dedup_key)
     return {"items": items}
 
 
@@ -1287,12 +1459,14 @@ async def get_document_library(novel_id: str, session: AsyncSession = Depends(ge
     repo = DocumentRepository(session)
     extraction_service = ExtractionService(session)
 
-    worldview_docs = await repo.get_by_type(novel_id, "worldview")
-    setting_docs = await repo.get_by_type(novel_id, "setting")
-    synopsis_docs = await repo.get_by_type(novel_id, "synopsis")
-    concept_docs = await repo.get_by_type(novel_id, "concept")
-    style_docs = await repo.get_by_type(novel_id, "style_profile")
+    worldview_docs = _active_documents(await repo.get_by_type(novel_id, "worldview"))
+    setting_docs = _active_documents(await repo.get_by_type(novel_id, "setting"))
+    synopsis_docs = _active_documents(await repo.get_by_type(novel_id, "synopsis"))
+    concept_docs = _active_documents(await repo.get_by_type(novel_id, "concept"))
+    style_docs = _active_documents(await repo.get_by_type(novel_id, "style_profile"))
     active_style_doc = await extraction_service.get_active_style_profile(novel_id)
+    if active_style_doc and active_style_doc.archived_at is not None:
+        active_style_doc = None
 
     items = [
         *[_serialize_library_document(doc) for doc in _latest_documents_by_title(worldview_docs)],
@@ -2328,6 +2502,198 @@ async def review_outline_workbench(
         raise HTTPException(status_code=404, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/sessions",
+    response_model=SettingGenerationSessionResponse,
+)
+async def create_setting_generation_session(
+    novel_id: str,
+    req: SettingGenerationSessionCreateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    title = req.title.strip() or "未命名设定会话"
+    repo = SettingWorkbenchRepository(session)
+    item = await repo.create_session(
+        novel_id=novel_id,
+        title=title,
+        target_categories=req.target_categories,
+    )
+    initial_idea = req.initial_idea.strip()
+    if initial_idea:
+        await repo.add_message(
+            session_id=item.id,
+            role="user",
+            content=initial_idea,
+            metadata={"kind": "initial_idea"},
+        )
+    await session.commit()
+    return _serialize_setting_generation_session(item)
+
+
+@router.get(
+    "/api/novels/{novel_id}/settings/sessions",
+    response_model=SettingGenerationSessionListResponse,
+)
+async def list_setting_generation_sessions(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = SettingWorkbenchRepository(session)
+    items = await repo.list_sessions(novel_id)
+    return {"items": [_serialize_setting_generation_session(item) for item in items]}
+
+
+@router.get(
+    "/api/novels/{novel_id}/settings/sessions/{session_id}",
+    response_model=SettingGenerationSessionDetailResponse,
+)
+async def get_setting_generation_session(
+    novel_id: str,
+    session_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = SettingWorkbenchRepository(session)
+    item = await repo.get_session(session_id)
+    if item is None or item.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting generation session not found")
+    messages = await repo.list_messages(session_id)
+    return {
+        "session": _serialize_setting_generation_session(item),
+        "messages": [_serialize_setting_generation_message(message) for message in messages],
+    }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/consolidations",
+    response_model=SettingConsolidationStartResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def start_setting_consolidation(
+    novel_id: str,
+    req: SettingConsolidationStartRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = GenerationJobRepository(session)
+    await _lock_setting_consolidation_start(session, novel_id)
+    active = await repo.get_active(novel_id, SETTING_CONSOLIDATION_JOB)
+    if active:
+        return {"job_id": active.id, "status": active.status}
+
+    job = await repo.create(
+        novel_id,
+        SETTING_CONSOLIDATION_JOB,
+        {"selected_pending_ids": req.selected_pending_ids},
+    )
+    await session.commit()
+    try:
+        schedule_generation_job(job.id)
+    except Exception as exc:
+        error_message = f"Failed to schedule setting consolidation job: {exc}"
+        await repo.mark_failed(job.id, {}, error_message)
+        await session.commit()
+        raise HTTPException(status_code=500, detail=error_message)
+    return {"job_id": job.id, "status": job.status}
+
+
+@router.get(
+    "/api/novels/{novel_id}/settings/review_batches",
+    response_model=SettingReviewBatchListResponse,
+)
+async def list_setting_review_batches(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = SettingWorkbenchRepository(session)
+    items = await repo.list_review_batches(novel_id)
+    return {"items": [_serialize_setting_review_batch(item) for item in items]}
+
+
+@router.get(
+    "/api/novels/{novel_id}/settings/review_batches/{batch_id}",
+    response_model=SettingReviewBatchDetailResponse,
+)
+async def get_setting_review_batch(
+    novel_id: str,
+    batch_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = SettingWorkbenchRepository(session)
+    batch = await repo.get_review_batch(batch_id)
+    if batch is None or batch.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting review batch not found")
+    changes = await repo.list_review_changes(batch_id)
+    return {
+        "batch": _serialize_setting_review_batch(batch),
+        "changes": [_serialize_setting_review_change(change) for change in changes],
+    }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/review_batches/{batch_id}/approve",
+    response_model=SettingReviewBatchDetailResponse,
+)
+async def approve_setting_review_batch(
+    novel_id: str,
+    batch_id: str,
+    req: SettingReviewApproveRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingConsolidationService(session)
+    batch = await service.setting_repo.get_review_batch(batch_id)
+    if batch is None or batch.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting review batch not found")
+    try:
+        await service.approve_review_batch(
+            batch_id,
+            change_ids=req.change_ids,
+            approve_all=req.approve_all,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+
+    updated = await service.setting_repo.get_review_batch(batch_id)
+    changes = await service.setting_repo.list_review_changes(batch_id)
+    return {
+        "batch": _serialize_setting_review_batch(updated),
+        "changes": [_serialize_setting_review_change(change) for change in changes],
+    }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/review_batches/{batch_id}/conflicts/resolve",
+    response_model=SettingReviewBatchDetailResponse,
+)
+async def resolve_setting_review_conflict(
+    novel_id: str,
+    batch_id: str,
+    req: SettingConflictResolutionRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingConsolidationService(session)
+    batch = await service.setting_repo.get_review_batch(batch_id)
+    if batch is None or batch.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting review batch not found")
+    try:
+        await service.resolve_conflict_change(
+            batch_id,
+            change_id=req.change_id,
+            resolved_after_snapshot=req.resolved_after_snapshot,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+
+    updated = await service.setting_repo.get_review_batch(batch_id)
+    changes = await service.setting_repo.list_review_changes(batch_id)
+    return {
+        "batch": _serialize_setting_review_batch(updated),
+        "changes": [_serialize_setting_review_change(change) for change in changes],
+    }
 
 
 @router.post(

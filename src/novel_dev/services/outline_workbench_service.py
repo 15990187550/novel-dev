@@ -13,7 +13,7 @@ from novel_dev.agents.outline_clarification_agent import (
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.db.models import OutlineMessage
 from novel_dev.repositories.document_repo import DocumentRepository
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,8 +43,21 @@ class SuggestionUpdateSummary(BaseModel):
 
 
 class SuggestionCardUpdateEnvelope(BaseModel):
-    cards: list[SettingSuggestionCardMergePayload] = Field(default_factory=list)
+    cards: list[dict[str, Any]] = Field(default_factory=list)
     summary: SuggestionUpdateSummary = Field(default_factory=SuggestionUpdateSummary)
+
+    @field_validator("cards", mode="before")
+    @classmethod
+    def normalize_card_items(cls, value: Any) -> Any:
+        if not isinstance(value, list):
+            return value
+        normalized = []
+        for item in value:
+            if isinstance(item, BaseModel):
+                normalized.append(item.model_dump(exclude_none=True))
+            else:
+                normalized.append(item)
+        return normalized
 
 
 class OutlineWorkbenchService:
@@ -611,9 +624,29 @@ class OutlineWorkbenchService:
             ).outline_drafts
 
         await self._release_connection_before_external_call()
-        intent = self._classify_feedback_intent(feedback)
+        intent = self._classify_feedback_intent(feedback, outline_type=outline_type)
         if outline_type == "volume" and self._extract_requested_chapter_count(feedback):
             intent = self._REGENERATE_INTENT
+        synopsis_snapshot = None
+        if outline_type == "synopsis":
+            synopsis_snapshot = self._get_workspace_snapshot(
+                workspace_outline_drafts,
+                "synopsis",
+                "synopsis",
+            )
+            current_synopsis_snapshot = (
+                context_window.last_result_snapshot
+                or synopsis_snapshot
+                or checkpoint.get("synopsis_data")
+            )
+            if (
+                intent == self._REVISE_INTENT
+                and self._should_regenerate_synopsis_revision(
+                    current_synopsis_snapshot,
+                    feedback,
+                )
+            ):
+                intent = self._REGENERATE_INTENT
         log_service.add_log(
             novel_id,
             "OutlineWorkbenchService",
@@ -631,11 +664,6 @@ class OutlineWorkbenchService:
         )
 
         if outline_type == "synopsis":
-            synopsis_snapshot = self._get_workspace_snapshot(
-                workspace_outline_drafts,
-                "synopsis",
-                "synopsis",
-            )
             if intent == self._REGENERATE_INTENT:
                 result = await self._regenerate_synopsis(
                     novel_id=novel_id,
@@ -779,6 +807,9 @@ class OutlineWorkbenchService:
             "你是一位小说设定编辑。根据新的 outline 快照、已有建议卡、历史摘要与用户最新意见，"
             "返回 suggestion card 增量更新 JSON。\n"
             "只返回符合 SuggestionCardUpdateEnvelope Schema 的 JSON，不要解释。\n"
+            "cards 每一项必须至少包含 merge_key；新增卡建议同时提供 card_type、title、summary、status 和 payload。\n"
+            "如果只是补充已有卡，可以返回 merge_key + payload 的补丁；不要只返回 card_id。\n"
+            "supersede 操作只需要 operation='supersede' 和 merge_key。\n"
             f"### outline_type\n{outline_type}\n\n"
             f"### outline_ref\n{outline_ref}\n\n"
             f"### 新 outline 快照\n{json.dumps(result_snapshot, ensure_ascii=False)}\n\n"
@@ -796,8 +827,160 @@ class OutlineWorkbenchService:
             SuggestionCardUpdateEnvelope,
             novel_id=novel_id,
         )
-        # Preserve merge semantics (e.g. omit display_order to avoid clobbering).
-        return [item.model_dump(exclude_none=True) for item in updates.cards], updates.summary.model_dump()
+        cards, skipped_count = self._normalize_suggestion_card_updates(
+            updates.cards,
+            active_cards=active_cards,
+            outline_ref=outline_ref,
+        )
+        summary = updates.summary.model_dump()
+        if skipped_count:
+            summary["unresolved"] = summary.get("unresolved", 0) + skipped_count
+            remaining = skipped_count
+            for key in ("created", "updated", "superseded"):
+                available = min(summary.get(key, 0), remaining)
+                summary[key] = summary.get(key, 0) - available
+                remaining -= available
+                if remaining <= 0:
+                    break
+        return cards, summary
+
+    def _normalize_suggestion_card_updates(
+        self,
+        raw_cards: list[Any],
+        *,
+        active_cards: list[Any],
+        outline_ref: str,
+    ) -> tuple[list[dict[str, Any]], int]:
+        existing_by_merge_key = {card.merge_key: card for card in active_cards}
+        existing_by_card_id = {card.card_id: card for card in active_cards}
+        normalized_cards: list[dict[str, Any]] = []
+        skipped_count = 0
+
+        for raw_card in raw_cards:
+            card = self._coerce_mapping(raw_card)
+            if not card:
+                skipped_count += 1
+                continue
+
+            operation = str(card.get("operation") or "upsert").strip() or "upsert"
+            merge_key = str(card.get("merge_key") or "").strip()
+            existing = existing_by_merge_key.get(merge_key)
+            if existing is None and card.get("card_id"):
+                existing = existing_by_card_id.get(str(card["card_id"]).strip())
+                if existing is not None and not merge_key:
+                    merge_key = existing.merge_key
+
+            if not merge_key:
+                skipped_count += 1
+                continue
+            if operation == "supersede":
+                normalized_cards.append({"operation": "supersede", "merge_key": merge_key})
+                continue
+            if operation != "upsert":
+                operation = "upsert"
+
+            payload = self._merge_suggestion_payload(existing, card.get("payload"))
+            card_type = str(
+                card.get("card_type")
+                or (existing.card_type if existing is not None else "")
+                or self._card_type_from_merge_key(merge_key)
+                or "unknown"
+            ).strip()
+            title = self._coerce_nonempty_text(card.get("title")) or (
+                existing.title if existing is not None else ""
+            ) or self._infer_suggestion_title(merge_key, payload)
+            summary = self._coerce_nonempty_text(card.get("summary")) or (
+                existing.summary if existing is not None else ""
+            ) or self._infer_suggestion_summary(payload)
+            status = str(
+                card.get("status")
+                or (existing.status if existing is not None else "")
+                or "active"
+            ).strip()
+
+            if not card_type or not title or not summary or not status:
+                skipped_count += 1
+                continue
+
+            source_outline_refs = sorted(
+                set(existing.source_outline_refs if existing is not None else [])
+                | set(self._coerce_str_list(card.get("source_outline_refs")))
+                | ({outline_ref} if outline_ref else set())
+            )
+
+            normalized = {
+                "operation": operation,
+                "merge_key": merge_key,
+                "card_id": str(
+                    card.get("card_id")
+                    or (existing.card_id if existing is not None else "")
+                    or f"card:{merge_key}"
+                ).strip(),
+                "card_type": card_type,
+                "title": title,
+                "summary": summary,
+                "status": status,
+                "source_outline_refs": source_outline_refs,
+                "payload": payload,
+            }
+            if card.get("display_order") is not None:
+                normalized["display_order"] = card["display_order"]
+            normalized_cards.append(
+                SettingSuggestionCardMergePayload.model_validate(normalized).model_dump(
+                    exclude_none=True
+                )
+            )
+
+        return normalized_cards, skipped_count
+
+    def _coerce_mapping(self, value: Any) -> dict[str, Any]:
+        if isinstance(value, BaseModel):
+            return value.model_dump(exclude_none=True)
+        if isinstance(value, dict):
+            return dict(value)
+        return {}
+
+    def _merge_suggestion_payload(self, existing: Any, incoming_payload: Any) -> dict[str, Any]:
+        base = dict(existing.payload) if existing is not None else {}
+        if isinstance(incoming_payload, dict):
+            base.update(incoming_payload)
+        return base
+
+    def _card_type_from_merge_key(self, merge_key: str) -> str:
+        card_type, _, _ = merge_key.partition(":")
+        return card_type.strip()
+
+    def _coerce_nonempty_text(self, value: Any) -> str:
+        text = str(value or "").strip()
+        return text
+
+    def _coerce_str_list(self, value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item or "").strip()]
+
+    def _infer_suggestion_title(self, merge_key: str, payload: dict[str, Any]) -> str:
+        for key in (
+            "canonical_name",
+            "name",
+            "title",
+            "source_entity_ref",
+            "target_entity_ref",
+            "relation_type",
+        ):
+            text = self._coerce_nonempty_text(payload.get(key))
+            if text:
+                if key == "target_entity_ref" and payload.get("source_entity_ref"):
+                    return f"{payload['source_entity_ref']} / {text}"
+                return text
+        return merge_key
+
+    def _infer_suggestion_summary(self, payload: dict[str, Any]) -> str:
+        for key in ("summary", "description", "content", "evidence", "rationale", "goal"):
+            text = self._coerce_nonempty_text(payload.get(key))
+            if text:
+                return text
+        return "待补充设定建议。"
 
     async def _write_result_snapshot(
         self,
@@ -949,6 +1132,8 @@ class OutlineWorkbenchService:
             prompt,
             SynopsisData,
             novel_id=novel_id,
+            config_agent_name="outline_workbench_service",
+            config_task="revise_synopsis_with_feedback",
         )
         log_service.add_log(
             novel_id,
@@ -1182,7 +1367,7 @@ class OutlineWorkbenchService:
             "setting_draft_updates": [],
         }
 
-    def _classify_feedback_intent(self, feedback: str) -> str:
+    def _classify_feedback_intent(self, feedback: str, outline_type: Optional[str] = None) -> str:
         text = (feedback or "").strip().lower()
         if not text:
             return self._REVISE_INTENT
@@ -1231,12 +1416,69 @@ class OutlineWorkbenchService:
         )
         if any(marker in text for marker in regenerate_markers):
             return self._REGENERATE_INTENT
-        if self._extract_requested_chapter_count(text):
+        synopsis_generation_markers = (
+            "生成完整总纲",
+            "生成总纲草稿",
+            "生成完整大纲",
+            "完整总纲草稿",
+            "完整总纲",
+            "补齐一句话梗概",
+            "补齐核心冲突",
+            "补齐卷数规模",
+            "补齐人物弧光",
+            "补齐关键里程碑",
+        )
+        if outline_type == "synopsis" and any(
+            marker in text for marker in synopsis_generation_markers
+        ):
+            return self._REGENERATE_INTENT
+        synopsis_review_markers = (
+            "overall=",
+            "logline_specificity=",
+            "conflict_concreteness=",
+            "character_arc_depth=",
+            "structural_turns=",
+            "hook_strength=",
+            "评审意见",
+            "低于下限",
+            "optimization_suggestion",
+            "本synopsis",
+        )
+        if outline_type == "synopsis" and any(
+            marker in text for marker in synopsis_review_markers
+        ):
+            return self._REGENERATE_INTENT
+        max_chapters = 3000 if outline_type == "synopsis" else 300
+        if self._extract_requested_chapter_count(text, max_chapters=max_chapters):
             return self._REGENERATE_INTENT
         return self._REVISE_INTENT
 
+    def _should_regenerate_synopsis_revision(
+        self,
+        current_synopsis: SynopsisData | dict[str, Any] | None,
+        feedback: str,
+    ) -> bool:
+        if current_synopsis is None:
+            return False
+        synopsis = (
+            current_synopsis
+            if isinstance(current_synopsis, SynopsisData)
+            else SynopsisData.model_validate(current_synopsis)
+        )
+        if synopsis.estimated_total_chapters >= 500:
+            return True
+        if synopsis.estimated_volumes >= 8:
+            return True
+        if len(synopsis.volume_outlines or []) >= 8:
+            return True
+        return False
+
     @staticmethod
-    def _extract_requested_chapter_count(feedback: str) -> Optional[int]:
+    def _extract_requested_chapter_count(
+        feedback: str,
+        *,
+        max_chapters: int = 300,
+    ) -> Optional[int]:
         text = (feedback or "").strip()
         if not text:
             return None
@@ -1248,7 +1490,7 @@ class OutlineWorkbenchService:
         for pattern in patterns:
             for match in re.finditer(pattern, text):
                 count = int(match.group(1))
-                if 1 <= count <= 300:
+                if 1 <= count <= max_chapters:
                     counts.append(count)
         return counts[-1] if counts else None
 

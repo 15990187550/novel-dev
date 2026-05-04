@@ -22,7 +22,11 @@ vi.mock('@/api.js', () => ({
   getVolumePlan: vi.fn(),
   deleteNovel: vi.fn(),
   getEntities: vi.fn(),
+  searchEntities: vi.fn(),
   getEntityRelationships: vi.fn(),
+  updateEntity: vi.fn(),
+  updateEntityClassification: vi.fn(),
+  deleteEntity: vi.fn(),
   getTimelines: vi.fn(),
   getForeshadowings: vi.fn(),
   getPendingDocs: vi.fn(),
@@ -34,6 +38,13 @@ vi.mock('@/api.js', () => ({
   startBrainstormWorkspace: vi.fn(),
   submitBrainstormWorkspace: vi.fn(),
   updateBrainstormSuggestionCard: vi.fn(),
+  getSettingSessions: vi.fn(),
+  createSettingSession: vi.fn(),
+  getSettingSession: vi.fn(),
+  startSettingConsolidation: vi.fn(),
+  getSettingReviewBatches: vi.fn(),
+  getSettingReviewBatch: vi.fn(),
+  approveSettingReviewBatch: vi.fn(),
   submitOutlineFeedback: vi.fn(),
   autoRunChapters: vi.fn(),
   rewriteChapter: vi.fn(),
@@ -104,6 +115,31 @@ describe('novel store dashboard loading', () => {
     const zhetianNode = store.entityTree.find((node) => node.label === '规则域：遮天')
     expect(zhuxianNode.children[0].children[0].children[0].entityId).toBe('zhuxian-xf')
     expect(zhetianNode.children[0].children[0].children[0].entityId).toBe('zhetian-xf')
+  })
+
+  it('preserves includeArchived when refetching after entity mutations', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.updateEntity).mockResolvedValue({})
+    vi.mocked(api.getEntities).mockResolvedValue({ items: [] })
+    vi.mocked(api.getEntityRelationships).mockResolvedValue({ items: [] })
+
+    await store.updateEntity('entity-1', { name: '陆照' }, { includeArchived: true })
+
+    expect(api.getEntities).toHaveBeenLastCalledWith('novel-1', { include_archived: true })
+    expect(api.getEntityRelationships).toHaveBeenLastCalledWith('novel-1', { include_archived: true })
+  })
+
+  it('passes includeArchived to entity search requests', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.searchEntities).mockResolvedValue({ items: [] })
+    vi.mocked(api.getEntityRelationships).mockResolvedValue({ items: [] })
+
+    await store.searchEntities('陆照', { includeArchived: true })
+
+    expect(api.searchEntities).toHaveBeenCalledWith('novel-1', { q: '陆照', include_archived: true })
+    expect(api.getEntityRelationships).toHaveBeenCalledWith('novel-1', { include_archived: true })
   })
 
   it('skips volume plan request when the checkpoint has no current volume plan', async () => {
@@ -1097,6 +1133,16 @@ describe('novel store dashboard loading', () => {
     expect(store.stoppingFlow).toBe(false)
   })
 
+  it('stopCurrentFlow ignores repeated requests while stopping', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.stoppingFlow = true
+
+    await store.stopCurrentFlow()
+
+    expect(api.stopCurrentFlow).not.toHaveBeenCalled()
+  })
+
   it('executeAction starts an auto-run generation job without waiting for chapter completion', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -1341,5 +1387,240 @@ describe('novel store dashboard loading', () => {
       outline_type: 'synopsis',
       outline_ref: 'synopsis',
     })
+  })
+
+  it('starts setting consolidation and stores the active job', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.startSettingConsolidation).mockResolvedValue({
+      job_id: 'job-setting-1',
+      status: 'queued',
+      job_type: 'setting_consolidation',
+    })
+
+    const job = await store.startSettingConsolidation(['pending-1'])
+
+    expect(api.startSettingConsolidation).toHaveBeenCalledWith('novel-1', ['pending-1'])
+    expect(job.job_id).toBe('job-setting-1')
+    expect(store.settingWorkbench.consolidationJob).toEqual(job)
+    expect(store.settingWorkbench.consolidationSubmitting).toBe(false)
+  })
+
+  it('ignores setting consolidation jobs after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    store.settingWorkbench.consolidationJob = { job_id: 'job-new', status: 'queued' }
+    const first = createDeferred()
+    vi.mocked(api.startSettingConsolidation).mockReturnValueOnce(first.promise)
+
+    const firstStart = store.startSettingConsolidation(['pending-old'])
+    store.novelId = 'novel-new'
+    store.settingWorkbench.consolidationSubmitting = false
+    first.resolve({ job_id: 'job-old', status: 'queued' })
+    const result = await firstStart
+
+    expect(api.startSettingConsolidation).toHaveBeenCalledWith('novel-old', ['pending-old'])
+    expect(result).toBeNull()
+    expect(store.settingWorkbench.consolidationJob).toEqual({ job_id: 'job-new', status: 'queued' })
+    expect(store.settingWorkbench.consolidationSubmitting).toBe(false)
+  })
+
+  it('ignores setting consolidation jobs after switching away and back to the same novel', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-a'
+    store.settingWorkbench.consolidationJob = { job_id: 'job-current-a', status: 'queued' }
+    const first = createDeferred()
+    vi.mocked(api.startSettingConsolidation).mockReturnValueOnce(first.promise)
+
+    const firstStart = store.startSettingConsolidation(['pending-a'])
+    store.novelId = 'novel-b'
+    store.settingWorkbench.consolidationSubmitting = false
+    store.novelId = 'novel-a'
+    store.settingWorkbench.consolidationRequestToken += 1
+    first.resolve({ job_id: 'job-stale-a', status: 'queued' })
+    const result = await firstStart
+
+    expect(api.startSettingConsolidation).toHaveBeenCalledWith('novel-a', ['pending-a'])
+    expect(result).toBeNull()
+    expect(store.settingWorkbench.consolidationJob).toEqual({ job_id: 'job-current-a', status: 'queued' })
+    expect(store.settingWorkbench.consolidationSubmitting).toBe(false)
+  })
+
+  it('returns null for overlapping setting consolidation submissions while one is running', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const first = createDeferred()
+    vi.mocked(api.startSettingConsolidation).mockReturnValueOnce(first.promise)
+
+    const firstStart = store.startSettingConsolidation(['pending-1'])
+    const secondStart = await store.startSettingConsolidation(['pending-2'])
+    first.resolve({ job_id: 'job-setting-1', status: 'queued' })
+    await firstStart
+
+    expect(secondStart).toBeNull()
+    expect(api.startSettingConsolidation).toHaveBeenCalledTimes(1)
+    expect(api.startSettingConsolidation).toHaveBeenCalledWith('novel-1', ['pending-1'])
+  })
+
+  it('ignores stale setting session list responses after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    const first = createDeferred()
+    vi.mocked(api.getSettingSessions)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ items: [{ id: 'sgs-new', title: '新小说会话' }] })
+
+    const firstLoad = store.fetchSettingSessions()
+    store.novelId = 'novel-new'
+    await store.fetchSettingSessions()
+    first.resolve({ items: [{ id: 'sgs-old', title: '旧小说会话' }] })
+    await firstLoad
+
+    expect(store.settingWorkbench.sessions).toEqual([{ id: 'sgs-new', title: '新小说会话' }])
+    expect(store.settingWorkbench.state).toBe('ready')
+  })
+
+  it('ignores stale setting review batch list responses after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    const first = createDeferred()
+    vi.mocked(api.getSettingReviewBatches)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ items: [{ id: 'batch-new', summary: '新小说批次' }] })
+
+    const firstLoad = store.fetchSettingReviewBatches()
+    store.novelId = 'novel-new'
+    await store.fetchSettingReviewBatches()
+    first.resolve({ items: [{ id: 'batch-old', summary: '旧小说批次' }] })
+    await firstLoad
+
+    expect(store.settingWorkbench.reviewBatches).toEqual([{ id: 'batch-new', summary: '新小说批次' }])
+  })
+
+  it('ignores stale pending document responses after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    const first = createDeferred()
+    vi.mocked(api.getPendingDocs)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({ items: [{ id: 'pending-new', extraction_type: 'setting' }] })
+
+    const firstLoad = store.fetchDocuments()
+    store.novelId = 'novel-new'
+    await store.fetchDocuments()
+    first.resolve({ items: [{ id: 'pending-old', extraction_type: 'setting' }] })
+    await firstLoad
+
+    expect(store.pendingDocs).toEqual([{ id: 'pending-new', extraction_type: 'setting' }])
+  })
+
+  it('ignores stale setting session detail responses', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const first = createDeferred()
+    vi.mocked(api.getSettingSession)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        session: { id: 'sgs-new', title: '新会话' },
+        messages: [{ id: 'msg-new', content: 'new' }],
+      })
+
+    const firstLoad = store.loadSettingSession('sgs-old')
+    await store.loadSettingSession('sgs-new')
+    first.resolve({
+      session: { id: 'sgs-old', title: '旧会话' },
+      messages: [{ id: 'msg-old', content: 'old' }],
+    })
+    await firstLoad
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('sgs-new')
+    expect(store.settingWorkbench.selectedSession.title).toBe('新会话')
+    expect(store.settingWorkbench.selectedMessages).toEqual([{ id: 'msg-new', content: 'new' }])
+  })
+
+  it('ignores setting session detail responses after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    store.settingWorkbench.selectedSessionId = 'existing-new'
+    store.settingWorkbench.selectedSession = { id: 'existing-new', title: '新小说现有会话' }
+    const first = createDeferred()
+    vi.mocked(api.getSettingSession).mockReturnValueOnce(first.promise)
+
+    const firstLoad = store.loadSettingSession('sgs-old')
+    store.novelId = 'novel-new'
+    first.resolve({
+      session: { id: 'sgs-old', title: '旧小说会话' },
+      messages: [{ id: 'msg-old', content: 'old' }],
+    })
+    const result = await firstLoad
+
+    expect(api.getSettingSession).toHaveBeenCalledWith('novel-old', 'sgs-old')
+    expect(result).toBeNull()
+    expect(store.settingWorkbench.selectedSession).toEqual({ id: 'existing-new', title: '新小说现有会话' })
+    expect(store.settingWorkbench.selectedMessages).toEqual([])
+  })
+
+  it('ignores stale setting review batch detail responses', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    const first = createDeferred()
+    vi.mocked(api.getSettingReviewBatch)
+      .mockReturnValueOnce(first.promise)
+      .mockResolvedValueOnce({
+        batch: { id: 'batch-new', summary: '新批次' },
+        changes: [{ id: 'change-new', operation: 'create' }],
+      })
+
+    const firstLoad = store.loadSettingReviewBatch('batch-old')
+    await store.loadSettingReviewBatch('batch-new')
+    first.resolve({
+      batch: { id: 'batch-old', summary: '旧批次' },
+      changes: [{ id: 'change-old', operation: 'archive' }],
+    })
+    await firstLoad
+
+    expect(store.settingWorkbench.selectedReviewBatch.id).toBe('batch-new')
+    expect(store.settingWorkbench.selectedReviewChanges).toEqual([{ id: 'change-new', operation: 'create' }])
+  })
+
+  it('ignores setting review batch detail responses after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    store.settingWorkbench.selectedReviewBatch = { id: 'batch-new', summary: '新小说现有批次' }
+    const first = createDeferred()
+    vi.mocked(api.getSettingReviewBatch).mockReturnValueOnce(first.promise)
+
+    const firstLoad = store.loadSettingReviewBatch('batch-old')
+    store.novelId = 'novel-new'
+    first.resolve({
+      batch: { id: 'batch-old', summary: '旧小说批次' },
+      changes: [{ id: 'change-old', operation: 'archive' }],
+    })
+    const result = await firstLoad
+
+    expect(api.getSettingReviewBatch).toHaveBeenCalledWith('novel-old', 'batch-old')
+    expect(result).toBeNull()
+    expect(store.settingWorkbench.selectedReviewBatch).toEqual({ id: 'batch-new', summary: '新小说现有批次' })
+    expect(store.settingWorkbench.selectedReviewChanges).toEqual([])
+  })
+
+  it('ignores created setting sessions after novel changes', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-old'
+    store.settingWorkbench.sessions = [{ id: 'sgs-new', title: '新小说现有会话' }]
+    const first = createDeferred()
+    vi.mocked(api.createSettingSession).mockReturnValueOnce(first.promise)
+
+    const firstCreate = store.createSettingSession({ title: '旧小说创建' })
+    store.novelId = 'novel-new'
+    store.settingWorkbench.creatingSession = false
+    first.resolve({ id: 'sgs-old', title: '旧小说创建' })
+    const result = await firstCreate
+
+    expect(api.createSettingSession).toHaveBeenCalledWith('novel-old', { title: '旧小说创建' })
+    expect(result).toBeNull()
+    expect(store.settingWorkbench.sessions).toEqual([{ id: 'sgs-new', title: '新小说现有会话' }])
+    expect(store.settingWorkbench.selectedSession).toBeNull()
+    expect(store.settingWorkbench.creatingSession).toBe(false)
   })
 })

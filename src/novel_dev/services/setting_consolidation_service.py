@@ -9,6 +9,7 @@ from novel_dev.db.models import EntityRelationship
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.log_service import log_service
 
@@ -21,6 +22,7 @@ class SettingConsolidationService:
         self.pending_repo = PendingExtractionRepository(session)
         self.setting_repo = SettingWorkbenchRepository(session)
         self.entity_repo = EntityRepository(session)
+        self.relationship_repo = RelationshipRepository(session)
 
     async def build_input_snapshot(self, novel_id: str, selected_pending_ids: list[str]) -> dict[str, Any]:
         documents = []
@@ -162,6 +164,180 @@ class SettingConsolidationService:
             metadata={"batch_id": batch.id, "job_id": job_id},
         )
         return batch
+
+    async def approve_review_batch(
+        self,
+        batch_id: str,
+        *,
+        change_ids: list[str] | None = None,
+        approve_all: bool = False,
+    ):
+        batch = await self.setting_repo.get_review_batch(batch_id)
+        if batch is None:
+            raise ValueError("审核记录不存在")
+
+        changes = await self.setting_repo.list_review_changes(batch.id)
+        pending_changes = [change for change in changes if change.status == "pending"]
+        unresolved_conflicts = [
+            change for change in pending_changes
+            if change.target_type == "conflict"
+        ]
+        if approve_all and unresolved_conflicts:
+            raise ValueError("存在未解决冲突，不能整体通过")
+
+        if approve_all:
+            selected_changes = pending_changes
+        else:
+            selected_ids = set(change_ids or [])
+            if not selected_ids:
+                raise ValueError("未选择审核变更")
+            changes_by_id = {change.id: change for change in changes}
+            missing_ids = selected_ids - set(changes_by_id)
+            if missing_ids:
+                raise ValueError(f"审核变更不存在或不属于当前批次: {', '.join(sorted(missing_ids))}")
+            non_pending_ids = sorted(
+                change_id
+                for change_id in selected_ids
+                if changes_by_id[change_id].status != "pending"
+            )
+            if non_pending_ids:
+                raise ValueError(f"审核变更不是 pending 状态: {', '.join(non_pending_ids)}")
+            selected_changes = [
+                change for change in pending_changes
+                if change.id in selected_ids
+            ]
+        selected_conflicts = [
+            change for change in selected_changes
+            if change.target_type == "conflict"
+        ]
+        if selected_conflicts:
+            raise ValueError("存在未解决冲突，不能直接通过")
+
+        for change in selected_changes:
+            try:
+                async with self.session.begin_nested():
+                    await self._apply_change(batch, change)
+            except Exception as exc:
+                await self.setting_repo.mark_change_status(change.id, "failed", error_message=str(exc))
+            else:
+                await self.setting_repo.mark_change_status(change.id, "approved", error_message=None)
+
+        latest_changes = await self.setting_repo.list_review_changes(batch.id)
+        approved_count = sum(
+            1
+            for change in latest_changes
+            if change.status in {"approved", "edited_approved"}
+        )
+        pending_count = sum(1 for change in latest_changes if change.status == "pending")
+        failed_count = sum(1 for change in latest_changes if change.status == "failed")
+        if pending_count == 0 and failed_count == 0:
+            await self.setting_repo.update_batch_status(batch.id, "approved")
+        elif approved_count > 0:
+            await self.setting_repo.update_batch_status(batch.id, "partially_approved")
+        elif failed_count > 0 and pending_count == 0:
+            await self.setting_repo.update_batch_status(batch.id, "failed")
+        return await self.setting_repo.get_review_batch(batch.id)
+
+    async def resolve_conflict_change(
+        self,
+        batch_id: str,
+        *,
+        change_id: str,
+        resolved_after_snapshot: dict[str, Any],
+    ):
+        batch = await self.setting_repo.get_review_batch(batch_id)
+        if batch is None:
+            raise ValueError("审核记录不存在")
+        change = await self.setting_repo.get_review_change(change_id)
+        if change is None or change.batch_id != batch.id:
+            raise ValueError("冲突项不存在或不属于当前审核记录")
+        if change.status != "pending":
+            raise ValueError("冲突项不是 pending 状态")
+        if change.target_type != "conflict":
+            raise ValueError("只能解决冲突项")
+        title = (resolved_after_snapshot.get("title") or "").strip()
+        content = (resolved_after_snapshot.get("content") or "").strip()
+        if not title or not content:
+            raise ValueError("解决后的设定卡必须包含标题和内容")
+
+        await self.setting_repo.mark_change_status(
+            change.id,
+            "resolved",
+            after_snapshot=resolved_after_snapshot,
+            error_message=None,
+        )
+        await self.setting_repo.add_review_change(
+            batch_id=batch.id,
+            target_type="setting_card",
+            operation="create",
+            after_snapshot={
+                **resolved_after_snapshot,
+                "doc_type": resolved_after_snapshot.get("doc_type") or "setting",
+            },
+            conflict_hints=change.conflict_hints or [],
+            source_session_id=change.source_session_id,
+        )
+        await self.setting_repo.update_batch_status(batch.id, "ready_for_review")
+        return await self.setting_repo.get_review_batch(batch.id)
+
+    async def _apply_change(self, batch, change) -> None:
+        if change.target_type == "conflict":
+            raise ValueError("冲突项必须先提交解决结果")
+        if change.operation == "archive":
+            await self._archive_target(batch, change)
+        elif change.target_type == "setting_card" and change.operation == "create":
+            snapshot = change.after_snapshot or {}
+            title = (snapshot.get("title") or "").strip()
+            if not title:
+                raise ValueError("设定卡标题不能为空")
+            doc_id = f"setting_{change.id}"
+            existing = await self.doc_repo.get_by_id(doc_id)
+            if existing is not None:
+                if existing.source_review_change_id == change.id:
+                    return
+                raise ValueError(f"设定卡已存在且来源不匹配: {doc_id}")
+            doc = await self.doc_repo.create(
+                doc_id,
+                batch.novel_id,
+                snapshot.get("doc_type") or "setting",
+                title,
+                snapshot.get("content") or "",
+                version=1,
+            )
+            doc.source_type = "consolidation"
+            doc.source_review_batch_id = batch.id
+            doc.source_review_change_id = change.id
+        else:
+            raise ValueError(f"暂不支持的设定审核变更: {change.target_type}/{change.operation}")
+
+    async def _archive_target(self, batch, change) -> None:
+        if not change.target_id:
+            raise ValueError("归档目标不存在: 空目标")
+        if change.target_type == "setting_card":
+            archived = await self.doc_repo.archive_for_consolidation(
+                change.target_id,
+                novel_id=batch.novel_id,
+                batch_id=batch.id,
+                change_id=change.id,
+            )
+        elif change.target_type == "entity":
+            archived = await self.entity_repo.archive_for_consolidation(
+                change.target_id,
+                novel_id=batch.novel_id,
+                batch_id=batch.id,
+                change_id=change.id,
+            )
+        elif change.target_type == "relationship":
+            archived = await self.relationship_repo.archive_for_consolidation(
+                change.target_id,
+                novel_id=batch.novel_id,
+                batch_id=batch.id,
+                change_id=change.id,
+            )
+        else:
+            raise ValueError(f"不支持归档目标类型: {change.target_type}")
+        if archived is None:
+            raise ValueError(f"归档目标不存在: {change.target_id}")
 
     @staticmethod
     def _is_newer_document(candidate, current) -> bool:

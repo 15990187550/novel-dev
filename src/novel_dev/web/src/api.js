@@ -32,7 +32,7 @@ export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).th
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
 export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/text`).then(r => r.data)
 export const getChapterQuality = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/quality`).then(r => r.data)
-export const getEntities = (id) => api.get(`/novels/${id}/entities`).then(r => r.data)
+export const getEntities = (id, params = {}) => api.get(`/novels/${id}/entities`, { params }).then(r => r.data)
 export const searchEntities = (id, params) => api.get(`/novels/${id}/entities/search`, { params }).then(r => r.data)
 export const updateEntity = (id, entityId, payload) =>
   api.patch(`/novels/${id}/entities/${entityId}`, payload).then(r => r.data)
@@ -40,7 +40,7 @@ export const updateEntityClassification = (id, entityId, payload) =>
   api.post(`/novels/${id}/entities/${entityId}/classification`, payload).then(r => r.data)
 export const deleteEntity = (id, entityId) =>
   api.delete(`/novels/${id}/entities/${entityId}`).then(r => r.data)
-export const getEntityRelationships = (id) => api.get(`/novels/${id}/entity_relationships`).then(r => r.data)
+export const getEntityRelationships = (id, params = {}) => api.get(`/novels/${id}/entity_relationships`, { params }).then(r => r.data)
 export const getTimelines = (id) => api.get(`/novels/${id}/timelines`).then(r => r.data)
 export const getSpacelines = (id) => api.get(`/novels/${id}/spacelines`).then(r => r.data)
 export const getForeshadowings = (id) => api.get(`/novels/${id}/foreshadowings`).then(r => r.data)
@@ -64,6 +64,20 @@ export const submitBrainstormWorkspace = (id) =>
   api.post(`/novels/${id}/brainstorm/workspace/submit`).then(r => r.data)
 export const updateBrainstormSuggestionCard = (id, cardId, payload) =>
   api.patch(`/novels/${id}/brainstorm/suggestion_cards/${encodeURIComponent(cardId)}`, payload).then(r => r.data)
+export const getSettingSessions = (id) =>
+  api.get(`/novels/${id}/settings/sessions`).then(r => r.data)
+export const createSettingSession = (id, payload) =>
+  api.post(`/novels/${id}/settings/sessions`, payload).then(r => r.data)
+export const getSettingSession = (id, sessionId) =>
+  api.get(`/novels/${id}/settings/sessions/${encodeURIComponent(sessionId)}`).then(r => r.data)
+export const startSettingConsolidation = (id, selectedPendingIds = []) =>
+  api.post(`/novels/${id}/settings/consolidations`, { selected_pending_ids: selectedPendingIds }).then(r => r.data)
+export const getSettingReviewBatches = (id) =>
+  api.get(`/novels/${id}/settings/review_batches`).then(r => r.data)
+export const getSettingReviewBatch = (id, batchId) =>
+  api.get(`/novels/${id}/settings/review_batches/${encodeURIComponent(batchId)}`).then(r => r.data)
+export const approveSettingReviewBatch = (id, batchId, payload) =>
+  api.post(`/novels/${id}/settings/review_batches/${encodeURIComponent(batchId)}/approve`, payload).then(r => r.data)
 export const getReview = (id) => api.get(`/novels/${id}/review`).then(r => r.data)
 export const getFastReview = (id) => api.get(`/novels/${id}/fast_review`).then(r => r.data)
 export const getPendingDocs = (id) => api.get(`/novels/${id}/documents/pending`).then(r => r.data)

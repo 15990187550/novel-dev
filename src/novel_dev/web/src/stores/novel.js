@@ -98,6 +98,26 @@ const createBrainstormWorkspaceState = () => ({
   requestToken: 0,
 })
 
+const createSettingWorkbenchState = () => ({
+  state: 'idle',
+  error: '',
+  creatingSession: false,
+  sessions: [],
+  selectedSessionId: '',
+  selectedSession: null,
+  selectedMessages: [],
+  consolidationSubmitting: false,
+  consolidationJob: null,
+  consolidationRequestToken: 0,
+  reviewBatches: [],
+  selectedReviewBatch: null,
+  selectedReviewChanges: [],
+  sessionsRequestToken: 0,
+  reviewBatchesRequestToken: 0,
+  selectedSessionRequestToken: 0,
+  selectedReviewBatchRequestToken: 0,
+})
+
 const createPendingDocActionState = () => ({
   approvingPendingId: '',
   rejectingPendingId: '',
@@ -383,10 +403,12 @@ export const useNovelStore = defineStore('novel', {
     spacelines: [],
     foreshadowings: [],
     pendingDocs: [],
+    pendingDocsRequestToken: 0,
     knowledgeDomains: [],
     pendingDocActions: createPendingDocActionState(),
     outlineWorkbench: createOutlineWorkbenchState(),
     brainstormWorkspace: createBrainstormWorkspaceState(),
+    settingWorkbench: createSettingWorkbenchState(),
     loadingActions: {},
     flowActivity: {
       active: false,
@@ -491,6 +513,7 @@ export const useNovelStore = defineStore('novel', {
       this.spacelines = []
       this.outlineWorkbench = createOutlineWorkbenchState()
       this.brainstormWorkspace = createBrainstormWorkspaceState()
+      this.settingWorkbench = createSettingWorkbenchState()
       this.loadingActions = {}
       this.flowActivity = { active: false, label: '', updatedAt: '' }
       this.autoRunJob = null
@@ -504,6 +527,7 @@ export const useNovelStore = defineStore('novel', {
     async loadNovel(novelId) {
       this.novelId = novelId
       this.resetDashboardSupplemental()
+      this.settingWorkbench = createSettingWorkbenchState()
       await this.refreshState()
     },
 
@@ -698,6 +722,7 @@ export const useNovelStore = defineStore('novel', {
 
     async stopCurrentFlow() {
       if (!this.novelId) return
+      if (this.stoppingFlow) return
       this.stoppingFlow = true
       try {
         await api.stopCurrentFlow(this.novelId)
@@ -730,14 +755,15 @@ export const useNovelStore = defineStore('novel', {
         : { active: false, label: '', updatedAt: this.flowActivity.updatedAt }
     },
 
-    async fetchEntities() {
+    async fetchEntities(options = {}) {
       if (!this.novelId) return
+      const params = options.includeArchived ? { include_archived: true } : {}
       const requestToken = ++this.entityRequestToken
       const requestedNovelId = this.novelId
       const selectedEntityId = this.selectedEntityNode?.entityId || this.selectedEntityDetail?.entity_id || null
       const [entities, relationships] = await Promise.all([
-        api.getEntities(this.novelId),
-        api.getEntityRelationships(this.novelId).catch(() => ({ items: [] })),
+        api.getEntities(this.novelId, params),
+        api.getEntityRelationships(this.novelId, params).catch(() => ({ items: [] })),
       ])
       if (requestToken !== this.entityRequestToken || requestedNovelId !== this.novelId) return
       this.entities = entities.items || []
@@ -750,12 +776,13 @@ export const useNovelStore = defineStore('novel', {
       this.selectedEntityDetail = selectedNode?.data || null
     },
 
-    async searchEntities(query) {
+    async searchEntities(query, options = {}) {
       if (!this.novelId) return
       const normalizedQuery = (query || '').trim()
+      const params = options.includeArchived ? { include_archived: true } : {}
       if (!normalizedQuery) {
         this.clearEntityWorkspaceState()
-        await this.fetchEntities()
+        await this.fetchEntities(options)
         return
       }
 
@@ -764,10 +791,10 @@ export const useNovelStore = defineStore('novel', {
       this.entityCommittedSearchQuery = normalizedQuery
       const selectedEntityId = this.selectedEntityNode?.entityId || this.selectedEntityDetail?.entity_id || null
       const [results, relationships] = await Promise.all([
-        api.searchEntities(this.novelId, { q: normalizedQuery }),
-        this.entityRelationships.length
+        api.searchEntities(this.novelId, { q: normalizedQuery, ...params }),
+        this.entityRelationships.length && !options.includeArchived
           ? Promise.resolve({ items: this.entityRelationships })
-          : api.getEntityRelationships(this.novelId).catch(() => ({ items: [] })),
+          : api.getEntityRelationships(this.novelId, params).catch(() => ({ items: [] })),
       ])
       if (requestToken !== this.entityRequestToken || requestedNovelId !== this.novelId) return
       this.entitySearchResults = results.items || []
@@ -779,36 +806,36 @@ export const useNovelStore = defineStore('novel', {
       this.selectedEntityDetail = selectedNode?.data || null
     },
 
-    async saveEntityClassification(entityIds, payload) {
+    async saveEntityClassification(entityIds, payload, options = {}) {
       if (!this.novelId) return
       const ids = Array.isArray(entityIds) ? entityIds.filter(Boolean) : [entityIds].filter(Boolean)
       if (!ids.length) return
       await Promise.all(ids.map((entityId) => api.updateEntityClassification(this.novelId, entityId, payload)))
       if (this.entityCommittedSearchQuery) {
-        await this.searchEntities(this.entityCommittedSearchQuery)
+        await this.searchEntities(this.entityCommittedSearchQuery, options)
         return
       }
-      await this.fetchEntities()
+      await this.fetchEntities(options)
     },
 
-    async updateEntity(entityId, payload) {
+    async updateEntity(entityId, payload, options = {}) {
       if (!this.novelId || !entityId) return
       await api.updateEntity(this.novelId, entityId, payload)
       if (this.entityCommittedSearchQuery) {
-        await this.searchEntities(this.entityCommittedSearchQuery)
+        await this.searchEntities(this.entityCommittedSearchQuery, options)
         return
       }
-      await this.fetchEntities()
+      await this.fetchEntities(options)
     },
 
-    async deleteEntity(entityId) {
+    async deleteEntity(entityId, options = {}) {
       if (!this.novelId || !entityId) return
       await api.deleteEntity(this.novelId, entityId)
       if (this.entityCommittedSearchQuery) {
-        await this.searchEntities(this.entityCommittedSearchQuery)
+        await this.searchEntities(this.entityCommittedSearchQuery, options)
         return
       }
-      await this.fetchEntities()
+      await this.fetchEntities(options)
     },
 
     async deleteCurrentNovel() {
@@ -834,8 +861,16 @@ export const useNovelStore = defineStore('novel', {
     },
 
     async fetchDocuments() {
-      const pending = await api.getPendingDocs(this.novelId).catch(() => ({ items: [] }))
+      if (!this.novelId) return []
+      const requestedNovelId = this.novelId
+      const requestToken = this.pendingDocsRequestToken + 1
+      this.pendingDocsRequestToken = requestToken
+      const pending = await api.getPendingDocs(requestedNovelId).catch(() => ({ items: [] }))
+      if (requestedNovelId !== this.novelId || requestToken !== this.pendingDocsRequestToken) {
+        return []
+      }
       this.pendingDocs = pending.items || []
+      return this.pendingDocs
     },
 
     async fetchKnowledgeDomains(includeDisabled = true) {
@@ -1098,6 +1133,138 @@ export const useNovelStore = defineStore('novel', {
         throw error
       } finally {
         this.brainstormWorkspace.updatingCardId = ''
+      }
+    },
+
+    async fetchSettingSessions() {
+      if (!this.novelId) return
+      const requestedNovelId = this.novelId
+      const requestToken = this.settingWorkbench.sessionsRequestToken + 1
+      this.settingWorkbench.sessionsRequestToken = requestToken
+      this.settingWorkbench.state = 'loading'
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingSessions(requestedNovelId)
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.sessionsRequestToken) return
+        this.settingWorkbench.sessions = payload?.items || []
+        this.settingWorkbench.state = 'ready'
+      } catch (error) {
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.sessionsRequestToken) return
+        this.settingWorkbench.state = 'error'
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
+      }
+    },
+
+    async createSettingSession(payload) {
+      if (!this.novelId) return null
+      if (this.settingWorkbench.creatingSession) return null
+      const requestedNovelId = this.novelId
+      this.settingWorkbench.creatingSession = true
+      this.settingWorkbench.error = ''
+      try {
+        const session = await api.createSettingSession(requestedNovelId, payload)
+        if (requestedNovelId !== this.novelId) return null
+        this.settingWorkbench.sessions = [
+          session,
+          ...this.settingWorkbench.sessions.filter((item) => item.id !== session.id),
+        ]
+        this.settingWorkbench.selectedSessionId = session.id
+        this.settingWorkbench.selectedSession = session
+        return session
+      } catch (error) {
+        if (requestedNovelId !== this.novelId) return null
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
+      } finally {
+        if (requestedNovelId === this.novelId) {
+          this.settingWorkbench.creatingSession = false
+        }
+      }
+    },
+
+    async loadSettingSession(sessionId) {
+      if (!this.novelId || !sessionId) return null
+      const requestedNovelId = this.novelId
+      const requestToken = this.settingWorkbench.selectedSessionRequestToken + 1
+      this.settingWorkbench.selectedSessionRequestToken = requestToken
+      this.settingWorkbench.selectedSessionId = sessionId
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingSession(requestedNovelId, sessionId)
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.selectedSessionRequestToken) return null
+        this.settingWorkbench.selectedSession = payload?.session || null
+        this.settingWorkbench.selectedMessages = payload?.messages || []
+        return payload
+      } catch (error) {
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.selectedSessionRequestToken) return null
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
+      }
+    },
+
+    async startSettingConsolidation(selectedPendingIds = []) {
+      if (!this.novelId) return null
+      if (this.settingWorkbench.consolidationSubmitting) return null
+      const requestedNovelId = this.novelId
+      const requestToken = this.settingWorkbench.consolidationRequestToken + 1
+      this.settingWorkbench.consolidationRequestToken = requestToken
+      this.settingWorkbench.consolidationSubmitting = true
+      this.settingWorkbench.error = ''
+      try {
+        const job = await api.startSettingConsolidation(requestedNovelId, selectedPendingIds)
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.consolidationRequestToken) return null
+        this.settingWorkbench.consolidationJob = job
+        return job
+      } catch (error) {
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.consolidationRequestToken) return null
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
+      } finally {
+        if (requestedNovelId === this.novelId && requestToken === this.settingWorkbench.consolidationRequestToken) {
+          this.settingWorkbench.consolidationSubmitting = false
+        }
+      }
+    },
+
+    async fetchSettingReviewBatches() {
+      if (!this.novelId) return []
+      const requestedNovelId = this.novelId
+      const requestToken = this.settingWorkbench.reviewBatchesRequestToken + 1
+      this.settingWorkbench.reviewBatchesRequestToken = requestToken
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingReviewBatches(requestedNovelId)
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.reviewBatchesRequestToken) {
+          return this.settingWorkbench.reviewBatches
+        }
+        this.settingWorkbench.reviewBatches = payload?.items || []
+        return this.settingWorkbench.reviewBatches
+      } catch (error) {
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.reviewBatchesRequestToken) {
+          return this.settingWorkbench.reviewBatches
+        }
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
+      }
+    },
+
+    async loadSettingReviewBatch(batchId) {
+      if (!this.novelId || !batchId) return null
+      const requestedNovelId = this.novelId
+      const requestToken = this.settingWorkbench.selectedReviewBatchRequestToken + 1
+      this.settingWorkbench.selectedReviewBatchRequestToken = requestToken
+      this.settingWorkbench.error = ''
+      try {
+        const payload = await api.getSettingReviewBatch(requestedNovelId, batchId)
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.selectedReviewBatchRequestToken) return null
+        this.settingWorkbench.selectedReviewBatch = payload?.batch || null
+        this.settingWorkbench.selectedReviewChanges = payload?.changes || []
+        return payload
+      } catch (error) {
+        if (requestedNovelId !== this.novelId || requestToken !== this.settingWorkbench.selectedReviewBatchRequestToken) return null
+        this.settingWorkbench.error = error?.message || '请求失败'
+        throw error
       }
     },
   },

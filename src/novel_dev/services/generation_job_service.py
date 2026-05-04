@@ -6,10 +6,12 @@ from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.chapter_generation_service import AutoRunFailedError, ChapterGenerationService
 from novel_dev.services.chapter_rewrite_service import ChapterRewriteFailedError, ChapterRewriteService
 from novel_dev.services.log_service import log_service
+from novel_dev.services.setting_consolidation_service import SettingConsolidationService
 
 
 CHAPTER_AUTO_RUN_JOB = "chapter_auto_run"
 CHAPTER_REWRITE_JOB = "chapter_rewrite"
+SETTING_CONSOLIDATION_JOB = "setting_consolidation"
 HEARTBEAT_INTERVAL_SECONDS = 30
 
 
@@ -30,7 +32,7 @@ async def run_generation_job(job_id: str) -> None:
         await repo.touch_heartbeat(job_id)
         await session.commit()
 
-        if job_type not in {CHAPTER_AUTO_RUN_JOB, CHAPTER_REWRITE_JOB}:
+        if job_type not in {CHAPTER_AUTO_RUN_JOB, CHAPTER_REWRITE_JOB, SETTING_CONSOLIDATION_JOB}:
             await repo.mark_failed(job_id, {}, f"Unsupported generation job type: {job_type}")
             await session.commit()
             return
@@ -51,7 +53,7 @@ async def run_generation_job(job_id: str) -> None:
                     max_chapters=request.get("max_chapters", 1),
                     stop_at_volume_end=request.get("stop_at_volume_end", True),
                 )
-            else:
+            elif job_type == CHAPTER_REWRITE_JOB:
                 chapter_id = request.get("chapter_id")
                 if not chapter_id:
                     raise ValueError("chapter_id missing for chapter rewrite job")
@@ -63,6 +65,18 @@ async def run_generation_job(job_id: str) -> None:
                     job_id=job.id,
                     job_repo=repo,
                 )
+            else:
+                batch = await SettingConsolidationService(session).run_consolidation(
+                    novel_id=novel_id,
+                    selected_pending_ids=request.get("selected_pending_ids", []),
+                    job_id=job.id,
+                    input_snapshot=request.get("input_snapshot"),
+                )
+                result = {
+                    "batch_id": batch.id,
+                    "status": "ready_for_review",
+                    "summary": batch.summary,
+                }
         except AutoRunFailedError as exc:
             await _cancel_heartbeat_task(heartbeat_task)
             await repo.touch_heartbeat(job_id)
@@ -88,7 +102,9 @@ async def run_generation_job(job_id: str) -> None:
             await _cancel_heartbeat_task(heartbeat_task)
 
         await repo.touch_heartbeat(job_id)
-        if getattr(result, "stopped_reason", None) == "flow_cancelled":
+        if isinstance(result, dict):
+            await repo.mark_succeeded(job_id, result)
+        elif getattr(result, "stopped_reason", None) == "flow_cancelled":
             await repo.mark_cancelled(job_id, result.model_dump())
         else:
             await repo.mark_succeeded(job_id, result.model_dump())

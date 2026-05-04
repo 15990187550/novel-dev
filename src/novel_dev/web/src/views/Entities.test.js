@@ -280,6 +280,20 @@ describe('Entities', () => {
     ]))
   })
 
+  it('refetches entities with archived data when the archive toggle is enabled', async () => {
+    const store = seedStore()
+    const wrapper = mountView()
+
+    await Promise.resolve()
+
+    expect(wrapper.text()).toContain('已归档 / 已整合')
+    expect(store.fetchEntities).toHaveBeenCalledWith({ includeArchived: false })
+
+    await wrapper.find('[data-testid="entity-archive-toggle"]').setValue(true)
+
+    expect(store.fetchEntities).toHaveBeenLastCalledWith({ includeArchived: true })
+  })
+
   it('does not use viewport calc heights for the entities root', () => {
     expect(entitiesSource).not.toMatch(/\.entities-page\s*{[\s\S]*height:\s*calc\(100vh/)
     expect(globalStyleSource).not.toMatch(/\.page-shell\s*{[\s\S]*height:\s*calc\(100vh/)
@@ -346,7 +360,21 @@ describe('Entities', () => {
       state_fields: {
         identity: '主角',
       },
+    }, {
+      includeArchived: false,
     })
+  })
+
+  it('passes archive toggle state through entity mutation actions', async () => {
+    const store = seedStore()
+    const wrapper = mountView()
+
+    await Promise.resolve()
+    await wrapper.find('[data-testid="entity-archive-toggle"]').setValue(true)
+    await wrapper.find('[data-node-id="entity:lu"]').trigger('click')
+    await wrapper.find('.save-entity-button').trigger('click')
+
+    expect(store.updateEntity).toHaveBeenLastCalledWith('lu', expect.any(Object), { includeArchived: true })
   })
 
   it('asks for confirmation before deleting the selected entity', async () => {
@@ -359,6 +387,6 @@ describe('Entities', () => {
     await wrapper.find('.delete-entity-button').trigger('click')
 
     expect(ElMessageBox.confirm).toHaveBeenCalledTimes(1)
-    expect(store.deleteEntity).toHaveBeenCalledWith('lu')
+    expect(store.deleteEntity).toHaveBeenCalledWith('lu', { includeArchived: false })
   })
 })

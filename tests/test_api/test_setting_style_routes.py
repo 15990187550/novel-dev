@@ -1,5 +1,6 @@
 import pytest
 import asyncio
+from datetime import datetime
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 from novel_dev.llm.exceptions import LLMTimeoutError
@@ -79,6 +80,8 @@ async def test_domain_upload_skips_file_classifier(async_session, monkeypatch):
             data = resp.json()
             assert data["extraction_type"] == "setting"
             assert data["knowledge_domain"]["name"] == "完美世界"
+            assert data["knowledge_domain"]["created_at"]
+            assert data["knowledge_domain"]["updated_at"]
     finally:
         app.dependency_overrides.clear()
 
@@ -347,7 +350,7 @@ async def test_upload_returns_504_when_setting_extraction_times_out(async_sessio
     async def override():
         yield async_session
 
-    async def mock_extract(self, text: str, novel_id: str = ""):
+    async def mock_extract(self, text: str, novel_id: str = "", **kwargs):
         raise LLMTimeoutError("Request timed out")
 
     monkeypatch.setattr("novel_dev.agents.setting_extractor.SettingExtractorAgent.extract", mock_extract)
@@ -1155,5 +1158,55 @@ async def test_update_library_document_creates_new_style_version_and_activates_i
             active = next(doc for doc in library_resp.json()["items"] if doc["doc_type"] == "style_profile" and doc["is_active"])
             assert active["version"] == 2
             assert active["content"] == "新文风"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_document_library_hides_archived_documents(async_session):
+    async def override():
+        yield async_session
+
+    repo = DocumentRepository(async_session)
+    active_setting = await repo.create(
+        "doc_setting_active",
+        "n1",
+        "setting",
+        "世界观",
+        "当前世界观",
+        version=1,
+    )
+    archived_setting = await repo.create(
+        "doc_setting_archived",
+        "n1",
+        "setting",
+        "旧世界观",
+        "旧世界观内容",
+        version=2,
+    )
+    archived_setting.archived_at = datetime(2026, 5, 4, 10, 0, 0)
+    archived_setting.archive_reason = "setting_consolidation"
+    archived_style = await repo.create(
+        "doc_style_archived",
+        "n1",
+        "style_profile",
+        '{"tone":"旧"}',
+        "旧文风",
+        version=3,
+    )
+    archived_style.archived_at = datetime(2026, 5, 4, 10, 5, 0)
+    archived_style.archive_reason = "setting_consolidation"
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n1/documents/library")
+            assert resp.status_code == 200
+            payload = resp.json()
+
+            assert [item["id"] for item in payload["items"]] == [active_setting.id]
+            assert payload["active_style_profile_version"] is None
     finally:
         app.dependency_overrides.clear()

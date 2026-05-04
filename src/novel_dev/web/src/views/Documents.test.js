@@ -303,6 +303,22 @@ describe('Documents', () => {
     expect(successMessageMock).toHaveBeenCalledWith('已批准')
   })
 
+  it('uses unified wording for review records while keeping source files in rows', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-1', source_filename: '设定一.md', extraction_type: 'setting', status: 'approved', created_at: '2026-04-22T00:00:00Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('审核记录')
+    expect(wrapper.text()).not.toContain('导入审核记录')
+    expect(wrapper.text()).toContain('设定一.md')
+  })
+
   it('keeps approve loading state after remount while the same request is still pending', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'
@@ -408,6 +424,7 @@ describe('Documents', () => {
             confirmed_scopes: [],
             confidence: 'low',
             is_active: true,
+            created_at: '2026-04-25T07:45:00Z',
           },
         ],
       })
@@ -436,6 +453,7 @@ describe('Documents', () => {
 
     expect(wrapper.text()).toContain('规则域')
     expect(wrapper.text()).toContain('完美世界')
+    expect(wrapper.text()).toContain('添加时间：2026/4/25 15:45:00')
     expect(wrapper.text()).toContain('高原诡异只能伏笔')
 
     const confirmButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '确认用于第2卷')

@@ -68,4 +68,31 @@ describe('EntityGraph', () => {
 
     expect(wrapper.text()).toContain('暂无关系图谱数据')
   })
+
+  it('uses entity ids as graph node keys when display names are duplicated', () => {
+    const wrapper = mount(EntityGraph, {
+      props: {
+        entities: [
+          { entity_id: 'dao-local', name: '道经', type: 'item', effective_category: '功法' },
+          { entity_id: 'dao-domain', name: '道经', type: 'item', effective_category: '功法' },
+          { entity_id: 'mengqi', name: '孟奇', type: 'character', effective_category: '人物' },
+        ],
+        relationships: [
+          { source_id: 'mengqi', target_id: 'dao-local', relation_type: '关联' },
+        ],
+      },
+      global: { stubs: { ElButton: true } },
+    })
+
+    const series = wrapper.vm.option.series[0]
+    expect(series.data.map((node) => node.name)).toEqual(['dao-local', 'dao-domain', 'mengqi'])
+    expect(series.data.map((node) => node.displayName)).toEqual(['道经', '道经', '孟奇'])
+    expect(series.label.formatter({ data: series.data[0] })).toBe('道经')
+    expect(series.links[0]).toMatchObject({
+      source: 'mengqi',
+      target: 'dao-local',
+      sourceName: '孟奇',
+      targetName: '道经',
+    })
+  })
 })

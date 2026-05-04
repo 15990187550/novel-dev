@@ -54,6 +54,14 @@ class Entity(Base):
     system_needs_review: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     search_document: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     search_vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
+    source_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_session_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
 
@@ -101,6 +109,14 @@ class EntityRelationship(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    source_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_session_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class Timeline(Base):
@@ -233,6 +249,14 @@ class NovelDocument(Base):
     vector_embedding: Mapped[Optional[List[float]]] = mapped_column(VectorCompat(1024), nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+    source_type: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_session_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_review_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
+    archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    archived_by_consolidation_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
 
 class KnowledgeDomain(Base):
@@ -330,6 +354,95 @@ class OutlineMessage(Base):
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
 
     session: Mapped["OutlineSession"] = relationship(back_populates="messages")
+
+
+class SettingGenerationSession(Base):
+    __tablename__ = "setting_generation_sessions"
+    __table_args__ = (
+        Index("ix_setting_generation_sessions_novel_updated", "novel_id", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="clarifying")
+    target_categories: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    clarification_round: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    conversation_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    messages: Mapped[List["SettingGenerationMessage"]] = relationship(
+        back_populates="session",
+        cascade="all, delete-orphan",
+    )
+
+
+class SettingGenerationMessage(Base):
+    __tablename__ = "setting_generation_messages"
+    __table_args__ = (
+        Index("ix_setting_generation_messages_session_created", "session_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("setting_generation_sessions.id"), nullable=False)
+    role: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    meta: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+
+    session: Mapped["SettingGenerationSession"] = relationship(back_populates="messages")
+
+
+class SettingReviewBatch(Base):
+    __tablename__ = "setting_review_batches"
+    __table_args__ = (
+        Index("ix_setting_review_batches_novel_status", "novel_id", "status"),
+        Index("ix_setting_review_batches_source_session", "source_session_id"),
+        Index("ix_setting_review_batches_job", "job_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    source_type: Mapped[str] = mapped_column(Text, nullable=False)
+    source_file: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    source_session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("setting_generation_sessions.id"), nullable=True)
+    job_id: Mapped[Optional[str]] = mapped_column(ForeignKey("generation_jobs.id"), nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    input_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    changes: Mapped[List["SettingReviewChange"]] = relationship(
+        back_populates="batch",
+        cascade="all, delete-orphan",
+        order_by=lambda: (SettingReviewChange.created_at, SettingReviewChange.id),
+    )
+
+
+class SettingReviewChange(Base):
+    __tablename__ = "setting_review_changes"
+    __table_args__ = (
+        Index("ix_setting_review_changes_batch_status", "batch_id", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    batch_id: Mapped[str] = mapped_column(ForeignKey("setting_review_batches.id"), nullable=False)
+    target_type: Mapped[str] = mapped_column(Text, nullable=False)
+    operation: Mapped[str] = mapped_column(Text, nullable=False)
+    target_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    before_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    after_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    conflict_hints: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    source_session_id: Mapped[Optional[str]] = mapped_column(ForeignKey("setting_generation_sessions.id"), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    batch: Mapped["SettingReviewBatch"] = relationship(back_populates="changes")
 
 
 class PendingExtraction(Base):

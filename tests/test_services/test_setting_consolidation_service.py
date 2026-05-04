@@ -278,3 +278,366 @@ async def test_snapshot_ordering_is_deterministic(async_session):
         ("entity-a", "entity-z", "到达"),
         ("entity-b", "entity-z", "驻守"),
     ]
+
+
+async def test_approve_all_blocks_unresolved_conflict_and_leaves_statuses_unchanged(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-approve-conflict",
+        source_type="consolidation",
+        summary="待审核",
+        input_snapshot={},
+    )
+    create_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "修炼体系总览"},
+    )
+    conflict_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="conflict",
+        operation="resolve",
+        after_snapshot={"title": "境界冲突"},
+        conflict_hints=[{"reason": "层数冲突"}],
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+
+    with pytest.raises(ValueError, match="存在未解决冲突"):
+        await service.approve_review_batch(batch.id, approve_all=True)
+
+    unchanged_batch = await repo.get_review_batch(batch.id)
+    unchanged_changes = await repo.list_review_changes(batch.id)
+    assert unchanged_batch.status == "pending"
+    assert {change.id: change.status for change in unchanged_changes} == {
+        create_change.id: "pending",
+        conflict_change.id: "pending",
+    }
+
+
+async def test_resolve_conflict_creates_pending_setting_change(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-resolve-conflict",
+        source_type="consolidation",
+        summary="待解决冲突",
+        input_snapshot={},
+    )
+    conflict_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="conflict",
+        operation="resolve",
+        after_snapshot={"title": "境界冲突"},
+        conflict_hints=[{"reason": "层数冲突"}],
+        source_session_id="session-1",
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.resolve_conflict_change(
+        batch.id,
+        change_id=conflict_change.id,
+        resolved_after_snapshot={
+            "title": "修炼体系总览",
+            "content": "炼气、筑基、金丹三境统一为九层。",
+        },
+    )
+
+    changes = await repo.list_review_changes(batch.id)
+    conflict = next(change for change in changes if change.id == conflict_change.id)
+    generated = next(change for change in changes if change.id != conflict_change.id)
+    assert updated_batch.status == "ready_for_review"
+    assert conflict.status == "resolved"
+    assert generated.target_type == "setting_card"
+    assert generated.operation == "create"
+    assert generated.status == "pending"
+    assert generated.after_snapshot["doc_type"] == "setting"
+    assert generated.after_snapshot["title"] == "修炼体系总览"
+    assert generated.conflict_hints == [{"reason": "层数冲突"}]
+    assert generated.source_session_id == "session-1"
+
+
+async def test_approve_archive_hides_old_document_with_consolidation_metadata(async_session):
+    doc_repo = DocumentRepository(async_session)
+    doc = await doc_repo.create("doc-archive", "novel-archive", "setting", "旧势力设定", "旧内容", version=1)
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-archive",
+        source_type="consolidation",
+        summary="归档旧设定",
+        input_snapshot={},
+    )
+    archive_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="archive",
+        target_id=doc.id,
+        before_snapshot={"title": doc.title},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[archive_change.id])
+    archived = await doc_repo.get_by_id(doc.id)
+    updated_change = await repo.get_review_change(archive_change.id)
+
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert archived.archived_at is not None
+    assert archived.archive_reason == "setting_consolidation"
+    assert archived.archived_by_consolidation_batch_id == batch.id
+    assert archived.archived_by_consolidation_change_id == archive_change.id
+
+
+async def test_approve_setting_card_create_writes_consolidation_source_metadata(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-create-setting",
+        source_type="consolidation",
+        summary="创建设定卡",
+        input_snapshot={},
+    )
+    create_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "修炼体系总览", "content": "炼气、筑基、金丹。"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    await service.approve_review_batch(batch.id, change_ids=[create_change.id])
+
+    created = await DocumentRepository(async_session).get_by_id(f"setting_{create_change.id}")
+    updated_change = await repo.get_review_change(create_change.id)
+    assert created is not None
+    assert created.novel_id == "novel-create-setting"
+    assert created.doc_type == "setting"
+    assert created.title == "修炼体系总览"
+    assert created.content == "炼气、筑基、金丹。"
+    assert created.source_type == "consolidation"
+    assert created.source_review_batch_id == batch.id
+    assert created.source_review_change_id == create_change.id
+    assert updated_change.status == "approved"
+
+
+async def test_approve_review_batch_missing_batch_raises(async_session):
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+
+    with pytest.raises(ValueError, match="审核记录不存在"):
+        await service.approve_review_batch("missing-batch", approve_all=True)
+
+
+async def test_approve_unsupported_change_marks_failed_and_batch_failed(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-unsupported",
+        source_type="consolidation",
+        summary="不支持变更",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="rewrite",
+        target_id="doc-missing",
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+    updated_change = await repo.get_review_change(change.id)
+
+    assert updated_batch.status == "failed"
+    assert updated_change.status == "failed"
+    assert "暂不支持的设定审核变更" in updated_change.error_message
+
+
+@pytest.mark.parametrize(
+    ("target_type", "target_id"),
+    [
+        ("setting_card", "doc-foreign"),
+        ("entity", "entity-foreign"),
+        ("relationship", None),
+    ],
+)
+async def test_archive_rejects_cross_novel_targets_and_leaves_foreign_target_unarchived(
+    async_session,
+    target_type,
+    target_id,
+):
+    doc_repo = DocumentRepository(async_session)
+    foreign_doc = await doc_repo.create(
+        "doc-foreign",
+        "novel-foreign",
+        "setting",
+        "外部设定",
+        "不属于当前小说",
+    )
+    foreign_entity = Entity(
+        id="entity-foreign",
+        novel_id="novel-foreign",
+        type="character",
+        name="外部人物",
+    )
+    async_session.add(foreign_entity)
+    await async_session.flush()
+    foreign_relationship = EntityRelationship(
+        source_id="entity-foreign",
+        target_id="entity-foreign",
+        relation_type="自指",
+        novel_id="novel-foreign",
+    )
+    async_session.add(foreign_relationship)
+    await async_session.flush()
+    if target_type == "relationship":
+        target_id = str(foreign_relationship.id)
+
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-owner",
+        source_type="consolidation",
+        summary="跨小说归档",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type=target_type,
+        operation="archive",
+        target_id=target_id,
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+    updated_change = await repo.get_review_change(change.id)
+
+    assert updated_batch.status == "failed"
+    assert updated_change.status == "failed"
+    assert "归档目标不存在" in updated_change.error_message
+    assert (await doc_repo.get_by_id(foreign_doc.id)).archived_at is None
+    assert (await service.entity_repo.get_by_id(foreign_entity.id)).archived_at is None
+    assert (await service.relationship_repo.get_by_id(foreign_relationship.id)).archived_at is None
+
+
+async def test_selecting_conflict_change_blocks_without_marking_failed(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-selected-conflict",
+        source_type="consolidation",
+        summary="待审核",
+        input_snapshot={},
+    )
+    conflict_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="conflict",
+        operation="resolve",
+        after_snapshot={"title": "冲突"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    with pytest.raises(ValueError, match="存在未解决冲突"):
+        await service.approve_review_batch(batch.id, change_ids=[conflict_change.id])
+
+    unchanged_batch = await repo.get_review_batch(batch.id)
+    unchanged_change = await repo.get_review_change(conflict_change.id)
+    assert unchanged_batch.status == "pending"
+    assert unchanged_change.status == "pending"
+    assert unchanged_change.error_message is None
+
+
+async def test_selective_approval_requires_change_ids(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-empty-selection",
+        source_type="consolidation",
+        summary="待审核",
+        input_snapshot={},
+    )
+    await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "修炼体系"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    with pytest.raises(ValueError, match="未选择审核变更"):
+        await service.approve_review_batch(batch.id, change_ids=[])
+
+
+async def test_selective_approval_rejects_missing_and_non_pending_change_ids(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-invalid-selection",
+        source_type="consolidation",
+        summary="待审核",
+        input_snapshot={},
+    )
+    approved_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "已通过"},
+        status="approved",
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    with pytest.raises(ValueError, match="审核变更不存在或不属于当前批次"):
+        await service.approve_review_batch(batch.id, change_ids=["missing-change"])
+    with pytest.raises(ValueError, match="审核变更不是 pending 状态"):
+        await service.approve_review_batch(batch.id, change_ids=[approved_change.id])
+
+
+async def test_create_failure_marks_change_failed_and_session_remains_usable(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-create-failure",
+        source_type="consolidation",
+        summary="缺标题",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"content": "缺少标题"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+    updated_change = await repo.get_review_change(change.id)
+    still_readable_batch = await repo.get_review_batch(batch.id)
+
+    assert updated_batch.status == "failed"
+    assert still_readable_batch.status == "failed"
+    assert updated_change.status == "failed"
+    assert "设定卡标题不能为空" in updated_change.error_message
+
+
+async def test_repeated_create_approval_rejects_non_pending_change(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-repeat-create",
+        source_type="consolidation",
+        summary="重复通过",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"title": "修炼体系"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    await service.approve_review_batch(batch.id, change_ids=[change.id])
+    with pytest.raises(ValueError, match="审核变更不是 pending 状态"):
+        await service.approve_review_batch(batch.id, change_ids=[change.id])

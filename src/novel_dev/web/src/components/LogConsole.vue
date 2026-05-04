@@ -80,6 +80,11 @@ const pendingNewLogs = ref(0)
 let resizeObserver = null
 
 const colors = { NovelDirector: '#9ca3af', VolumePlannerAgent: '#60a5fa', WriterAgent: '#4ade80', CriticAgent: '#fb923c', EditorAgent: '#c084fc', FastReviewAgent: '#facc15', LibrarianAgent: '#f472b6', ContextAgent: '#2dd4bf' }
+const fullTextMetadataFields = [
+  ['prompt', 'Prompt'],
+  ['raw_output', 'Raw Output'],
+  ['raw_text', 'Raw Text'],
+]
 
 const allAgents = computed(() => Array.from(new Set(props.logs.map(l => l.agent))).sort())
 const visibleLogs = computed(() => filters.value.size === 0 ? props.logs : props.logs.filter(l => filters.value.has(l.agent)))
@@ -99,7 +104,20 @@ function hasMetadata(log) {
 }
 function formatMetadata(metadata) {
   if (typeof metadata === 'string') return metadata
-  return JSON.stringify(metadata, null, 2)
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return JSON.stringify(metadata, null, 2)
+  }
+
+  const compact = { ...metadata }
+  const fullTextSections = []
+  for (const [field, label] of fullTextMetadataFields) {
+    if (typeof compact[field] === 'string' && compact[field]) {
+      fullTextSections.push(`--- ${label} ---\n${compact[field]}`)
+      delete compact[field]
+    }
+  }
+  const compactText = Object.keys(compact).length ? JSON.stringify(compact, null, 2) : ''
+  return [compactText, ...fullTextSections].filter(Boolean).join('\n\n')
 }
 function toggleDetails(key) {
   const next = new Set(expandedDetails.value)
