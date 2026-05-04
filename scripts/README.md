@@ -120,3 +120,13 @@ xinference terminate --model-uid bge-m3
 ```bash
 pkill -f xinference-local
 ```
+
+## Local verification
+
+Run the full local gate before handing off changes:
+
+```bash
+./scripts/verify_local.sh
+```
+
+It runs backend tests, Python compile checks, web tests, and the web build from the expected project directories.
