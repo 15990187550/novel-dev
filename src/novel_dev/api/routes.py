@@ -66,6 +66,8 @@ from novel_dev.schemas.setting_workbench import (
     SettingGenerationSessionReplyRequest,
     SettingGenerationSessionReplyResponse,
     SettingGenerationSessionResponse,
+    SettingReviewApplyRequest,
+    SettingReviewApplyResponse,
     SettingReviewApproveRequest,
     SettingReviewBatchDetailResponse,
     SettingReviewBatchListResponse,
@@ -2815,6 +2817,32 @@ async def get_setting_review_batch(
         "batch": _serialize_setting_review_batch(batch),
         "changes": [_serialize_setting_review_change(change) for change in changes],
     }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
+    response_model=SettingReviewApplyResponse,
+)
+async def apply_setting_review_batch(
+    novel_id: str,
+    batch_id: str,
+    req: SettingReviewApplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    try:
+        result = await service.apply_review_decisions(
+            novel_id,
+            batch_id,
+            [decision.model_dump() for decision in req.decisions],
+        )
+    except ValueError as exc:
+        await session.rollback()
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 409
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    await session.commit()
+    return result
 
 
 @router.post(

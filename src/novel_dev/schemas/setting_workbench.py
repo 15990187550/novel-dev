@@ -111,6 +111,23 @@ class SettingReviewApproveRequest(BaseModel):
     approve_all: bool = False
 
 
+class SettingReviewDecisionRequest(BaseModel):
+    change_id: str
+    decision: str
+    edited_after_snapshot: Optional[dict[str, Any]] = None
+
+
+class SettingReviewApplyRequest(BaseModel):
+    decisions: list[SettingReviewDecisionRequest] = Field(default_factory=list)
+
+
+class SettingReviewApplyResponse(BaseModel):
+    status: str
+    applied: int = 0
+    rejected: int = 0
+    failed: int = 0
+
+
 class SettingConflictResolutionRequest(BaseModel):
     change_id: str
     resolved_after_snapshot: dict[str, Any]
