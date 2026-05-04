@@ -156,7 +156,23 @@
 
       <SettingWorkbench v-else embedded />
 
-      <div class="surface-card p-5">
+      <section class="documents-management">
+        <div class="documents-management__header">
+          <div>
+            <h2 class="documents-management__title">资料管理</h2>
+            <p class="documents-management__description">
+              已生效资料、局部规则域和审核记录集中在同一区域查看，避免在导入和 AI 生成流程之间来回跳转。
+            </p>
+          </div>
+          <div class="documents-management__stats">
+            <span>资料 {{ libraryItems.length }}</span>
+            <span>规则域 {{ knowledgeDomains.length }}</span>
+            <span>待处理 {{ pendingReviewCount }}</span>
+          </div>
+        </div>
+
+        <div class="documents-management-grid">
+      <div class="surface-card documents-panel documents-panel--library p-5">
         <div class="flex items-center justify-between gap-3">
           <div>
             <h3 class="font-bold">当前资料库</h3>
@@ -295,7 +311,7 @@
         </div>
       </div>
 
-      <div class="surface-card p-5">
+      <div class="surface-card documents-panel documents-panel--domains p-5">
         <div class="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h3 class="font-bold">规则域</h3>
@@ -384,7 +400,7 @@
         </div>
       </div>
 
-      <div v-if="reviewRecordRows.length" class="surface-card documents-pending p-5">
+      <div v-if="reviewRecordRows.length" class="surface-card documents-panel documents-panel--reviews documents-pending p-5">
         <h3 class="font-bold">审核记录</h3>
         <p class="mt-1 mb-3 text-sm text-gray-500 dark:text-gray-400">
           这里统一显示导入资料、AI 设定会话和后续优化产生的待审核变更。
@@ -487,6 +503,8 @@
           </el-table-column>
         </el-table>
       </div>
+        </div>
+      </section>
 
       <el-dialog
         v-model="detailVisible"
@@ -1917,6 +1935,80 @@ watch(editingDraftField, (value) => {
 .documents-tab--active {
   background: var(--app-accent);
   color: #fff;
+}
+
+.documents-management {
+  display: grid;
+  gap: 1rem;
+}
+
+.documents-management__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.documents-management__title {
+  color: var(--app-text);
+  font-size: 1.05rem;
+  font-weight: 800;
+}
+
+.documents-management__description {
+  margin-top: 0.35rem;
+  max-width: 44rem;
+  color: var(--app-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.documents-management__stats {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  color: var(--app-text-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.documents-management__stats span {
+  border: 1px solid var(--app-border);
+  border-radius: 999px;
+  background: var(--app-surface);
+  padding: 0.35rem 0.65rem;
+}
+
+.documents-management-grid {
+  display: grid;
+  align-items: start;
+  gap: 1rem;
+}
+
+.documents-panel {
+  min-width: 0;
+}
+
+@media (min-width: 1280px) {
+  .documents-management-grid {
+    grid-template-columns: minmax(0, 1.5fr) minmax(22rem, 0.9fr);
+  }
+
+  .documents-panel--library {
+    grid-row: span 2;
+  }
+}
+
+@media (max-width: 767px) {
+  .documents-management__header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .documents-management__stats {
+    justify-content: flex-start;
+  }
 }
 
 .documents-pending-table {

@@ -1,6 +1,6 @@
 <template>
-  <div class="space-y-6">
-    <section class="page-header">
+  <div class="setting-workbench space-y-6" :class="{ 'setting-workbench--embedded': embedded }">
+    <section v-if="!embedded" class="page-header">
       <div>
         <div class="page-header__eyebrow">Settings Workbench</div>
         <h1 class="page-header__title">设定工作台</h1>
@@ -43,15 +43,6 @@
 
         <div v-if="showCreateForm" class="setting-create-box mt-4 grid gap-3 rounded-xl border p-4">
           <label class="setting-field">
-            <span>会话标题</span>
-            <input
-              v-model="newTitle"
-              data-testid="setting-session-title"
-              class="setting-input"
-              placeholder="例如：修炼体系补全"
-            />
-          </label>
-          <label class="setting-field">
             <span>初始想法</span>
             <textarea
               v-model="newIdea"
@@ -60,13 +51,16 @@
               placeholder="输入你希望 AI 扩展的设定方向"
             />
           </label>
+          <p class="text-xs leading-5 text-gray-500 dark:text-gray-400">
+            会话名称会从初始想法中自动提炼，不需要手动填写。
+          </p>
           <div class="flex justify-end gap-2">
             <button type="button" class="setting-secondary" @click="showCreateForm = false">取消</button>
             <button
               type="button"
               class="setting-primary"
               data-testid="setting-create-session"
-              :disabled="store.settingWorkbench.creatingSession"
+              :disabled="store.settingWorkbench.creatingSession || !canCreateSession"
               @click="createSession"
             >
               {{ store.settingWorkbench.creatingSession ? '创建中...' : '创建会话' }}
@@ -240,16 +234,23 @@
 import { computed, ref, watch } from 'vue'
 import { useNovelStore } from '@/stores/novel.js'
 
+defineProps({
+  embedded: {
+    type: Boolean,
+    default: false,
+  },
+})
+
 const store = useNovelStore()
 const showCreateForm = ref(false)
 const showConsolidationDialog = ref(false)
-const newTitle = ref('')
 const newIdea = ref('')
 const selectedPendingIds = ref([])
 
 const selectedSession = computed(() => store.settingWorkbench.selectedSession)
 const messages = computed(() => store.settingWorkbench.selectedMessages || [])
 const pendingSettingDocs = computed(() => (store.pendingDocs || []).filter(isSettingPendingDoc))
+const canCreateSession = computed(() => Boolean(newIdea.value.trim()))
 
 watch(() => store.novelId, (novelId) => {
   if (novelId) {
@@ -295,17 +296,28 @@ async function submitConsolidation() {
 }
 
 async function createSession() {
+  const idea = newIdea.value.trim()
+  if (!idea) return
   const session = await store.createSettingSession({
-    title: newTitle.value.trim() || '未命名设定会话',
-    initial_idea: newIdea.value.trim(),
+    title: deriveSessionTitle(idea),
+    initial_idea: idea,
     target_categories: [],
   })
   if (session?.id) {
     await store.loadSettingSession(session.id)
-    newTitle.value = ''
     newIdea.value = ''
     showCreateForm.value = false
   }
+}
+
+function deriveSessionTitle(content) {
+  const firstLine = String(content || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean) || '未命名设定会话'
+  return firstLine
+    .replace(/[，。！？；：,.!?;:]+$/g, '')
+    .slice(0, 24) || '未命名设定会话'
 }
 </script>
 

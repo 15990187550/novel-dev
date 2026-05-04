@@ -18,7 +18,7 @@ vi.mock('@/api.js', () => ({
   createSettingSession: vi.fn().mockResolvedValue({
     id: 'sgs-1',
     novel_id: 'novel-1',
-    title: '修炼体系补全',
+    title: '废脉少年',
     status: 'clarifying',
     target_categories: [],
     clarification_round: 0,
@@ -27,7 +27,7 @@ vi.mock('@/api.js', () => ({
     session: {
       id: 'sgs-1',
       novel_id: 'novel-1',
-      title: '修炼体系补全',
+      title: '废脉少年',
       status: 'clarifying',
       target_categories: [],
       clarification_round: 0,
@@ -66,13 +66,42 @@ describe('SettingWorkbench', () => {
     expect(wrapper.text()).toContain('新建会话')
 
     await wrapper.get('[data-testid="setting-new-session"]').trigger('click')
-    await wrapper.get('[data-testid="setting-session-title"]').setValue('修炼体系补全')
+    expect(wrapper.find('[data-testid="setting-session-title"]').exists()).toBe(false)
     await wrapper.get('[data-testid="setting-session-idea"]').setValue('废脉少年')
     await wrapper.get('[data-testid="setting-create-session"]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.text()).toContain('修炼体系补全')
+    expect(api.createSettingSession).toHaveBeenCalledWith('novel-1', {
+      title: '废脉少年',
+      initial_idea: '废脉少年',
+      target_categories: [],
+    })
     expect(wrapper.text()).toContain('废脉少年')
+  })
+
+  it('hides the standalone page header when embedded in documents', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+
+    const wrapper = mount(SettingWorkbench, {
+      props: { embedded: true },
+      global: {
+        plugins: [pinia],
+        stubs: {
+          ElAlert: true,
+          ElDialog: {
+            template: '<div><slot /><slot name="footer" /></div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.find('.page-header').exists()).toBe(false)
+    expect(wrapper.text()).toContain('AI 生成设定')
+    expect(wrapper.text()).not.toContain('设定工作台')
   })
 
   it('opens consolidation dialog, selects pending records, and submits selected ids', async () => {
