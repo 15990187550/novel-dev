@@ -5,7 +5,6 @@ const routes = [
   { path: '/dashboard', component: () => import('@/views/Dashboard.vue') },
   { path: '/settings', redirect: (to) => ({ path: '/documents', query: { ...to.query, tab: 'ai' } }) },
   { path: '/documents', component: () => import('@/views/Documents.vue') },
-  { path: '/settings', component: () => import('@/views/SettingWorkbench.vue') },
   { path: '/volume-plan', component: () => import('@/views/VolumePlan.vue') },
   { path: '/chapters', component: () => import('@/views/ChapterList.vue') },
   { path: '/chapters/:chapterId', component: () => import('@/views/ChapterDetail.vue') },
