@@ -9,7 +9,6 @@ from novel_dev.db.models import EntityRelationship
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
-from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.log_service import log_service
 
@@ -22,15 +21,18 @@ class SettingConsolidationService:
         self.pending_repo = PendingExtractionRepository(session)
         self.setting_repo = SettingWorkbenchRepository(session)
         self.entity_repo = EntityRepository(session)
-        self.relationship_repo = RelationshipRepository(session)
 
     async def build_input_snapshot(self, novel_id: str, selected_pending_ids: list[str]) -> dict[str, Any]:
         documents = []
         for doc_type in ("worldview", "setting", "synopsis", "concept"):
-            current_docs = await self.doc_repo.get_current_by_type(novel_id, doc_type)
-            for doc in current_docs:
-                if getattr(doc, "archived_at", None) is not None:
+            active_docs_by_title = {}
+            for doc in await self.doc_repo.get_by_type(novel_id, doc_type):
+                if doc.archived_at is not None:
                     continue
+                current = active_docs_by_title.get(doc.title)
+                if current is None or self._is_newer_document(doc, current):
+                    active_docs_by_title[doc.title] = doc
+            for doc in active_docs_by_title.values():
                 documents.append(
                     {
                         "id": doc.id,
@@ -40,6 +42,7 @@ class SettingConsolidationService:
                         "version": doc.version,
                     }
                 )
+        documents.sort(key=lambda doc: (doc["doc_type"] or "", doc["title"] or "", doc["id"] or ""))
 
         selected_pending = []
         for pending_id in selected_pending_ids:
@@ -74,6 +77,7 @@ class SettingConsolidationService:
                     "search_document": entity.search_document,
                 }
             )
+        entities.sort(key=lambda entity: (entity["type"] or "", entity["name"] or "", entity["id"] or ""))
 
         result = await self.session.execute(
             select(EntityRelationship)
@@ -81,7 +85,6 @@ class SettingConsolidationService:
                 EntityRelationship.novel_id == novel_id,
                 EntityRelationship.is_active == True,
             )
-            .order_by(EntityRelationship.id.asc())
         )
         relationships = []
         for relationship in result.scalars().all():
@@ -96,6 +99,14 @@ class SettingConsolidationService:
                     "meta": relationship.meta or {},
                 }
             )
+        relationships.sort(
+            key=lambda relationship: (
+                relationship["source_id"] or "",
+                relationship["target_id"] or "",
+                relationship["relation_type"] or "",
+                relationship["id"] or 0,
+            )
+        )
 
         return {
             "novel_id": novel_id,
@@ -151,3 +162,15 @@ class SettingConsolidationService:
             metadata={"batch_id": batch.id, "job_id": job_id},
         )
         return batch
+
+    @staticmethod
+    def _is_newer_document(candidate, current) -> bool:
+        candidate_version = candidate.version or 0
+        current_version = current.version or 0
+        if candidate_version != current_version:
+            return candidate_version > current_version
+        candidate_updated = candidate.updated_at or datetime.min
+        current_updated = current.updated_at or datetime.min
+        if candidate_updated != current_updated:
+            return candidate_updated > current_updated
+        return candidate.id > current.id

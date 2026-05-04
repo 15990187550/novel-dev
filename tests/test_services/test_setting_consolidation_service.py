@@ -52,6 +52,20 @@ class FakeConsolidationAgent:
         }
 
 
+class FailingIfCalledAgent:
+    def __init__(self):
+        self.called = False
+
+    async def consolidate(self, snapshot):
+        self.called = True
+        raise AssertionError("agent should not be called")
+
+
+class FailingConsolidationAgent:
+    async def consolidate(self, snapshot):
+        raise RuntimeError("model failed")
+
+
 async def test_consolidation_snapshots_effective_docs_and_selected_pending(async_session):
     doc_repo = DocumentRepository(async_session)
     await doc_repo.create("doc-current", "novel-c", "setting", "旧修炼体系", "炼气九层", version=1)
@@ -127,3 +141,140 @@ async def test_consolidation_snapshots_effective_docs_and_selected_pending(async
     assert [change.operation for change in changes] == ["create", "archive", "resolve"]
     assert [change.target_type for change in changes] == ["setting_card", "setting_card", "conflict"]
     assert changes[2].conflict_hints == [{"reason": "炼气层数冲突"}]
+
+
+async def test_snapshot_uses_latest_non_archived_document_when_latest_is_archived(async_session):
+    doc_repo = DocumentRepository(async_session)
+    active = await doc_repo.create(
+        "doc-active-previous",
+        "novel-docs",
+        "setting",
+        "修炼体系",
+        "炼气九层",
+        version=1,
+    )
+    archived_latest = await doc_repo.create(
+        "doc-archived-latest",
+        "novel-docs",
+        "setting",
+        "修炼体系",
+        "炼气十二层",
+        version=2,
+    )
+    archived_latest.archived_at = datetime.utcnow()
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FakeConsolidationAgent())
+    snapshot = await service.build_input_snapshot("novel-docs", [])
+
+    assert [doc["id"] for doc in snapshot["documents"]] == [active.id]
+    assert snapshot["documents"][0]["content"] == "炼气九层"
+
+
+@pytest.mark.parametrize("selected_pending_ids", [["missing-pending"], ["pending-approved"]])
+async def test_invalid_selected_pending_raises_before_agent_or_review_batch(async_session, selected_pending_ids):
+    pending_repo = PendingExtractionRepository(async_session)
+    await pending_repo.create(
+        "pending-approved",
+        "novel-invalid",
+        "setting",
+        {"worldview": "已处理资料"},
+        status="approved",
+    )
+    await async_session.commit()
+
+    agent = FailingIfCalledAgent()
+    service = SettingConsolidationService(async_session, agent=agent)
+
+    with pytest.raises(ValueError):
+        await service.run_consolidation(
+            novel_id="novel-invalid",
+            selected_pending_ids=selected_pending_ids,
+        )
+
+    review_repo = SettingWorkbenchRepository(async_session)
+    assert agent.called is False
+    assert await review_repo.list_review_batches("novel-invalid") == []
+
+
+async def test_agent_failure_creates_no_review_batch_or_changes(async_session):
+    pending_repo = PendingExtractionRepository(async_session)
+    await pending_repo.create(
+        "pending-selected",
+        "novel-failure",
+        "setting",
+        {"worldview": "选中的待审核资料"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingConsolidationAgent())
+
+    with pytest.raises(RuntimeError, match="model failed"):
+        await service.run_consolidation(
+            novel_id="novel-failure",
+            selected_pending_ids=["pending-selected"],
+        )
+
+    review_repo = SettingWorkbenchRepository(async_session)
+    batches = await review_repo.list_review_batches("novel-failure")
+    assert batches == []
+
+
+async def test_snapshot_ordering_is_deterministic(async_session):
+    doc_repo = DocumentRepository(async_session)
+    await doc_repo.create("doc-setting-b", "novel-order", "setting", "B设定", "B", version=1)
+    await doc_repo.create("doc-concept-a", "novel-order", "concept", "A概念", "A", version=1)
+    await doc_repo.create("doc-setting-a", "novel-order", "setting", "A设定", "A", version=1)
+    async_session.add_all(
+        [
+            Entity(id="entity-z", novel_id="novel-order", type="place", name="紫府"),
+            Entity(id="entity-a", novel_id="novel-order", type="character", name="阿照"),
+            Entity(id="entity-b", novel_id="novel-order", type="character", name="白术"),
+        ]
+    )
+    await async_session.flush()
+    async_session.add_all(
+        [
+            EntityRelationship(
+                source_id="entity-b",
+                target_id="entity-z",
+                relation_type="驻守",
+                novel_id="novel-order",
+            ),
+            EntityRelationship(
+                source_id="entity-a",
+                target_id="entity-z",
+                relation_type="到达",
+                novel_id="novel-order",
+            ),
+            EntityRelationship(
+                source_id="entity-a",
+                target_id="entity-b",
+                relation_type="同伴",
+                novel_id="novel-order",
+            ),
+        ]
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FakeConsolidationAgent())
+    snapshot = await service.build_input_snapshot("novel-order", [])
+
+    assert [doc["id"] for doc in snapshot["documents"]] == [
+        "doc-concept-a",
+        "doc-setting-a",
+        "doc-setting-b",
+    ]
+    assert [entity["id"] for entity in snapshot["entities"]] == [
+        "entity-b",
+        "entity-a",
+        "entity-z",
+    ]
+    assert [
+        (relationship["source_id"], relationship["target_id"], relationship["relation_type"])
+        for relationship in snapshot["relationships"]
+    ] == [
+        ("entity-a", "entity-b", "同伴"),
+        ("entity-a", "entity-z", "到达"),
+        ("entity-b", "entity-z", "驻守"),
+    ]
