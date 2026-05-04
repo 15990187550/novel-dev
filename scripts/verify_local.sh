@@ -7,7 +7,7 @@ WEB_DIR="${ROOT_DIR}/src/novel_dev/web"
 echo "==> Python tests"
 (
   cd "${ROOT_DIR}"
-  PYTHONPATH=src pytest -q
+  PYTHONPATH=src python3.11 -m pytest -q
 )
 
 echo "==> Python compile check"
