@@ -50,8 +50,11 @@ async def test_setting_consolidation_agent_uses_standard_llm_helper(monkeypatch)
     assert calls["model_cls"] is ConsolidationResult
     assert calls["max_retries"] == 3
     assert calls["novel_id"] == "novel-a"
-    assert calls["config_agent_name"] == "SettingExtractorAgent"
-    assert calls["config_task"] == "extract_setting"
+    assert calls["config_agent_name"] == "setting_consolidation_agent"
+    assert calls["config_task"] == "consolidate"
+    assert "准确率第一" in calls["prompt"]
+    assert "不得新增输入快照中不存在的事实" in calls["prompt"]
+    assert "不得遗漏输入快照中的有效设定" in calls["prompt"]
     assert '"documents": []' in calls["prompt"]
     assert '"novel_id": "novel-a"' in calls["prompt"]
     assert "{'novel_id': 'novel-a'" not in calls["prompt"]

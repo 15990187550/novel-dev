@@ -305,6 +305,74 @@ describe('novel store dashboard loading', () => {
     expect(store.settingWorkbench.reviewBatches[0].summary).toBe('新增 1 张设定卡片')
   })
 
+  it('assigns stable local ids to setting reply messages', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_stable'
+    store.settingWorkbench.selectedSession = { id: 'sgs_stable', title: '仙剑会话', status: 'clarifying' }
+    vi.mocked(api.replySettingSession).mockResolvedValue({
+      session: { id: 'sgs_stable', title: '仙剑会话', status: 'clarifying' },
+      assistant_message: '以下是需要澄清的关键问题：',
+      questions: ['仙剑世界从哪一卷进入？'],
+    })
+
+    await store.replySettingSession('补充仙剑设定')
+
+    expect(store.settingWorkbench.selectedMessages).toHaveLength(2)
+    expect(store.settingWorkbench.selectedMessages.map((message) => message.id)).toEqual([
+      'sgs_stable:local:1',
+      'sgs_stable:local:2',
+    ])
+    expect(store.settingWorkbench.selectedMessages[1].meta.questions).toEqual(['仙剑世界从哪一卷进入？'])
+  })
+
+  it('hydrates setting session messages immediately after creating a session', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.createSettingSession).mockResolvedValue({
+      id: 'sgs_new',
+      title: '废脉少年',
+      status: 'clarifying',
+    })
+    vi.mocked(api.getSettingSession).mockResolvedValue({
+      session: { id: 'sgs_new', title: '废脉少年', status: 'clarifying' },
+      messages: [{ id: 'msg_initial', role: 'user', content: '废脉少年' }],
+    })
+
+    await store.createSettingSession({
+      title: '废脉少年',
+      initial_idea: '废脉少年',
+      target_categories: [],
+    })
+
+    expect(api.getSettingSession).toHaveBeenCalledWith('novel-1', 'sgs_new')
+    expect(store.settingWorkbench.selectedMessages).toEqual([
+      { id: 'msg_initial', role: 'user', content: '废脉少年' },
+    ])
+  })
+
+  it('preserves selected setting session history when refreshing the session list', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_keep'
+    store.settingWorkbench.selectedSession = { id: 'sgs_keep', title: '旧标题', status: 'clarifying' }
+    store.settingWorkbench.selectedMessages = [{ id: 'msg_keep', role: 'assistant', content: '已有历史' }]
+    vi.mocked(api.getSettingSessions).mockResolvedValue({
+      items: [{ id: 'sgs_keep', title: '新标题', status: 'ready_to_generate' }],
+    })
+
+    await store.fetchSettingSessions()
+
+    expect(store.settingWorkbench.selectedSession).toEqual({
+      id: 'sgs_keep',
+      title: '新标题',
+      status: 'ready_to_generate',
+    })
+    expect(store.settingWorkbench.selectedMessages).toEqual([
+      { id: 'msg_keep', role: 'assistant', content: '已有历史' },
+    ])
+  })
+
   it('ignores stale setting workbench and session responses', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

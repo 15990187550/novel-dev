@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Any
 
@@ -12,6 +13,7 @@ from novel_dev.agents.setting_workbench_agent import (
     SettingWorkbenchAgent,
 )
 from novel_dev.db.models import EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
+from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
@@ -24,6 +26,7 @@ def _new_id(prefix: str) -> str:
 
 class SettingWorkbenchService:
     MAX_CLARIFICATION_ROUNDS = 5
+    GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 165
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -140,15 +143,22 @@ class SettingWorkbenchService:
         )
         await self._release_connection_before_external_call()
         try:
-            draft = await call_and_parse_model(
-                agent_name="SettingWorkbenchService",
-                task="setting_workbench_generate_batch",
-                prompt=prompt,
-                model_cls=SettingBatchDraft,
-                config_agent_name="setting_workbench_service",
-                novel_id=novel_id,
-                max_retries=2,
-            )
+            try:
+                async with asyncio.timeout(self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS):
+                    draft = await call_and_parse_model(
+                        agent_name="SettingWorkbenchService",
+                        task="setting_workbench_generate_batch",
+                        prompt=prompt,
+                        model_cls=SettingBatchDraft,
+                        config_agent_name="setting_workbench_service",
+                        novel_id=novel_id,
+                        max_retries=2,
+                    )
+            except TimeoutError as exc:
+                raise LLMTimeoutError(
+                    "Setting workbench generation timed out "
+                    f"after {self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS}s"
+                ) from exc
             self._validate_batch_draft(draft)
 
             batch = await self.repo.create_review_batch(
@@ -302,7 +312,6 @@ class SettingWorkbenchService:
                 "target_id": relationship.target_id,
                 "target_name": entity_name_by_id.get(relationship.target_id, ""),
                 "relation_type": relationship.relation_type,
-                "meta": self._trim_struct(relationship.meta or {}, max_text=180),
             }
             for relationship in relationships
         ]

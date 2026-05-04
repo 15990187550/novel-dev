@@ -113,6 +113,7 @@ const createSettingWorkbenchState = () => ({
   consolidationRequestToken: 0,
   reviewBatchesRequestToken: 0,
   selectedReviewBatchRequestToken: 0,
+  localMessageSeq: 0,
   creatingSession: false,
   replying: false,
   generating: false,
@@ -920,6 +921,11 @@ export const useNovelStore = defineStore('novel', {
         if (token !== this.settingWorkbench.requestToken || requestedNovelId !== this.novelId) return
         this.settingWorkbench.sessions = payload?.sessions || []
         this.settingWorkbench.reviewBatches = payload?.review_batches || []
+        if (this.settingWorkbench.selectedSessionId) {
+          this.settingWorkbench.selectedSession = this.settingWorkbench.sessions.find(
+            (session) => session.id === this.settingWorkbench.selectedSessionId
+          ) || this.settingWorkbench.selectedSession
+        }
         this.settingWorkbench.state = 'ready'
       } catch (error) {
         if (token !== this.settingWorkbench.requestToken || requestedNovelId !== this.novelId) return
@@ -944,6 +950,11 @@ export const useNovelStore = defineStore('novel', {
           return this.settingWorkbench.sessions
         }
         this.settingWorkbench.sessions = payload?.items || payload?.sessions || []
+        if (this.settingWorkbench.selectedSessionId) {
+          this.settingWorkbench.selectedSession = this.settingWorkbench.sessions.find(
+            (session) => session.id === this.settingWorkbench.selectedSessionId
+          ) || this.settingWorkbench.selectedSession
+        }
         this.settingWorkbench.state = 'ready'
         return this.settingWorkbench.sessions
       } catch (error) {
@@ -972,6 +983,7 @@ export const useNovelStore = defineStore('novel', {
         this.settingWorkbench.selectedSessionId = session.id
         this.settingWorkbench.selectedSession = session
         this.settingWorkbench.selectedMessages = []
+        await this.loadSettingSession(session.id)
         return session
       } catch (error) {
         if (requestedNovelId !== this.novelId) return null
@@ -1018,9 +1030,14 @@ export const useNovelStore = defineStore('novel', {
             ? { ...session, ...this.settingWorkbench.selectedSession }
             : session
         )
-        this.settingWorkbench.selectedMessages.push({ role: 'user', content })
+        const nextLocalMessageId = () => {
+          this.settingWorkbench.localMessageSeq += 1
+          return `${sessionId}:local:${this.settingWorkbench.localMessageSeq}`
+        }
+        this.settingWorkbench.selectedMessages.push({ id: nextLocalMessageId(), role: 'user', content })
         if (payload?.assistant_message) {
           this.settingWorkbench.selectedMessages.push({
+            id: nextLocalMessageId(),
             role: 'assistant',
             content: payload.assistant_message,
             meta: { questions: payload.questions || [] },

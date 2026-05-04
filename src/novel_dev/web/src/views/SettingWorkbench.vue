@@ -127,6 +127,9 @@
             <article v-for="message in messages" :key="message.id" class="setting-message rounded-xl px-3 py-2">
               <div class="text-xs font-semibold uppercase text-gray-400">{{ message.role === 'user' ? '你' : 'AI' }}</div>
               <div class="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">{{ message.content }}</div>
+              <ol v-if="messageQuestions(message).length" class="setting-message__questions">
+                <li v-for="question in messageQuestions(message)" :key="question">{{ question }}</li>
+              </ol>
             </article>
           </div>
 
@@ -307,6 +310,21 @@ function deriveSessionTitle(content) {
     .replace(/[，。！？；：,.!?;:]+$/g, '')
     .slice(0, 24) || '未命名设定会话'
 }
+
+function messageQuestions(message) {
+  const questions = message?.meta?.questions
+  if (!Array.isArray(questions)) return []
+  return questions
+    .map((item) => {
+      if (typeof item === 'string') return item
+      if (item && typeof item === 'object') {
+        return item.question || item.content || item.text || ''
+      }
+      return ''
+    })
+    .map((item) => String(item).trim())
+    .filter(Boolean)
+}
 </script>
 
 <style scoped>
@@ -412,6 +430,22 @@ function deriveSessionTitle(content) {
 
 .setting-message {
   background: var(--app-surface);
+}
+
+.setting-message__questions {
+  margin-top: 0.65rem;
+  display: grid;
+  gap: 0.45rem;
+  list-style: decimal;
+  padding-left: 1.25rem;
+  color: var(--app-text);
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+
+.setting-message__questions li::marker {
+  color: var(--app-text-soft);
+  font-weight: 700;
 }
 
 .setting-pending-option {

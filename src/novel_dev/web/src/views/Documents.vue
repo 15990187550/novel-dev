@@ -1990,16 +1990,6 @@ watch(editingDraftField, (value) => {
   min-width: 0;
 }
 
-@media (min-width: 1280px) {
-  .documents-management-grid {
-    grid-template-columns: minmax(0, 1.5fr) minmax(22rem, 0.9fr);
-  }
-
-  .documents-panel--library {
-    grid-row: span 2;
-  }
-}
-
 @media (max-width: 767px) {
   .documents-management__header {
     align-items: flex-start;

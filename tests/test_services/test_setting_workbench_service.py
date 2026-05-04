@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -7,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 
 from novel_dev.db.models import Entity, EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
+from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.entity_service import EntityService
@@ -1082,6 +1084,88 @@ async def test_generate_review_batch_includes_existing_setting_context(async_ses
     assert batch.summary == "新增宗门实体"
 
 
+async def test_generate_review_batch_excludes_noisy_relationship_metadata_from_prompt(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    entity_service = EntityService(async_session)
+    entity_service._refresh_entity_artifacts = AsyncMock()
+    await entity_service.create_entity(
+        "ent_ctx_meta_luzhao",
+        "character",
+        "陆照",
+        novel_id="novel-ai-rel-meta",
+        initial_state={"identity": "主角"},
+    )
+    await entity_service.create_entity(
+        "ent_ctx_meta_daojing",
+        "item",
+        "道经",
+        novel_id="novel-ai-rel-meta",
+        initial_state={"description": "功法"},
+    )
+    await service.relationship_repo.create(
+        "ent_ctx_meta_luzhao",
+        "ent_ctx_meta_daojing",
+        "修炼功法",
+        novel_id="novel-ai-rel-meta",
+        meta={
+            "source": "relationship_backfill",
+            "evidence": "NOISY_RELATIONSHIP_METADATA_SHOULD_NOT_LEAK",
+            "source_entity_names": ["很长的回填实体列表"] * 20,
+        },
+    )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-rel-meta",
+        title="补充设定",
+        initial_idea="补充设定",
+        target_categories=["关系"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        assert "修炼功法" in prompt
+        assert "ent_ctx_meta_luzhao" in prompt
+        assert "ent_ctx_meta_daojing" in prompt
+        assert "NOISY_RELATIONSHIP_METADATA_SHOULD_NOT_LEAK" not in prompt
+        assert "source_entity_names" not in prompt
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "新增设定卡片",
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": "关系补充",
+                            "content": "陆照修炼道经。",
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    await service.generate_review_batch(novel_id="novel-ai-rel-meta", session_id=session.id)
+
+
 @pytest.mark.parametrize("status", ["clarifying", "generating", "failed", "archived"])
 async def test_generate_review_batch_rejects_non_ready_or_generated_status(async_session, status):
     service = SettingWorkbenchService(async_session)
@@ -1202,6 +1286,63 @@ async def test_generate_review_batch_restores_ready_state_when_llm_fails(async_s
     assert changes == []
     assert messages[-1].role == "assistant"
     assert messages[-1].meta["status"] == "error"
+
+
+async def test_generate_review_batch_times_out_before_frontend_request_budget(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-wall-timeout",
+        title="超时生成",
+        initial_idea="生成一个会拖很久的审核批次",
+        target_categories=["势力"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+    monkeypatch.setattr(
+        SettingWorkbenchService,
+        "GENERATE_BATCH_WALL_TIMEOUT_SECONDS",
+        0.01,
+        raising=False,
+    )
+
+    async def slow_call_and_parse_model(*args, **kwargs):
+        await asyncio.sleep(0.05)
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "迟到的批次",
+                "changes": [
+                    {
+                        "target_type": "entity",
+                        "operation": "create",
+                        "after_snapshot": {"type": "faction", "name": "迟到宗", "state": {}},
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        slow_call_and_parse_model,
+    )
+
+    with pytest.raises(LLMTimeoutError, match="Setting workbench generation timed out"):
+        await service.generate_review_batch(novel_id="novel-ai-wall-timeout", session_id=session.id)
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-wall-timeout")
+        )
+    ).scalars().all()
+    messages = await service.repo.list_messages(session.id)
+    assert batches == []
+    assert messages[-1].role == "assistant"
+    assert messages[-1].meta["status"] == "error"
+    assert messages[-1].meta["stage"] == "setting_workbench_generate_batch"
 
 
 async def test_generate_review_batch_rejects_update_draft_without_target_id_before_creating_batch(

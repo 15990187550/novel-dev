@@ -61,14 +61,20 @@ from novel_dev.schemas.setting_workbench import (
     SettingConflictResolutionRequest,
     SettingGenerationSessionCreateRequest,
     SettingGenerationSessionDetailResponse,
+    SettingGenerationSessionGenerateRequest,
     SettingGenerationSessionListResponse,
+    SettingGenerationSessionReplyRequest,
+    SettingGenerationSessionReplyResponse,
     SettingGenerationSessionResponse,
     SettingReviewApproveRequest,
     SettingReviewBatchDetailResponse,
     SettingReviewBatchListResponse,
+    SettingReviewBatchResponse,
+    SettingWorkbenchResponse,
 )
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.setting_consolidation_service import SettingConsolidationService
+from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 import re
@@ -2645,6 +2651,23 @@ async def create_setting_generation_session(
 
 
 @router.get(
+    "/api/novels/{novel_id}/settings/workbench",
+    response_model=SettingWorkbenchResponse,
+)
+async def get_setting_workbench(
+    novel_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    repo = SettingWorkbenchRepository(session)
+    sessions = await repo.list_sessions(novel_id)
+    review_batches = await repo.list_review_batches(novel_id)
+    return {
+        "sessions": [_serialize_setting_generation_session(item) for item in sessions],
+        "review_batches": [_serialize_setting_review_batch(item) for item in review_batches],
+    }
+
+
+@router.get(
     "/api/novels/{novel_id}/settings/sessions",
     response_model=SettingGenerationSessionListResponse,
 )
@@ -2675,6 +2698,58 @@ async def get_setting_generation_session(
         "session": _serialize_setting_generation_session(item),
         "messages": [_serialize_setting_generation_message(message) for message in messages],
     }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/sessions/{session_id}/reply",
+    response_model=SettingGenerationSessionReplyResponse,
+)
+async def reply_setting_generation_session(
+    novel_id: str,
+    session_id: str,
+    req: SettingGenerationSessionReplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    try:
+        result = await service.reply_to_session(
+            novel_id=novel_id,
+            session_id=session_id,
+            content=req.content,
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await session.commit()
+    return {
+        "session": _serialize_setting_generation_session(result["session"]),
+        "assistant_message": result["assistant_message"],
+        "questions": result.get("questions") or [],
+    }
+
+
+@router.post(
+    "/api/novels/{novel_id}/settings/sessions/{session_id}/generate",
+    response_model=SettingReviewBatchResponse,
+)
+async def generate_setting_review_batch(
+    novel_id: str,
+    session_id: str,
+    req: SettingGenerationSessionGenerateRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    _ = req
+    service = SettingWorkbenchService(session)
+    try:
+        batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
+    except LLMTimeoutError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=504, detail="设定工作台生成超时，请缩小生成范围或稍后重试") from exc
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return _serialize_setting_review_batch(batch)
 
 
 @router.post(

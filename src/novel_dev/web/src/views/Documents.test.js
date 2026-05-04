@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { defineComponent, h, inject, nextTick, provide } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
@@ -804,6 +806,13 @@ describe('Documents', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain(longRule)
+  })
+
+  it('keeps the management sections in a single vertical column on desktop', () => {
+    const source = readFileSync(join(process.cwd(), 'src/views/Documents.vue'), 'utf8')
+
+    expect(source).not.toMatch(/documents-management-grid\s*\{[^}]*grid-template-columns/s)
+    expect(source).not.toContain('grid-row: span 2')
   })
 
   it('keeps long library content collapsed and opens details in a modal', async () => {

@@ -63,3 +63,24 @@ async def test_list_setting_generation_sessions(test_client):
         assert response.status_code == 200
         payload = response.json()
         assert payload["items"][0]["title"] == "主角阵营设定"
+
+
+@pytest.mark.asyncio
+async def test_get_setting_workbench_returns_sessions_and_review_batches(test_client):
+    async with test_client as client:
+        created = await client.post(
+            "/api/novels/novel-api/settings/sessions",
+            json={
+                "title": "北境宗门设定",
+                "initial_idea": "北境宗门互相制衡",
+                "target_categories": ["势力"],
+            },
+        )
+        assert created.status_code == 200
+
+        response = await client.get("/api/novels/novel-api/settings/workbench")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["sessions"][0]["title"] == "北境宗门设定"
+        assert payload["review_batches"] == []

@@ -39,6 +39,20 @@ class SettingGenerationSessionDetailResponse(BaseModel):
     messages: list[SettingGenerationMessageResponse] = Field(default_factory=list)
 
 
+class SettingGenerationSessionReplyRequest(BaseModel):
+    content: str
+
+
+class SettingGenerationSessionReplyResponse(BaseModel):
+    session: SettingGenerationSessionResponse
+    assistant_message: str
+    questions: list[str] = Field(default_factory=list)
+
+
+class SettingGenerationSessionGenerateRequest(BaseModel):
+    pass
+
+
 class SettingConsolidationStartRequest(BaseModel):
     selected_pending_ids: list[str] = Field(default_factory=list)
 
@@ -80,6 +94,11 @@ class SettingReviewBatchResponse(BaseModel):
 
 class SettingReviewBatchListResponse(BaseModel):
     items: list[SettingReviewBatchResponse] = Field(default_factory=list)
+
+
+class SettingWorkbenchResponse(BaseModel):
+    sessions: list[SettingGenerationSessionResponse] = Field(default_factory=list)
+    review_batches: list[SettingReviewBatchResponse] = Field(default_factory=list)
 
 
 class SettingReviewBatchDetailResponse(BaseModel):

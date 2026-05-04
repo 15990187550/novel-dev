@@ -158,6 +158,48 @@ describe('SettingWorkbench', () => {
     expect(wrapper.text()).toContain('已记录这次调整。')
   })
 
+  it('renders clarification questions stored on assistant message metadata', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.sessions = [
+      { id: 'sgs-1', title: '诸天设定', status: 'clarifying' },
+    ]
+    store.settingWorkbench.selectedSessionId = 'sgs-1'
+    store.settingWorkbench.selectedSession = { id: 'sgs-1', title: '诸天设定', status: 'clarifying' }
+    store.settingWorkbench.selectedMessages = [
+      {
+        id: 'msg-ai',
+        role: 'assistant',
+        content: '以下是需要澄清的关键问题：',
+        meta: {
+          questions: [
+            '四个核心游历世界分别承担什么剧情功能？',
+            { question: '主角与孟奇的交集要从哪一卷开始？' },
+          ],
+        },
+      },
+    ]
+
+    const wrapper = mount(SettingWorkbench, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          ElAlert: true,
+          ElDialog: {
+            template: '<div><slot /><slot name="footer" /></div>',
+          },
+        },
+      },
+    })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('以下是需要澄清的关键问题：')
+    expect(wrapper.text()).toContain('四个核心游历世界分别承担什么剧情功能？')
+    expect(wrapper.text()).toContain('主角与孟奇的交集要从哪一卷开始？')
+  })
+
   it('opens consolidation dialog, selects pending records, and submits selected ids', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
