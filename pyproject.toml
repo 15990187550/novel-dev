@@ -42,3 +42,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"novel_dev.export" = ["templates/*.md"]

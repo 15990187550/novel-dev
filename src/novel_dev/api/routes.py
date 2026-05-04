@@ -19,6 +19,7 @@ from novel_dev.config import Settings
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.export.brainstorm import render_brainstorm_prompt
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.services.embedding_service import EmbeddingService
@@ -2252,108 +2253,7 @@ async def get_brainstorm_prompt(novel_id: str, session: AsyncSession = Depends(g
 
     combined = "\n\n".join(f"[{d.doc_type}] {d.title}\n{d.content}" for d in docs)
 
-    prompt = f'''---
-name: Novel Brainstorm
-description: 根据设定文档生成小说大纲 Synopsis
----
-
-# 角色设定
-
-你是 **资深商业小说大纲生成专家**，面向网文连载读者。
-
-# 背景信息
-
-```
-{combined}
-```
-
-# 任务
-
-根据背景信息，生成一份可供后续分卷、分章、分节拍继续展开的大纲。
-
-## 结构要求(在里程碑与人物弧中体现)
-
-1. 采用三幕式或更复杂结构，整部故事至少含 4 个能改变主角处境的转折点，
-   每一幕至少 1 个，转折尽量由角色选择驱动（而非纯外力）。
-2. 节奏：里程碑分布上，平均每 3 章左右有 1 个小高潮，每卷有 1 个卷级高潮。
-3. 伏笔：character_arcs 与 milestones 合计给出 ≥4 个可回收的悬念点，
-   每个悬念尽量在 1 卷内给出回收线索。
-4. 钩子：整部故事结尾带开放性钩子，能引出下一卷或续作的核心悬念。
-5. 人物弧光：主要角色 key_turning_points ≥3 个，且包含一次内在转变
-   (信念/价值观/关系的重要变化)。
-
-## 输出格式
-
-请按以下 Markdown 格式输出（最后附上完整的 JSON）：
-
-```markdown
-# 《小说标题》
-
-## 一句话梗概
-[角色 + 欲望 + 阻力 + 赌注的一句话]
-
-## 核心冲突
-[具体对抗关系，如：主角 vs 反派，关于XXX的争夺]
-
-## 主题
-- 主题1
-- 主题2
-
-## 人物弧光
-
-### 角色名1
-弧光概述：[角色弧光简述]
-转折点：
-1. [转折点1]
-2. [转折点2]
-3. [转折点3]
-
-### 角色名2
-...
-
-## 剧情里程碑
-
-### 第一幕
-概述：[本幕概述]
-高潮事件：[具体高潮事件]
-
-### 第二幕
-...
-
-### 第三幕
-...
-
-## 预估
-- 卷数：X
-- 总章节数：X
-- 总字数：X
-
----
-
-## 完整 JSON（供系统导入）
-
-```json
-{{
-  "title": "小说标题",
-  "logline": "...",
-  "core_conflict": "...",
-  "themes": [...],
-  "character_arcs": [...],
-  "milestones": [...],
-  "estimated_volumes": 3,
-  "estimated_total_chapters": 60,
-  "estimated_total_words": 600000
-}}
-```
-```
-
----
-
-**提示**：
-1. 先写 Markdown 部分，这是给人看的
-2. 再补上 JSON 部分，这是给系统导入用的
-3. 如果对输出满意，在最后加一行 `=== SYNOPSIS COMPLETE ===`
-'''
+    prompt = render_brainstorm_prompt(combined)
 
     return {"prompt": prompt, "doc_count": len(docs)}
 
