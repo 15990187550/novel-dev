@@ -38,7 +38,17 @@
           </div>
         </div>
 
-        <div v-if="store.settingWorkbench.sessions.length" class="setting-session-strip" aria-label="AI 会话列表">
+        <div class="setting-session-strip" aria-label="AI 会话列表">
+          <button
+            type="button"
+            class="setting-session-chip setting-session-chip--new"
+            :class="{ 'setting-session-chip--active': !store.settingWorkbench.selectedSessionId }"
+            data-testid="setting-new-session"
+            @click="startNewSession"
+          >
+            <span>新建会话</span>
+            <small>输入后创建</small>
+          </button>
           <button
             v-for="session in store.settingWorkbench.sessions"
             :key="session.id"
@@ -184,6 +194,20 @@ function deriveSessionTitle(content) {
 
 function sessionQuery(id) {
   return { ...route.query, tab: 'ai', session: id }
+}
+
+function newSessionQuery() {
+  const query = { ...route.query, tab: 'ai' }
+  delete query.session
+  return query
+}
+
+function startNewSession() {
+  store.settingWorkbench.selectedSessionId = ''
+  store.settingWorkbench.selectedSession = null
+  store.settingWorkbench.selectedMessages = []
+  replyDraft.value = ''
+  router.replace({ path: routePath.value, query: newSessionQuery() })
 }
 
 async function selectSession(id) {
@@ -339,6 +363,10 @@ async function sendReply() {
 .setting-session-chip--active {
   border-color: rgba(15, 118, 110, 0.38);
   background: var(--app-surface-strong);
+}
+
+.setting-session-chip--new {
+  border-style: dashed;
 }
 
 .setting-session-chip span {

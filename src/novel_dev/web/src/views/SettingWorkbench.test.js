@@ -173,6 +173,35 @@ describe('SettingWorkbench', () => {
     expect(wrapper.find('[data-testid="setting-generate-batch"]').exists()).toBe(true)
   })
 
+  it('switches back to a blank new session draft from an existing session', async () => {
+    const wrapper = mountView()
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.settingWorkbench.selectedSessionId = 'sgs_1'
+    store.settingWorkbench.selectedSession = {
+      id: 'sgs_1',
+      title: '修炼体系补全',
+      status: 'clarifying',
+    }
+    store.settingWorkbench.selectedMessages = [
+      { role: 'assistant', content: '请回答问题。' },
+    ]
+    routeState.query = { tab: 'ai', session: 'sgs_1' }
+    await flushPromises()
+
+    await wrapper.find('[data-testid="setting-reply-input"]').setValue('尚未发送的草稿')
+    await wrapper.find('[data-testid="setting-new-session"]').trigger('click')
+    await flushPromises()
+
+    expect(store.settingWorkbench.selectedSessionId).toBe('')
+    expect(store.settingWorkbench.selectedSession).toBeNull()
+    expect(store.settingWorkbench.selectedMessages).toEqual([])
+    expect(wrapper.find('[data-testid="setting-reply-input"]').element.value).toBe('')
+    expect(wrapper.text()).toContain('AI 生成设定')
+    expect(wrapper.text()).toContain('输入初始想法并发送后会自动创建 AI 会话')
+    expect(routerReplaceMock).toHaveBeenCalledWith({ path: '/settings', query: { tab: 'ai' } })
+  })
+
   it('renders clarification questions stored in assistant message metadata', async () => {
     getSettingSessionMock.mockResolvedValueOnce({
       session: {
