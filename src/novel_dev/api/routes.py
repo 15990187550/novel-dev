@@ -1797,6 +1797,26 @@ async def list_document_versions(novel_id: str, doc_type: str, session: AsyncSes
     }
 
 
+@router.get("/api/novels/{novel_id}/documents/{document_id}/versions")
+async def list_document_versions_for_document(novel_id: str, document_id: str, session: AsyncSession = Depends(get_session)):
+    svc = ExtractionService(session)
+    doc = await svc.get_approved_document(novel_id, document_id)
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    docs = await svc.list_document_versions_for_document(novel_id, document_id)
+    return {
+        "items": [
+            {
+                "id": d.id,
+                "title": d.title,
+                "version": d.version,
+                "updated_at": d.updated_at.isoformat() if d.updated_at else None,
+            }
+            for d in docs
+        ]
+    }
+
+
 @router.post("/api/novels/{novel_id}/documents/{document_id}/versions")
 async def save_document_version(novel_id: str, document_id: str, req: SaveDocumentVersionRequest, session: AsyncSession = Depends(get_session)):
     if not req.title.strip() or not req.content.strip():

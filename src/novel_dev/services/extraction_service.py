@@ -1489,6 +1489,12 @@ class ExtractionService:
     async def list_document_versions(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
         return await self.doc_repo.list_versions(novel_id, doc_type)
 
+    async def list_document_versions_for_document(self, novel_id: str, doc_id: str) -> List[NovelDocument]:
+        doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+        if doc is None:
+            return []
+        return await self.doc_repo.list_versions(novel_id, doc.doc_type)
+
     async def save_document_version(self, novel_id: str, doc_id: str, title: str, content: str) -> Optional[NovelDocument]:
         doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
         if doc is None:

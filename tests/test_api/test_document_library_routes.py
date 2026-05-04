@@ -1,8 +1,8 @@
 import pytest
 from fastapi import FastAPI
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
-from novel_dev.api.routes import router, get_session
+from novel_dev.api.routes import get_session, router
 from novel_dev.repositories.document_repo import DocumentRepository
 
 
@@ -77,6 +77,10 @@ async def test_get_document_detail_and_versions(async_session):
             versions = await client.get("/api/novels/n1/documents/types/worldview/versions")
             assert versions.status_code == 200
             assert [item["version"] for item in versions.json()["items"]] == [2, 1]
+
+            versions_by_document = await client.get("/api/novels/n1/documents/d2/versions")
+            assert versions_by_document.status_code == 200
+            assert [item["version"] for item in versions_by_document.json()["items"]] == [2, 1]
     finally:
         app.dependency_overrides.clear()
 
@@ -120,8 +124,11 @@ async def test_cross_novel_document_returns_404(async_session):
     transport = ASGITransport(app=app)
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.get("/api/novels/n1/documents/d1")
-            assert resp.status_code == 404
+            detail = await client.get("/api/novels/n1/documents/d1")
+            assert detail.status_code == 404
+
+            versions = await client.get("/api/novels/n1/documents/d1/versions")
+            assert versions.status_code == 404
     finally:
         app.dependency_overrides.clear()
 
