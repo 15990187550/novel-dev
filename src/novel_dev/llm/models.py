@@ -21,6 +21,20 @@ class LLMResponse(BaseModel):
     usage: Optional["TokenUsage"] = None
     structured_payload: Optional[Any] = None
     finish_reason: Optional[str] = None
+    tool_calls: list["LLMToolCall"] = Field(default_factory=list)
+
+
+class LLMToolCall(BaseModel):
+    id: Optional[str] = None
+    name: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+
+
+class LLMToolResult(BaseModel):
+    tool_call_id: Optional[str] = None
+    name: str
+    content: Any
+    is_error: bool = False
 
 
 class StructuredOutputConfig(BaseModel):
@@ -29,6 +43,12 @@ class StructuredOutputConfig(BaseModel):
     tool_choice: Literal["force", "auto", "none"] = "force"
     fallback_to_text: bool = True
     wrap_array: bool = False
+
+
+class CapabilityToolConfig(BaseModel):
+    name: str
+    description: str
+    input_schema: dict[str, Any] = Field(default_factory=lambda: {"type": "object"})
 
 
 class TaskConfig(BaseModel):
@@ -44,6 +64,7 @@ class TaskConfig(BaseModel):
     structured_output: Optional[StructuredOutputConfig] = None
     response_tool_name: Optional[str] = None
     response_json_schema: Optional[dict[str, Any]] = None
+    capability_tools: list[CapabilityToolConfig] = Field(default_factory=list)
     fallback: Optional["TaskConfig"] = None
 
 

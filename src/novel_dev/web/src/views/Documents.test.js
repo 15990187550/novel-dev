@@ -615,6 +615,175 @@ describe('Documents', () => {
     expect(store.fetchSettingWorkbench).toHaveBeenCalled()
   })
 
+  it('shows full AI setting change details and applies single-change decisions', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.settingWorkbench.reviewBatches = [
+      {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        source_session_id: 'sgs_ai',
+        source_session_title: '仙剑设定',
+        status: 'pending',
+        summary: '新增仙剑设定',
+        counts: { setting_card: 1, entity: 1, relationship: 0 },
+        created_at: '2026-05-03T00:58:06Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchSettingWorkbench = vi.fn().mockResolvedValue()
+    const fullContent = `第一段。${'完整设定内容。'.repeat(80)}末尾唯一详情`
+    const initialDetail = {
+      batch: {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        status: 'pending',
+        summary: '新增仙剑设定',
+      },
+      changes: [
+        {
+          id: 'chg_card',
+          target_type: 'setting_card',
+          operation: 'create',
+          status: 'pending',
+          after_snapshot: {
+            title: '蜀山修行体系',
+            doc_type: 'setting',
+            content: fullContent,
+          },
+          conflict_hints: [{ reason: '与旧设定有轻微重叠' }],
+        },
+        {
+          id: 'chg_entity',
+          target_type: 'entity',
+          operation: 'create',
+          status: 'pending',
+          after_snapshot: {
+            name: '锁妖塔',
+            type: 'location',
+            state: { description: '镇压妖物的高塔。' },
+          },
+        },
+      ],
+    }
+    getSettingReviewBatchMock
+      .mockResolvedValueOnce(initialDetail)
+      .mockResolvedValueOnce({
+        ...initialDetail,
+        changes: [
+          { ...initialDetail.changes[0], status: 'approved' },
+          initialDetail.changes[1],
+        ],
+      })
+      .mockResolvedValueOnce({
+        ...initialDetail,
+        changes: [
+          { ...initialDetail.changes[0], status: 'approved' },
+          { ...initialDetail.changes[1], status: 'rejected' },
+        ],
+      })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const reviewButton = wrapper.findAll('.documents-pending-table__action')
+      .find((button) => button.text().includes('审核'))
+    await reviewButton.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('蜀山修行体系')
+    expect(wrapper.text()).not.toContain('末尾唯一详情')
+
+    const changeCards = wrapper.findAll('.documents-setting-review-change')
+    const detailButton = changeCards[0].findAll('.el-button-stub')
+      .find((button) => button.text() === '查看详情')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('末尾唯一详情')
+    expect(wrapper.text()).toContain('与旧设定有轻微重叠')
+
+    const approveButton = changeCards[0].findAll('.el-button-stub')
+      .find((button) => button.text() === '批准')
+    await approveButton.trigger('click')
+    await flushPromises()
+
+    expect(applySettingReviewBatchMock).toHaveBeenCalledWith('novel-1', 'srb_ai', {
+      decisions: [{ change_id: 'chg_card', decision: 'approve' }],
+    })
+
+    const refreshedCards = wrapper.findAll('.documents-setting-review-change')
+    const rejectButton = refreshedCards[1].findAll('.el-button-stub')
+      .find((button) => button.text() === '拒绝')
+    await rejectButton.trigger('click')
+    await flushPromises()
+
+    expect(applySettingReviewBatchMock).toHaveBeenLastCalledWith('novel-1', 'srb_ai', {
+      decisions: [{ change_id: 'chg_entity', decision: 'reject' }],
+    })
+  })
+
+  it('renders AI setting review detail content as readable fields instead of escaped JSON', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = []
+    store.settingWorkbench.reviewBatches = [
+      {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        source_session_id: 'sgs_ai',
+        source_session_title: '仙剑设定',
+        status: 'pending',
+        summary: '新增仙剑设定',
+        counts: { setting_card: 1, entity: 0, relationship: 0 },
+        created_at: '2026-05-03T00:58:06Z',
+      },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+    store.fetchSettingWorkbench = vi.fn().mockResolvedValue()
+    getSettingReviewBatchMock.mockResolvedValueOnce({
+      batch: {
+        id: 'srb_ai',
+        source_type: 'ai_session',
+        status: 'pending',
+        summary: '新增仙剑设定',
+      },
+      changes: [
+        {
+          id: 'chg_card',
+          target_type: 'setting_card',
+          operation: 'create',
+          status: 'pending',
+          after_snapshot: {
+            doc_type: 'setting',
+            title: '外部宇宙统一对标体系',
+            content: '第一行\\n第二行\\n第三行',
+          },
+        },
+      ],
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const reviewButton = wrapper.findAll('.documents-pending-table__action')
+      .find((button) => button.text().includes('审核'))
+    await reviewButton.trigger('click')
+    await flushPromises()
+
+    const detailButton = wrapper.find('.documents-setting-review-change .el-button-stub')
+    await detailButton.trigger('click')
+    await nextTick()
+
+    expect(wrapper.text()).toContain('标题')
+    expect(wrapper.text()).toContain('外部宇宙统一对标体系')
+    expect(wrapper.text()).toContain('正文')
+    expect(wrapper.text()).toContain('第一行\n第二行\n第三行')
+    expect(wrapper.text()).not.toContain('"content"')
+    expect(wrapper.text()).not.toContain('\\n')
+  })
+
   it('shows AI badge next to AI sourced setting cards and opens the source session', async () => {
     const store = useNovelStore()
     store.novelId = 'novel-1'

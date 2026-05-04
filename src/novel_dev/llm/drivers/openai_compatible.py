@@ -10,7 +10,7 @@ from novel_dev.llm.exceptions import (
     LLMRateLimitError,
     LLMTimeoutError,
 )
-from novel_dev.llm.models import ChatMessage, LLMResponse, TaskConfig, TokenUsage
+from novel_dev.llm.models import ChatMessage, LLMResponse, LLMToolCall, TaskConfig, TokenUsage
 
 
 class OpenAICompatibleDriver(BaseDriver):
@@ -36,16 +36,36 @@ class OpenAICompatibleDriver(BaseDriver):
             "max_tokens": config.max_tokens,
             "timeout": config.timeout,
         }
+        tools = []
         if config.response_tool_name and config.response_json_schema:
-            request_kwargs["tools"] = [{
+            tools.append({
                 "type": "function",
                 "function": {
                     "name": config.response_tool_name,
                     "description": "Return the requested structured payload.",
                     "parameters": config.response_json_schema,
                 },
-            }]
-            request_kwargs["tool_choice"] = {"type": "function", "function": {"name": config.response_tool_name}}
+            })
+        for tool in config.capability_tools:
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": tool.description,
+                    "parameters": tool.input_schema,
+                },
+            })
+        if tools:
+            request_kwargs["tools"] = tools
+            tool_choice = "force"
+            if config.structured_output:
+                tool_choice = config.structured_output.tool_choice
+            if tool_choice == "force" and config.response_tool_name:
+                request_kwargs["tool_choice"] = {"type": "function", "function": {"name": config.response_tool_name}}
+            elif tool_choice == "auto":
+                request_kwargs["tool_choice"] = "auto"
+            elif tool_choice == "none":
+                request_kwargs["tool_choice"] = "none"
 
         try:
             resp = await self.client.chat.completions.create(**request_kwargs)
@@ -56,11 +76,33 @@ class OpenAICompatibleDriver(BaseDriver):
         message = choice.message
         content = message.content or ""
         structured_payload = None
+        parsed_tool_calls: list[LLMToolCall] = []
         tool_calls = getattr(message, "tool_calls", None) or []
-        if config.response_tool_name and tool_calls:
-            arguments = getattr(tool_calls[0].function, "arguments", "")
-            if arguments:
-                structured_payload = json.loads(arguments)
+        for tool_call in tool_calls:
+            function = getattr(tool_call, "function", None)
+            name = getattr(function, "name", None)
+            if not isinstance(name, str):
+                name = getattr(function, "_mock_name", None)
+            if (
+                config.response_tool_name
+                and len(tool_calls) == 1
+                and not config.capability_tools
+                and name != config.response_tool_name
+            ):
+                name = config.response_tool_name
+            arguments = getattr(function, "arguments", "") if function is not None else ""
+            payload = json.loads(arguments) if arguments else {}
+            if name == config.response_tool_name:
+                structured_payload = payload
+            elif name:
+                tool_call_id = getattr(tool_call, "id", None)
+                if not isinstance(tool_call_id, str):
+                    tool_call_id = None
+                parsed_tool_calls.append(LLMToolCall(
+                    id=tool_call_id,
+                    name=name,
+                    arguments=payload,
+                ))
         usage = None
         if resp.usage:
             usage = TokenUsage(
@@ -76,6 +118,7 @@ class OpenAICompatibleDriver(BaseDriver):
             usage=usage,
             structured_payload=structured_payload,
             finish_reason=finish_reason,
+            tool_calls=parsed_tool_calls,
         )
 
     def _map_exception(self, exc: Exception) -> Exception:

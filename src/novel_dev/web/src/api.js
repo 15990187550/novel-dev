@@ -93,9 +93,9 @@ export const getSettingWorkbench = (id) =>
 export const replySettingSession = (id, sessionId, payload) =>
   api.post(`/novels/${id}/settings/sessions/${sessionId}/reply`, payload, withLongTimeout()).then(r => r.data)
 export const generateSettingReviewBatch = (id, sessionId, payload = {}) =>
-  api.post(`/novels/${id}/settings/sessions/${sessionId}/generate`, payload, withLongTimeout()).then(r => r.data)
+  api.post(`/novels/${id}/settings/sessions/${sessionId}/generate`, payload, withLongTimeout(330000)).then(r => r.data)
 export const applySettingReviewBatch = (id, batchId, payload) =>
-  api.post(`/novels/${id}/settings/review_batches/${batchId}/apply`, payload).then(r => r.data)
+  api.post(`/novels/${id}/settings/review_batches/${encodeURIComponent(batchId)}/apply`, payload).then(r => r.data)
 export const getKnowledgeDomains = (id, includeDisabled = false) =>
   api.get(`/novels/${id}/knowledge_domains`, { params: { include_disabled: includeDisabled } }).then(r => r.data)
 export const createKnowledgeDomain = (id, payload) =>

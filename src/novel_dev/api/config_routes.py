@@ -93,6 +93,42 @@ def _preserve_masked_config_secrets(submitted: Any, existing: Any = None) -> Any
     return submitted
 
 
+def _default_model_api_key_env(profile_name: str) -> str:
+    normalized = "".join(char if char.isalnum() else "_" for char in profile_name.upper())
+    normalized = "_".join(part for part in normalized.split("_") if part)
+    return f"{normalized or 'MODEL'}_API_KEY"
+
+
+def _write_env_secret(env_name: str, value: str) -> None:
+    env_path = find_dotenv() or ".env"
+    env_dir = os.path.dirname(env_path)
+    if env_dir:
+        os.makedirs(env_dir, exist_ok=True)
+    if not os.path.exists(env_path):
+        open(env_path, "a", encoding="utf-8").close()
+    set_key(env_path, env_name, value)
+    os.environ[env_name] = value
+
+
+def _externalize_model_api_keys(config: dict) -> dict:
+    models = config.get("models")
+    if not isinstance(models, dict):
+        return config
+
+    for profile_name, profile in models.items():
+        if not isinstance(profile, dict):
+            continue
+        api_key = profile.get("api_key")
+        if api_key in (None, "", MASKED_SECRET):
+            profile.pop("api_key", None)
+            continue
+        env_name = profile.get("api_key_env") or _default_model_api_key_env(str(profile_name))
+        _write_env_secret(env_name, str(api_key))
+        profile["api_key_env"] = env_name
+        profile.pop("api_key", None)
+    return config
+
+
 def _require_config_admin_token(x_novel_config_token: Optional[str]) -> None:
     expected_token = settings.config_admin_token
     if not expected_token:
@@ -123,7 +159,7 @@ async def save_llm_config(
     if os.path.exists(settings.llm_config_path):
         with open(settings.llm_config_path, "r", encoding="utf-8") as f:
             existing_config = yaml.safe_load(f) or {}
-    config = _preserve_masked_config_secrets(payload.config, existing_config)
+    config = _externalize_model_api_keys(_preserve_masked_config_secrets(payload.config, existing_config))
     config_dir = os.path.dirname(settings.llm_config_path)
     if config_dir:
         os.makedirs(config_dir, exist_ok=True)
@@ -167,6 +203,7 @@ async def test_llm_model(
         model=model,
         base_url=profile.get("base_url") or None,
         api_key=profile.get("api_key") or None,
+        api_key_env=profile.get("api_key_env") or None,
         timeout=timeout,
         retries=0,
         temperature=0,

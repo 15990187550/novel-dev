@@ -4,7 +4,10 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.agents._llm_helpers import call_and_parse_model, orchestrated_call_and_parse_model
+from novel_dev.llm import llm_factory
+from novel_dev.llm.context_tools import build_mcp_context_tools
+from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext, ForeshadowingContext, BeatContext
 from novel_dev.schemas.similar_document import SimilarDocument
 from novel_dev.services.embedding_service import EmbeddingService
@@ -586,6 +589,25 @@ class ContextAgent:
             },
         )
 
+        scene_inputs = {
+            "locations": [
+                {"name": loc.name, "narrative": loc.narrative, "meta": loc.meta}
+                for loc in locations
+            ],
+            "entity_states": entity_states,
+            "timeline_events": timeline_events,
+            "foreshadowings": pending_fs,
+        }
+        orchestration_config = llm_factory.resolve_orchestration_config(
+            "context_agent",
+            "build_scene_context",
+        )
+        prompt_scene_inputs = (
+            self._build_scene_context_catalog(scene_inputs)
+            if orchestration_config is not None
+            else scene_inputs
+        )
+
         prompt = (
             "你是一位导演，正在为下一幕戏撰写场景说明。请根据以下所有信息，"
             "写一段 200-300 字的场景镜头描述。这段文字将被直接交给小说家作为写作参考，"
@@ -602,15 +624,277 @@ class ContextAgent:
             '  "parent": "上级地点/区域（如有）",\n'
             '  "narrative": "完整的场景镜头描述（200-300字）"\n'
             "}\n\n"
-            f"地点：{json.dumps([{'name': loc.name, 'narrative': loc.narrative, 'meta': loc.meta} for loc in locations], ensure_ascii=False)}\n"
-            f"实体状态：{json.dumps(entity_states, ensure_ascii=False)}\n"
-            f"近期时间线：{json.dumps(timeline_events, ensure_ascii=False)}\n"
-            f"待回收伏笔：{json.dumps(pending_fs, ensure_ascii=False)}\n"
+            f"场景上下文：{json.dumps(prompt_scene_inputs, ensure_ascii=False)}\n"
         )
+        if orchestration_config is not None:
+            return await orchestrated_call_and_parse_model(
+                "ContextAgent",
+                "build_scene_context",
+                prompt,
+                LocationContext,
+                tools=self._build_scene_context_tools(
+                    novel_id=novel_id,
+                    scene_inputs=scene_inputs,
+                    orchestration_config=orchestration_config,
+                ),
+                task_config=orchestration_config,
+                novel_id=novel_id,
+                max_retries=3,
+            )
         return await call_and_parse_model(
             "ContextAgent", "build_scene_context", prompt,
             LocationContext, max_retries=3, novel_id=novel_id
         )
+
+    def _build_scene_context_catalog(self, scene_inputs: dict) -> dict:
+        return {
+            "locations": [
+                {"name": item.get("name"), "has_narrative": bool(item.get("narrative"))}
+                for item in scene_inputs.get("locations", [])
+            ],
+            "entities": [
+                {"name": item.get("name"), "type": item.get("type"), "has_state": bool(item.get("state"))}
+                for item in scene_inputs.get("entity_states", [])
+            ],
+            "timeline_event_count": len(scene_inputs.get("timeline_events", [])),
+            "foreshadowing_ids": [
+                item.get("id") for item in scene_inputs.get("foreshadowings", [])
+            ],
+            "tool_hint": (
+                "可按需调用只读工具查询详情。优先用批量工具一次查询同类数据："
+                "get_context_location_details / get_context_entity_states / "
+                "get_context_foreshadowing_details。需要时间线时再调用 get_context_timeline_events。"
+                "最多查询 3 类最缺的细节；目录摘要足够时不要调用工具，不要全量查询。"
+            ),
+        }
+
+    def _build_scene_context_tools(
+        self,
+        *,
+        novel_id: str,
+        scene_inputs: dict,
+        orchestration_config: OrchestratedTaskConfig,
+    ) -> list[LLMToolSpec]:
+        tools: list[LLMToolSpec] = []
+        timeout_seconds = orchestration_config.tool_timeout_seconds or 5.0
+        max_return_chars = min(orchestration_config.max_tool_result_chars, 1600)
+        batch_limit = 5
+
+        def requested_values(args: dict, key: str, fallback_key: str | None = None) -> list[str]:
+            raw_values = args.get(key)
+            if raw_values is None and fallback_key:
+                raw_values = args.get(fallback_key)
+            if isinstance(raw_values, str):
+                raw_values = [raw_values]
+            if not isinstance(raw_values, list):
+                raw_values = []
+            values = []
+            for raw in raw_values:
+                value = str(raw or "").strip()
+                if value and value not in values:
+                    values.append(value)
+            return values[:batch_limit]
+
+        def trim_item(item: dict) -> dict:
+            item_limit = max(300, min(800, max_return_chars // 2))
+            trimmed = {}
+            for key, value in item.items():
+                if isinstance(value, str) and len(value) > item_limit:
+                    trimmed[key] = value[:item_limit] + "...[truncated]"
+                else:
+                    trimmed[key] = value
+            return trimmed
+
+        if "get_context_location_details" in orchestration_config.tool_allowlist:
+            async def get_context_location_details(args: dict) -> dict:
+                names = requested_values(args, "names", "name")
+                items = []
+                missing = []
+                for name in names:
+                    match = next((item for item in scene_inputs.get("locations", []) if item.get("name") == name), None)
+                    if match:
+                        items.append(trim_item(match))
+                    else:
+                        missing.append(name)
+                return {"items": items, "missing": missing, "requested": names}
+
+            tools.append(LLMToolSpec(
+                name="get_context_location_details",
+                description="Read up to 5 location details from the current scene context by exact names.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": batch_limit,
+                        }
+                    },
+                    "required": ["names"],
+                },
+                handler=get_context_location_details,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_entity_states" in orchestration_config.tool_allowlist:
+            async def get_context_entity_states(args: dict) -> dict:
+                names = requested_values(args, "names", "name")
+                items = []
+                missing = []
+                for name in names:
+                    match = next((item for item in scene_inputs.get("entity_states", []) if item.get("name") == name), None)
+                    if match:
+                        items.append(trim_item(match))
+                    else:
+                        missing.append(name)
+                return {"items": items, "missing": missing, "requested": names}
+
+            tools.append(LLMToolSpec(
+                name="get_context_entity_states",
+                description="Read up to 5 active entity states from the current scene context by exact names.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": batch_limit,
+                        }
+                    },
+                    "required": ["names"],
+                },
+                handler=get_context_entity_states,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_foreshadowing_details" in orchestration_config.tool_allowlist:
+            async def get_context_foreshadowing_details(args: dict) -> dict:
+                ids = requested_values(args, "ids", "id")
+                items = []
+                missing = []
+                for fs_id in ids:
+                    match = next((item for item in scene_inputs.get("foreshadowings", []) if item.get("id") == fs_id), None)
+                    if match:
+                        items.append(trim_item(match))
+                    else:
+                        missing.append(fs_id)
+                return {"items": items, "missing": missing, "requested": ids}
+
+            tools.append(LLMToolSpec(
+                name="get_context_foreshadowing_details",
+                description="Read up to 5 foreshadowing details from the current scene context by ids.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "maxItems": batch_limit,
+                        }
+                    },
+                    "required": ["ids"],
+                },
+                handler=get_context_foreshadowing_details,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_location_detail" in orchestration_config.tool_allowlist:
+            async def get_context_location_detail(args: dict) -> dict:
+                name = str(args.get("name") or "").strip()
+                for item in scene_inputs.get("locations", []):
+                    if item.get("name") == name:
+                        return item
+                return {"error": "location not found", "name": name}
+
+            tools.append(LLMToolSpec(
+                name="get_context_location_detail",
+                description="Read one location detail from the current scene context by exact name.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+                handler=get_context_location_detail,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_entity_state" in orchestration_config.tool_allowlist:
+            async def get_context_entity_state(args: dict) -> dict:
+                name = str(args.get("name") or "").strip()
+                for item in scene_inputs.get("entity_states", []):
+                    if item.get("name") == name:
+                        return item
+                return {"error": "entity not found", "name": name}
+
+            tools.append(LLMToolSpec(
+                name="get_context_entity_state",
+                description="Read one active entity state from the current scene context by exact name.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"name": {"type": "string"}},
+                    "required": ["name"],
+                },
+                handler=get_context_entity_state,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_foreshadowing_detail" in orchestration_config.tool_allowlist:
+            async def get_context_foreshadowing_detail(args: dict) -> dict:
+                fs_id = str(args.get("id") or "").strip()
+                for item in scene_inputs.get("foreshadowings", []):
+                    if item.get("id") == fs_id:
+                        return item
+                return {"error": "foreshadowing not found", "id": fs_id}
+
+            tools.append(LLMToolSpec(
+                name="get_context_foreshadowing_detail",
+                description="Read one foreshadowing detail from the current scene context by id.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+                handler=get_context_foreshadowing_detail,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+        if "get_context_timeline_events" in orchestration_config.tool_allowlist:
+            async def get_context_timeline_events(args: dict) -> list[dict]:
+                limit = int(args.get("limit") or 6)
+                limit = max(1, min(limit, 12))
+                return scene_inputs.get("timeline_events", [])[:limit]
+
+            tools.append(LLMToolSpec(
+                name="get_context_timeline_events",
+                description="Read recent timeline events already selected for the current scene context.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 12}},
+                },
+                handler=get_context_timeline_events,
+                read_only=True,
+                timeout_seconds=timeout_seconds,
+                max_return_chars=max_return_chars,
+            ))
+
+        from novel_dev.mcp_server.server import internal_mcp_registry
+
+        tools.extend(build_mcp_context_tools(
+            internal_mcp_registry,
+            allowlist=orchestration_config.tool_allowlist,
+            max_return_chars=orchestration_config.max_tool_result_chars,
+            timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+        ))
+        return tools
 
     async def _load_timeline_events(self, checkpoint: dict, novel_id: str) -> List[dict]:
         tick = checkpoint.get("current_time_tick")

@@ -20,8 +20,16 @@ from novel_dev.repositories.version_repo import EntityVersionRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.agents.director import NovelDirector, Phase
-from novel_dev.agents._llm_helpers import call_and_parse_model, coerce_to_str_list, coerce_to_text
+from novel_dev.agents._llm_helpers import (
+    call_and_parse_model,
+    coerce_to_str_list,
+    coerce_to_text,
+    orchestrated_call_and_parse_model,
+)
 from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
+from novel_dev.llm import llm_factory
+from novel_dev.llm.context_tools import build_mcp_context_tools
+from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
@@ -674,7 +682,6 @@ class VolumePlannerAgent:
             },
         )
         MAX_CHARS = 8000
-        truncated_synopsis = synopsis.model_dump_json()[:MAX_CHARS]
         chapter_range = self._suggest_volume_chapter_range(synopsis, target_chapters=target_chapters)
         volume_contract_block = self._build_volume_contract_context(synopsis, volume_number)
         source_text = await self._load_constraint_source_text(novel_id)
@@ -752,6 +759,26 @@ class VolumePlannerAgent:
             if target_chapters
             else f"1. total_chapters 必须控制在 {chapter_range[0]}-{chapter_range[1]} 章之间。\n"
         )
+        orchestration_config = llm_factory.resolve_orchestration_config(
+            "volume_planner_agent",
+            "generate_volume_plan",
+        )
+        if orchestration_config is not None:
+            volume_contract_block = self._build_volume_contract_catalog(synopsis, volume_number)
+        synopsis_prompt_data = (
+            self._build_synopsis_catalog(synopsis)
+            if orchestration_config is not None
+            else synopsis.model_dump_json()[:MAX_CHARS]
+        )
+        volume_context = {
+            "novel_id": novel_id,
+            "volume_number": volume_number,
+            "synopsis": synopsis.model_dump(mode="json"),
+            "world_snapshot": world_snapshot,
+            "constraint_block": constraint_block,
+            "generation_instruction": generation_instruction,
+            "target_chapters": target_chapters,
+        }
 
         prompt = (
             "你是一位小说分卷规划专家。请根据以下大纲数据,"
@@ -778,7 +805,7 @@ class VolumePlannerAgent:
             "3. 每章 summary 控制在 25-50 字，优先写主线推进与章末悬念。\n"
             "4. 不要返回 beats、target_word_count、target_mood、foreshadowings 字段。\n"
             "5. 优先保证 JSON 完整，不要输出解释，不要输出 Markdown。\n\n"
-            f"大纲数据:\n{truncated_synopsis}\n\n"
+            f"大纲数据:\n{synopsis_prompt_data}\n\n"
             f"{volume_contract_block}\n\n"
             f"{constraint_block}\n\n"
             f"当前卷号:{volume_number}"
@@ -786,8 +813,11 @@ class VolumePlannerAgent:
             f"{instruction_block}"
         )
         await self._release_connection_before_external_call()
-        blueprint = await call_and_parse_model(
-            "VolumePlannerAgent", "generate_volume_plan", prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+        blueprint = await self._call_volume_blueprint_model(
+            prompt,
+            novel_id=novel_id,
+            orchestration_config=orchestration_config,
+            volume_context=volume_context,
         )
         if target_chapters and len(blueprint.chapters) != target_chapters:
             log_service.add_log(
@@ -809,8 +839,11 @@ class VolumePlannerAgent:
                 f"chapter_number 从 1 连续到 {target_chapters}，不得少于或多于。"
             )
             await self._release_connection_before_external_call()
-            blueprint = await call_and_parse_model(
-                "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
+            blueprint = await self._call_volume_blueprint_model(
+                retry_prompt,
+                novel_id=novel_id,
+                orchestration_config=orchestration_config,
+                volume_context=volume_context,
             )
             if len(blueprint.chapters) != target_chapters:
                 raise ValueError(
@@ -863,6 +896,113 @@ class VolumePlannerAgent:
             },
         )
         return result
+
+    def _build_synopsis_catalog(self, synopsis: SynopsisData) -> str:
+        return json.dumps(
+            {
+                "title": synopsis.title,
+                "logline": synopsis.logline,
+                "estimated_volumes": synopsis.estimated_volumes,
+                "estimated_total_chapters": synopsis.estimated_total_chapters,
+                "estimated_total_words": synopsis.estimated_total_words,
+                "volume_outlines": [
+                    {
+                        "volume_number": item.volume_number,
+                        "title": item.title,
+                        "main_goal": item.main_goal,
+                        "target_chapter_range": item.target_chapter_range,
+                    }
+                    for item in (synopsis.volume_outlines or [])
+                ],
+                "tool_hint": "可按需调用只读上下文工具获取完整总纲、约束和世界状态。",
+            },
+            ensure_ascii=False,
+        )
+
+    def _build_volume_contract_catalog(self, synopsis: SynopsisData, volume_number: int) -> str:
+        outlines = list(synopsis.volume_outlines or [])
+        current = next((item for item in outlines if item.volume_number == volume_number), None)
+        previous = next((item for item in outlines if item.volume_number == volume_number - 1), None)
+        next_item = next((item for item in outlines if item.volume_number == volume_number + 1), None)
+        return (
+            "### 本卷总纲契约(目录模式，详情可调用 get_volume_planner_context)\n"
+            f"当前卷: {current.title if current else f'第{volume_number}卷'}\n"
+            f"当前卷目标: {current.main_goal if current else ''}\n"
+            f"目标章节范围: {current.target_chapter_range if current else ''}\n"
+            f"上一卷: {previous.title if previous else '无'}\n"
+            f"下一卷: {next_item.title if next_item else '无'}"
+        )
+
+    async def _call_volume_blueprint_model(
+        self,
+        prompt: str,
+        *,
+        novel_id: str,
+        orchestration_config: OrchestratedTaskConfig | None,
+        volume_context: dict[str, Any],
+    ) -> VolumePlanBlueprint:
+        if orchestration_config is None:
+            return await call_and_parse_model(
+                "VolumePlannerAgent",
+                "generate_volume_plan",
+                prompt,
+                VolumePlanBlueprint,
+                max_retries=3,
+                novel_id=novel_id,
+            )
+        return await orchestrated_call_and_parse_model(
+            "VolumePlannerAgent",
+            "generate_volume_plan",
+            prompt,
+            VolumePlanBlueprint,
+            tools=self._build_volume_planner_tools(
+                novel_id=novel_id,
+                volume_context=volume_context,
+                orchestration_config=orchestration_config,
+            ),
+            task_config=orchestration_config,
+            novel_id=novel_id,
+            max_retries=3,
+        )
+
+    def _build_volume_planner_tools(
+        self,
+        *,
+        novel_id: str,
+        volume_context: dict[str, Any],
+        orchestration_config: OrchestratedTaskConfig,
+    ) -> list[LLMToolSpec]:
+        tools: list[LLMToolSpec] = []
+        if "get_volume_planner_context" in orchestration_config.tool_allowlist:
+            async def get_volume_planner_context(args: dict[str, Any]) -> dict[str, Any]:
+                requested_novel_id = str(args.get("novel_id") or novel_id)
+                if requested_novel_id != novel_id:
+                    return {"error": "novel_id does not match current volume planning task"}
+                return volume_context
+
+            tools.append(LLMToolSpec(
+                name="get_volume_planner_context",
+                description="Read the full synopsis, active constraints, world snapshot, and volume planning instruction.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"novel_id": {"type": "string"}},
+                    "required": ["novel_id"],
+                },
+                handler=get_volume_planner_context,
+                read_only=True,
+                timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+                max_return_chars=orchestration_config.max_tool_result_chars,
+            ))
+
+        from novel_dev.mcp_server.server import internal_mcp_registry
+
+        tools.extend(build_mcp_context_tools(
+            internal_mcp_registry,
+            allowlist=orchestration_config.tool_allowlist,
+            max_return_chars=orchestration_config.max_tool_result_chars,
+            timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+        ))
+        return tools
 
     async def _repair_blueprint_constraint_violations(
         self,

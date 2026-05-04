@@ -9,7 +9,7 @@ from novel_dev.llm.exceptions import (
     LLMRateLimitError,
     LLMTimeoutError,
 )
-from novel_dev.llm.models import ChatMessage, LLMResponse, TaskConfig, TokenUsage
+from novel_dev.llm.models import ChatMessage, LLMResponse, LLMToolCall, TaskConfig, TokenUsage
 
 
 class AnthropicDriver(BaseDriver):
@@ -39,16 +39,25 @@ class AnthropicDriver(BaseDriver):
             "temperature": config.temperature,
             "timeout": config.timeout,
         }
+        tools = []
         if config.response_tool_name and config.response_json_schema:
-            request_kwargs["tools"] = [{
+            tools.append({
                 "name": config.response_tool_name,
                 "description": "Return the requested structured payload.",
                 "input_schema": config.response_json_schema,
-            }]
+            })
+        for tool in config.capability_tools:
+            tools.append({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            })
+        if tools:
+            request_kwargs["tools"] = tools
             tool_choice = "force"
             if config.structured_output:
                 tool_choice = config.structured_output.tool_choice
-            if tool_choice == "force":
+            if tool_choice == "force" and config.response_tool_name:
                 request_kwargs["tool_choice"] = {"type": "tool", "name": config.response_tool_name}
             elif tool_choice == "auto":
                 request_kwargs["tool_choice"] = {"type": "auto"}
@@ -62,10 +71,19 @@ class AnthropicDriver(BaseDriver):
         text_blocks = [c for c in resp.content if hasattr(c, "text")]
         content = text_blocks[0].text if text_blocks else ""
         structured_payload = None
+        tool_calls: list[LLMToolCall] = []
         for block in resp.content:
-            if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == config.response_tool_name:
+            if getattr(block, "type", None) != "tool_use":
+                continue
+            name = getattr(block, "name", None)
+            if name == config.response_tool_name:
                 structured_payload = getattr(block, "input", None)
-                break
+            elif name:
+                tool_calls.append(LLMToolCall(
+                    id=getattr(block, "id", None),
+                    name=name,
+                    arguments=getattr(block, "input", None) or {},
+                ))
         usage = None
         if resp.usage:
             usage = TokenUsage(
@@ -81,6 +99,7 @@ class AnthropicDriver(BaseDriver):
             usage=usage,
             structured_payload=structured_payload,
             finish_reason=finish_reason,
+            tool_calls=tool_calls,
         )
 
     def _map_exception(self, exc: Exception) -> Exception:

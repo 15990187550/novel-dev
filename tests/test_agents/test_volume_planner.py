@@ -20,6 +20,7 @@ from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.services.domain_activation_service import DomainActivationService
 from novel_dev.services.narrative_constraint_service import NarrativeConstraintBuilder
 from novel_dev.llm.models import LLMResponse
+from novel_dev.llm.orchestrator import OrchestratedTaskConfig
 from novel_dev.services.log_service import LogService
 
 
@@ -918,6 +919,93 @@ async def test_generate_volume_plan_prompt_limits_output_scale_for_large_project
     assert "chapter_id 必须逐项使用本批待扩展章节提供的 chapter_id" in second_prompt
     assert "ActiveConstraintContext" in second_prompt
     assert "不要把只能伏笔的高阶内容写成本批正面冲突" in second_prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_volume_plan_uses_orchestrated_context_tools_when_configured(async_session, monkeypatch):
+    synopsis = SynopsisData(
+        title="道经照诸天",
+        logline="陆照争夺超脱路径。",
+        core_conflict="陆照 vs 末劫幕后布局者",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+        volume_outlines=[{
+            "volume_number": 1,
+            "title": "筑基问道",
+            "summary": "深层卷纲细节不应该进入首轮提示，但工具可以读取。",
+        }],
+    )
+    orchestration_config = OrchestratedTaskConfig(
+        tool_allowlist=["get_volume_planner_context", "get_novel_state"],
+        max_tool_calls=2,
+        max_tool_result_chars=1200,
+    )
+    monkeypatch.setattr(
+        "novel_dev.agents.volume_planner.llm_factory.resolve_orchestration_config",
+        lambda agent_name, task: orchestration_config,
+    )
+
+    async def should_not_call_plain_model(*args, **kwargs):
+        raise AssertionError("plain call_and_parse_model should not be used for the initial blueprint")
+
+    async def fake_orchestrated_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        tools,
+        task_config,
+        novel_id="",
+        max_retries=3,
+    ):
+        assert agent_name == "VolumePlannerAgent"
+        assert task == "generate_volume_plan"
+        assert model_cls is VolumePlanBlueprint
+        assert novel_id == "n_volume_orch"
+        assert max_retries == 3
+        assert task_config is orchestration_config
+        assert "深层卷纲细节不应该进入首轮提示" not in prompt
+        tool_names = [tool.name for tool in tools]
+        assert "get_volume_planner_context" in tool_names
+        context_tool = next(tool for tool in tools if tool.name == "get_volume_planner_context")
+        context = await context_tool.handler({"novel_id": "n_volume_orch"})
+        assert context["synopsis"]["volume_outlines"][0]["summary"] == "深层卷纲细节不应该进入首轮提示，但工具可以读取。"
+        return VolumePlanBlueprint.model_validate({
+            "volume_id": "vol_1",
+            "volume_number": 1,
+            "title": "筑基问道",
+            "summary": "陆照起步。",
+            "total_chapters": 1,
+            "estimated_total_words": 3000,
+            "chapters": [{"chapter_number": 1, "title": "启程", "summary": "陆照入局。"}],
+        })
+
+    async def fake_expand(*args, **kwargs):
+        return [
+            VolumeBeat(
+                chapter_id="vol_1_ch_1",
+                chapter_number=1,
+                title="启程",
+                summary="陆照入局。",
+                target_word_count=3000,
+                target_mood="tense",
+            )
+        ]
+
+    monkeypatch.setattr("novel_dev.agents.volume_planner.call_and_parse_model", should_not_call_plain_model)
+    monkeypatch.setattr(
+        "novel_dev.agents.volume_planner.orchestrated_call_and_parse_model",
+        fake_orchestrated_call_and_parse_model,
+    )
+    agent = VolumePlannerAgent(async_session)
+    monkeypatch.setattr(agent, "_expand_volume_plan_batches", fake_expand)
+
+    plan = await agent._generate_volume_plan(synopsis, 1, novel_id="n_volume_orch")
+
+    assert plan.title == "筑基问道"
+    assert plan.chapters[0].chapter_id == "vol_1_ch_1"
 
 
 @pytest.mark.asyncio

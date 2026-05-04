@@ -158,6 +158,117 @@
               <el-text v-else type="info" size="small">未启用备用模型</el-text>
             </div>
 
+            <div
+              v-if="hasOrchestrationPanel(currentKey, null, config.agents[currentKey])"
+              class="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-4 dark:border-gray-700 dark:bg-gray-700/40"
+            >
+              <div class="mb-3 flex items-center justify-between border-b border-gray-200 pb-2 dark:border-gray-700">
+                <div>
+                  <div class="font-medium text-sm">新链路 Orchestration</div>
+                  <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">控制结构化输出、只读工具和校验/修复子任务。</div>
+                </div>
+                <label class="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    :checked="orchestrationFor(config.agents[currentKey], currentKey).enabled"
+                    :data-testid="`orchestration-enabled-${currentKey}`"
+                    @change="setOrchestrationEnabled(config.agents[currentKey], currentKey, null, $event.target.checked)"
+                  />
+                  启用
+                </label>
+              </div>
+              <div class="grid gap-4 lg:grid-cols-2">
+                <div>
+                  <div class="mb-2 text-xs font-semibold text-gray-600 dark:text-gray-300">允许工具</div>
+                  <div class="space-y-2">
+                    <label
+                      v-for="tool in orchestrationToolOptions(currentKey)"
+                      :key="tool.value"
+                      class="flex items-start gap-2 rounded-md border border-gray-200 bg-white px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-800"
+                    >
+                      <input
+                        type="checkbox"
+                        class="mt-1"
+                        :checked="orchestrationToolEnabled(orchestrationFor(config.agents[currentKey], currentKey), tool.value)"
+                        :data-testid="`orchestration-tool-${currentKey}-${tool.value}`"
+                        @change="setOrchestrationTool(orchestrationFor(config.agents[currentKey], currentKey), tool.value, $event.target.checked)"
+                      />
+                      <span>
+                        <span class="block font-medium">{{ tool.label }}</span>
+                        <span class="block text-xs text-gray-500 dark:text-gray-400">{{ tool.value }}</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+                <div class="space-y-3 text-sm">
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">最大工具调用数</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="20"
+                      class="w-28 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                      :value="orchestrationFor(config.agents[currentKey], currentKey).max_tool_calls"
+                      :data-testid="`orchestration-max-tool-calls-${currentKey}`"
+                      @input="orchestrationFor(config.agents[currentKey], currentKey).max_tool_calls = Number($event.target.value)"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">工具超时秒数</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      class="w-28 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                      :value="orchestrationFor(config.agents[currentKey], currentKey).tool_timeout_seconds"
+                      @input="orchestrationFor(config.agents[currentKey], currentKey).tool_timeout_seconds = Number($event.target.value)"
+                    />
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">最大工具返回字符</span>
+                    <input
+                      type="number"
+                      min="200"
+                      max="20000"
+                      class="w-32 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                      :value="orchestrationFor(config.agents[currentKey], currentKey).max_tool_result_chars"
+                      @input="orchestrationFor(config.agents[currentKey], currentKey).max_tool_result_chars = Number($event.target.value)"
+                    />
+                  </label>
+                  <label class="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      :checked="orchestrationFor(config.agents[currentKey], currentKey).enable_subtasks"
+                      @change="orchestrationFor(config.agents[currentKey], currentKey).enable_subtasks = $event.target.checked"
+                    />
+                    启用子任务校验/修复
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">Validator</span>
+                    <select
+                      class="w-full rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                      :value="orchestrationFor(config.agents[currentKey], currentKey).validator_subtask || ''"
+                      @change="setOptionalField(orchestrationFor(config.agents[currentKey], currentKey), 'validator_subtask', $event.target.value)"
+                    >
+                      <option value="">无</option>
+                      <option value="location_context_quality">location_context_quality</option>
+                    </select>
+                  </label>
+                  <label class="block">
+                    <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">Repairer</span>
+                    <select
+                      class="w-full rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                      :value="orchestrationFor(config.agents[currentKey], currentKey).repairer_subtask || ''"
+                      @change="setOptionalField(orchestrationFor(config.agents[currentKey], currentKey), 'repairer_subtask', $event.target.value)"
+                    >
+                      <option value="">无</option>
+                      <option value="schema_repair">schema_repair</option>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </div>
+
             <el-collapse v-if="hasTasks(currentKey)">
               <el-collapse-item title="任务级配置 (Tasks)">
                 <div v-for="taskName in taskNames(currentKey)" :key="taskName" class="mb-4 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
@@ -192,6 +303,80 @@
                       <el-input-number v-model="config.agents[currentKey].tasks[taskName].retries" :min="0" :max="10" />
                     </el-form-item>
                   </el-form>
+                  <div
+                    v-if="hasOrchestrationPanel(currentKey, taskName, config.agents[currentKey].tasks[taskName])"
+                    class="mt-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-gray-800"
+                  >
+                    <div class="mb-3 flex items-center justify-between">
+                      <div>
+                        <div class="font-medium text-sm">任务新链路</div>
+                        <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">{{ taskName }} 的工具和子任务配置。</div>
+                      </div>
+                      <label class="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          :checked="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).enabled"
+                          :data-testid="`orchestration-enabled-${currentKey}-${taskName}`"
+                          @change="setOrchestrationEnabled(config.agents[currentKey].tasks[taskName], currentKey, taskName, $event.target.checked)"
+                        />
+                        启用
+                      </label>
+                    </div>
+                    <div class="grid gap-3 lg:grid-cols-2">
+                      <div class="space-y-2">
+                        <label
+                          v-for="tool in orchestrationToolOptions(currentKey, taskName)"
+                          :key="tool.value"
+                          class="flex items-start gap-2 text-sm"
+                        >
+                          <input
+                            type="checkbox"
+                            class="mt-1"
+                            :checked="orchestrationToolEnabled(orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName), tool.value)"
+                            :data-testid="`orchestration-tool-${currentKey}-${taskName}-${tool.value}`"
+                            @change="setOrchestrationTool(orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName), tool.value, $event.target.checked)"
+                          />
+                          <span>
+                            <span class="block font-medium">{{ tool.label }}</span>
+                            <span class="block text-xs text-gray-500 dark:text-gray-400">{{ tool.value }}</span>
+                          </span>
+                        </label>
+                      </div>
+                      <div class="space-y-3 text-sm">
+                        <label class="block">
+                          <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">最大工具调用数</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max="20"
+                            class="w-28 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                            :value="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).max_tool_calls"
+                            :data-testid="`orchestration-max-tool-calls-${currentKey}-${taskName}`"
+                            @input="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).max_tool_calls = Number($event.target.value)"
+                          />
+                        </label>
+                        <label class="block">
+                          <span class="mb-1 block text-xs font-semibold text-gray-600 dark:text-gray-300">最大工具返回字符</span>
+                          <input
+                            type="number"
+                            min="200"
+                            max="20000"
+                            class="w-32 rounded border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-800"
+                            :value="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).max_tool_result_chars"
+                            @input="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).max_tool_result_chars = Number($event.target.value)"
+                          />
+                        </label>
+                        <label class="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            :checked="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).enable_subtasks"
+                            @change="orchestrationFor(config.agents[currentKey].tasks[taskName], currentKey, taskName).enable_subtasks = $event.target.checked"
+                          />
+                          启用子任务
+                        </label>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </el-collapse-item>
             </el-collapse>
@@ -200,7 +385,7 @@
       </div>
 
       <div class="flex justify-end pt-2">
-        <el-button type="primary" :loading="savingConfig" @click="saveConfig">保存配置</el-button>
+        <el-button type="primary" :loading="savingConfig" data-testid="save-config" @click="saveConfig">保存配置</el-button>
       </div>
     </template>
 
@@ -239,19 +424,45 @@ const fallbackEnabled = ref({})
 
 const agentOrder = [
   'brainstorm_agent', 'volume_planner_agent', 'setting_extractor_agent',
-  'style_profiler_agent', 'file_classifier', 'entity_classifier_agent',
+  'setting_consolidation_agent', 'setting_workbench_service', 'style_profiler_agent',
+  'file_classifier', 'entity_classifier_agent',
   'outline_workbench_service', 'context_agent', 'writer_agent', 'critic_agent',
   'editor_agent', 'fast_review_agent', 'librarian_agent',
 ]
 
 const agentLabels = {
   brainstorm_agent: 'Brainstorm', volume_planner_agent: 'Volume Planner',
-  setting_extractor_agent: 'Setting Extractor', style_profiler_agent: 'Style Profiler',
+  setting_extractor_agent: 'Setting Extractor', setting_consolidation_agent: 'Setting Consolidation',
+  setting_workbench_service: 'Setting Workbench', style_profiler_agent: 'Style Profiler',
   file_classifier: 'File Classifier', entity_classifier_agent: 'Entity Classifier',
   outline_workbench_service: 'Outline Workbench', context_agent: 'Context',
   writer_agent: 'Writer', critic_agent: 'Critic',
   editor_agent: 'Editor', fast_review_agent: 'Fast Review',
   librarian_agent: 'Librarian',
+}
+
+const orchestrationToolCatalog = {
+  context_agent: [
+    { value: 'get_context_location_details', label: '批量地点详情' },
+    { value: 'get_context_entity_states', label: '批量实体状态' },
+    { value: 'get_context_foreshadowing_details', label: '批量伏笔详情' },
+    { value: 'get_context_timeline_events', label: '最近时间线' },
+    { value: 'get_novel_state', label: '小说状态' },
+    { value: 'get_chapter_draft_status', label: '章节草稿状态' },
+  ],
+  setting_workbench_service: [
+    { value: 'get_setting_workbench_context', label: '设定工作台上下文' },
+    { value: 'get_novel_state', label: '小说状态' },
+    { value: 'get_novel_documents', label: '文档摘要列表' },
+    { value: 'get_novel_document_full', label: '全文文档' },
+  ],
+  'volume_planner_agent.generate_volume_plan': [
+    { value: 'get_volume_planner_context', label: '卷纲规划上下文' },
+    { value: 'get_novel_state', label: '小说状态' },
+    { value: 'get_synopsis', label: '总纲' },
+    { value: 'get_novel_documents', label: '文档摘要列表' },
+    { value: 'get_novel_document_full', label: '全文文档' },
+  ],
 }
 
 const navItems = computed(() => {
@@ -277,6 +488,69 @@ function hasTasks(key) {
 function taskNames(key) {
   const agent = config.value.agents?.[key]
   return agent?.tasks ? Object.keys(agent.tasks) : []
+}
+
+function orchestrationCatalogKey(agentKey, taskName = null) {
+  return taskName ? `${agentKey}.${taskName}` : agentKey
+}
+
+function orchestrationToolOptions(agentKey, taskName = null) {
+  const key = orchestrationCatalogKey(agentKey, taskName)
+  return orchestrationToolCatalog[key] || []
+}
+
+function hasOrchestrationPanel(agentKey, taskName = null, target = null) {
+  return !!target?.orchestration || orchestrationToolOptions(agentKey, taskName).length > 0
+}
+
+function defaultOrchestration(agentKey, taskName = null) {
+  return {
+    enabled: false,
+    tool_allowlist: orchestrationToolOptions(agentKey, taskName).map(tool => tool.value),
+    max_tool_calls: 3,
+    tool_timeout_seconds: 5,
+    max_tool_result_chars: agentKey === 'volume_planner_agent' ? 6000 : 1600,
+    retriever_subtasks: [],
+    enable_subtasks: true,
+    repairer_subtask: 'schema_repair',
+  }
+}
+
+function orchestrationFor(target, agentKey, taskName = null) {
+  if (!target.orchestration) {
+    target.orchestration = defaultOrchestration(agentKey, taskName)
+  }
+  const orchestration = target.orchestration
+  if (!Array.isArray(orchestration.tool_allowlist)) orchestration.tool_allowlist = []
+  if (!Array.isArray(orchestration.retriever_subtasks)) orchestration.retriever_subtasks = []
+  if (orchestration.max_tool_calls === undefined) orchestration.max_tool_calls = 3
+  if (orchestration.tool_timeout_seconds === undefined) orchestration.tool_timeout_seconds = 5
+  if (orchestration.max_tool_result_chars === undefined) orchestration.max_tool_result_chars = 1600
+  if (orchestration.enable_subtasks === undefined) orchestration.enable_subtasks = true
+  return orchestration
+}
+
+function setOrchestrationEnabled(target, agentKey, taskName, enabled) {
+  orchestrationFor(target, agentKey, taskName).enabled = enabled
+}
+
+function orchestrationToolEnabled(orchestration, toolValue) {
+  return (orchestration.tool_allowlist || []).includes(toolValue)
+}
+
+function setOrchestrationTool(orchestration, toolValue, enabled) {
+  if (!Array.isArray(orchestration.tool_allowlist)) orchestration.tool_allowlist = []
+  if (enabled && !orchestration.tool_allowlist.includes(toolValue)) {
+    orchestration.tool_allowlist.push(toolValue)
+  }
+  if (!enabled) {
+    orchestration.tool_allowlist = orchestration.tool_allowlist.filter(value => value !== toolValue)
+  }
+}
+
+function setOptionalField(target, field, value) {
+  if (value) target[field] = value
+  else delete target[field]
 }
 
 function modelProfileInfo(name) {

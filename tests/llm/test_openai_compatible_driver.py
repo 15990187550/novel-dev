@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from novel_dev.llm.drivers.openai_compatible import OpenAICompatibleDriver
-from novel_dev.llm.models import ChatMessage, TaskConfig
+from novel_dev.llm.models import CapabilityToolConfig, ChatMessage, StructuredOutputConfig, TaskConfig
 
 
 @pytest.mark.asyncio
@@ -86,3 +86,53 @@ async def test_openai_compatible_extracts_tool_payload():
     response = await driver.acomplete("say hi", config)
     assert response.structured_payload == {"value": "ok"}
     assert response.finish_reason == "tool_calls"
+
+
+@pytest.mark.asyncio
+async def test_openai_compatible_distinguishes_response_tool_from_capability_tools():
+    response_tool_call = MagicMock(
+        id="response_1",
+        function=MagicMock(name="emit_payload", arguments='{"value":"done"}'),
+    )
+    capability_tool_call = MagicMock(
+        id="tool_1",
+        function=MagicMock(name="get_novel_state", arguments='{"novel_id":"n1"}'),
+    )
+    mock_client = MagicMock()
+    mock_client.chat.completions.create = AsyncMock(
+        return_value=MagicMock(
+            choices=[
+                MagicMock(
+                    message=MagicMock(content=None, tool_calls=[capability_tool_call, response_tool_call]),
+                    finish_reason="tool_calls",
+                )
+            ],
+            usage=MagicMock(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+        )
+    )
+    driver = OpenAICompatibleDriver(client=mock_client)
+    config = TaskConfig(
+        provider="openai_compatible",
+        model="gpt-4",
+        structured_output=StructuredOutputConfig(mode="openai_tool", tool_choice="auto"),
+        response_tool_name="emit_payload",
+        response_json_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+        capability_tools=[
+            CapabilityToolConfig(
+                name="get_novel_state",
+                description="Read the current novel state.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"novel_id": {"type": "string"}},
+                    "required": ["novel_id"],
+                },
+            )
+        ],
+    )
+    response = await driver.acomplete("say hi", config)
+    call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+    assert [tool["function"]["name"] for tool in call_kwargs["tools"]] == ["emit_payload", "get_novel_state"]
+    assert call_kwargs["tool_choice"] == "auto"
+    assert response.structured_payload == {"value": "done"}
+    assert response.tool_calls[0].name == "get_novel_state"
+    assert response.tool_calls[0].arguments == {"novel_id": "n1"}

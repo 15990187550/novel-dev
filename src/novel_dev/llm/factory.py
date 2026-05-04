@@ -1,4 +1,5 @@
 import asyncio
+from dataclasses import fields
 import hashlib
 import logging
 import os
@@ -21,6 +22,7 @@ from novel_dev.llm.embedder import BaseEmbedder
 from novel_dev.llm.exceptions import LLMConfigError, LLMRateLimitError, LLMTimeoutError
 from novel_dev.llm.fallback_driver import FallbackDriver
 from novel_dev.llm.models import EmbeddingConfig, RetryConfig, TaskConfig
+from novel_dev.llm.orchestrator import OrchestratedTaskConfig
 from novel_dev.llm.usage_tracker import LoggingUsageTracker, UsageTracker
 
 
@@ -131,6 +133,29 @@ class LLMFactory:
             fallback = self._resolve_model_profile(fallback_merged)
 
         return self._resolve_model_profile(merged, fallback=fallback)
+
+    def resolve_orchestration_config(self, agent_name: str, task: Optional[str]) -> OrchestratedTaskConfig | None:
+        normalized_name = self._normalize_agent_name(agent_name)
+        agent_cfg = self._config.get("agents", {}).get(normalized_name, {})
+        task_cfg = agent_cfg.get("tasks", {}).get(task, {}) if task else {}
+        raw = task_cfg.get("orchestration") or agent_cfg.get("orchestration")
+        if not raw or raw.get("enabled") is False:
+            return None
+        allowed_keys = {field.name for field in fields(OrchestratedTaskConfig)}
+        clean = {key: value for key, value in raw.items() if key in allowed_keys}
+        has_tools = bool(clean.get("tool_allowlist"))
+        has_subtasks = bool(
+            clean.get("enable_subtasks")
+            and (
+                clean.get("retriever_subtasks")
+                or clean.get("validator_subtask")
+                or clean.get("repairer_subtask")
+            )
+        )
+        if not has_tools and not has_subtasks:
+            return None
+        clean.setdefault("tool_allowlist", [])
+        return OrchestratedTaskConfig(**clean)
 
     def _resolve_model_profile(
         self, raw: dict, fallback: Optional[TaskConfig] = None

@@ -3,7 +3,7 @@
     <h2 class="text-xl font-bold">伏笔</h2>
     <el-alert v-if="!store.novelId" title="请先选择或新建小说" type="info" show-icon />
     <div v-else class="foreshadowings-table-panel overflow-hidden rounded-xl">
-      <el-table :data="store.foreshadowings" style="width: 100%" class="foreshadowings-table">
+      <el-table :data="store.foreshadowings" style="width: 100%" class="app-themed-table foreshadowings-table">
         <el-table-column prop="content" label="内容" show-overflow-tooltip />
         <el-table-column prop="回收状态" label="回收状态" width="100">
           <template #default="{ row }"><el-tag :type="row.回收状态 === 'recovered' ? 'success' : 'warning'" size="small">{{ row.回收状态 }}</el-tag></template>

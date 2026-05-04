@@ -1,4 +1,5 @@
 import os
+import json
 import re
 import sys
 from pathlib import Path
@@ -48,13 +49,14 @@ def mock_llm_factory(monkeypatch):
     )
 
     def mock_get(agent, task=None):
-        from novel_dev.llm.models import LLMResponse
+        from novel_dev.llm.models import LLMResponse, TaskConfig
         from novel_dev.agents.volume_planner import VolumePlanBlueprint, VolumePlanPatch
         from novel_dev.schemas.outline import VolumeScoreResult, VolumePlan, VolumeBeat
         from novel_dev.schemas.review import ScoreResult, DimensionScore
         from novel_dev.schemas.context import BeatPlan
 
         mock_client = AsyncMock()
+        mock_client.config = TaskConfig(provider="anthropic", model="mock-model")
 
         if agent == "BrainstormAgent" and task in {"generate_synopsis", "generate_synopsis_top_level"}:
             mock_client.acomplete.return_value = LLMResponse(text=default_synopsis.model_dump_json())
@@ -145,13 +147,35 @@ def mock_llm_factory(monkeypatch):
             )
         elif agent == "ContextAgent" and task == "build_scene_context":
             from novel_dev.schemas.context import LocationContext
-            mock_client.acomplete.return_value = LLMResponse(
-                text=LocationContext(current="默认地点", parent=None, narrative="场景描述").model_dump_json()
-            )
+
+            async def smart_scene_context(messages, **kwargs):
+                prompt = messages[0].content if messages else ""
+                entity_names = []
+                context_match = re.search(r"场景上下文：(\{.*\})", prompt, re.S)
+                if context_match:
+                    try:
+                        scene_context = json.loads(context_match.group(1))
+                    except json.JSONDecodeError:
+                        scene_context = {}
+                    for item in scene_context.get("entities", []):
+                        name = str(item.get("name") or "").strip() if isinstance(item, dict) else ""
+                        if name and name not in entity_names:
+                            entity_names.append(name)
+                entity_phrase = "、".join(entity_names) if entity_names else "人物"
+                return LLMResponse(
+                    text="",
+                    structured_payload=LocationContext(
+                        current="默认地点",
+                        parent=None,
+                        narrative=f"晨雾压在山门前，石阶泛着冷光，远处钟声回荡，{entity_phrase}在风里短暂停步，衣角被山风卷起，视线落向殿门深处。",
+                    ).model_dump(mode="json"),
+                )
+
+            mock_client.acomplete.side_effect = smart_scene_context
         elif agent == "FileClassifier" and task == "classify_file":
             from novel_dev.agents.file_classifier import FileClassificationResult
 
-            async def smart_classify(messages):
+            async def smart_classify(messages, **kwargs):
                 prompt = messages[0].content if messages else ""
                 # 根据文件名判断：文件名行以 "文件名：style" 开头则为 style_sample
                 if "文件名：style" in prompt:
@@ -183,7 +207,7 @@ def mock_llm_factory(monkeypatch):
         elif agent == "EntityClassifierAgent" and task == "classify_entity":
             from novel_dev.agents.entity_classifier import EntityClassificationLLMResult
 
-            async def smart_entity_classify(messages):
+            async def smart_entity_classify(messages, **kwargs):
                 prompt = messages[0].content if messages else ""
                 type_match = re.search(r"实体类型：([^\n]+)", prompt)
                 name_match = re.search(r"实体名称：([^\n]+)", prompt)
@@ -277,6 +301,7 @@ async def cleanup_tables():
     yield
     await engine.dispose()
     async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
         for table in reversed(Base.metadata.sorted_tables):
             await conn.execute(table.delete())
     await engine.dispose()

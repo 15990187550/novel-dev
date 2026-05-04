@@ -409,6 +409,85 @@ async def test_approve_setting_review_batch_404s_wrong_novel(test_client, async_
 
 
 @pytest.mark.asyncio
+async def test_apply_setting_review_batch_accepts_single_change_decisions(test_client, async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-apply-api",
+        source_type="ai_session",
+        summary="审核设定",
+        input_snapshot={},
+    )
+    approve_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"doc_type": "setting", "title": "灵根设定", "content": "灵根分五行。"},
+    )
+    reject_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="entity",
+        operation="create",
+        after_snapshot={"type": "location", "name": "废弃洞府", "state": {"description": "不采用。"}},
+    )
+    untouched_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="entity",
+        operation="create",
+        after_snapshot={"type": "character", "name": "陆照", "state": {"identity": "主角"}},
+    )
+    await async_session.commit()
+
+    async with test_client as client:
+        response = await client.post(
+            f"/api/novels/novel-apply-api/settings/review_batches/{batch.id}/apply",
+            json={
+                "decisions": [
+                    {"change_id": approve_change.id, "decision": "approve"},
+                    {"change_id": reject_change.id, "decision": "reject"},
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "partially_approved",
+        "applied": 1,
+        "rejected": 1,
+        "failed": 0,
+    }
+    assert (await repo.get_review_batch(batch.id)).status == "partially_approved"
+    assert (await repo.get_review_change(approve_change.id)).status == "approved"
+    assert (await repo.get_review_change(reject_change.id)).status == "rejected"
+    assert (await repo.get_review_change(untouched_change.id)).status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_apply_setting_review_batch_404s_wrong_novel(test_client, async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-apply-owner",
+        source_type="ai_session",
+        summary="审核设定",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting_card",
+        operation="create",
+        after_snapshot={"doc_type": "setting", "title": "灵根设定", "content": "灵根分五行。"},
+    )
+    await async_session.commit()
+
+    async with test_client as client:
+        response = await client.post(
+            f"/api/novels/other-novel/settings/review_batches/{batch.id}/apply",
+            json={"decisions": [{"change_id": change.id, "decision": "approve"}]},
+        )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_run_generation_job_succeeds_for_setting_consolidation(async_session, monkeypatch):
     class FakeSettingConsolidationService:
         def __init__(self, session):

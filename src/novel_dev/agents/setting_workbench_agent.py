@@ -86,7 +86,21 @@ class SettingWorkbenchAgent:
         conversation_summary: str | None = None,
         focused_context: dict[str, Any] | None = None,
         current_setting_context: dict[str, Any] | None = None,
+        required_sections: list[dict[str, str]] | None = None,
     ) -> str:
+        required_section_lines = []
+        if required_sections:
+            required_section_lines = [
+                "必须完整生成以下建议批次：",
+                *[
+                    f"- {section.get('label') or f'批次{index + 1}'}：{section.get('title', '').strip()}"
+                    for index, section in enumerate(required_sections)
+                    if section.get("title")
+                ],
+                "每个建议批次必须对应 1 条 setting_card create change；禁止只生成其中一部分。",
+                "setting_card.after_snapshot.title 必须保留对应批次主题，content 必须展开该批次内容。",
+                "如果某个建议批次仍有不确定项，也要生成该批次的待审核设定卡，并在 content 或 conflict_hints 中标明待确认点。",
+            ]
         return "\n".join(
             [
                 "你是小说设定工作台的设定生成助手。",
@@ -101,6 +115,7 @@ class SettingWorkbenchAgent:
                 "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type。",
                 "relationship create 的 source_id/target_id 必须引用已存在实体 ID，或同一批次中 entity create 的 after_snapshot.id。",
                 "如果无法确定实体 ID，不要生成 relationship change；只在实体 state 或设定 content 中描述关系，留待后续优化。",
+                *required_section_lines,
                 f"会话标题：{title}",
                 f"目标分类：{', '.join(target_categories) if target_categories else '默认全量'}",
                 f"会话摘要：{conversation_summary or '暂无'}",
