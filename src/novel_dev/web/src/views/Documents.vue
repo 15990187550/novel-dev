@@ -948,6 +948,36 @@
                       <span>{{ statusLabel(change.status) }}</span>
                     </div>
                   </div>
+                  <div class="flex flex-wrap justify-end gap-2">
+                    <el-button
+                      size="small"
+                      plain
+                      @click="openSettingReviewChangeDetail(change)"
+                    >
+                      查看详情
+                    </el-button>
+                    <template v-if="change.status === 'pending'">
+                      <el-button
+                        size="small"
+                        type="danger"
+                        plain
+                        :loading="settingReviewApplying"
+                        :disabled="settingReviewApplying"
+                        @click="applySettingReviewDecision('reject', change)"
+                      >
+                        拒绝
+                      </el-button>
+                      <el-button
+                        size="small"
+                        type="primary"
+                        :loading="settingReviewApplying"
+                        :disabled="settingReviewApplying"
+                        @click="applySettingReviewDecision('approve', change)"
+                      >
+                        批准
+                      </el-button>
+                    </template>
+                  </div>
                 </div>
                 <p class="mt-3 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">
                   {{ settingChangeSummary(change) }}
@@ -975,6 +1005,54 @@
               </el-button>
             </div>
           </template>
+        </div>
+      </el-dialog>
+
+      <el-dialog
+        v-model="settingReviewChangeDetailVisible"
+        title="设定变更详情"
+        width="920px"
+        top="7vh"
+        append-to-body
+      >
+        <div v-if="selectedSettingReviewChange" class="max-h-[72vh] space-y-4 overflow-y-auto pr-2 text-sm">
+          <div class="rounded-xl border border-gray-200 p-3 dark:border-gray-700">
+            <div class="font-semibold text-gray-900 dark:text-gray-100">
+              {{ settingChangeTitle(selectedSettingReviewChange) }}
+            </div>
+            <div class="mt-2 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-gray-400">
+              <span>{{ settingChangeTargetLabel(selectedSettingReviewChange.target_type) }}</span>
+              <span>{{ settingChangeOperationLabel(selectedSettingReviewChange.operation) }}</span>
+              <span>{{ statusLabel(selectedSettingReviewChange.status) }}</span>
+            </div>
+          </div>
+
+          <section
+            v-for="section in settingReviewDetailSections(selectedSettingReviewChange)"
+            :key="section.key"
+            class="documents-setting-review-detail-section"
+          >
+            <h4>{{ section.title }}</h4>
+            <dl v-if="section.rows?.length" class="documents-setting-review-detail-fields">
+              <div
+                v-for="row in section.rows"
+                :key="row.key"
+                class="documents-setting-review-detail-field"
+              >
+                <dt>{{ row.label }}</dt>
+                <dd>{{ row.value }}</dd>
+              </div>
+            </dl>
+            <pre v-else>{{ section.content }}</pre>
+          </section>
+          <section v-if="selectedSettingReviewChange.conflict_hints?.length" class="documents-setting-review-detail-section">
+            <h4>冲突提示</h4>
+            <pre>{{ formatReadableValue(selectedSettingReviewChange.conflict_hints) }}</pre>
+          </section>
+          <section v-if="selectedSettingReviewChange.error_message" class="documents-setting-review-detail-section">
+            <h4>错误信息</h4>
+            <pre>{{ selectedSettingReviewChange.error_message }}</pre>
+          </section>
         </div>
       </el-dialog>
     </template>
@@ -1046,6 +1124,8 @@ const settingReviewVisible = ref(false)
 const settingReviewLoading = ref(false)
 const settingReviewApplying = ref(false)
 const selectedSettingReviewBatch = ref(null)
+const settingReviewChangeDetailVisible = ref(false)
+const selectedSettingReviewChange = ref(null)
 const editingDraftField = ref(null)
 const draftFieldInput = ref('')
 const draftFieldError = ref('')
@@ -1260,6 +1340,20 @@ function settingChangeSummary(change) {
   return summarizeContent(snapshot, 260)
 }
 
+function normalizeSettingReviewBatchPayload(payload) {
+  if (!payload) return null
+  if (payload.batch) {
+    return {
+      ...payload.batch,
+      changes: payload.changes || [],
+    }
+  }
+  return {
+    ...payload,
+    changes: payload.changes || [],
+  }
+}
+
 function resolutionActionLabel(action) {
   const labels = {
     created: '新增实体',
@@ -1287,8 +1381,93 @@ function formatValue(value) {
   return JSON.stringify(value, null, 2)
 }
 
+const settingReviewSnapshotFieldLabels = {
+  doc_type: '资料类型',
+  title: '标题',
+  content: '正文',
+  type: '类型',
+  name: '名称',
+  state: '状态',
+  data: '数据',
+  source_id: '源实体',
+  source_name: '源实体',
+  relation_type: '关系',
+  target_id: '目标实体',
+  target_name: '目标实体',
+  description: '描述',
+}
+
+const settingReviewSnapshotFieldOrder = [
+  'title',
+  'name',
+  'doc_type',
+  'type',
+  'content',
+  'description',
+  'state',
+  'data',
+  'source_name',
+  'source_id',
+  'relation_type',
+  'target_name',
+  'target_id',
+]
+
+function normalizeReadableText(value) {
+  return String(value)
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '  ')
+}
+
+function formatReadableValue(value) {
+  if (value == null || value === '') return '-'
+  if (typeof value === 'string') return normalizeReadableText(value)
+  return normalizeReadableText(JSON.stringify(value, null, 2))
+}
+
+function orderedSnapshotEntries(snapshot = {}) {
+  const keys = Object.keys(snapshot)
+  const orderedKeys = [
+    ...settingReviewSnapshotFieldOrder.filter((key) => keys.includes(key)),
+    ...keys.filter((key) => !settingReviewSnapshotFieldOrder.includes(key)).sort(),
+  ]
+  return orderedKeys.map((key) => [key, snapshot[key]])
+}
+
+function settingReviewSnapshotRows(snapshot = {}) {
+  return orderedSnapshotEntries(snapshot)
+    .filter(([, value]) => value != null && value !== '')
+    .map(([key, value]) => ({
+      key,
+      label: settingReviewSnapshotFieldLabels[key] || key,
+      value: formatReadableValue(value),
+    }))
+}
+
+function settingReviewDetailSections(change) {
+  const sections = []
+  if (change?.after_snapshot) {
+    sections.push({
+      key: 'after',
+      title: '变更后',
+      rows: settingReviewSnapshotRows(change.after_snapshot),
+      content: formatReadableValue(change.after_snapshot),
+    })
+  }
+  if (change?.before_snapshot) {
+    sections.push({
+      key: 'before',
+      title: '变更前',
+      rows: settingReviewSnapshotRows(change.before_snapshot),
+      content: formatReadableValue(change.before_snapshot),
+    })
+  }
+  return sections
+}
+
 function summarizeContent(value, maxLength = 180) {
-  const text = formatValue(value).replace(/\s+/g, ' ').trim()
+  const text = normalizeReadableText(formatValue(value)).replace(/\s+/g, ' ').trim()
   if (!text) return '暂无内容'
   return text.length > maxLength ? `${text.slice(0, maxLength)}...` : text
 }
@@ -1385,26 +1564,44 @@ async function openSettingReviewBatch(row) {
   settingReviewVisible.value = true
   settingReviewLoading.value = true
   selectedSettingReviewBatch.value = null
+  selectedSettingReviewChange.value = null
+  settingReviewChangeDetailVisible.value = false
   try {
-    selectedSettingReviewBatch.value = await getSettingReviewBatch(store.novelId, row.id)
+    selectedSettingReviewBatch.value = normalizeSettingReviewBatchPayload(
+      await getSettingReviewBatch(store.novelId, row.id)
+    )
   } finally {
     settingReviewLoading.value = false
   }
 }
 
-async function applySettingReviewDecision(decision) {
+function openSettingReviewChangeDetail(change) {
+  selectedSettingReviewChange.value = change
+  settingReviewChangeDetailVisible.value = true
+}
+
+async function applySettingReviewDecision(decision, change = null) {
   const batch = selectedSettingReviewBatch.value
   if (!store.novelId || !batch?.id || settingReviewApplying.value) return
-  const decisions = pendingSettingReviewChanges.value.map((change) => ({
-    change_id: change.id,
-    decision,
-  }))
+  const targetChanges = change ? [change] : pendingSettingReviewChanges.value
+  const decisions = targetChanges
+    .filter((item) => item?.status === 'pending')
+    .map((item) => ({
+      change_id: item.id,
+      decision,
+    }))
   if (!decisions.length) return
   settingReviewApplying.value = true
   try {
     await applySettingReviewBatch(store.novelId, batch.id, { decisions })
     await Promise.all([store.fetchSettingWorkbench(), store.fetchDocuments(), fetchLibrary()])
-    selectedSettingReviewBatch.value = await getSettingReviewBatch(store.novelId, batch.id)
+    selectedSettingReviewBatch.value = normalizeSettingReviewBatchPayload(
+      await getSettingReviewBatch(store.novelId, batch.id)
+    )
+    if (selectedSettingReviewChange.value) {
+      selectedSettingReviewChange.value = (selectedSettingReviewBatch.value?.changes || [])
+        .find((item) => item.id === selectedSettingReviewChange.value.id) || selectedSettingReviewChange.value
+    }
     ElMessage.success(decision === 'approve' ? 'AI 设定变更已批准' : 'AI 设定变更已拒绝')
   } finally {
     settingReviewApplying.value = false
@@ -2086,6 +2283,58 @@ watch(editingDraftField, (value) => {
   border-radius: 0.75rem;
   background: var(--app-surface-soft);
   padding: 0.9rem;
+}
+
+.documents-setting-review-detail-section {
+  border: 1px solid var(--app-border);
+  border-radius: 0.75rem;
+  background: var(--app-surface-soft);
+  padding: 0.9rem;
+}
+
+.documents-setting-review-detail-section h4 {
+  margin: 0 0 0.65rem;
+  color: var(--app-text);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.documents-setting-review-detail-section pre {
+  margin: 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.65;
+}
+
+.documents-setting-review-detail-fields {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0;
+}
+
+.documents-setting-review-detail-field {
+  display: grid;
+  grid-template-columns: minmax(5rem, 8rem) minmax(0, 1fr);
+  gap: 0.75rem;
+}
+
+.documents-setting-review-detail-field dt {
+  color: var(--app-text-soft);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.documents-setting-review-detail-field dd {
+  margin: 0;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-text);
+  font-size: 0.9rem;
+  line-height: 1.75;
 }
 
 .documents-detail-table {

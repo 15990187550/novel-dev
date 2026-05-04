@@ -9,8 +9,11 @@ from novel_dev.agents._llm_helpers import (
     _await_llm_response_with_progress,
     call_and_parse,
     call_and_parse_model,
+    orchestrated_call_and_parse_model,
     register_structured_normalizer,
 )
+from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
+from novel_dev.llm.subtasks import LightweightSubtaskOrchestrator, RepairerSubtask, ValidatorSubtask
 from novel_dev.llm.fallback_driver import FallbackDriver
 from novel_dev.llm.models import LLMResponse, StructuredOutputConfig, TaskConfig
 from novel_dev.services.flow_control_service import FlowCancelledError, clear_cancel_request, request_cancel
@@ -151,6 +154,294 @@ async def test_call_and_parse_model_prefers_structured_payload():
     assert call_kwargs["config"].response_json_schema["type"] == "object"
     assert "$defs" not in call_kwargs["config"].response_json_schema
     assert "title" not in call_kwargs["config"].response_json_schema
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_uses_capability_tools():
+    async def read_state(args):
+        return {"state": args["novel_id"]}
+
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="tool-model")
+    mock_client.acomplete.side_effect = [
+        LLMResponse(
+            text="",
+            tool_calls=[{"id": "c1", "name": "read_state", "arguments": {"novel_id": "n1"}}],
+        ),
+        LLMResponse(text="", structured_payload={"title": "工具结果", "tags": ["上下文"]}),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "TestAgent",
+            "tool_task",
+            "prompt",
+            ExamplePayload,
+            tools=[
+                LLMToolSpec(
+                    name="read_state",
+                    description="Read state",
+                    input_schema={"type": "object", "properties": {"novel_id": {"type": "string"}}},
+                    handler=read_state,
+                    read_only=True,
+                )
+            ],
+            task_config=OrchestratedTaskConfig(tool_allowlist=["read_state"], max_tool_calls=1),
+            novel_id="novel-tool-call",
+        )
+
+    assert result.title == "工具结果"
+    first_config = mock_client.acomplete.call_args_list[0].kwargs["config"]
+    assert first_config.response_tool_name == "emit_tool_task"
+    assert first_config.capability_tools[0].name == "read_state"
+    followup_messages = mock_client.acomplete.call_args_list[1].args[0]
+    assert "Tool read_state result" in followup_messages[1].content
+    assert any(entry.get("node") == "llm_tool_call" for entry in LogService._buffers["novel-tool-call"])
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_accepts_subtask_orchestrator():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="tool-model")
+    mock_client.acomplete.return_value = LLMResponse(text="", structured_payload={"title": "bad", "tags": []})
+
+    def validate(payload):
+        return {"valid": payload["payload"].get("title") == "ok", "reason": "title must be ok"}
+
+    def repair(payload):
+        fixed = dict(payload["payload"])
+        fixed["title"] = "ok"
+        return fixed
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "TestAgent",
+            "subtask_task",
+            "prompt",
+            ExamplePayload,
+            tools=[],
+            task_config=OrchestratedTaskConfig(
+                tool_allowlist=[],
+                enable_subtasks=True,
+                validator_subtask="semantic",
+                repairer_subtask="semantic_repair",
+            ),
+            subtask_orchestrator=LightweightSubtaskOrchestrator(
+                validators=[ValidatorSubtask(name="semantic", handler=validate)],
+                repairers=[RepairerSubtask(name="semantic_repair", handler=repair)],
+            ),
+            novel_id="novel-helper-subtask",
+        )
+
+    assert result.title == "ok"
+    assert any(entry.get("node") == "llm_repairer" for entry in LogService._buffers["novel-helper-subtask"])
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_retries_orchestrator_failures():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="tool-model")
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=""),
+        LLMResponse(text="", structured_payload={"title": "重试成功", "tags": ["上下文"]}),
+    ]
+
+    with (
+        patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory,
+        patch("novel_dev.agents._llm_helpers._sleep_with_cancel_check", new_callable=AsyncMock) as mock_sleep,
+    ):
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "TestAgent",
+            "retry_tool_task",
+            "prompt",
+            ExamplePayload,
+            tools=[],
+            task_config=OrchestratedTaskConfig(tool_allowlist=[]),
+            max_retries=2,
+            novel_id="novel-tool-retry",
+        )
+
+    assert result.title == "重试成功"
+    assert mock_client.acomplete.call_count == 2
+    mock_sleep.assert_awaited_once()
+    entries = list(LogService._buffers["novel-tool-retry"])
+    assert any(
+        entry.get("node") == "llm_orchestrator"
+        and entry.get("status") == "failed"
+        and entry.get("metadata", {}).get("fallback_reason")
+        for entry in entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_uses_default_schema_repairer():
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="tool-model")
+    mock_client.acomplete.return_value = LLMResponse(
+        text="",
+        structured_payload={"name": "旧字段", "tags": ["兼容"]},
+    )
+
+    def normalize(payload, error):
+        assert error is not None
+        if isinstance(payload, dict) and "name" in payload:
+            return {"title": payload["name"], "tags": payload.get("tags", [])}
+        return payload
+
+    register_structured_normalizer("NormalizeAgent", "orchestrated_schema_repair", normalize)
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "NormalizeAgent",
+            "orchestrated_schema_repair",
+            "prompt",
+            ExamplePayload,
+            tools=[],
+            task_config=OrchestratedTaskConfig(
+                tool_allowlist=[],
+                enable_subtasks=True,
+                repairer_subtask="schema_repair",
+            ),
+            novel_id="novel-default-schema-repair",
+        )
+
+    assert result.title == "旧字段"
+    assert result.tags == ["兼容"]
+    entries = list(LogService._buffers["novel-default-schema-repair"])
+    assert any(entry.get("node") == "llm_repairer" and entry.get("status") == "succeeded" for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_retries_default_location_context_quality_failure():
+    class LocationPayload(BaseModel):
+        current: str
+        parent: str | None = None
+        narrative: str | None = None
+
+    class FeedbackAwareClient:
+        def __init__(self):
+            self.config = TaskConfig(provider="anthropic", model="tool-model")
+            self.calls = []
+
+        async def acomplete(self, messages, config=None):
+            self.calls.append((messages, config))
+            if len(self.calls) == 1:
+                return LLMResponse(text="", structured_payload={"current": "青云宗", "parent": "", "narrative": ""})
+            assert "narrative_too_short" in messages[0].content
+            return LLMResponse(
+                text="",
+                structured_payload={
+                    "current": "青云宗",
+                    "parent": "",
+                    "narrative": "晨雾压在山门前，林风握着发烫的玉佩站在石阶下，钟声从内门传来。",
+                },
+            )
+
+    mock_client = FeedbackAwareClient()
+
+    with (
+        patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory,
+        patch("novel_dev.agents._llm_helpers._sleep_with_cancel_check", new_callable=AsyncMock) as mock_sleep,
+    ):
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "ContextAgent",
+            "build_scene_context",
+            "prompt",
+            LocationPayload,
+            tools=[],
+            task_config=OrchestratedTaskConfig(
+                tool_allowlist=[],
+                enable_subtasks=True,
+                validator_subtask="location_context_quality",
+                repairer_subtask="schema_repair",
+            ),
+            max_retries=2,
+            novel_id="novel-location-quality",
+        )
+
+    assert result.narrative and "晨雾" in result.narrative
+    assert len(mock_client.calls) == 2
+    mock_sleep.assert_awaited_once()
+    entries = list(LogService._buffers["novel-location-quality"])
+    assert any(
+        entry.get("node") == "llm_validator"
+        and entry.get("status") == "failed"
+        and entry.get("metadata", {}).get("validation", {}).get("reason") == "narrative_too_short"
+        for entry in entries
+    )
+
+
+@pytest.mark.asyncio
+async def test_orchestrated_call_and_parse_model_retries_location_context_missing_required_context():
+    class LocationPayload(BaseModel):
+        current: str
+        parent: str | None = None
+        narrative: str | None = None
+
+    class ContextAwareClient:
+        def __init__(self):
+            self.config = TaskConfig(provider="anthropic", model="tool-model")
+            self.calls = []
+
+        async def acomplete(self, messages, config=None):
+            self.calls.append((messages, config))
+            if len(self.calls) == 1:
+                return LLMResponse(
+                    text="",
+                    structured_payload={
+                        "current": "青云宗",
+                        "parent": "",
+                        "narrative": "晨雾压在山门前，钟声从内门传来，石阶泛着冷光，山风吹过松林。",
+                    },
+                )
+            assert "missing_required_context" in messages[0].content
+            return LLMResponse(
+                text="",
+                structured_payload={
+                    "current": "青云宗",
+                    "parent": "",
+                    "narrative": "晨雾压在青云宗山门前，林风握紧发烫的玉佩，守门长老在石阶上审视他，钟声从内门传来。",
+                },
+            )
+
+    mock_client = ContextAwareClient()
+
+    with (
+        patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory,
+        patch("novel_dev.agents._llm_helpers._sleep_with_cancel_check", new_callable=AsyncMock),
+    ):
+        mock_factory.get.return_value = mock_client
+        result = await orchestrated_call_and_parse_model(
+            "ContextAgent",
+            "build_scene_context",
+            "原始提示\n场景上下文：{\"entities\":[{\"name\":\"林风\"},{\"name\":\"守门长老\"}],\"foreshadowing_ids\":[\"fs_jade\"],\"required_terms\":[\"玉佩\"]}",
+            LocationPayload,
+            tools=[],
+            task_config=OrchestratedTaskConfig(
+                tool_allowlist=[],
+                enable_subtasks=True,
+                validator_subtask="location_context_quality",
+                repairer_subtask="schema_repair",
+            ),
+            max_retries=2,
+            novel_id="novel-location-required-context",
+        )
+
+    assert result.narrative and "林风" in result.narrative
+    assert "守门长老" in result.narrative
+    assert "玉佩" in result.narrative
+    entries = list(LogService._buffers["novel-location-required-context"])
+    assert any(
+        entry.get("node") == "llm_validator"
+        and entry.get("status") == "failed"
+        and entry.get("metadata", {}).get("validation", {}).get("reason") == "missing_required_context"
+        for entry in entries
+    )
 
 
 @pytest.mark.asyncio

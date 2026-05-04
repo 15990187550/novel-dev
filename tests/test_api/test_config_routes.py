@@ -106,6 +106,8 @@ async def test_save_llm_config_preserves_existing_secret_when_masked_value_round
     import yaml
 
     config_path = tmp_path / "llm_config.yaml"
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
     config_path.write_text(
         "models:\n"
         "  kimi:\n"
@@ -119,6 +121,8 @@ async def test_save_llm_config_preserves_existing_secret_when_masked_value_round
 
     settings = Settings(llm_config_path=str(config_path))
     monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -140,8 +144,55 @@ async def test_save_llm_config_preserves_existing_secret_when_masked_value_round
     assert resp.status_code == 200
     saved_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved_config["models"]["kimi"]["model"] == "kimi-changed"
-    assert saved_config["models"]["kimi"]["api_key"] == "sk-live-secret"
+    assert saved_config["models"]["kimi"]["api_key_env"] == "KIMI_API_KEY"
+    assert "api_key" not in saved_config["models"]["kimi"]
+    assert "KIMI_API_KEY='sk-live-secret'" in env_file.read_text(encoding="utf-8")
+    assert __import__("os").environ["KIMI_API_KEY"] == "sk-live-secret"
     assert "********" not in config_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_save_llm_config_writes_profile_api_key_to_env_file(tmp_path, monkeypatch):
+    import os
+    import yaml
+
+    config_path = tmp_path / "llm_config.yaml"
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+
+    from novel_dev.config import Settings
+
+    settings = Settings(llm_config_path=str(config_path))
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+    monkeypatch.delenv("KIMI_API_KEY", raising=False)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/config/llm",
+            json={
+                "config": {
+                    "models": {
+                        "kimi-for-coding": {
+                            "provider": "anthropic",
+                            "model": "kimi-for-coding",
+                            "api_key_env": "KIMI_API_KEY",
+                            "api_key": "sk-new-secret",
+                        }
+                    }
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    saved_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    saved_profile = saved_config["models"]["kimi-for-coding"]
+    assert saved_profile["api_key_env"] == "KIMI_API_KEY"
+    assert "api_key" not in saved_profile
+    assert "sk-new-secret" not in config_path.read_text(encoding="utf-8")
+    assert "KIMI_API_KEY='sk-new-secret'" in env_file.read_text(encoding="utf-8")
+    assert os.environ["KIMI_API_KEY"] == "sk-new-secret"
 
 
 @pytest.mark.asyncio

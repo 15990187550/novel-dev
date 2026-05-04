@@ -1,11 +1,13 @@
 import asyncio
+import re
+import time
 import uuid
 from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.agents._llm_helpers import call_and_parse_model
+from novel_dev.agents._llm_helpers import call_and_parse_model, orchestrated_call_and_parse_model
 from novel_dev.agents.setting_workbench_agent import (
     SettingBatchDraft,
     SettingBatchChangeDraft,
@@ -13,11 +15,15 @@ from novel_dev.agents.setting_workbench_agent import (
     SettingWorkbenchAgent,
 )
 from novel_dev.db.models import EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
+from novel_dev.llm import llm_factory
+from novel_dev.llm.context_tools import build_mcp_context_tools
 from novel_dev.llm.exceptions import LLMTimeoutError
+from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.entity_service import EntityService
+from novel_dev.services.log_service import log_service
 
 
 def _new_id(prefix: str) -> str:
@@ -26,7 +32,7 @@ def _new_id(prefix: str) -> str:
 
 class SettingWorkbenchService:
     MAX_CLARIFICATION_ROUNDS = 5
-    GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 165
+    GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 300
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -124,6 +130,7 @@ class SettingWorkbenchService:
         }
 
     async def generate_review_batch(self, *, novel_id: str, session_id: str):
+        generation_started_at = time.perf_counter()
         setting_session = await self.repo.get_session(session_id)
         if setting_session is None or setting_session.novel_id != novel_id:
             raise ValueError("Setting generation session not found")
@@ -132,34 +139,134 @@ class SettingWorkbenchService:
 
         await self.repo.update_session_state(session_id, status="generating")
         messages = await self.repo.list_messages(session_id)
+        required_sections = self._extract_suggested_generation_batches(messages)
         current_setting_context = await self._build_generation_context(novel_id)
+        orchestration_config = llm_factory.resolve_orchestration_config(
+            "setting_workbench_service",
+            "setting_workbench_generate_batch",
+        )
+        prompt_context = (
+            self._build_generation_context_catalog(current_setting_context)
+            if orchestration_config is not None
+            else current_setting_context
+        )
         prompt = SettingWorkbenchAgent.build_generation_prompt(
             title=setting_session.title,
             target_categories=setting_session.target_categories or [],
             messages=self._message_items(messages),
             conversation_summary=setting_session.conversation_summary,
             focused_context=setting_session.focused_target,
-            current_setting_context=current_setting_context,
+            current_setting_context=prompt_context,
+            required_sections=required_sections,
+        )
+        context_stats = self._generation_context_stats(current_setting_context)
+        common_metadata = {
+            "session_id": session_id,
+            "session_title": setting_session.title,
+            "session_status": setting_session.status,
+            "clarification_round": setting_session.clarification_round,
+            "target_categories": setting_session.target_categories or [],
+            "message_count": len(messages),
+            "required_section_count": len(required_sections),
+            "required_sections": required_sections,
+            "context": context_stats,
+            "prompt_chars": len(prompt),
+            "orchestration_enabled": orchestration_config is not None,
+            "timeout_seconds": self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS,
+        }
+        log_service.add_log(
+            novel_id,
+            "SettingWorkbenchService",
+            "设定审核记录生成开始",
+            event="agent.progress",
+            status="started",
+            node="setting_generate_prepare",
+            task="setting_workbench_generate_batch",
+            metadata=common_metadata,
         )
         await self._release_connection_before_external_call()
         try:
+            llm_started_at = time.perf_counter()
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                "开始调用模型生成设定审核草稿",
+                event="agent.progress",
+                status="started",
+                node="setting_generate_llm",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "model_path": "orchestrated" if orchestration_config is not None else "direct",
+                    "tool_allowlist": list(orchestration_config.tool_allowlist) if orchestration_config is not None else [],
+                    "max_tool_calls": orchestration_config.max_tool_calls if orchestration_config is not None else 0,
+                },
+            )
             try:
                 async with asyncio.timeout(self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS):
-                    draft = await call_and_parse_model(
-                        agent_name="SettingWorkbenchService",
-                        task="setting_workbench_generate_batch",
-                        prompt=prompt,
-                        model_cls=SettingBatchDraft,
-                        config_agent_name="setting_workbench_service",
-                        novel_id=novel_id,
-                        max_retries=2,
-                    )
+                    if orchestration_config is not None:
+                        draft = await orchestrated_call_and_parse_model(
+                            agent_name="SettingWorkbenchService",
+                            task="setting_workbench_generate_batch",
+                            prompt=prompt,
+                            model_cls=SettingBatchDraft,
+                            tools=self._build_generation_tools(
+                                novel_id=novel_id,
+                                current_setting_context=current_setting_context,
+                                orchestration_config=orchestration_config,
+                            ),
+                            task_config=orchestration_config,
+                            config_agent_name="setting_workbench_service",
+                            novel_id=novel_id,
+                            max_retries=2,
+                        )
+                    else:
+                        draft = await call_and_parse_model(
+                            agent_name="SettingWorkbenchService",
+                            task="setting_workbench_generate_batch",
+                            prompt=prompt,
+                            model_cls=SettingBatchDraft,
+                            config_agent_name="setting_workbench_service",
+                            novel_id=novel_id,
+                            max_retries=2,
+                        )
             except TimeoutError as exc:
                 raise LLMTimeoutError(
                     "Setting workbench generation timed out "
                     f"after {self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS}s"
                 ) from exc
-            self._validate_batch_draft(draft)
+            llm_duration_ms = self._elapsed_ms(llm_started_at)
+            draft_stats = self._draft_stats(draft)
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                "模型已返回设定审核草稿",
+                event="agent.progress",
+                status="succeeded",
+                node="setting_generate_llm",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "draft": draft_stats,
+                },
+                duration_ms=llm_duration_ms,
+            )
+
+            self._validate_batch_draft(draft, required_sections=required_sections)
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                "设定审核草稿校验完成",
+                event="agent.progress",
+                status="succeeded",
+                node="setting_generate_validate",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "draft": draft_stats,
+                },
+                duration_ms=self._elapsed_ms(generation_started_at),
+            )
 
             batch = await self.repo.create_review_batch(
                 novel_id=novel_id,
@@ -186,9 +293,39 @@ class SettingWorkbenchService:
                 metadata={"batch_id": batch.id},
             )
             await self.session.flush()
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                f"设定审核记录已生成：{draft.summary}",
+                event="agent.progress",
+                status="succeeded",
+                node="setting_generate_persist",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "batch_id": batch.id,
+                    "summary": draft.summary,
+                    "change_count": len(draft.changes),
+                    "draft": draft_stats,
+                },
+                duration_ms=self._elapsed_ms(generation_started_at),
+            )
             return batch
         except Exception as exc:
-            await self._restore_generation_ready_after_failure(session_id, exc)
+            restore_error: Exception | None = None
+            try:
+                await self._restore_generation_ready_after_failure(session_id, exc)
+            except Exception as restore_exc:
+                restore_error = restore_exc
+            self._log_generation_failure(
+                novel_id=novel_id,
+                metadata=common_metadata if "common_metadata" in locals() else {"session_id": session_id},
+                started_at=generation_started_at,
+                exc=exc,
+                restore_error=restore_error,
+            )
+            if restore_error is not None:
+                raise restore_error from exc
             raise
 
     async def apply_review_decisions(self, novel_id: str, batch_id: str, decisions: list[dict]) -> dict:
@@ -250,6 +387,72 @@ class SettingWorkbenchService:
         batch_status = self._resolve_batch_status(changes, batch.status)
         await self.repo.update_batch_status(batch.id, batch_status, error_message=None)
         return {"status": batch_status, "applied": applied, "rejected": rejected, "failed": failed}
+
+    @staticmethod
+    def _elapsed_ms(started_at: float) -> int:
+        return max(0, int((time.perf_counter() - started_at) * 1000))
+
+    @staticmethod
+    def _generation_context_stats(context: dict[str, Any]) -> dict[str, int]:
+        return {
+            "document_count": len(context.get("documents") or []),
+            "entity_count": len(context.get("entities") or []),
+            "relationship_count": len(context.get("relationships") or []),
+        }
+
+    @staticmethod
+    def _draft_stats(draft: SettingBatchDraft) -> dict[str, Any]:
+        target_counts: dict[str, int] = {}
+        operation_counts: dict[str, int] = {}
+        setting_titles: list[str] = []
+        entity_names: list[str] = []
+        for change in draft.changes:
+            target_counts[change.target_type] = target_counts.get(change.target_type, 0) + 1
+            operation_counts[change.operation] = operation_counts.get(change.operation, 0) + 1
+            snapshot = change.after_snapshot or {}
+            if change.target_type == "setting_card" and snapshot.get("title"):
+                setting_titles.append(str(snapshot.get("title")))
+            if change.target_type == "entity" and snapshot.get("name"):
+                entity_names.append(str(snapshot.get("name")))
+        return {
+            "summary": draft.summary,
+            "change_count": len(draft.changes),
+            "target_counts": target_counts,
+            "operation_counts": operation_counts,
+            "setting_titles": setting_titles[:12],
+            "entity_names": entity_names[:12],
+        }
+
+    def _log_generation_failure(
+        self,
+        *,
+        novel_id: str,
+        metadata: dict[str, Any],
+        started_at: float,
+        exc: Exception,
+        restore_error: Exception | None = None,
+    ) -> None:
+        failure_metadata = {
+            **metadata,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "timeout_seconds": self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS,
+        }
+        if restore_error is not None:
+            failure_metadata["restore_error_type"] = type(restore_error).__name__
+            failure_metadata["restore_error"] = str(restore_error)
+        log_service.add_log(
+            novel_id,
+            "SettingWorkbenchService",
+            f"设定审核记录生成失败: {exc}",
+            level="error",
+            event="agent.progress",
+            status="failed",
+            node="setting_generate",
+            task="setting_workbench_generate_batch",
+            metadata=failure_metadata,
+            duration_ms=self._elapsed_ms(started_at),
+        )
 
     async def _build_generation_context(self, novel_id: str) -> dict[str, Any]:
         document_items: list[dict[str, Any]] = []
@@ -327,6 +530,74 @@ class SettingWorkbenchService:
                 "content_preview_chars": 900,
             },
         }
+
+    def _build_generation_context_catalog(self, context: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "documents": [
+                {
+                    "id": item.get("id"),
+                    "doc_type": item.get("doc_type"),
+                    "title": item.get("title"),
+                    "version": item.get("version"),
+                }
+                for item in context.get("documents", [])
+            ],
+            "entities": [
+                {
+                    "id": item.get("id"),
+                    "type": item.get("type"),
+                    "name": item.get("name"),
+                    "current_version": item.get("current_version"),
+                    "state_keys": list((item.get("state") or {}).keys()) if isinstance(item.get("state"), dict) else [],
+                }
+                for item in context.get("entities", [])
+            ],
+            "relationships": context.get("relationships", []),
+            "limits": {
+                **(context.get("limits") or {}),
+                "catalog_only": True,
+            },
+            "tool_hint": "可按需调用只读上下文工具获取完整设定详情。",
+        }
+
+    def _build_generation_tools(
+        self,
+        *,
+        novel_id: str,
+        current_setting_context: dict[str, Any],
+        orchestration_config: OrchestratedTaskConfig,
+    ) -> list[LLMToolSpec]:
+        tools: list[LLMToolSpec] = []
+        if "get_setting_workbench_context" in orchestration_config.tool_allowlist:
+            async def get_setting_workbench_context(args: dict[str, Any]) -> dict[str, Any]:
+                requested_novel_id = str(args.get("novel_id") or novel_id)
+                if requested_novel_id != novel_id:
+                    return {"error": "novel_id does not match current setting workbench session"}
+                return current_setting_context
+
+            tools.append(LLMToolSpec(
+                name="get_setting_workbench_context",
+                description="Read the current setting workbench context including documents, entities, and relationships.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"novel_id": {"type": "string"}},
+                    "required": ["novel_id"],
+                },
+                handler=get_setting_workbench_context,
+                read_only=True,
+                timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+                max_return_chars=orchestration_config.max_tool_result_chars,
+            ))
+
+        from novel_dev.mcp_server.server import internal_mcp_registry
+
+        tools.extend(build_mcp_context_tools(
+            internal_mcp_registry,
+            allowlist=orchestration_config.tool_allowlist,
+            max_return_chars=orchestration_config.max_tool_result_chars,
+            timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+        ))
+        return tools
 
     async def _apply_change(
         self,
@@ -555,9 +826,58 @@ class SettingWorkbenchService:
     def _message_items(messages: list[Any]) -> list[dict[str, Any]]:
         return [{"role": message.role, "content": message.content} for message in messages]
 
-    def _validate_batch_draft(self, draft: SettingBatchDraft) -> None:
+    @classmethod
+    def _extract_suggested_generation_batches(cls, messages: list[Any]) -> list[dict[str, str]]:
+        for message in reversed(messages):
+            sections = cls._parse_suggested_generation_batches(getattr(message, "content", "") or "")
+            if sections:
+                return sections
+        return []
+
+    @staticmethod
+    def _parse_suggested_generation_batches(content: str) -> list[dict[str, str]]:
+        sections: list[dict[str, str]] = []
+        collecting = False
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not collecting:
+                if "建议生成批次" in line:
+                    collecting = True
+                continue
+
+            if not line:
+                continue
+            if sections and line.startswith("**"):
+                break
+
+            match = re.match(r"^(?:[-*]\s*)?(批次\s*[0-9一二三四五六七八九十]+)\s*[：:]\s*(.+)$", line)
+            if match:
+                sections.append(
+                    {
+                        "label": re.sub(r"\s+", "", match.group(1)),
+                        "title": match.group(2).strip(),
+                    }
+                )
+                continue
+            if sections:
+                break
+        return sections
+
+    def _validate_batch_draft(
+        self,
+        draft: SettingBatchDraft,
+        *,
+        required_sections: list[dict[str, str]] | None = None,
+    ) -> None:
         if not draft.changes:
             raise ValueError("Draft must contain at least one change")
+        missing_sections = self._missing_required_sections(draft, required_sections or [])
+        if missing_sections:
+            labels = [
+                f"{section.get('label') or '批次'}：{section.get('title') or ''}".strip("：")
+                for section in missing_sections
+            ]
+            raise ValueError(f"Missing required suggested batches: {'; '.join(labels)}")
         same_batch_entity_ids = self._same_batch_entity_create_ids(draft.changes)
         has_same_batch_entity_create_without_id = self._has_same_batch_entity_create_without_id(draft.changes)
         for index, item in enumerate(draft.changes):
@@ -567,6 +887,67 @@ class SettingWorkbenchService:
                 same_batch_entity_ids=same_batch_entity_ids,
                 has_same_batch_entity_create_without_id=has_same_batch_entity_create_without_id,
             )
+
+    @classmethod
+    def _missing_required_sections(
+        cls,
+        draft: SettingBatchDraft,
+        required_sections: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        if not required_sections:
+            return []
+
+        change_texts = [
+            cls._review_change_search_text(change)
+            for change in draft.changes
+            if change.target_type == "setting_card"
+        ]
+        matched_change_indexes: set[int] = set()
+        missing = []
+        for section in required_sections:
+            terms = cls._required_section_match_terms(section)
+            if not terms:
+                continue
+            matched_index = next(
+                (
+                    index
+                    for index, text in enumerate(change_texts)
+                    if index not in matched_change_indexes and any(term and term in text for term in terms)
+                ),
+                None,
+            )
+            if matched_index is None:
+                missing.append(section)
+            else:
+                matched_change_indexes.add(matched_index)
+        return missing
+
+    @staticmethod
+    def _review_change_search_text(change: SettingBatchChangeDraft) -> str:
+        snapshot = change.after_snapshot or {}
+        pieces = [
+            snapshot.get("title"),
+            snapshot.get("content"),
+            snapshot.get("name"),
+            snapshot.get("description"),
+        ]
+        return "\n".join(str(piece) for piece in pieces if piece)
+
+    @staticmethod
+    def _required_section_match_terms(section: dict[str, str]) -> list[str]:
+        title = (section.get("title") or "").strip()
+        label = (section.get("label") or "").strip()
+        if not title:
+            return [label] if label else []
+        base = re.split(r"[（(]", title, maxsplit=1)[0].strip()
+        variants = [title, base]
+        if label:
+            variants.append(f"{label}：{title}")
+            variants.append(f"{label}:{title}")
+            if base:
+                variants.append(f"{label}：{base}")
+                variants.append(f"{label}:{base}")
+        return [variant for variant in dict.fromkeys(variants) if variant]
 
     @staticmethod
     def _same_batch_entity_create_ids(changes: list[SettingBatchChangeDraft]) -> set[str]:

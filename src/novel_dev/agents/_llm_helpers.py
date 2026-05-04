@@ -9,7 +9,9 @@ from pydantic import TypeAdapter, ValidationError
 
 from novel_dev.llm import llm_factory
 from novel_dev.llm.models import ChatMessage, StructuredOutputConfig, TaskConfig
-from novel_dev.services.flow_control_service import raise_if_cancelled_sync
+from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedLLM, OrchestratedTaskConfig
+from novel_dev.llm.subtasks import LightweightSubtaskOrchestrator, RepairerSubtask, ValidatorSubtask
+from novel_dev.services.flow_control_service import FlowCancelledError, raise_if_cancelled_sync
 from novel_dev.services.log_service import log_service
 
 T = TypeVar("T")
@@ -294,6 +296,141 @@ def _retag_llm_client_identity(
         child = attrs.get(child_name)
         if child is not None:
             _retag_llm_client_identity(child, agent_name, task, seen)
+
+
+def _default_subtask_orchestrator(
+    agent_name: str,
+    task: str,
+    task_config: OrchestratedTaskConfig,
+) -> LightweightSubtaskOrchestrator | None:
+    if not task_config.enable_subtasks:
+        return None
+    validators: list[ValidatorSubtask] = []
+    repairers: list[RepairerSubtask] = []
+    if task_config.validator_subtask == "location_context_quality":
+        def location_context_quality(payload: dict[str, Any]) -> dict[str, Any]:
+            raw_payload = payload.get("payload")
+            prompt = str(payload.get("prompt") or "")
+            narrative = ""
+            if isinstance(raw_payload, dict):
+                narrative = str(raw_payload.get("narrative") or "").strip()
+            else:
+                narrative = str(getattr(raw_payload, "narrative", "") or "").strip()
+            if len(narrative) < 30:
+                return {
+                    "valid": False,
+                    "reason": "narrative_too_short",
+                    "min_chars": 30,
+                    "actual_chars": len(narrative),
+                }
+            required_terms = _location_context_required_terms(prompt)
+            missing_terms = [term for term in required_terms if term not in narrative]
+            if missing_terms:
+                return {
+                    "valid": False,
+                    "reason": "missing_required_context",
+                    "missing_terms": missing_terms,
+                }
+            return {"valid": True}
+
+        validators.append(ValidatorSubtask(name="location_context_quality", handler=location_context_quality))
+    if task_config.repairer_subtask == "schema_repair":
+        def schema_repair(payload: dict[str, Any]) -> Any:
+            raw_payload = payload.get("payload")
+            validation_error = payload.get("validation_error")
+            normalized, _ = _normalize_payload(agent_name, task, raw_payload, validation_error)
+            return normalized
+
+        repairers.append(RepairerSubtask(name="schema_repair", handler=schema_repair))
+    if not validators and not repairers:
+        return None
+    return LightweightSubtaskOrchestrator(validators=validators, repairers=repairers)
+
+
+def _location_context_required_terms(prompt: str) -> list[str]:
+    terms: list[str] = []
+    scene_context = _extract_scene_context_json(prompt)
+    if isinstance(scene_context, dict):
+        for item in scene_context.get("entities", []):
+            if not isinstance(item, dict):
+                continue
+            term = str(item.get("name") or "").strip()
+            if term and len(term) <= 12 and term not in terms:
+                terms.append(term)
+        for field in ("required_terms", "key_entities"):
+            for value in scene_context.get(field, []):
+                term = str(value or "").strip()
+                if term and len(term) <= 12 and term not in terms:
+                    terms.append(term)
+        return terms[:6]
+
+    for marker in ("实体：",):
+        search_from = 0
+        while True:
+            idx = prompt.find(marker, search_from)
+            if idx == -1:
+                break
+            start = idx + len(marker)
+            end_candidates = [
+                pos for pos in (
+                    prompt.find('"', start),
+                    prompt.find("，", start),
+                    prompt.find(",", start),
+                    prompt.find("\n", start),
+                    prompt.find("}", start),
+                    prompt.find("]", start),
+                )
+                if pos != -1
+            ]
+            end = min(end_candidates) if end_candidates else min(len(prompt), start + 12)
+            term = prompt[start:end].strip()
+            if term and len(term) <= 12 and term not in terms:
+                terms.append(term)
+            search_from = start
+    for field in ("required_terms", "key_entities"):
+        pattern = rf'"{field}"\s*:\s*\[(.*?)\]'
+        for match in re.finditer(pattern, prompt, flags=re.DOTALL):
+            for term in re.findall(r'"([^"]{1,12})"', match.group(1)):
+                term = term.strip()
+                if term and term not in terms:
+                    terms.append(term)
+    return terms[:6]
+
+
+def _extract_scene_context_json(prompt: str) -> dict[str, Any] | None:
+    marker = "场景上下文："
+    idx = prompt.find(marker)
+    if idx == -1:
+        return None
+    text = prompt[idx + len(marker):].strip()
+    if not text.startswith("{"):
+        return None
+    brace_count = 0
+    in_string = False
+    escape_next = False
+    for i, ch in enumerate(text):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            brace_count += 1
+        elif ch == "}":
+            brace_count -= 1
+            if brace_count == 0:
+                try:
+                    value = json.loads(text[: i + 1])
+                except json.JSONDecodeError:
+                    return None
+                return value if isinstance(value, dict) else None
+    return None
 
 
 def _preview_text(value: str | None, limit: int = 300) -> str:
@@ -936,4 +1073,89 @@ async def call_and_parse_model(
         config_agent_name=config_agent_name,
         config_task=config_task,
         client=client,
+    )
+
+
+async def orchestrated_call_and_parse_model(
+    agent_name: str,
+    task: str,
+    prompt: str,
+    model_cls: Any,
+    *,
+    tools: list[LLMToolSpec],
+    task_config: OrchestratedTaskConfig,
+    novel_id: str = "",
+    max_retries: int = 3,
+    context_metadata: dict[str, Any] | None = None,
+    config_agent_name: str | None = None,
+    config_task: str | None = None,
+    subtask_orchestrator: LightweightSubtaskOrchestrator | None = None,
+) -> Any:
+    config_agent_name = config_agent_name or agent_name
+    config_task = config_task or task
+    client = llm_factory.get(config_agent_name, task=config_task)
+    _retag_llm_client_identity(client, agent_name, task)
+    structured_config = _structured_config_for_client(client, task, model_cls)
+    if structured_config is None:
+        raise RuntimeError(f"{agent_name}/{task} cannot use orchestrated tools without TaskConfig")
+    if subtask_orchestrator is None:
+        subtask_orchestrator = _default_subtask_orchestrator(agent_name, task, task_config)
+    orchestrator = OrchestratedLLM(
+        client=client,
+        base_config=structured_config,
+        response_schema=model_cls,
+        response_tool_name=structured_config.response_tool_name or _tool_name_for_task(task),
+        tools=tools,
+        task_config=task_config,
+        subtask_orchestrator=subtask_orchestrator,
+    )
+    last_error: Exception | None = None
+    current_prompt = prompt
+    for attempt in range(max_retries):
+        raise_if_cancelled_sync(novel_id)
+        try:
+            return await orchestrator.run(
+                current_prompt,
+                agent_name=agent_name,
+                task=task,
+                novel_id=novel_id,
+                context_metadata=context_metadata,
+            )
+        except FlowCancelledError:
+            raise
+        except Exception as exc:
+            last_error = exc
+            _log_llm_event(
+                novel_id,
+                agent_name,
+                task,
+                f"{task} 编排调用失败(第 {attempt + 1}/{max_retries} 次): {exc}",
+                status="failed",
+                node="llm_orchestrator",
+                level="warning" if attempt < max_retries - 1 else "error",
+                metadata={
+                    **(context_metadata or {}),
+                    "attempt": attempt + 1,
+                    "max_retries": max_retries,
+                    "prompt_chars": len(current_prompt),
+                    "tool_allowlist": list(task_config.tool_allowlist),
+                    "max_tool_calls": task_config.max_tool_calls,
+                    "fallback_reason": str(exc),
+                },
+            )
+            if attempt < max_retries - 1:
+                current_prompt = _build_orchestrated_retry_prompt(prompt, exc)
+                await _sleep_with_cancel_check(1 * (attempt + 1), novel_id)
+    raise RuntimeError(
+        f"LLM orchestrated parse failed after {max_retries} retries for {agent_name}/{task}: {last_error}"
+    ) from last_error
+
+
+def _build_orchestrated_retry_prompt(original_prompt: str, error: Exception) -> str:
+    return (
+        f"{original_prompt}\n\n"
+        "上一次编排调用失败，请严格修正后重新输出。\n"
+        f"失败原因：{error}\n"
+        "如果失败原因包含 validator/subtask 语义校验，请优先修正对应字段；"
+        "如果已调用工具，请只补足最终 response tool 结构化结果。"
     )

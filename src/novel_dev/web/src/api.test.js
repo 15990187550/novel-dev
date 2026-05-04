@@ -56,10 +56,12 @@ import {
   getSettingSessions,
   createSettingSession,
   getSettingSession,
+  generateSettingReviewBatch,
   startSettingConsolidation,
   getSettingReviewBatches,
   getSettingReviewBatch,
   approveSettingReviewBatch,
+  applySettingReviewBatch,
   confirmKnowledgeDomainScope,
   clearLogs,
   getLogs,
@@ -153,6 +155,14 @@ describe('outline workbench api', () => {
     })
   })
 
+  it('uses an extended timeout for AI setting review generation', async () => {
+    await expect(generateSettingReviewBatch('novel-1', 'sgs-1')).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/sessions/sgs-1/generate', {}, {
+      timeout: 330000,
+    })
+  })
+
   it('loads setting review batch detail with encoded batch id', async () => {
     await expect(getSettingReviewBatch('novel-1', 'batch 1/2')).resolves.toEqual({ ok: true })
 
@@ -171,6 +181,14 @@ describe('outline workbench api', () => {
     await expect(approveSettingReviewBatch('novel-1', 'batch 1/2', payload)).resolves.toEqual({ ok: true })
 
     expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/review_batches/batch%201%2F2/approve', payload)
+  })
+
+  it('applies setting review batch decisions with encoded batch id', async () => {
+    const payload = { decisions: [{ change_id: 'change-1', decision: 'reject' }] }
+
+    await expect(applySettingReviewBatch('novel-1', 'batch 1/2', payload)).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/review_batches/batch%201%2F2/apply', payload)
   })
 
   it('requests volume plan with silent error handling for missing plans', async () => {

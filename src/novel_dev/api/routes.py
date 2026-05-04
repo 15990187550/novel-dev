@@ -2782,6 +2782,33 @@ async def approve_setting_review_batch(
 
 
 @router.post(
+    "/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
+    response_model=SettingReviewApplyResponse,
+)
+async def apply_setting_review_batch(
+    novel_id: str,
+    batch_id: str,
+    req: SettingReviewApplyRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = SettingWorkbenchService(session)
+    batch = await service.repo.get_review_batch(batch_id)
+    if batch is None or batch.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="Setting review batch not found")
+    try:
+        result = await service.apply_review_decisions(
+            novel_id,
+            batch_id,
+            [decision.model_dump(exclude_none=True) for decision in req.decisions],
+        )
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    await session.commit()
+    return result
+
+
+@router.post(
     "/api/novels/{novel_id}/settings/review_batches/{batch_id}/conflicts/resolve",
     response_model=SettingReviewBatchDetailResponse,
 )

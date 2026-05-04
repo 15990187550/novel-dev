@@ -25,6 +25,7 @@ from novel_dev.schemas.outline import VolumePlan, SynopsisData
 from novel_dev.services.export_service import ExportService
 import uuid as uuid_mod
 from novel_dev.config import Settings
+from novel_dev.mcp_server.registry import MCPToolRegistry
 
 mcp = FastMCP("novel-dev")
 
@@ -513,3 +514,23 @@ async def confirm_brainstorm(novel_id: str) -> dict:
         )
         await session.commit()
         return {"confirmed": True}
+
+
+_WRITE_TOOL_NAMES = {
+    "upload_document",
+    "approve_pending_documents",
+    "rollback_style_profile",
+    "prepare_chapter_context",
+    "generate_chapter_draft",
+    "advance_novel",
+    "brainstorm_novel",
+    "plan_volume",
+    "run_librarian",
+    "save_brainstorm_draft",
+    "confirm_brainstorm",
+}
+
+internal_mcp_registry = MCPToolRegistry.from_fastmcp(
+    mcp,
+    write_tool_names=_WRITE_TOOL_NAMES,
+)

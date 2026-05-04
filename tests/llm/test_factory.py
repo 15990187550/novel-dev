@@ -95,6 +95,80 @@ def test_resolve_config_task_level(temp_yaml):
     assert cfg.fallback.model == "gpt-4"
 
 
+def test_resolve_orchestration_config_from_task_level(temp_yaml):
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    factory = LLMFactory(settings)
+    factory._config["agents"]["test_agent"]["tasks"]["special_task"]["orchestration"] = {
+        "tool_allowlist": ["get_novel_state", "get_novel_documents"],
+        "max_tool_calls": 2,
+        "tool_timeout_seconds": 1.5,
+        "max_tool_result_chars": 1200,
+        "enable_subtasks": True,
+        "retriever_subtasks": ["context_retriever"],
+        "validator_subtask": "semantic",
+        "repairer_subtask": "semantic_repair",
+    }
+
+    cfg = factory.resolve_orchestration_config("TestAgent", "special_task")
+
+    assert cfg is not None
+    assert cfg.tool_allowlist == ["get_novel_state", "get_novel_documents"]
+    assert cfg.max_tool_calls == 2
+    assert cfg.tool_timeout_seconds == 1.5
+    assert cfg.max_tool_result_chars == 1200
+    assert cfg.allow_writes is False
+    assert cfg.enable_subtasks is True
+    assert cfg.retriever_subtasks == ["context_retriever"]
+    assert cfg.validator_subtask == "semantic"
+    assert cfg.repairer_subtask == "semantic_repair"
+
+
+def test_resolve_orchestration_config_returns_none_when_unconfigured(temp_yaml):
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    factory = LLMFactory(settings)
+
+    assert factory.resolve_orchestration_config("TestAgent", "special_task") is None
+
+
+def test_resolve_orchestration_config_allows_subtask_only_config(temp_yaml):
+    settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
+    factory = LLMFactory(settings)
+    factory._config["agents"]["test_agent"]["tasks"]["special_task"]["orchestration"] = {
+        "enabled": True,
+        "enable_subtasks": True,
+        "repairer_subtask": "schema_repair",
+    }
+
+    cfg = factory.resolve_orchestration_config("TestAgent", "special_task")
+
+    assert cfg is not None
+    assert cfg.tool_allowlist == []
+    assert cfg.enable_subtasks is True
+    assert cfg.repairer_subtask == "schema_repair"
+
+
+def test_default_llm_config_resolves_context_agent_orchestration():
+    settings = Settings(llm_config_path="llm_config.yaml", anthropic_api_key="ak")
+    factory = LLMFactory(settings)
+
+    cfg = factory.resolve_orchestration_config("ContextAgent", "build_scene_context")
+
+    assert cfg is not None
+    assert cfg.tool_allowlist == [
+        "get_context_location_details",
+        "get_context_entity_states",
+        "get_context_foreshadowing_details",
+        "get_context_timeline_events",
+        "get_novel_state",
+        "get_chapter_draft_status",
+    ]
+    assert cfg.max_tool_calls == 3
+    assert cfg.max_tool_result_chars == 1600
+    assert cfg.enable_subtasks is True
+    assert cfg.validator_subtask == "location_context_quality"
+    assert cfg.repairer_subtask == "schema_repair"
+
+
 def test_resolve_config_preserves_auto_tool_choice(temp_yaml):
     settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak")
     factory = LLMFactory(settings)

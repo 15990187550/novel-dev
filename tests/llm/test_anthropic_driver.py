@@ -5,7 +5,7 @@ import types
 
 from novel_dev.llm.drivers.anthropic import AnthropicDriver
 from novel_dev.llm.exceptions import LLMRateLimitError
-from novel_dev.llm.models import ChatMessage, StructuredOutputConfig, TaskConfig
+from novel_dev.llm.models import CapabilityToolConfig, ChatMessage, StructuredOutputConfig, TaskConfig
 
 
 @pytest.mark.asyncio
@@ -186,6 +186,56 @@ async def test_anthropic_extracts_tool_use_payload():
     response = await driver.acomplete("hi", config)
     assert response.structured_payload == {"value": "ok"}
     assert response.finish_reason == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_anthropic_distinguishes_response_tool_from_capability_tools():
+    response_block = MagicMock()
+    del response_block.text
+    response_block.type = "tool_use"
+    response_block.id = "response_1"
+    response_block.name = "emit_payload"
+    response_block.input = {"value": "done"}
+    capability_block = MagicMock()
+    del capability_block.text
+    capability_block.type = "tool_use"
+    capability_block.id = "tool_1"
+    capability_block.name = "get_novel_state"
+    capability_block.input = {"novel_id": "n1"}
+    mock_client = MagicMock()
+    mock_client.messages.create = AsyncMock(
+        return_value=MagicMock(
+            content=[capability_block, response_block],
+            usage=MagicMock(input_tokens=1, output_tokens=1),
+            stop_reason="tool_use",
+        )
+    )
+    driver = AnthropicDriver(client=mock_client)
+    config = TaskConfig(
+        provider="anthropic",
+        model="claude-sonnet",
+        structured_output=StructuredOutputConfig(mode="anthropic_tool", tool_choice="auto"),
+        response_tool_name="emit_payload",
+        response_json_schema={"type": "object", "properties": {"value": {"type": "string"}}},
+        capability_tools=[
+            CapabilityToolConfig(
+                name="get_novel_state",
+                description="Read the current novel state.",
+                input_schema={
+                    "type": "object",
+                    "properties": {"novel_id": {"type": "string"}},
+                    "required": ["novel_id"],
+                },
+            )
+        ],
+    )
+    response = await driver.acomplete("hi", config)
+    call_kwargs = mock_client.messages.create.call_args.kwargs
+    assert [tool["name"] for tool in call_kwargs["tools"]] == ["emit_payload", "get_novel_state"]
+    assert call_kwargs["tool_choice"] == {"type": "auto"}
+    assert response.structured_payload == {"value": "done"}
+    assert response.tool_calls[0].name == "get_novel_state"
+    assert response.tool_calls[0].arguments == {"novel_id": "n1"}
 
 
 def test_map_exception_without_overloaded_error_symbol():

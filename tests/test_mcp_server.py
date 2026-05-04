@@ -1,7 +1,7 @@
 import uuid
 import pytest
 
-from novel_dev.mcp_server.server import mcp
+from novel_dev.mcp_server.server import internal_mcp_registry, mcp
 
 
 def test_mcp_server_has_tools():
@@ -36,6 +36,18 @@ def test_mcp_server_has_tools():
         "confirm_brainstorm",
     }
     assert set(mcp._tool_manager._tools.keys()) == expected
+
+
+def test_mcp_internal_registry_reuses_external_tool_functions():
+    entry = internal_mcp_registry.get("get_novel_state")
+    assert entry is not None
+    assert entry.fn is mcp._tool_manager._tools["get_novel_state"].fn
+    assert entry.read_only is True
+
+    write_entry = internal_mcp_registry.get("upload_document")
+    assert write_entry is not None
+    assert write_entry.fn is mcp._tool_manager._tools["upload_document"].fn
+    assert write_entry.read_only is False
 
 
 @pytest.mark.asyncio

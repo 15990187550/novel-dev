@@ -73,6 +73,20 @@ agents:
         retries: 3
         temperature: 0.85
         max_tokens: 8192
+        orchestration:
+          enabled: false
+          tool_allowlist:
+            - get_volume_planner_context
+            - get_novel_state
+            - get_synopsis
+            - get_novel_documents
+            - get_novel_document_full
+          max_tool_calls: 3
+          tool_timeout_seconds: 5
+          max_tool_result_chars: 6000
+          retriever_subtasks: []
+          enable_subtasks: true
+          repairer_subtask: schema_repair
       expand_volume_plan_batch:
         timeout: 120
         retries: 3
@@ -172,6 +186,19 @@ agents:
     timeout: 180
     temperature: 0.55
     max_tokens: 12000
+    orchestration:
+      enabled: false
+      tool_allowlist:
+        - get_setting_workbench_context
+        - get_novel_state
+        - get_novel_documents
+        - get_novel_document_full
+      max_tool_calls: 3
+      tool_timeout_seconds: 5
+      max_tool_result_chars: 4000
+      retriever_subtasks: []
+      enable_subtasks: true
+      repairer_subtask: schema_repair
     fallback:
       model: minimax-2-7
       temperature: 0.55
@@ -181,6 +208,22 @@ agents:
   context_agent:
     model: minimax-2-7
     timeout: 60
+    orchestration:
+      enabled: true
+      tool_allowlist:
+        - get_context_location_details
+        - get_context_entity_states
+        - get_context_foreshadowing_details
+        - get_context_timeline_events
+        - get_novel_state
+        - get_chapter_draft_status
+      max_tool_calls: 3
+      tool_timeout_seconds: 5
+      max_tool_result_chars: 1600
+      retriever_subtasks: []
+      enable_subtasks: true
+      validator_subtask: location_context_quality
+      repairer_subtask: schema_repair
     fallback:
       model: kimi-for-coding
       temperature: 0.45
