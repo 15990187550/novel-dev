@@ -102,6 +102,49 @@ async def test_save_llm_config_requires_admin_token_when_configured(tmp_path, mo
 
 
 @pytest.mark.asyncio
+async def test_save_llm_config_preserves_existing_secret_when_masked_value_round_trips(tmp_path, monkeypatch):
+    import yaml
+
+    config_path = tmp_path / "llm_config.yaml"
+    config_path.write_text(
+        "models:\n"
+        "  kimi:\n"
+        "    provider: anthropic\n"
+        "    model: kimi-test\n"
+        "    api_key: sk-live-secret\n",
+        encoding="utf-8",
+    )
+
+    from novel_dev.config import Settings
+
+    settings = Settings(llm_config_path=str(config_path))
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/config/llm",
+            json={
+                "config": {
+                    "models": {
+                        "kimi": {
+                            "provider": "anthropic",
+                            "model": "kimi-changed",
+                            "api_key": "********",
+                        }
+                    }
+                }
+            },
+        )
+
+    assert resp.status_code == 200
+    saved_config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved_config["models"]["kimi"]["model"] == "kimi-changed"
+    assert saved_config["models"]["kimi"]["api_key"] == "sk-live-secret"
+    assert "********" not in config_path.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
 async def test_save_llm_config_reloads_runtime_factory(tmp_path, monkeypatch):
     config_path = tmp_path / "llm_config.yaml"
     from novel_dev.config import Settings
@@ -283,3 +326,24 @@ async def test_save_env_config_requires_admin_token_when_configured(tmp_path, mo
     assert missing.status_code == 403
     assert ok.status_code == 200
     assert "sk-test" in env_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_save_env_config_ignores_masked_secret_placeholder(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("ANTHROPIC_API_KEY=sk-live-secret\n", encoding="utf-8")
+
+    from novel_dev.config import Settings
+
+    settings = Settings(anthropic_api_key="sk-live-secret")
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post("/api/config/env", json={"anthropic_api_key": "********"})
+
+    assert resp.status_code == 200
+    content = env_file.read_text(encoding="utf-8")
+    assert "ANTHROPIC_API_KEY=sk-live-secret" in content
+    assert "********" not in content

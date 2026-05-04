@@ -65,6 +65,34 @@ def _mask_config_secrets(value: Any) -> Any:
     return value
 
 
+def _preserve_masked_config_secrets(submitted: Any, existing: Any = None) -> Any:
+    if isinstance(submitted, dict):
+        existing_dict = existing if isinstance(existing, dict) else {}
+        sanitized = {}
+        for key, value in submitted.items():
+            if _is_secret_config_key(str(key)) and value == MASKED_SECRET:
+                existing_value = existing_dict.get(key)
+                if existing_value not in (None, "", MASKED_SECRET):
+                    sanitized[key] = existing_value
+                continue
+
+            sanitized_value = _preserve_masked_config_secrets(value, existing_dict.get(key))
+            sanitized[key] = sanitized_value
+        return sanitized
+
+    if isinstance(submitted, list):
+        existing_list = existing if isinstance(existing, list) else []
+        return [
+            _preserve_masked_config_secrets(
+                item,
+                existing_list[index] if index < len(existing_list) else None,
+            )
+            for index, item in enumerate(submitted)
+        ]
+
+    return submitted
+
+
 def _require_config_admin_token(x_novel_config_token: Optional[str]) -> None:
     expected_token = settings.config_admin_token
     if not expected_token:
@@ -91,11 +119,16 @@ async def save_llm_config(
 ):
     _require_config_admin_token(x_novel_config_token)
     import yaml
+    existing_config = {}
+    if os.path.exists(settings.llm_config_path):
+        with open(settings.llm_config_path, "r", encoding="utf-8") as f:
+            existing_config = yaml.safe_load(f) or {}
+    config = _preserve_masked_config_secrets(payload.config, existing_config)
     config_dir = os.path.dirname(settings.llm_config_path)
     if config_dir:
         os.makedirs(config_dir, exist_ok=True)
     with open(settings.llm_config_path, "w", encoding="utf-8") as f:
-        yaml.safe_dump(payload.config, f, allow_unicode=True, sort_keys=False)
+        yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
     llm_factory.reload()
     return {"saved": True, "reloaded": True}
 
@@ -186,6 +219,8 @@ async def save_env_config(
     _require_config_admin_token(x_novel_config_token)
     env_path = find_dotenv() or ".env"
     for key, value in payload.model_dump().items():
+        if value == MASKED_SECRET:
+            continue
         if value is not None:
             set_key(env_path, key.upper(), value)
             setattr(settings, key, value)
