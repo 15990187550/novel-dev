@@ -1,9 +1,16 @@
+import asyncio
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from pydantic import BaseModel
 
-from novel_dev.agents._llm_helpers import call_and_parse, call_and_parse_model, register_structured_normalizer
+from novel_dev.agents._llm_helpers import (
+    _await_llm_response_with_progress,
+    call_and_parse,
+    call_and_parse_model,
+    register_structured_normalizer,
+)
 from novel_dev.llm.fallback_driver import FallbackDriver
 from novel_dev.llm.models import LLMResponse, StructuredOutputConfig, TaskConfig
 from novel_dev.services.flow_control_service import FlowCancelledError, clear_cancel_request, request_cancel
@@ -464,6 +471,7 @@ async def test_call_and_parse_model_emits_frontend_visible_llm_node_logs():
     started = next(entry for entry in entries if entry.get("status") == "started")
     metadata = started["metadata"]
     assert metadata["prompt_chars"] == len(prompt)
+    assert metadata["prompt"] == prompt
     assert len(metadata["prompt_preview"]) <= 300
     assert metadata["prompt_preview"] != prompt
     succeeded = next(entry for entry in entries if entry.get("status") == "succeeded")
@@ -619,3 +627,75 @@ async def test_call_and_parse_model_stops_before_llm_call_when_cancel_requested(
             )
 
     mock_client.acomplete.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_waiting_llm_response_stops_when_cancel_requested():
+    cancelled = False
+
+    async def never_returns():
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    wait_task = asyncio.create_task(
+        _await_llm_response_with_progress(
+            never_returns(),
+            novel_id="novel-cancel",
+            agent_name="TestAgent",
+            task="test_task",
+            attempt_metadata={},
+            started_at=0.0,
+            interval_seconds=0.01,
+        )
+    )
+    await asyncio.sleep(0.02)
+    request_cancel("novel-cancel")
+
+    with pytest.raises(FlowCancelledError):
+        await asyncio.wait_for(wait_task, timeout=0.2)
+    assert cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_call_and_parse_stops_during_retry_backoff():
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="invalid json"),
+        LLMResponse(text='{"title": "主线", "tags": ["成长"]}'),
+    ]
+
+    def parser(text):
+        import json
+        payload = json.loads(text)
+        return ExamplePayload.model_validate(payload)
+
+    original_log_llm_event = __import__(
+        "novel_dev.agents._llm_helpers",
+        fromlist=["_log_llm_event"],
+    )._log_llm_event
+
+    def cancel_after_parse_failure(*args, **kwargs):
+        original_log_llm_event(*args, **kwargs)
+        if kwargs.get("status") == "failed" and kwargs.get("node") == "llm_parse":
+            request_cancel("novel-cancel")
+
+    started_at = time.perf_counter()
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        with patch("novel_dev.agents._llm_helpers._log_llm_event", side_effect=cancel_after_parse_failure):
+            with pytest.raises(FlowCancelledError):
+                await call_and_parse(
+                    "TestAgent",
+                    "test_task",
+                    "prompt",
+                    parser,
+                    max_retries=3,
+                    novel_id="novel-cancel",
+                )
+
+    assert time.perf_counter() - started_at < 0.5
+    assert mock_client.acomplete.call_count == 1

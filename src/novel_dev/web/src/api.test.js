@@ -53,6 +53,13 @@ import {
   updateNovel,
   updateEntity,
   getKnowledgeDomains,
+  getSettingSessions,
+  createSettingSession,
+  getSettingSession,
+  startSettingConsolidation,
+  getSettingReviewBatches,
+  getSettingReviewBatch,
+  approveSettingReviewBatch,
   confirmKnowledgeDomainScope,
   clearLogs,
   getLogs,
@@ -120,6 +127,50 @@ describe('outline workbench api', () => {
     expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace/start')
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace')
     expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/brainstorm/workspace/submit')
+  })
+
+  it('requests setting generation session endpoints', async () => {
+    const payload = {
+      title: '修炼体系补全',
+      initial_idea: '废脉少年',
+      target_categories: [],
+    }
+
+    await expect(getSettingSessions('novel-1')).resolves.toEqual({ ok: true })
+    await expect(createSettingSession('novel-1', payload)).resolves.toEqual({ ok: true })
+    await expect(getSettingSession('novel-1', 'sgs-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/settings/sessions')
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/sessions', payload)
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/settings/sessions/sgs-1')
+  })
+
+  it('starts setting consolidation with selected pending ids', async () => {
+    await expect(startSettingConsolidation('novel-1', ['pending-1', 'pending-2'])).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/consolidations', {
+      selected_pending_ids: ['pending-1', 'pending-2'],
+    })
+  })
+
+  it('loads setting review batch detail with encoded batch id', async () => {
+    await expect(getSettingReviewBatch('novel-1', 'batch 1/2')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/settings/review_batches/batch%201%2F2')
+  })
+
+  it('lists setting review batches', async () => {
+    await expect(getSettingReviewBatches('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/settings/review_batches')
+  })
+
+  it('approves setting review batch with encoded batch id', async () => {
+    const payload = { change_ids: ['change-1'] }
+
+    await expect(approveSettingReviewBatch('novel-1', 'batch 1/2', payload)).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/settings/review_batches/batch%201%2F2/approve', payload)
   })
 
   it('requests volume plan with silent error handling for missing plans', async () => {

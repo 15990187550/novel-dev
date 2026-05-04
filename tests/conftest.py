@@ -23,7 +23,7 @@ from novel_dev.db.engine import engine, async_session_maker
 def mock_llm_factory(monkeypatch):
     from novel_dev.llm import llm_factory
     from novel_dev.llm.models import LLMResponse
-    from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone
+    from novel_dev.schemas.outline import SynopsisData, CharacterArc, PlotMilestone, SynopsisVolumeOutline
 
     default_synopsis = SynopsisData(
         title="天玄纪元",
@@ -56,8 +56,31 @@ def mock_llm_factory(monkeypatch):
 
         mock_client = AsyncMock()
 
-        if agent == "BrainstormAgent" and task == "generate_synopsis":
+        if agent == "BrainstormAgent" and task in {"generate_synopsis", "generate_synopsis_top_level"}:
             mock_client.acomplete.return_value = LLMResponse(text=default_synopsis.model_dump_json())
+        elif agent == "BrainstormAgent" and task == "generate_synopsis_volume_outlines_batch":
+            mock_client.acomplete.return_value = LLMResponse(
+                text="[" + ",".join(
+                    SynopsisVolumeOutline(
+                        volume_number=i,
+                        title=f"第{i}卷",
+                        summary=f"第{i}卷概要",
+                        narrative_role="承接主线",
+                        main_goal="突破困局",
+                        main_conflict="正邪冲突",
+                        start_state="初入局",
+                        end_state="阶段胜利",
+                        climax="卷末大战",
+                        hook_to_next="新的危机",
+                        key_entities=["主角"],
+                        relationship_shifts=["主角成长"],
+                        foreshadowing_setup=["伏笔"],
+                        foreshadowing_payoff=["回收"],
+                        target_chapter_range=f"{(i - 1) * 30 + 1}-{i * 30}",
+                    ).model_dump_json()
+                    for i in range(1, 4)
+                ) + "]"
+            )
         elif agent == "BrainstormAgent" and task == "score_synopsis":
             from novel_dev.schemas.outline import SynopsisScoreResult
             mock_client.acomplete.return_value = LLMResponse(text=SynopsisScoreResult(
@@ -146,12 +169,12 @@ def mock_llm_factory(monkeypatch):
                 text=StyleProfile(style_guide="Overall: mock style guide", style_config=StyleConfig()).model_dump_json()
             )
         elif agent == "SettingExtractorAgent" and task == "extract_setting":
-            from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile, ImportantItem
+            from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile, FactionInfo, ImportantItem
             mock_client.acomplete.return_value = LLMResponse(
                 text=ExtractedSetting(
                     worldview="mock worldview",
                     power_system="mock power",
-                    factions=[],
+                    factions=[FactionInfo(name="青云宗", description="正道魁首", relationship_with_protagonist="主角宗门")],
                     character_profiles=[CharacterProfile(name="Mock", identity="mock", personality="mock", goal="mock")],
                     important_items=[ImportantItem(name="MockItem", description="mock", significance="mock")],
                     plot_synopsis="mock synopsis",

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import json
 import re
 import time
@@ -304,6 +305,7 @@ def _preview_text(value: str | None, limit: int = 300) -> str:
 def _prompt_metadata(prompt: str, *, limit: int = 300) -> dict[str, Any]:
     return {
         "prompt_chars": len(prompt or ""),
+        "prompt": prompt or "",
         "prompt_preview": _preview_text(prompt, limit),
     }
 
@@ -380,9 +382,11 @@ async def _await_llm_response_with_progress(
     heartbeat = 0
     try:
         while True:
+            raise_if_cancelled_sync(novel_id)
             done, _ = await asyncio.wait({response_task}, timeout=interval_seconds)
             if response_task in done:
                 return await response_task
+            raise_if_cancelled_sync(novel_id)
             heartbeat += 1
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             _log_llm_event(
@@ -399,8 +403,24 @@ async def _await_llm_response_with_progress(
                 duration_ms=elapsed_ms,
             )
     except BaseException:
-        response_task.cancel()
+        if not response_task.done():
+            response_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await response_task
         raise
+
+
+async def _sleep_with_cancel_check(seconds: float, novel_id: str, *, interval_seconds: float = 0.1) -> None:
+    if seconds <= 0:
+        raise_if_cancelled_sync(novel_id)
+        return
+    deadline = time.perf_counter() + seconds
+    while True:
+        raise_if_cancelled_sync(novel_id)
+        remaining = deadline - time.perf_counter()
+        if remaining <= 0:
+            return
+        await asyncio.sleep(min(interval_seconds, remaining))
 
 
 def _repair_truncated_json(text: str) -> str | None:
@@ -558,7 +578,7 @@ async def call_and_parse(
                 duration_ms=int((time.perf_counter() - started_at) * 1000),
             )
             if attempt < max_retries - 1:
-                await asyncio.sleep(1 * (attempt + 1))
+                await _sleep_with_cancel_check(1 * (attempt + 1), novel_id)
     _log_llm_event(
         novel_id,
         agent_name,
@@ -804,7 +824,7 @@ async def call_and_parse_model(
                             attempt = 0
                             continue
                 if attempt < max_retries:
-                    await asyncio.sleep(1 * (attempt + 1))
+                    await _sleep_with_cancel_check(1 * (attempt + 1), novel_id)
             except StructuredPayloadMissingError as exc:
                 last_error = exc
                 bad_output = response.text if response is not None else ""
@@ -882,7 +902,7 @@ async def call_and_parse_model(
                             attempt = 0
                             continue
                 if attempt < max_retries:
-                    await asyncio.sleep(1 * (attempt + 1))
+                    await _sleep_with_cancel_check(1 * (attempt + 1), novel_id)
         _log_llm_event(
             novel_id,
             agent_name,

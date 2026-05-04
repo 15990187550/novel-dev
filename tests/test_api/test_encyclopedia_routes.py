@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
@@ -49,6 +51,45 @@ async def test_list_entities(async_session):
             assert data["items"][0]["latest_state"]["goal"] == "报仇"
             assert data["items"][0]["effective_category"] == "人物"
             assert data["items"][0]["effective_group_name"] == "主角阵营"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entities_hides_archived_by_default_and_includes_with_flag(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    active = await repo.create("active_entity", "character", "陆照", novel_id="n_archived_entities")
+    archived = await repo.create("archived_entity", "character", "旧设定陆照", novel_id="n_archived_entities")
+    archived.archived_at = datetime(2026, 5, 4, 8, 0, 0)
+    archived.archive_reason = "setting_consolidation"
+    archived.archived_by_consolidation_batch_id = "batch-1"
+    archived.archived_by_consolidation_change_id = "change-1"
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            default_resp = await client.get("/api/novels/n_archived_entities/entities")
+            assert default_resp.status_code == 200
+            assert [item["entity_id"] for item in default_resp.json()["items"]] == [active.id]
+
+            include_resp = await client.get(
+                "/api/novels/n_archived_entities/entities",
+                params={"include_archived": "true"},
+            )
+            assert include_resp.status_code == 200
+            items = include_resp.json()["items"]
+            assert {item["entity_id"] for item in items} == {active.id, archived.id}
+            archived_payload = next(item for item in items if item["entity_id"] == archived.id)
+            assert archived_payload["archived_at"] == "2026-05-04T08:00:00"
+            assert archived_payload["archive_reason"] == "setting_consolidation"
+            assert archived_payload["archived_by_consolidation_batch_id"] == "batch-1"
+            assert archived_payload["archived_by_consolidation_change_id"] == "change-1"
     finally:
         app.dependency_overrides.clear()
 
@@ -453,6 +494,92 @@ async def test_search_entities_returns_grouped_results(async_session):
 
 
 @pytest.mark.asyncio
+async def test_search_entities_hides_archived_by_default_and_includes_with_flag(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    active = await repo.create("search_active", "character", "陆照", novel_id="n_archived_search")
+    archived = await repo.create("search_archived", "character", "旧设定陆照", novel_id="n_archived_search")
+    archived.archived_at = datetime(2026, 5, 4, 11, 0, 0)
+    archived.archive_reason = "setting_consolidation"
+    archived.archived_by_consolidation_batch_id = "batch-search"
+    archived.archived_by_consolidation_change_id = "change-search"
+    active.search_document = "名称：陆照"
+    archived.search_document = "名称：旧设定陆照"
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            default_resp = await client.get(
+                "/api/novels/n_archived_search/entities/search",
+                params={"q": "旧设定陆照"},
+            )
+            assert default_resp.status_code == 200
+            assert default_resp.json()["items"] == []
+
+            include_resp = await client.get(
+                "/api/novels/n_archived_search/entities/search",
+                params={"q": "旧设定陆照", "include_archived": "true"},
+            )
+            assert include_resp.status_code == 200
+            items = include_resp.json()["items"]
+            assert len(items) == 1
+            assert items[0]["entities"][0]["entity_id"] == archived.id
+            assert items[0]["entities"][0]["archived_at"] == "2026-05-04T11:00:00"
+            assert items[0]["entities"][0]["archived_by_consolidation_batch_id"] == "batch-search"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_search_entities_hides_archived_relationship_graph_hits_by_default(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    entity_repo = EntityRepository(async_session)
+    relationship_repo = RelationshipRepository(async_session)
+    await entity_repo.create("graph_source", "character", "陆照", novel_id="n_archived_graph_search")
+    target = await entity_repo.create("graph_target", "item", "道经", novel_id="n_archived_graph_search")
+    await entity_repo.update_classification("graph_target", system_category="功法")
+    archived_rel = await relationship_repo.upsert(
+        source_id="graph_source",
+        target_id="graph_target",
+        relation_type="所修功法",
+        meta={"source": "test.archived_graph"},
+        novel_id="n_archived_graph_search",
+    )
+    archived_rel.archived_at = datetime(2026, 5, 4, 14, 0, 0)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            default_resp = await client.get(
+                "/api/novels/n_archived_graph_search/entities/search",
+                params={"q": "陆照修炼的功法"},
+            )
+            assert default_resp.status_code == 200
+            assert default_resp.json()["items"] == []
+
+            include_resp = await client.get(
+                "/api/novels/n_archived_graph_search/entities/search",
+                params={"q": "陆照修炼的功法", "include_archived": "true"},
+            )
+            assert include_resp.status_code == 200
+            items = include_resp.json()["items"]
+            assert len(items) == 1
+            assert items[0]["entities"][0]["entity_id"] == target.id
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_search_entities_blank_query_returns_empty_grouped_results(async_session):
     async def override():
         yield async_session
@@ -509,6 +636,102 @@ async def test_list_entity_relationships_falls_back_to_latest_state(async_sessio
             assert items[0]["target_id"] == "e2"
             assert items[0]["relation_type"] == "同盟"
             assert items[0]["is_inferred"] is True
+            assert items[0]["archived_at"] is None
+            assert items[0]["archive_reason"] is None
+            assert items[0]["archived_by_consolidation_batch_id"] is None
+            assert items[0]["archived_by_consolidation_change_id"] is None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entity_relationships_hides_archived_by_default_and_includes_with_flag(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    entity_repo = EntityRepository(async_session)
+    relationship_repo = RelationshipRepository(async_session)
+    await entity_repo.create("source", "character", "陆照", novel_id="n_archived_rels")
+    await entity_repo.create("target", "character", "妖妖", novel_id="n_archived_rels")
+    active = await relationship_repo.upsert(
+        source_id="source",
+        target_id="target",
+        relation_type="同盟",
+        meta={"source": "test.active"},
+        novel_id="n_archived_rels",
+    )
+    archived = await relationship_repo.upsert(
+        source_id="target",
+        target_id="source",
+        relation_type="旧关系",
+        meta={"source": "test.archived"},
+        novel_id="n_archived_rels",
+    )
+    archived.archived_at = datetime(2026, 5, 4, 9, 0, 0)
+    archived.archive_reason = "setting_consolidation"
+    archived.archived_by_consolidation_batch_id = "batch-2"
+    archived.archived_by_consolidation_change_id = "change-2"
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            default_resp = await client.get("/api/novels/n_archived_rels/entity_relationships")
+            assert default_resp.status_code == 200
+            assert [item["id"] for item in default_resp.json()["items"]] == [active.id]
+
+            include_resp = await client.get(
+                "/api/novels/n_archived_rels/entity_relationships",
+                params={"include_archived": "true"},
+            )
+            assert include_resp.status_code == 200
+            items = include_resp.json()["items"]
+            assert [item["id"] for item in items] == [active.id, archived.id]
+            archived_payload = next(item for item in items if item["id"] == archived.id)
+            assert archived_payload["archived_at"] == "2026-05-04T09:00:00"
+            assert archived_payload["archive_reason"] == "setting_consolidation"
+            assert archived_payload["archived_by_consolidation_batch_id"] == "batch-2"
+            assert archived_payload["archived_by_consolidation_change_id"] == "change-2"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entity_relationships_hides_edges_to_archived_entities_by_default(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    entity_repo = EntityRepository(async_session)
+    relationship_repo = RelationshipRepository(async_session)
+    await entity_repo.create("visible_source", "character", "陆照", novel_id="n_archived_rel_nodes")
+    archived_target = await entity_repo.create("archived_target", "item", "旧道经", novel_id="n_archived_rel_nodes")
+    archived_target.archived_at = datetime(2026, 5, 4, 13, 0, 0)
+    hidden_edge = await relationship_repo.upsert(
+        source_id="visible_source",
+        target_id="archived_target",
+        relation_type="所修功法",
+        meta={"source": "test.hidden_node"},
+        novel_id="n_archived_rel_nodes",
+    )
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            default_resp = await client.get("/api/novels/n_archived_rel_nodes/entity_relationships")
+            assert default_resp.status_code == 200
+            assert default_resp.json()["items"] == []
+
+            include_resp = await client.get(
+                "/api/novels/n_archived_rel_nodes/entity_relationships",
+                params={"include_archived": "true"},
+            )
+            assert include_resp.status_code == 200
+            assert [item["id"] for item in include_resp.json()["items"]] == [hidden_edge.id]
     finally:
         app.dependency_overrides.clear()
 
@@ -606,6 +829,133 @@ async def test_list_entity_relationships_downgrades_non_character_mentor_inferen
             assert items[0]["target_id"] == "manual"
             assert items[0]["relation_type"] == "关联"
             assert items[0]["meta"]["source"] == "latest_state.identity"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entity_relationships_keeps_same_name_entities_in_own_domain(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    await repo.create("source_local", "faction", "三清", novel_id="n_domain_rel")
+    await repo.create("target_local", "item", "道经", novel_id="n_domain_rel")
+    await repo.create("source_domain", "location", "幽谷", novel_id="n_domain_rel")
+    await repo.create("target_domain", "item", "道经", novel_id="n_domain_rel")
+    await version_repo.create(
+        "source_local",
+        1,
+        {"name": "三清", "description": "已超脱的至高存在，遗留道经于后世"},
+    )
+    await version_repo.create(
+        "target_local",
+        1,
+        {"name": "道经"},
+    )
+    await version_repo.create(
+        "source_domain",
+        1,
+        {
+            "name": "幽谷",
+            "description": "涂山纯狐一族居住地，藏有道经等典籍。",
+            "_knowledge_domain_id": "domain_yangshen",
+            "_knowledge_domain_name": "阳神",
+        },
+    )
+    await version_repo.create(
+        "target_domain",
+        1,
+        {
+            "name": "道经",
+            "_knowledge_domain_id": "domain_yangshen",
+            "_knowledge_domain_name": "阳神",
+        },
+    )
+    for entity_id in ("source_local", "target_local", "source_domain", "target_domain"):
+        await repo.update_version(entity_id, 1)
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_domain_rel/entity_relationships")
+            assert resp.status_code == 200
+            pairs = {
+                (item["source_id"], item["target_id"])
+                for item in resp.json()["items"]
+            }
+            assert pairs == {
+                ("source_local", "target_local"),
+                ("source_domain", "target_domain"),
+            }
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_list_entity_relationships_infers_domain_edges_when_explicit_global_edges_exist(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+
+    repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+    relationship_repo = RelationshipRepository(async_session)
+    await repo.create("global_source", "character", "陆照", novel_id="n_mixed_rel")
+    await repo.create("global_target", "item", "道经", novel_id="n_mixed_rel")
+    await repo.create("domain_source", "location", "幽谷", novel_id="n_mixed_rel")
+    await repo.create("domain_target", "item", "青帝经", novel_id="n_mixed_rel")
+    await version_repo.create("global_source", 1, {"name": "陆照"})
+    await version_repo.create("global_target", 1, {"name": "道经"})
+    await version_repo.create(
+        "domain_source",
+        1,
+        {
+            "name": "幽谷",
+            "description": "谷中藏有青帝经等传承。",
+            "_knowledge_usage": "domain",
+            "_knowledge_domain_id": "domain_zhetian",
+            "_knowledge_domain_name": "遮天",
+        },
+    )
+    await version_repo.create(
+        "domain_target",
+        1,
+        {
+            "name": "青帝经",
+            "_knowledge_usage": "domain",
+            "_knowledge_domain_id": "domain_zhetian",
+            "_knowledge_domain_name": "遮天",
+        },
+    )
+    for entity_id in ("global_source", "global_target", "domain_source", "domain_target"):
+        await repo.update_version(entity_id, 1)
+    await relationship_repo.upsert(
+        source_id="global_source",
+        target_id="global_target",
+        relation_type="所修功法",
+        meta={"source": "test"},
+        novel_id="n_mixed_rel",
+    )
+    await async_session.commit()
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/novels/n_mixed_rel/entity_relationships")
+            assert resp.status_code == 200
+            items = resp.json()["items"]
+            pairs = {
+                (item["source_id"], item["target_id"], item["relation_type"], item["is_inferred"])
+                for item in items
+            }
+            assert ("global_source", "global_target", "所修功法", False) in pairs
+            assert ("domain_source", "domain_target", "关联", True) in pairs
     finally:
         app.dependency_overrides.clear()
 

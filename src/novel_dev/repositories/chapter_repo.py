@@ -29,6 +29,18 @@ class ChapterRepository:
         title: Optional[str] = None,
         novel_id: Optional[str] = None,
     ) -> Chapter:
+        existing = await self.get_by_id(chapter_id)
+        if existing is not None:
+            return existing
+        result = await self.session.execute(
+            select(Chapter).where(
+                Chapter.volume_id == volume_id,
+                Chapter.chapter_number == chapter_number,
+            )
+        )
+        existing = result.scalars().first()
+        if existing is not None:
+            return existing
         ch = Chapter(
             id=chapter_id,
             novel_id=novel_id,
@@ -215,7 +227,7 @@ class ChapterRepository:
                     doc_id=row.id,
                     doc_type="chapter",
                     title=row.title or f"第{row.chapter_number}章",
-                    content_preview=(row.polished_text or row.raw_draft or "")[:600],
+                    content_preview=(row.polished_text or row.raw_draft or "")[:200],
                     similarity_score=float(row.similarity),
                 )
                 for row in rows
@@ -243,7 +255,7 @@ class ChapterRepository:
                 doc_id=ch.id,
                 doc_type="chapter",
                 title=ch.title or f"第{ch.chapter_number}章",
-                content_preview=(ch.polished_text or ch.raw_draft or "")[:600],
+                content_preview=(ch.polished_text or ch.raw_draft or "")[:200],
                 similarity_score=score,
             )
             for score, ch in scored[:limit]

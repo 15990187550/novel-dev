@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, or_, select
@@ -29,6 +30,45 @@ class RelationshipRepository:
         self.session.add(rel)
         await self.session.flush()
         return rel
+
+    async def get_by_id(self, relationship_id: str | int) -> Optional[EntityRelationship]:
+        try:
+            parsed_id = int(relationship_id)
+        except (TypeError, ValueError):
+            return None
+        result = await self.session.execute(
+            select(EntityRelationship).where(EntityRelationship.id == parsed_id)
+        )
+        return result.scalar_one_or_none()
+
+    async def archive_for_consolidation(
+        self,
+        relationship_id: str | int,
+        *,
+        novel_id: str,
+        batch_id: str,
+        change_id: str,
+        reason: str = "setting_consolidation",
+    ) -> Optional[EntityRelationship]:
+        try:
+            parsed_id = int(relationship_id)
+        except (TypeError, ValueError):
+            return None
+        result = await self.session.execute(
+            select(EntityRelationship).where(
+                EntityRelationship.id == parsed_id,
+                EntityRelationship.novel_id == novel_id,
+            )
+        )
+        relationship = result.scalar_one_or_none()
+        if relationship is None:
+            return None
+        relationship.archived_at = datetime.utcnow()
+        relationship.archive_reason = reason
+        relationship.archived_by_consolidation_batch_id = batch_id
+        relationship.archived_by_consolidation_change_id = change_id
+        await self.session.flush()
+        return relationship
 
     async def list_by_source(self, source_id: str, novel_id: Optional[str] = None) -> list:
         stmt = select(EntityRelationship).where(
@@ -62,12 +102,15 @@ class RelationshipRepository:
         meta: Optional[dict] = None,
         chapter_id: Optional[str] = None,
         novel_id: Optional[str] = None,
+        replace_existing_pair: bool = False,
     ) -> EntityRelationship:
         stmt = select(EntityRelationship).where(
             EntityRelationship.source_id == source_id,
             EntityRelationship.target_id == target_id,
             EntityRelationship.is_active == True,
         )
+        if not replace_existing_pair:
+            stmt = stmt.where(EntityRelationship.relation_type == relation_type)
         if novel_id is not None:
             stmt = stmt.where(EntityRelationship.novel_id == novel_id)
         result = await self.session.execute(stmt.order_by(EntityRelationship.id.desc()))

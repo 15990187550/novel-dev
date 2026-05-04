@@ -89,17 +89,17 @@ agents:
     timeout: 200
     fallback:
       model: minimax-2-7
-      temperature: 0.5
+      temperature: 0.2
       timeout: 180
       retries: 2
     tasks:
       extract_setting:
         temperature: 0.35
-        max_tokens: 32768
+        max_tokens: 65536
         timeout: 240
         retries: 3
     retries: 1
-    temperature: 0.5
+    temperature: 0.2
   style_profiler_agent:
     model: kimi-for-coding
     timeout: 60
@@ -140,6 +140,16 @@ agents:
       timeout: 180
       retries: 1
     retries: 2
+    tasks:
+      revise_synopsis_with_feedback:
+        timeout: 180
+        retries: 1
+        temperature: 0.5
+        fallback:
+          model: minimax-2-7
+          timeout: 120
+          retries: 1
+          temperature: 0.5
   setting_workbench_service:
     model: kimi-for-coding
     timeout: 180
@@ -176,8 +186,14 @@ agents:
       rewrite_beat:
         temperature: 0.8
       generate_relay:
+        model: deepseek
         timeout: 15
         temperature: 0.2
+        fallback:
+          model: minimax-2-7
+          temperature: 0.2
+          timeout: 15
+          retries: 1
     retries: 2
   critic_agent:
     model: kimi-for-coding

@@ -1,159 +1,263 @@
 <template>
-  <div class="setting-workbench" :class="{ 'setting-workbench--embedded': embedded }">
-    <section v-if="!embedded" class="page-header setting-workbench__header">
-      <div class="min-w-0">
-        <p class="page-header__eyebrow">Settings Workbench</p>
-        <h1 class="page-header__title">AI 生成设定</h1>
-        <p class="page-header__description">通过持久 AI 会话生成待审核设定、实体和关系。</p>
+  <div class="space-y-6">
+    <section class="page-header">
+      <div>
+        <div class="page-header__eyebrow">Settings Workbench</div>
+        <h1 class="page-header__title">设定工作台</h1>
+        <p class="page-header__description">
+          从一个初始想法开始，创建独立的 AI 生成设定会话。
+        </p>
       </div>
     </section>
 
     <el-alert v-if="!store.novelId" title="请先选择小说" type="info" show-icon />
-
     <template v-else>
-      <p v-if="store.settingWorkbench.error" class="setting-error">{{ store.settingWorkbench.error }}</p>
-
-      <section class="setting-panel setting-conversation" data-testid="setting-ai-panel">
-        <div class="setting-panel__title-row">
-          <div class="min-w-0">
-            <h2 class="setting-panel__title">{{ selectedSession?.title || 'AI 生成设定' }}</h2>
-            <p class="setting-panel__desc">
-              当前状态：<span data-testid="setting-session-status">{{ statusLabel(selectedSession?.status) }}</span>
+      <section class="surface-card setting-ai-panel p-5" data-testid="setting-ai-panel">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div class="text-xs font-medium uppercase tracking-[0.24em] text-gray-400">AI Settings</div>
+            <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">AI 生成设定</h2>
+            <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+              每个会话独立保存初始想法和后续上下文，后续生成结果进入审核记录。
             </p>
           </div>
-          <div class="setting-panel__actions">
+          <div class="flex flex-wrap justify-end gap-2">
             <button
-              v-if="canGenerate"
+              type="button"
+              class="setting-secondary"
+              data-testid="setting-consolidation-open"
+              @click="openConsolidationDialog"
+            >
+              一键整合设定
+            </button>
+            <button
               type="button"
               class="setting-primary"
-              data-testid="setting-generate-batch"
-              :disabled="store.settingWorkbench.generating"
-              @click="store.generateSettingReviewBatch()"
+              data-testid="setting-new-session"
+              @click="showCreateForm = true"
             >
-              {{ store.settingWorkbench.generating ? '生成中...' : '生成审核记录' }}
-            </button>
-            <button type="button" class="setting-refresh" :disabled="store.settingWorkbench.state === 'loading'" @click="store.fetchSettingWorkbench()">
-              {{ store.settingWorkbench.state === 'loading' ? '刷新中...' : '刷新' }}
+              新建会话
             </button>
           </div>
         </div>
 
-        <div class="setting-session-strip" aria-label="AI 会话列表">
-          <button
-            type="button"
-            class="setting-session-chip setting-session-chip--new"
-            :class="{ 'setting-session-chip--active': !store.settingWorkbench.selectedSessionId }"
-            data-testid="setting-new-session"
-            @click="startNewSession"
-          >
-            <span>新建会话</span>
-            <small>输入后创建</small>
-          </button>
-          <button
-            v-for="session in store.settingWorkbench.sessions"
-            :key="session.id"
-            type="button"
-            class="setting-session-chip"
-            :class="{ 'setting-session-chip--active': session.id === store.settingWorkbench.selectedSessionId }"
-            @click="selectSession(session.id)"
-          >
-            <span>{{ session.title || '未命名会话' }}</span>
-            <small>{{ statusLabel(session.status) }}</small>
-          </button>
+        <div v-if="showCreateForm" class="setting-create-box mt-4 grid gap-3 rounded-xl border p-4">
+          <label class="setting-field">
+            <span>会话标题</span>
+            <input
+              v-model="newTitle"
+              data-testid="setting-session-title"
+              class="setting-input"
+              placeholder="例如：修炼体系补全"
+            />
+          </label>
+          <label class="setting-field">
+            <span>初始想法</span>
+            <textarea
+              v-model="newIdea"
+              data-testid="setting-session-idea"
+              class="setting-input min-h-[96px]"
+              placeholder="输入你希望 AI 扩展的设定方向"
+            />
+          </label>
+          <div class="flex justify-end gap-2">
+            <button type="button" class="setting-secondary" @click="showCreateForm = false">取消</button>
+            <button
+              type="button"
+              class="setting-primary"
+              data-testid="setting-create-session"
+              :disabled="store.settingWorkbench.creatingSession"
+              @click="createSession"
+            >
+              {{ store.settingWorkbench.creatingSession ? '创建中...' : '创建会话' }}
+            </button>
+          </div>
         </div>
 
-        <div class="setting-message-list">
-          <article v-for="(message, index) in messages" :key="message.id || index" class="setting-message">
-            <div class="setting-message__role">{{ message.role === 'user' ? '你' : 'AI' }}</div>
-            <p class="setting-message__content">{{ message.content }}</p>
-            <ol v-if="messageQuestions(message).length" class="setting-message__questions">
-              <li v-for="(question, questionIndex) in messageQuestions(message)" :key="`${message.id || index}-q-${questionIndex}`">
-                {{ question }}
-              </li>
-            </ol>
-          </article>
-          <p v-if="!messages.length" class="setting-empty">
-            输入初始想法并发送后会自动创建 AI 会话；AI 会基于当前资料库继续澄清。
-          </p>
+        <div v-if="store.settingWorkbench.consolidationJob" class="setting-job mt-4 rounded-xl border px-4 py-3 text-sm">
+          <span class="font-semibold">整合任务</span>
+          <span class="ml-2 text-gray-500 dark:text-gray-400">
+            {{ store.settingWorkbench.consolidationJob.job_id || store.settingWorkbench.consolidationJob.id }}
+            · {{ statusLabel(store.settingWorkbench.consolidationJob.status) }}
+          </span>
         </div>
-
-        <form class="setting-reply-form" @submit.prevent="sendReply">
-          <textarea
-            v-model="replyDraft"
-            data-testid="setting-reply-input"
-            class="setting-input setting-input--reply"
-            :placeholder="selectedSession ? '回答澄清问题，或继续补充设定方向' : '输入初始想法，例如：补一个与陆照相关的宗门势力'"
-          />
-          <button
-            class="setting-primary"
-            data-testid="setting-send-reply"
-            type="button"
-            :disabled="!replyDraft.trim() || sending"
-            @click="sendReply"
-          >
-            {{ sending ? '发送中...' : selectedSession ? '发送回答' : '创建并发送' }}
-          </button>
-        </form>
       </section>
 
-      <section v-if="!embedded" class="setting-panel">
-        <div class="setting-panel__title-row">
+      <section class="grid gap-4 xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside class="surface-card p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div class="font-semibold text-gray-900 dark:text-gray-100">会话列表</div>
+            <button type="button" class="setting-secondary" @click="store.fetchSettingSessions()">刷新</button>
+          </div>
+          <div v-if="store.settingWorkbench.state === 'loading'" class="mt-4 text-sm text-gray-500">加载中...</div>
+          <div v-else-if="!store.settingWorkbench.sessions.length" class="mt-4 rounded-xl border border-dashed px-4 py-6 text-sm text-gray-500">
+            暂无 AI 设定会话。
+          </div>
+          <div v-else class="mt-4 space-y-2">
+            <button
+              v-for="session in store.settingWorkbench.sessions"
+              :key="session.id"
+              type="button"
+              class="setting-session-item"
+              :class="{ 'setting-session-item--active': session.id === store.settingWorkbench.selectedSessionId }"
+              @click="store.loadSettingSession(session.id)"
+            >
+              <span>{{ session.title }}</span>
+              <small>{{ statusLabel(session.status) }}</small>
+            </button>
+          </div>
+        </aside>
+
+        <section class="surface-card p-4">
           <div>
-            <h2 class="setting-panel__title">审核记录</h2>
-            <p class="setting-panel__desc">AI 会话和后续优化产生的待审核变更。</p>
+            <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Session</div>
+            <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">
+              {{ selectedSession?.title || '选择或新建会话' }}
+            </h2>
           </div>
+
+          <div class="setting-message-log mt-4 max-h-80 space-y-3 overflow-auto rounded-xl border p-4">
+            <div v-if="!messages.length" class="text-sm text-gray-500">
+              创建会话后，这里会显示初始想法和后续对话。
+            </div>
+            <article v-for="message in messages" :key="message.id" class="setting-message rounded-xl px-3 py-2">
+              <div class="text-xs font-semibold uppercase text-gray-400">{{ message.role === 'user' ? '你' : 'AI' }}</div>
+              <div class="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-gray-200">{{ message.content }}</div>
+            </article>
+          </div>
+        </section>
+      </section>
+
+      <section class="surface-card p-4">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div class="text-xs font-medium uppercase tracking-[0.2em] text-gray-400">Review Batches</div>
+            <h2 class="mt-2 text-xl font-semibold text-gray-900 dark:text-gray-100">设定审核批次</h2>
+          </div>
+          <button type="button" class="setting-secondary" @click="store.fetchSettingReviewBatches()">刷新</button>
         </div>
 
-        <div class="setting-review-list">
-          <article v-for="batch in reviewBatches" :key="batch.id" class="setting-review-row">
-            <div class="setting-review-row__main">
-              <span class="setting-review-row__source">{{ sourceLabel(batch.source_type) }}</span>
-              <h3 class="setting-review-row__summary">{{ batch.summary || '未命名审核记录' }}</h3>
-              <p class="setting-review-row__counts">{{ countsLabel(batch.counts) }}</p>
+        <div class="mt-4 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div>
+            <div v-if="!store.settingWorkbench.reviewBatches.length" class="rounded-xl border border-dashed px-4 py-6 text-sm text-gray-500">
+              暂无设定审核批次。
             </div>
-            <span class="setting-review-row__status">{{ statusLabel(batch.status) }}</span>
-          </article>
-          <p v-if="!reviewBatches.length" class="setting-empty">暂无 AI 审核记录。</p>
+            <div v-else class="space-y-2">
+              <button
+                v-for="batch in store.settingWorkbench.reviewBatches"
+                :key="batch.id"
+                type="button"
+                class="setting-session-item"
+                :class="{ 'setting-session-item--active': batch.id === store.settingWorkbench.selectedReviewBatch?.id }"
+                @click="store.loadSettingReviewBatch(batch.id)"
+              >
+                <span>{{ batch.summary || batch.id }}</span>
+                <small>{{ statusLabel(batch.status) }}</small>
+              </button>
+            </div>
+          </div>
+
+          <div class="setting-review-detail rounded-xl border p-4">
+            <div v-if="!store.settingWorkbench.selectedReviewBatch" class="text-sm text-gray-500">
+              选择一个审核批次查看变更明细。
+            </div>
+            <template v-else>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div class="font-semibold text-gray-900 dark:text-gray-100">
+                    {{ store.settingWorkbench.selectedReviewBatch.summary || store.settingWorkbench.selectedReviewBatch.id }}
+                  </div>
+                  <div class="mt-1 text-xs text-gray-500">
+                    {{ statusLabel(store.settingWorkbench.selectedReviewBatch.status) }}
+                  </div>
+                </div>
+              </div>
+              <div class="mt-4 space-y-2">
+                <article
+                  v-for="change in store.settingWorkbench.selectedReviewChanges"
+                  :key="change.id"
+                  class="setting-review-change rounded-lg border px-3 py-2 text-sm"
+                >
+                  <div class="font-semibold text-gray-800 dark:text-gray-100">
+                    {{ change.target_type || 'change' }} · {{ change.operation || 'update' }}
+                  </div>
+                  <div v-if="change.after_snapshot?.title || change.before_snapshot?.title" class="mt-1 text-gray-500">
+                    {{ change.after_snapshot?.title || change.before_snapshot?.title }}
+                  </div>
+                </article>
+                <div v-if="!store.settingWorkbench.selectedReviewChanges.length" class="text-sm text-gray-500">
+                  暂无变更明细。
+                </div>
+              </div>
+            </template>
+          </div>
         </div>
       </section>
+
+      <el-dialog v-model="showConsolidationDialog" title="一键整合设定" width="560px">
+        <div class="space-y-3">
+          <div class="text-sm text-gray-500">
+            已通过审核并生效的设定会自动参与整合；待审核设定记录为可选项，只有勾选后才会参与。本次提交会创建一条设定审核记录。
+          </div>
+          <div v-if="!pendingSettingDocs.length" class="rounded-xl border border-dashed px-4 py-6 text-sm text-gray-500">
+            当前没有待审核设定记录。
+          </div>
+          <label
+            v-for="item in pendingSettingDocs"
+            :key="item.id"
+            class="setting-pending-option"
+          >
+            <input
+              v-model="selectedPendingIds"
+              type="checkbox"
+              :value="item.id"
+              :data-testid="`setting-consolidation-pending-${item.id}`"
+            />
+            <span>
+              <strong>{{ item.title || item.filename || item.id }}</strong>
+              <small>{{ item.doc_type || item.type || 'setting' }}</small>
+            </span>
+          </label>
+        </div>
+        <template #footer>
+          <button type="button" class="setting-secondary" @click="showConsolidationDialog = false">取消</button>
+          <button
+            type="button"
+            class="setting-primary"
+            data-testid="setting-consolidation-submit"
+            :disabled="store.settingWorkbench.consolidationSubmitting"
+            @click="submitConsolidation"
+          >
+            {{ store.settingWorkbench.consolidationSubmitting ? '提交中...' : '开始整合' }}
+          </button>
+        </template>
+      </el-dialog>
     </template>
   </div>
 </template>
 
 <script setup>
 import { computed, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 import { useNovelStore } from '@/stores/novel.js'
 
-const props = defineProps({
-  embedded: { type: Boolean, default: false },
-})
-
 const store = useNovelStore()
-const route = useRoute()
-const router = useRouter()
-
-const replyDraft = ref('')
+const showCreateForm = ref(false)
+const showConsolidationDialog = ref(false)
+const newTitle = ref('')
+const newIdea = ref('')
+const selectedPendingIds = ref([])
 
 const selectedSession = computed(() => store.settingWorkbench.selectedSession)
 const messages = computed(() => store.settingWorkbench.selectedMessages || [])
-const reviewBatches = computed(() => store.settingWorkbench.reviewBatches || [])
-const canGenerate = computed(() => selectedSession.value?.status === 'ready_to_generate')
-const sending = computed(() => store.settingWorkbench.creatingSession || store.settingWorkbench.replying)
-const routePath = computed(() => (props.embedded ? '/documents' : '/settings'))
+const pendingSettingDocs = computed(() => (store.pendingDocs || []).filter(isSettingPendingDoc))
 
-watch(
-  () => [store.novelId, route.query?.session],
-  async ([novelId, querySession]) => {
-    if (!novelId) return
-    await store.fetchSettingWorkbench()
-    const sessionId = String(querySession || '')
-    if (sessionId) {
-      await store.loadSettingSession(sessionId)
-    }
-  },
-  { immediate: true }
-)
+watch(() => store.novelId, (novelId) => {
+  if (novelId) {
+    store.fetchSettingSessions()
+    store.fetchSettingReviewBatches()
+    store.fetchDocuments()
+  }
+}, { immediate: true })
 
 function statusLabel(status) {
   return {
@@ -163,355 +267,158 @@ function statusLabel(status) {
     generated: '已生成',
     pending: '待审核',
     approved: '已通过',
-    partially_approved: '部分通过',
-    rejected: '已拒绝',
+    archived: '已归档',
+    queued: '排队中',
+    running: '运行中',
+    succeeded: '已完成',
     failed: '失败',
   }[status] || status || '未知'
 }
 
-function sourceLabel(sourceType) {
-  return sourceType === 'ai_session' ? 'AI 会话' : '导入资料'
+function isSettingPendingDoc(item) {
+  if (item?.status !== 'pending') return false
+  const type = String(item.extraction_type || item.doc_type || item.type || '').toLowerCase()
+  return type === 'setting' || type === 'settings'
 }
 
-function countsLabel(counts = {}) {
-  const settingCards = counts.setting_card ?? counts.setting_cards ?? counts.cards ?? 0
-  const entities = counts.entity ?? counts.entities ?? 0
-  const relationships = counts.relationship ?? counts.relationships ?? 0
-  return `设定卡片 ${settingCards} · 实体 ${entities} · 关系 ${relationships}`
+function openConsolidationDialog() {
+  selectedPendingIds.value = []
+  showConsolidationDialog.value = true
 }
 
-function messageQuestions(message) {
-  const questions = message?.meta?.questions
-  if (!Array.isArray(questions)) return []
-  return questions.map(item => String(item || '').trim()).filter(Boolean)
+async function submitConsolidation() {
+  const job = await store.startSettingConsolidation([...selectedPendingIds.value])
+  if (job) {
+    selectedPendingIds.value = []
+    showConsolidationDialog.value = false
+  }
 }
 
-function deriveSessionTitle(content) {
-  const firstLine = String(content || '').split(/\n/).map(item => item.trim()).find(Boolean) || 'AI 设定会话'
-  const compact = firstLine.replace(/[。！？!?；;，,、：:]+$/g, '')
-  return compact.length > 18 ? `${compact.slice(0, 18)}...` : compact
-}
-
-function sessionQuery(id) {
-  return { ...route.query, tab: 'ai', session: id }
-}
-
-function newSessionQuery() {
-  const query = { ...route.query, tab: 'ai' }
-  delete query.session
-  return query
-}
-
-function startNewSession() {
-  store.settingWorkbench.selectedSessionId = ''
-  store.settingWorkbench.selectedSession = null
-  store.settingWorkbench.selectedMessages = []
-  replyDraft.value = ''
-  router.replace({ path: routePath.value, query: newSessionQuery() })
-}
-
-async function selectSession(id) {
-  router.replace({ path: routePath.value, query: sessionQuery(id) })
-  await store.loadSettingSession(id)
-}
-
-async function sendReply() {
-  const content = replyDraft.value.trim()
-  if (!content) return
-  let sessionId = store.settingWorkbench.selectedSessionId
-  try {
-    if (!sessionId) {
-      const session = await store.createSettingSession({
-        title: deriveSessionTitle(content),
-        initial_idea: '',
-        target_categories: [],
-      })
-      sessionId = session?.id || ''
-      if (sessionId) {
-        router.replace({ path: routePath.value, query: sessionQuery(sessionId) })
-      }
-    }
-    if (!sessionId) return
-    await store.replySettingSession(content)
-    if (store.settingWorkbench.selectedSessionId === sessionId && replyDraft.value.trim() === content) {
-      replyDraft.value = ''
-    }
-  } catch {
-    if (store.settingWorkbench.selectedSessionId === sessionId) {
-      replyDraft.value = content
-    }
+async function createSession() {
+  const session = await store.createSettingSession({
+    title: newTitle.value.trim() || '未命名设定会话',
+    initial_idea: newIdea.value.trim(),
+    target_categories: [],
+  })
+  if (session?.id) {
+    await store.loadSettingSession(session.id)
+    newTitle.value = ''
+    newIdea.value = ''
+    showCreateForm.value = false
   }
 }
 </script>
 
 <style scoped>
-.setting-workbench {
-  display: grid;
-  gap: 1rem;
-}
-
-.setting-workbench__header,
-.setting-panel {
-  padding: 1rem;
-}
-
-.setting-workbench__header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.setting-refresh,
-.setting-primary {
-  border: 1px solid rgba(15, 118, 110, 0.26);
-  border-radius: 0.75rem;
-  background: var(--app-accent);
-  color: white;
+.setting-primary,
+.setting-secondary,
+.setting-session-item {
+  border-radius: 8px;
   font-size: 0.875rem;
   font-weight: 700;
-  line-height: 1.2;
-  padding: 0.68rem 0.95rem;
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition: border-color 0.16s ease, background 0.16s ease, color 0.16s ease;
 }
 
-.setting-refresh {
-  background: var(--app-surface-strong);
-  color: var(--app-text);
+.setting-primary {
+  border: 1px solid color-mix(in srgb, var(--app-accent, #14b8a6) 44%, var(--app-border));
+  background: color-mix(in srgb, var(--app-accent, #14b8a6) 78%, white 10%);
+  color: #fff;
+  padding: 0.55rem 0.9rem;
 }
 
-.setting-refresh:hover,
-.setting-primary:hover {
-  transform: translateY(-1px);
-}
-
-.setting-refresh:disabled,
 .setting-primary:disabled {
   cursor: not-allowed;
   opacity: 0.55;
-  transform: none;
 }
 
-.setting-error {
-  border: 1px solid rgba(220, 38, 38, 0.24);
-  border-radius: 0.75rem;
-  background: rgba(254, 242, 242, 0.86);
-  color: #991b1b;
-  margin: 0;
-  padding: 0.75rem 0.9rem;
-}
-
-.setting-panel {
+.setting-secondary {
   border: 1px solid var(--app-border);
-  border-radius: 0.5rem;
   background: var(--app-surface);
-}
-
-.setting-panel__title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.setting-panel__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
-
-.setting-panel__title {
   color: var(--app-text);
-  font-size: 1.1rem;
-  font-weight: 800;
-  line-height: 1.25;
-  margin: 0;
+  padding: 0.45rem 0.75rem;
 }
 
-.setting-panel__desc,
-.setting-empty {
-  color: var(--app-text-muted);
-  font-size: 0.875rem;
-  line-height: 1.55;
-}
-
-.setting-panel__desc {
-  margin: 0.3rem 0 0;
-}
-
-.setting-session-strip {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.9rem;
-  overflow-x: auto;
-  padding-bottom: 0.2rem;
-}
-
-.setting-session-chip {
-  display: grid;
-  gap: 0.18rem;
-  min-width: 8.5rem;
-  border: 1px solid var(--app-border);
-  border-radius: 0.75rem;
+.setting-create-box,
+.setting-message-log,
+.setting-job,
+.setting-review-detail,
+.setting-review-change,
+.setting-session-item {
+  border-color: var(--app-border);
   background: var(--app-surface-soft);
+}
+
+.setting-field {
+  display: grid;
+  gap: 0.35rem;
   color: var(--app-text);
-  padding: 0.58rem 0.68rem;
-  text-align: left;
-}
-
-.setting-session-chip--active {
-  border-color: rgba(15, 118, 110, 0.38);
-  background: var(--app-surface-strong);
-}
-
-.setting-session-chip--new {
-  border-style: dashed;
-}
-
-.setting-session-chip span {
-  font-weight: 800;
-  overflow-wrap: anywhere;
-}
-
-.setting-session-chip small {
-  color: var(--app-text-muted);
-  font-size: 0.74rem;
+  font-size: 0.875rem;
+  font-weight: 700;
 }
 
 .setting-input {
   width: 100%;
-  min-width: 0;
   border: 1px solid var(--app-border);
-  border-radius: 0.75rem;
-  background: var(--app-surface-strong);
+  border-radius: 8px;
+  background: var(--app-surface);
   color: var(--app-text);
-  font: inherit;
-  padding: 0.68rem 0.78rem;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  outline: none;
 }
 
-.setting-input--reply {
-  min-height: 5rem;
-  resize: vertical;
+.setting-input:focus {
+  border-color: var(--app-border-strong);
 }
 
-.setting-message-list,
-.setting-review-list {
-  display: grid;
-  gap: 0.65rem;
-  margin-top: 0.9rem;
+.setting-session-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid var(--app-border);
+  padding: 0.75rem;
+  text-align: left;
+  color: var(--app-text);
 }
 
-.setting-message-list {
-  max-height: 20rem;
-  overflow: auto;
+.setting-session-item small {
+  color: var(--app-text-muted);
+}
+
+.setting-session-item--active {
+  border-color: color-mix(in srgb, var(--app-accent, #14b8a6) 46%, var(--app-border));
+  background: color-mix(in srgb, var(--app-accent, #14b8a6) 10%, var(--app-surface));
 }
 
 .setting-message {
+  background: var(--app-surface);
+}
+
+.setting-pending-option {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
   border: 1px solid var(--app-border);
-  border-radius: 0.75rem;
+  border-radius: 8px;
   background: var(--app-surface-soft);
   padding: 0.75rem;
-}
-
-.setting-message__role {
-  color: var(--app-text-soft);
-  font-size: 0.72rem;
-  font-weight: 800;
-}
-
-.setting-message__content {
   color: var(--app-text);
-  font-size: 0.9rem;
-  line-height: 1.6;
-  margin: 0.2rem 0 0;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
+  cursor: pointer;
 }
 
-.setting-message__questions {
+.setting-pending-option input {
+  margin-top: 0.2rem;
+}
+
+.setting-pending-option span {
   display: grid;
-  gap: 0.45rem;
-  color: var(--app-text);
-  font-size: 0.9rem;
-  line-height: 1.55;
-  margin: 0.65rem 0 0;
-  padding-left: 1.2rem;
+  gap: 0.2rem;
 }
 
-.setting-message__questions li {
-  overflow-wrap: anywhere;
-}
-
-.setting-reply-form {
-  display: grid;
-  gap: 0.7rem;
-  grid-template-columns: minmax(0, 1fr) auto;
-  margin-top: 0.9rem;
-}
-
-.setting-reply-form .setting-primary {
-  align-self: end;
-}
-
-.setting-review-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
-  border: 1px solid var(--app-border);
-  border-radius: 0.75rem;
-  background: var(--app-surface-soft);
-  padding: 0.85rem;
-}
-
-.setting-review-row__main {
-  min-width: 0;
-}
-
-.setting-review-row__source,
-.setting-review-row__status {
-  border: 1px solid var(--app-border);
-  border-radius: 999px;
+.setting-pending-option small {
   color: var(--app-text-muted);
-  display: inline-flex;
-  font-size: 0.74rem;
-  font-weight: 800;
-  line-height: 1;
-  padding: 0.32rem 0.52rem;
-  white-space: nowrap;
-}
-
-.setting-review-row__summary {
-  color: var(--app-text);
-  font-size: 0.98rem;
-  font-weight: 800;
-  line-height: 1.4;
-  margin: 0.45rem 0 0;
-  overflow-wrap: anywhere;
-}
-
-.setting-review-row__counts {
-  color: var(--app-text-muted);
-  font-size: 0.85rem;
-  margin: 0.28rem 0 0;
-}
-
-@media (max-width: 900px) {
-  .setting-reply-form {
-    grid-template-columns: 1fr;
-  }
-
-  .setting-review-row,
-  .setting-workbench__header,
-  .setting-panel__title-row {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .setting-refresh,
-  .setting-reply-form .setting-primary {
-    width: 100%;
-  }
 }
 </style>

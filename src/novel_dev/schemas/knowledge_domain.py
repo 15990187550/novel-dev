@@ -64,6 +64,8 @@ class KnowledgeDomainResponse(BaseModel):
     id: str
     novel_id: str
     name: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
     domain_type: str
     scope_status: str
     activation_mode: str
@@ -81,6 +83,8 @@ def serialize_knowledge_domain(domain) -> dict[str, Any]:
         "id": domain.id,
         "novel_id": domain.novel_id,
         "name": domain.name,
+        "created_at": domain.created_at.isoformat() if domain.created_at else None,
+        "updated_at": domain.updated_at.isoformat() if domain.updated_at else None,
         "domain_type": domain.domain_type,
         "scope_status": domain.scope_status,
         "activation_mode": domain.activation_mode,

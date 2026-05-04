@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -895,8 +896,8 @@ async def test_optimize_volume_regenerates_with_requested_chapter_count(async_se
     assert captured["target_chapters"] == 60
 
 
-def test_classify_feedback_intent_detects_regenerate_and_negation(async_session):
-    service = OutlineWorkbenchService(async_session)
+def test_classify_feedback_intent_detects_regenerate_and_negation():
+    service = OutlineWorkbenchService(None)
 
     assert service._classify_feedback_intent("重写生成 1300 左右的大纲") == service._REGENERATE_INTENT
     assert service._classify_feedback_intent("重写 1300 左右的大纲") == service._REGENERATE_INTENT
@@ -905,8 +906,113 @@ def test_classify_feedback_intent_detects_regenerate_and_negation(async_session)
     assert service._classify_feedback_intent("推倒重来，另起一版") == service._REGENERATE_INTENT
     assert service._classify_feedback_intent("第一卷要求60章左右") == service._REGENERATE_INTENT
     assert service._extract_requested_chapter_count("24章不够，要60章") == 60
+    assert service._classify_feedback_intent(
+        "请基于当前设定生成完整总纲草稿，补齐一句话梗概、核心冲突、卷数规模、人物弧光和关键里程碑。",
+        outline_type="synopsis",
+    ) == service._REGENERATE_INTENT
+    assert service._extract_requested_chapter_count(
+        "根据设定，生成1200章左右的大纲",
+        max_chapters=3000,
+    ) == 1200
+    assert service._classify_feedback_intent(
+        "根据设定，生成1200章左右的大纲",
+        outline_type="synopsis",
+    ) == service._REGENERATE_INTENT
+    assert service._classify_feedback_intent(
+        "overall=68 低于下限 75\n"
+        "logline_specificity=65 低于下限 75\n"
+        "conflict_concreteness=70 低于下限 75\n"
+        "评审意见: 本Synopsis在结构转折和结尾钩子方面表现较好，但存在三个核心缺陷需优先修改。",
+        outline_type="synopsis",
+    ) == service._REGENERATE_INTENT
+    assert service._extract_requested_chapter_count(
+        "根据设定，生成1200章左右的大纲"
+    ) is None
     assert service._classify_feedback_intent("不要重写，只补强第二卷冲突") == service._REVISE_INTENT
     assert service._classify_feedback_intent("细化每一卷的境界提升") == service._REVISE_INTENT
+
+
+def test_large_synopsis_revision_should_use_regeneration_path():
+    service = OutlineWorkbenchService(None)
+    synopsis = SynopsisData(
+        title="道照诸天",
+        logline="旧梗概",
+        core_conflict="旧冲突",
+        estimated_volumes=18,
+        estimated_total_chapters=1200,
+        estimated_total_words=3600000,
+        volume_outlines=[
+            {
+                "volume_number": index,
+                "title": f"第{index}卷",
+                "summary": "旧卷纲",
+                "narrative_role": "承转",
+                "main_goal": "推进修行",
+                "main_conflict": "外部冲突",
+                "start_state": "起点",
+                "end_state": "终点",
+                "climax": "高潮",
+                "hook_to_next": "钩子",
+                "key_entities": ["陆照"],
+                "relationship_shifts": [],
+                "foreshadowing_setup": [],
+                "foreshadowing_payoff": [],
+                "target_chapter_range": f"{(index - 1) * 66 + 1}-{index * 66}",
+            }
+            for index in range(1, 19)
+        ],
+    )
+
+    assert service._should_regenerate_synopsis_revision(
+        synopsis,
+        "只强化logline和核心冲突",
+    )
+
+
+@pytest.mark.asyncio
+async def test_optimize_synopsis_uses_outline_workbench_llm_config(monkeypatch):
+    fake_session = SimpleNamespace(in_transaction=lambda: False, commit=AsyncMock())
+    service = OutlineWorkbenchService(fake_session)
+    current = SynopsisData(
+        title="道照诸天",
+        logline="旧梗概",
+        core_conflict="旧冲突",
+        estimated_volumes=1,
+        estimated_total_chapters=10,
+        estimated_total_words=30000,
+    )
+    revised = SynopsisData(
+        title="道照诸天",
+        logline="新梗概",
+        core_conflict="新冲突",
+        estimated_volumes=18,
+        estimated_total_chapters=1200,
+        estimated_total_words=3600000,
+    )
+    captured = {}
+
+    async def fake_call_and_parse_model(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return revised
+
+    monkeypatch.setattr(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+    monkeypatch.setattr(service, "_load_brainstorm_source_text", AsyncMock(return_value=""))
+
+    result = await service._optimize_synopsis(
+        novel_id="n_synopsis_config",
+        checkpoint={"synopsis_data": current.model_dump()},
+        feedback="只强化核心冲突",
+        context_window=OutlineContextWindow(),
+    )
+
+    assert result["result_snapshot"]["estimated_total_chapters"] == 1200
+    assert captured["args"][:2] == ("BrainstormAgent", "revise_synopsis_with_feedback")
+    assert captured["kwargs"]["config_agent_name"] == "outline_workbench_service"
+    assert captured["kwargs"]["config_task"] == "revise_synopsis_with_feedback"
 
 
 @pytest.mark.asyncio
@@ -1936,3 +2042,149 @@ async def test_submit_feedback_merges_suggestion_cards_in_brainstorm_mode(async_
     workspace = await service.workspace_service.get_workspace_payload("novel_outline_cards")
     assert workspace.setting_suggestion_cards[0].merge_key == "relationship:lu-zhao:su-qinghan"
     assert response.last_result_snapshot["relationship_highlights"] == ["陆照 / 苏清寒：互疑转合作"]
+
+
+@pytest.mark.asyncio
+async def test_build_suggestion_card_updates_normalizes_patch_only_new_card(async_session, monkeypatch):
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_call_and_parse_model(*args, **kwargs):
+        return SimpleNamespace(
+            cards=[
+                {
+                    "merge_key": "character:lu-zhao",
+                    "payload": {
+                        "canonical_name": "陆照",
+                        "summary": "补充主角求道动机",
+                        "goal": "求道改命",
+                    },
+                }
+            ],
+            summary=SuggestionUpdateSummary(created=1),
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    updates, summary = await service._build_suggestion_card_updates(
+        novel_id="novel_patch_only_card",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="补充陆照动机",
+        context_window=OutlineContextWindow(),
+        result_snapshot={"title": "总纲", "character_arcs": [{"name": "陆照"}]},
+    )
+
+    assert summary == {"created": 1, "updated": 0, "superseded": 0, "unresolved": 0}
+    assert updates == [
+        {
+            "operation": "upsert",
+            "merge_key": "character:lu-zhao",
+            "card_id": "card:character:lu-zhao",
+            "card_type": "character",
+            "title": "陆照",
+            "summary": "补充主角求道动机",
+            "status": "active",
+            "source_outline_refs": ["synopsis"],
+            "payload": {
+                "canonical_name": "陆照",
+                "summary": "补充主角求道动机",
+                "goal": "求道改命",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_suggestion_card_updates_merges_patch_with_existing_card(async_session, monkeypatch):
+    service = OutlineWorkbenchService(async_session)
+    await service.workspace_service.merge_suggestion_cards(
+        "novel_existing_card_patch",
+        [
+            {
+                "operation": "upsert",
+                "card_id": "card_luzhao",
+                "card_type": "character",
+                "merge_key": "character:lu-zhao",
+                "title": "陆照",
+                "summary": "旧摘要",
+                "status": "active",
+                "source_outline_refs": ["synopsis"],
+                "payload": {"canonical_name": "陆照", "trait": "谨慎"},
+                "display_order": 30,
+            }
+        ],
+    )
+
+    async def fake_call_and_parse_model(*args, **kwargs):
+        return SimpleNamespace(
+            cards=[
+                {
+                    "merge_key": "character:lu-zhao",
+                    "payload": {"resources": "道种"},
+                }
+            ],
+            summary=SuggestionUpdateSummary(updated=1),
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    updates, _ = await service._build_suggestion_card_updates(
+        novel_id="novel_existing_card_patch",
+        outline_type="volume",
+        outline_ref="vol_1",
+        feedback="补充陆照资源",
+        context_window=OutlineContextWindow(),
+        result_snapshot={"title": "第一卷"},
+    )
+
+    assert updates == [
+        {
+            "operation": "upsert",
+            "merge_key": "character:lu-zhao",
+            "card_id": "card_luzhao",
+            "card_type": "character",
+            "title": "陆照",
+            "summary": "旧摘要",
+            "status": "active",
+            "source_outline_refs": ["synopsis", "vol_1"],
+            "payload": {
+                "canonical_name": "陆照",
+                "trait": "谨慎",
+                "resources": "道种",
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_suggestion_card_updates_skips_unresolvable_card_without_merge_key(async_session, monkeypatch):
+    service = OutlineWorkbenchService(async_session)
+
+    async def fake_call_and_parse_model(*args, **kwargs):
+        return SimpleNamespace(
+            cards=[{"payload": {"canonical_name": "陆照"}}],
+            summary=SuggestionUpdateSummary(created=1),
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.outline_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    updates, summary = await service._build_suggestion_card_updates(
+        novel_id="novel_bad_card_patch",
+        outline_type="synopsis",
+        outline_ref="synopsis",
+        feedback="补充陆照",
+        context_window=OutlineContextWindow(),
+        result_snapshot={"title": "总纲"},
+    )
+
+    assert updates == []
+    assert summary == {"created": 0, "updated": 0, "superseded": 0, "unresolved": 1}

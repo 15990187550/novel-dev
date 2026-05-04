@@ -194,3 +194,18 @@ def test_default_max_tokens_is_doubled_for_tasks_without_override():
     cfg = factory._resolve_config("WriterAgent", "generate_beat")
 
     assert cfg.max_tokens == 8192
+
+
+def test_outline_workbench_synopsis_revision_has_bounded_timeout():
+    settings = Settings(llm_config_path="llm_config.yaml")
+    factory = LLMFactory(settings)
+
+    cfg = factory._resolve_config("OutlineWorkbenchService", "revise_synopsis_with_feedback")
+
+    assert cfg.timeout == 180
+    assert cfg.retries == 1
+    assert cfg.temperature == 0.5
+    assert cfg.fallback is not None
+    assert cfg.fallback.timeout == 120
+    assert cfg.fallback.retries == 1
+    assert cfg.fallback.temperature == 0.5

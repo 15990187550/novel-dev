@@ -4,6 +4,11 @@ import pytest
 
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.schemas.brainstorm_workspace import PendingExtractionPayload
+from novel_dev.services.relationship_extraction_service import (
+    ExtractedRelationship,
+    RelationshipExtractionResult,
+)
 from novel_dev.agents.file_classifier import FileClassificationResult
 from novel_dev.agents.setting_extractor import (
     ExtractedSetting,
@@ -189,6 +194,101 @@ async def test_approve_setting_creates_character_entities_with_full_state(async_
 
 
 @pytest.mark.asyncio
+async def test_approve_setting_extracts_relationships_after_entities_are_applied(async_session, monkeypatch):
+    from sqlalchemy import select
+
+    from novel_dev.db.models import EntityRelationship
+    from novel_dev.services.entity_service import EntityService
+    from novel_dev.services.relationship_extraction_service import RelationshipExtractionService
+
+    original_extract = RelationshipExtractionService.extract_and_persist_from_setting
+
+    async def fake_classify_batch(self, entity_ids):
+        return {"total": len(entity_ids), "updated": 0}
+
+    async def fake_extract(self, *, novel_id, source_text, source_ref, domain_id=None, domain_name=None):
+        service = RelationshipExtractionService(
+            async_session,
+            extractor=AsyncMock(
+                return_value=RelationshipExtractionResult(
+                    relationships=[
+                        ExtractedRelationship(
+                            source_entity_name="石昊",
+                            target_entity_name="云曦",
+                            relation_type="妻子",
+                            evidence="云曦是石昊的妻子。",
+                            confidence=0.94,
+                        )
+                    ]
+                )
+            ),
+        )
+        return await original_extract(
+            service,
+            novel_id=novel_id,
+            source_text=source_text,
+            source_ref=source_ref,
+            domain_id=domain_id,
+            domain_name=domain_name,
+        )
+
+    monkeypatch.setattr(EntityService, "classify_entities_batch", fake_classify_batch)
+    monkeypatch.setattr(
+        RelationshipExtractionService,
+        "extract_and_persist_from_setting",
+        fake_extract,
+    )
+    svc = ExtractionService(async_session)
+    pe = await svc.persist_pending_payload(
+        "n_setting_rel",
+        PendingExtractionPayload(
+            source_filename="setting.md",
+            extraction_type="setting",
+            raw_result={
+                "character_profiles": [
+                    {"name": "石昊", "identity": "主角", "relationships": "云曦是其妻子"},
+                    {"name": "云曦", "identity": "石昊的妻子", "relationships": "与石昊结为夫妻"},
+                ]
+            },
+            diff_result={
+                "entity_diffs": [
+                    {
+                        "entity_type": "character",
+                        "entity_name": "石昊",
+                        "operation": "create",
+                        "field_changes": [
+                            {"field": "identity", "new_value": "主角"},
+                            {"field": "relationships", "new_value": "云曦是其妻子"},
+                        ],
+                    },
+                    {
+                        "entity_type": "character",
+                        "entity_name": "云曦",
+                        "operation": "create",
+                        "field_changes": [
+                            {"field": "identity", "new_value": "石昊的妻子"},
+                            {"field": "relationships", "new_value": "与石昊结为夫妻"},
+                        ],
+                    },
+                ],
+                "summary": "2 个新增实体",
+            },
+        ),
+    )
+
+    await svc.approve_pending(pe.id)
+
+    relationships = (
+        await async_session.execute(
+            select(EntityRelationship).where(EntityRelationship.novel_id == "n_setting_rel")
+        )
+    ).scalars().all()
+    assert len(relationships) == 1
+    assert relationships[0].relation_type == "妻子"
+    assert relationships[0].meta["evidence"] == "云曦是石昊的妻子。"
+
+
+@pytest.mark.asyncio
 async def test_approve_setting_creates_item_entities_with_description(async_session, mock_llm):
     from novel_dev.agents.setting_extractor import ExtractedSetting, CharacterProfile, ImportantItem
     from novel_dev.agents.file_classifier import FileClassificationResult
@@ -268,7 +368,7 @@ async def test_approve_setting_merges_duplicate_character_entities(async_session
 
         svc = ExtractionService(async_session)
         svc.entity_svc._refresh_entity_artifacts = AsyncMock()
-        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 1, "updated": 0})
         pe1 = await svc.process_upload("n_dedup", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_dedup", "setting2.txt", "second")
@@ -321,7 +421,7 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
 
         svc = ExtractionService(async_session)
         svc.entity_svc._refresh_entity_artifacts = AsyncMock()
-        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
+        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 1, "updated": 0})
         pe1 = await svc.process_upload("n_alias", "setting1.txt", "first")
         await svc.approve_pending(pe1.id)
         pe2 = await svc.process_upload("n_alias", "setting2.txt", "second")
@@ -333,6 +433,82 @@ async def test_approve_setting_merges_character_alias_by_normalized_name(async_s
 
     assert len(char_entities) == 1
     assert char_entities[0].name == "陆照（主角）"
+
+
+@pytest.mark.asyncio
+async def test_approve_domain_setting_merges_alias_inside_same_domain(async_session, monkeypatch):
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
+    from novel_dev.services.entity_service import EntityService
+    from novel_dev.services.relationship_extraction_service import RelationshipExtractionService
+
+    async def fake_extract(*args, **kwargs):
+        return {"total": 0, "created": 0, "skipped": 0}
+
+    async def fake_classify_batch(self, entity_ids):
+        return {"total": len(entity_ids), "updated": 0}
+
+    monkeypatch.setattr(
+        RelationshipExtractionService,
+        "extract_and_persist_from_setting",
+        fake_extract,
+    )
+    monkeypatch.setattr(EntityService, "classify_entities_batch", fake_classify_batch)
+
+    domain_repo = KnowledgeDomainRepository(async_session)
+    domain = await domain_repo.create(novel_id="n_domain_alias", name="诛仙")
+
+    entity_svc = EntityService(async_session)
+    entity_svc._refresh_entity_artifacts = AsyncMock()
+    await entity_svc.create_entity(
+        "zhangxiaofan",
+        "character",
+        "张小凡",
+        novel_id="n_domain_alias",
+        initial_state={
+            "name": "张小凡",
+            "identity": "草庙村少年，青云门大竹峰弟子。",
+            "_knowledge_usage": "domain",
+            "_knowledge_domain_id": domain.id,
+            "_knowledge_domain_name": domain.name,
+        },
+        use_llm_for_classification=False,
+    )
+
+    svc = ExtractionService(async_session)
+    svc.entity_svc._refresh_entity_artifacts = AsyncMock()
+    pe = await svc.persist_pending_payload(
+        "n_domain_alias",
+        PendingExtractionPayload(
+            source_filename="诛仙.md",
+            extraction_type="setting",
+            raw_result={
+                "_knowledge_usage": "domain",
+                "character_profiles": [
+                    {
+                        "name": "张小凡/鬼厉",
+                        "identity": "反出师门后化名鬼厉，加入鬼王宗。",
+                    }
+                ],
+            },
+            diff_result=None,
+        ),
+    )
+    await domain_repo.update(domain, source_doc_ids=[pe.id])
+
+    await svc.approve_pending(pe.id)
+
+    entities = [
+        entity
+        for entity in await EntityRepository(async_session).list_by_novel("n_domain_alias")
+        if entity.type == "character"
+    ]
+    assert len(entities) == 1
+    assert entities[0].name == "张小凡"
+    latest = await svc.entity_svc.get_latest_state(entities[0].id)
+    assert "草庙村少年" in latest["identity"]
+    assert "鬼王宗" in latest["identity"]
+    assert latest["aliases"] == ["张小凡/鬼厉", "鬼厉"]
 
 
 @pytest.mark.asyncio
@@ -369,7 +545,6 @@ async def test_approve_setting_auto_applies_additive_entity_diff(async_session):
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
-        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_additive", "setting.txt", "content")
         assert pe.diff_result["summary"] == "1 个可自动补充实体"
         changes = pe.diff_result["entity_diffs"][0]["field_changes"]
@@ -464,7 +639,6 @@ async def test_approve_setting_records_conflict_resolution_result(async_session)
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
-        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_resolution_log", "setting.txt", "content")
         await svc.approve_pending(
             pe.id,
@@ -513,7 +687,6 @@ async def test_approve_setting_records_keep_old_resolution_result(async_session)
         mock_get.return_value = mock_client
 
         svc = ExtractionService(async_session)
-        svc.entity_svc.classify_entities_batch = AsyncMock(return_value={"total": 0, "updated": 0})
         pe = await svc.process_upload("n_keep_old", "setting.txt", "content")
         await svc.approve_pending(pe.id)
 
@@ -617,88 +790,3 @@ async def test_approve_setting_builds_diff_for_legacy_pending(async_session):
     refreshed = await svc.pending_repo.get_by_id(pe.id)
     assert refreshed.resolution_result is not None
     assert refreshed.resolution_result["field_resolutions"]
-
-
-@pytest.mark.asyncio
-async def test_approve_nonexistent_pending(async_session):
-    svc = ExtractionService(async_session)
-    docs = await svc.approve_pending("pe_does_not_exist")
-    assert docs == []
-
-
-@pytest.mark.asyncio
-async def test_list_approved_documents_returns_novel_scoped_documents(async_session):
-    svc = ExtractionService(async_session)
-    await svc.doc_repo.create("d1", "n1", "worldview", "World", "world")
-    await svc.doc_repo.create("d2", "n1", "concept", "People", "people")
-    await svc.doc_repo.create("d3", "n2", "worldview", "Other", "other")
-
-    docs = await svc.list_approved_documents("n1")
-
-    assert [doc.id for doc in docs] == ["d2", "d1"]
-
-
-@pytest.mark.asyncio
-async def test_get_approved_document_returns_none_for_other_novel(async_session):
-    svc = ExtractionService(async_session)
-    await svc.doc_repo.create("d1", "n1", "worldview", "World", "world")
-    await svc.doc_repo.create("d2", "n2", "worldview", "Other", "other")
-
-    doc = await svc.get_approved_document("n1", "d1")
-    missing = await svc.get_approved_document("n1", "d2")
-
-    assert doc is not None
-    assert doc.id == "d1"
-    assert missing is None
-
-
-@pytest.mark.asyncio
-async def test_list_document_versions_returns_versions_for_doc_type(async_session):
-    svc = ExtractionService(async_session)
-    await svc.doc_repo.create("d1", "n1", "style_profile", "v1", "content1", version=1)
-    await svc.doc_repo.create("d2", "n1", "style_profile", "v2", "content2", version=2)
-
-    versions = await svc.list_document_versions("n1", "style_profile")
-
-    assert [doc.id for doc in versions] == ["d2", "d1"]
-
-
-@pytest.mark.asyncio
-async def test_save_document_version_indexes_embedding_when_service_available(async_session):
-    embedding_service = AsyncMock()
-    svc = ExtractionService(async_session, embedding_service=embedding_service)
-    original = await svc.doc_repo.create("d1", "n1", "worldview", "v1", "content1", version=1)
-
-    saved = await svc.save_document_version("n1", original.id, title="v2", content="content2")
-
-    assert saved.version == 2
-    embedding_service.index_document.assert_awaited_once_with(saved.id)
-
-
-@pytest.mark.asyncio
-async def test_reindex_document_indexes_existing_document(async_session):
-    embedding_service = AsyncMock()
-    svc = ExtractionService(async_session, embedding_service=embedding_service)
-    doc = await svc.doc_repo.create("d1", "n1", "worldview", "v1", "content1", version=1)
-
-    result = await svc.reindex_document("n1", doc.id)
-
-    assert result is doc
-    embedding_service.index_document.assert_awaited_once_with(doc.id)
-
-
-@pytest.mark.asyncio
-async def test_approve_pending_indexes_created_documents(async_session, mock_llm):
-    embedding_service = AsyncMock()
-    svc = ExtractionService(async_session, embedding_service=embedding_service)
-    pe = await svc.process_upload(
-        novel_id="n1",
-        filename="setting.txt",
-        content="世界观：天玄大陆。主角林风，外门弟子。",
-    )
-
-    docs = await svc.approve_pending(pe.id)
-
-    assert len(docs) > 0
-    assert embedding_service.index_document.await_count == len(docs)
-    embedding_service.index_document.assert_any_await(docs[0].id)

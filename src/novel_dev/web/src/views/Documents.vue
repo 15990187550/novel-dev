@@ -316,7 +316,10 @@
           >
             <div class="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <div class="font-semibold text-gray-900 dark:text-gray-100">{{ domain.name }}</div>
+                <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <span class="font-semibold text-gray-900 dark:text-gray-100">{{ domain.name }}</span>
+                  <span class="text-xs text-gray-500 dark:text-gray-400">添加时间：{{ formatTimestamp(domain.created_at) }}</span>
+                </div>
                 <div class="mt-1 flex flex-wrap gap-2 text-xs">
                   <el-tag size="small" :type="domain.is_active ? 'success' : 'info'">{{ domain.is_active ? '启用' : '禁用' }}</el-tag>
                   <el-tag size="small" type="info">{{ domainStatusLabel(domain.scope_status) }}</el-tag>

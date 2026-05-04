@@ -1,6 +1,7 @@
 import uuid
 import json
 import logging
+import re
 from typing import Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,11 +10,13 @@ from novel_dev.agents.setting_extractor import SettingExtractorAgent
 from novel_dev.agents.style_profiler import StyleProfilerAgent, StyleProfile, StyleConfig
 from novel_dev.agents.profile_merger import ProfileMerger
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.relationship_extraction_service import RelationshipExtractionService
 from novel_dev.services.log_service import log_service
 from novel_dev.db.models import NovelDocument, PendingExtraction
 from novel_dev.llm import llm_factory
@@ -612,6 +615,115 @@ class ExtractionService:
             "summary": "，".join(summary_parts) if summary_parts else "无实体变更",
         }
 
+    @staticmethod
+    def _merge_entity_field_value(old_value: Any, new_value: Any) -> Any:
+        if new_value in (None, "", []):
+            return old_value
+        if old_value in (None, "", []):
+            return new_value
+        if isinstance(old_value, list) or isinstance(new_value, list):
+            merged: list[Any] = []
+            for item in [*(old_value if isinstance(old_value, list) else [old_value]), *(new_value if isinstance(new_value, list) else [new_value])]:
+                if item not in (None, "") and item not in merged:
+                    merged.append(item)
+            return merged
+        old_text = str(old_value).strip()
+        new_text = str(new_value).strip()
+        if not new_text or old_text == new_text:
+            return old_value
+        if new_text in old_text:
+            return old_value
+        if old_text in new_text:
+            return new_value
+        return f"{old_text}\n{new_text}"
+
+    @staticmethod
+    def _aliases_from_incoming_name(incoming_name: str, canonical_name: str) -> list[str]:
+        incoming = (incoming_name or "").strip()
+        canonical_normalized = EntityRepository.normalize_name(canonical_name)
+        aliases: list[str] = []
+        if incoming and EntityRepository.normalize_name(incoming) != canonical_normalized:
+            aliases.append(incoming)
+        for part in re.split(r"[/／|｜、;；]+", incoming):
+            cleaned = part.strip()
+            if cleaned and EntityRepository.normalize_name(cleaned) != canonical_normalized and cleaned not in aliases:
+                aliases.append(cleaned)
+        for match in re.finditer(r"（(.*?)）|\((.*?)\)|【(.*?)】|\[(.*?)\]", incoming):
+            for part in match.groups():
+                cleaned = (part or "").strip()
+                if cleaned and EntityRepository.normalize_name(cleaned) != canonical_normalized and cleaned not in aliases:
+                    aliases.append(cleaned)
+        return aliases
+
+    def _merge_entity_state_for_alias(self, existing_name: str, latest_state: dict[str, Any], incoming_state: dict[str, Any]) -> dict[str, Any]:
+        merged_state = dict(latest_state or {})
+        incoming_name = str(incoming_state.get("name") or "").strip()
+        for field, value in incoming_state.items():
+            if field == "name":
+                continue
+            merged_state[field] = self._merge_entity_field_value(merged_state.get(field), value)
+        aliases = self._merge_entity_field_value(
+            merged_state.get("aliases") or [],
+            self._aliases_from_incoming_name(incoming_name, existing_name),
+        )
+        if aliases:
+            merged_state["aliases"] = aliases
+        merged_state["name"] = existing_name
+        return merged_state
+
+    def _domain_scope_from_entity_diff(self, entity_diff: dict[str, Any]) -> tuple[str | None, str | None]:
+        domain_id = None
+        domain_name = None
+        for change in entity_diff.get("field_changes", []):
+            if change.get("field") == "_knowledge_domain_id":
+                domain_id = change.get("new_value")
+            elif change.get("field") == "_knowledge_domain_name":
+                domain_name = change.get("new_value")
+        return domain_id, domain_name
+
+    async def _find_existing_domain_entity(
+        self,
+        novel_id: str,
+        entity_type: str,
+        entity_name: str,
+        *,
+        domain_id: str | None,
+        domain_name: str | None,
+    ):
+        target_variants = EntityRepository.name_variants(entity_name)
+        if not target_variants:
+            return None
+        candidates = [
+            entity for entity in await self.entity_svc.entity_repo.list_by_novel(novel_id)
+            if entity.type == entity_type
+        ]
+        domain_matches = []
+        for entity in candidates:
+            latest_state = await self.entity_svc.get_latest_state(entity.id) or {}
+            if latest_state.get("_knowledge_usage") != "domain":
+                continue
+            if domain_id and latest_state.get("_knowledge_domain_id") != domain_id:
+                continue
+            if not domain_id and domain_name and latest_state.get("_knowledge_domain_name") != domain_name:
+                continue
+            entity_variants = EntityRepository.name_variants(entity.name)
+            state_aliases = latest_state.get("aliases") or []
+            if isinstance(state_aliases, list):
+                for alias in state_aliases:
+                    entity_variants.update(EntityRepository.name_variants(str(alias)))
+            if entity_variants & target_variants:
+                domain_matches.append(entity)
+                continue
+            if any(
+                EntityRepository._is_close_name_match(candidate_variant, target_variant)
+                for candidate_variant in entity_variants
+                for target_variant in target_variants
+            ):
+                domain_matches.append(entity)
+        if len(domain_matches) == 1:
+            return domain_matches[0]
+        return None
+
     async def _apply_entity_diff(
         self,
         novel_id: str,
@@ -626,6 +738,41 @@ class ExtractionService:
         if entity_diff.get("operation") == "create":
             initial_state = {change["field"]: change.get("new_value") for change in entity_diff.get("field_changes", [])}
             initial_state["name"] = entity_name
+            domain_id, domain_name = self._domain_scope_from_entity_diff(entity_diff)
+            existing = None
+            if domain_id or domain_name:
+                existing = await self._find_existing_domain_entity(
+                    novel_id,
+                    entity_type,
+                    entity_name,
+                    domain_id=domain_id,
+                    domain_name=domain_name,
+                )
+            else:
+                existing = await self.entity_svc.entity_repo.find_by_name(
+                    entity_name,
+                    entity_type=entity_type,
+                    novel_id=novel_id,
+                )
+            if existing is not None:
+                latest_state = await self.entity_svc.get_latest_state(existing.id) or {"name": existing.name}
+                merged_state = self._merge_entity_state_for_alias(existing.name, latest_state, initial_state)
+                await self.entity_svc.update_state_from_import(
+                    existing.id,
+                    merged_state,
+                    diff_summary={"merged_from_pending": True, "deduplicated_create": True},
+                )
+                if applied_entity_ids is not None:
+                    applied_entity_ids.append(existing.id)
+                for change in entity_diff.get("field_changes", []):
+                    resolution_log.append({
+                        "entity_type": entity_type,
+                        "entity_name": entity_name,
+                        "field": change["field"],
+                        "action": "merged_create",
+                        "applied": True,
+                    })
+                return resolution_log
             entity_id = f"ent_{uuid.uuid4().hex[:8]}"
             await self.entity_svc.create_entity(
                 entity_id=entity_id,
@@ -930,6 +1077,13 @@ class ExtractionService:
             field_resolutions=field_resolutions,
             source_filename=pe.source_filename or pe.id,
         )
+        relationship_result = await RelationshipExtractionService(self.session).extract_and_persist_from_setting(
+            novel_id=pe.novel_id,
+            source_text=self._build_relationship_source_text(raw),
+            source_ref=pe.source_filename or pe.id,
+            domain_id=domain.id if domain else None,
+            domain_name=domain_name,
+        )
         resolution_result: dict[str, Any] = {
             "field_resolutions": [],
             "knowledge_usage": "domain",
@@ -937,6 +1091,7 @@ class ExtractionService:
             "domain_name": domain_name,
             "isolated_from_global_library": True,
             "local_document_ids": [doc.id for doc in docs],
+            "relationship_extraction": relationship_result,
         }
         resolution_result.update(entity_result)
         if domain:
@@ -1400,6 +1555,12 @@ class ExtractionService:
                 source_filename=pe.source_filename or pe.id,
             )
             resolution_result.update(entity_result)
+            relationship_result = await RelationshipExtractionService(self.session).extract_and_persist_from_setting(
+                novel_id=pe.novel_id,
+                source_text=self._build_relationship_source_text(raw),
+                source_ref=pe.source_filename or pe.id,
+            )
+            resolution_result["relationship_extraction"] = relationship_result
 
         else:
             latest = await self.doc_repo.get_latest_by_type(pe.novel_id, "style_profile")
@@ -1443,6 +1604,9 @@ class ExtractionService:
             source_filename=pe.source_filename or pe.id,
         )
         return docs
+
+    def _build_relationship_source_text(self, raw_result: dict[str, Any]) -> str:
+        return json.dumps(raw_result or {}, ensure_ascii=False)
 
     async def _get_knowledge_domain_for_pending(self, pe: PendingExtraction):
         raw_result = pe.raw_result or {}

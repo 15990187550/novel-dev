@@ -29,10 +29,12 @@ const {
   updateLibraryDocumentMock,
   rollbackStyleProfileMock,
   getSettingWorkbenchMock,
+  getSettingSessionsMock,
   getSettingSessionMock,
   createSettingSessionMock,
   replySettingSessionMock,
   generateSettingReviewBatchMock,
+  getSettingReviewBatchesMock,
   getSettingReviewBatchMock,
   applySettingReviewBatchMock,
   successMessageMock,
@@ -53,10 +55,12 @@ const {
   updateLibraryDocumentMock: vi.fn(),
   rollbackStyleProfileMock: vi.fn(),
   getSettingWorkbenchMock: vi.fn(),
+  getSettingSessionsMock: vi.fn(),
   getSettingSessionMock: vi.fn(),
   createSettingSessionMock: vi.fn(),
   replySettingSessionMock: vi.fn(),
   generateSettingReviewBatchMock: vi.fn(),
+  getSettingReviewBatchesMock: vi.fn(),
   getSettingReviewBatchMock: vi.fn(),
   applySettingReviewBatchMock: vi.fn(),
   successMessageMock: vi.fn(),
@@ -83,10 +87,12 @@ vi.mock('@/api.js', () => ({
   updateLibraryDocument: updateLibraryDocumentMock,
   rollbackStyleProfile: rollbackStyleProfileMock,
   getSettingWorkbench: getSettingWorkbenchMock,
+  getSettingSessions: getSettingSessionsMock,
   getSettingSession: getSettingSessionMock,
   createSettingSession: createSettingSessionMock,
   replySettingSession: replySettingSessionMock,
   generateSettingReviewBatch: generateSettingReviewBatchMock,
+  getSettingReviewBatches: getSettingReviewBatchesMock,
   getSettingReviewBatch: getSettingReviewBatchMock,
   applySettingReviewBatch: applySettingReviewBatchMock,
 }))
@@ -184,6 +190,7 @@ describe('Documents', () => {
     getDocumentLibraryMock.mockResolvedValue({ items: [], active_style_profile_version: null })
     getKnowledgeDomainsMock.mockResolvedValue({ items: [] })
     getSettingWorkbenchMock.mockResolvedValue({ sessions: [], review_batches: [] })
+    getSettingSessionsMock.mockResolvedValue({ items: [] })
     getSettingSessionMock.mockResolvedValue({ session: null, messages: [], review_batches: [] })
     createSettingSessionMock.mockResolvedValue({ id: 'sgs_new', title: '新设定', status: 'clarifying' })
     replySettingSessionMock.mockResolvedValue({
@@ -191,6 +198,7 @@ describe('Documents', () => {
       assistant_message: '请继续补充。',
       questions: ['还需要什么势力？'],
     })
+    getSettingReviewBatchesMock.mockResolvedValue({ items: [] })
     getSettingReviewBatchMock.mockResolvedValue({ id: 'srb_empty', changes: [] })
     applySettingReviewBatchMock.mockResolvedValue({ status: 'approved', applied: 0, rejected: 0, failed: 0 })
     confirmKnowledgeDomainScopeMock.mockResolvedValue({ item: {} })
@@ -352,6 +360,22 @@ describe('Documents', () => {
     expect(settledButtons[1].attributes('disabled')).toBeUndefined()
     expect(store.fetchDocuments).toHaveBeenCalled()
     expect(successMessageMock).toHaveBeenCalledWith('已批准')
+  })
+
+  it('uses unified wording for review records while keeping source files in rows', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.pendingDocs = [
+      { id: 'doc-1', source_filename: '设定一.md', extraction_type: 'setting', status: 'approved', created_at: '2026-04-22T00:00:00Z' },
+    ]
+    store.fetchDocuments = vi.fn().mockResolvedValue()
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('审核记录')
+    expect(wrapper.text()).not.toContain('导入审核记录')
+    expect(wrapper.text()).toContain('设定一.md')
   })
 
   it('keeps approve loading state after remount while the same request is still pending', async () => {
@@ -682,6 +706,7 @@ describe('Documents', () => {
             confirmed_scopes: [],
             confidence: 'low',
             is_active: true,
+            created_at: '2026-04-25T07:45:00Z',
           },
         ],
       })
@@ -710,6 +735,7 @@ describe('Documents', () => {
 
     expect(wrapper.text()).toContain('规则域')
     expect(wrapper.text()).toContain('完美世界')
+    expect(wrapper.text()).toContain('添加时间：2026/4/25 15:45:00')
     expect(wrapper.text()).toContain('高原诡异只能伏笔')
 
     const confirmButton = wrapper.findAll('.el-button-stub').find((button) => button.text() === '确认用于第2卷')

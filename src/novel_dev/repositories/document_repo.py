@@ -1,4 +1,5 @@
 import math
+from datetime import datetime
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select, text
@@ -128,6 +129,31 @@ class DocumentRepository:
         result = await self.session.execute(select(NovelDocument).where(NovelDocument.id == doc_id))
         return result.scalar_one_or_none()
 
+    async def archive_for_consolidation(
+        self,
+        doc_id: str,
+        *,
+        novel_id: str,
+        batch_id: str,
+        change_id: str,
+        reason: str = "setting_consolidation",
+    ) -> Optional[NovelDocument]:
+        result = await self.session.execute(
+            select(NovelDocument).where(
+                NovelDocument.id == doc_id,
+                NovelDocument.novel_id == novel_id,
+            )
+        )
+        doc = result.scalar_one_or_none()
+        if doc is None:
+            return None
+        doc.archived_at = datetime.utcnow()
+        doc.archive_reason = reason
+        doc.archived_by_consolidation_batch_id = batch_id
+        doc.archived_by_consolidation_change_id = change_id
+        await self.session.flush()
+        return doc
+
     async def get_by_id_for_novel(self, novel_id: str, doc_id: str) -> Optional[NovelDocument]:
         result = await self.session.execute(
             select(NovelDocument).where(
@@ -148,7 +174,10 @@ class DocumentRepository:
     async def get_by_type(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
         result = await self.session.execute(
             select(NovelDocument)
-            .where(NovelDocument.novel_id == novel_id, NovelDocument.doc_type == doc_type)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+            )
             .order_by(NovelDocument.updated_at.desc())
         )
         return result.scalars().all()
@@ -167,7 +196,11 @@ class DocumentRepository:
                 )
                 .label("rn"),
             )
-            .where(NovelDocument.novel_id == novel_id, NovelDocument.doc_type == doc_type)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+                NovelDocument.archived_at.is_(None),
+            )
             .subquery()
         )
         result = await self.session.execute(
@@ -175,6 +208,7 @@ class DocumentRepository:
             .where(
                 NovelDocument.novel_id == novel_id,
                 NovelDocument.doc_type == doc_type,
+                NovelDocument.archived_at.is_(None),
                 NovelDocument.id.in_(select(latest_stmt.c.id).where(latest_stmt.c.rn == 1)),
             )
             .order_by(NovelDocument.updated_at.desc())

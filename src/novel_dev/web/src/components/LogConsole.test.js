@@ -94,6 +94,44 @@ describe('LogConsole', () => {
     expect(wrapper.find('[data-testid="log-details-0"]').exists()).toBe(false)
   })
 
+  it('renders full prompt metadata as readable text in details', async () => {
+    const prompt = '第一行 prompt\n第二行 prompt'
+    const wrapper = mount(LogConsole, {
+      props: {
+        connected: true,
+        logs: [
+          {
+            timestamp: '2026-04-25T01:00:00Z',
+            agent: 'BrainstormAgent',
+            level: 'info',
+            status: 'started',
+            node: 'llm_call',
+            task: 'score_synopsis',
+            message: 'score_synopsis 调用模型',
+            metadata: {
+              prompt_chars: prompt.length,
+              prompt,
+              prompt_preview: '第一行 prompt 第二行 prompt',
+            },
+          },
+        ],
+      },
+      global: {
+        stubs: {
+          ElTag: { props: ['type'], template: '<span class="el-tag-stub"><slot /></span>' },
+          ElButton: { template: '<button><slot /></button>' },
+        },
+      },
+    })
+
+    await wrapper.get('[data-testid="log-details-toggle-0"]').trigger('click')
+
+    const details = wrapper.get('[data-testid="log-details-0"]').text()
+    expect(details).toContain('--- Prompt ---')
+    expect(details).toContain(prompt)
+    expect(details).not.toContain('"prompt": "第一行 prompt\\n第二行 prompt"')
+  })
+
   it('scrolls to the bottom when opened with existing logs', async () => {
     const restoreAnimationFrame = installAnimationFrameMock()
     const scrollTo = vi.fn()

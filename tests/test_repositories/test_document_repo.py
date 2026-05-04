@@ -1,3 +1,5 @@
+from datetime import datetime
+
 import pytest
 
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -31,6 +33,21 @@ async def test_get_by_type_returns_all_versions_but_current_returns_latest_per_t
     assert {doc.id for doc in all_docs} == {"d1", "d2", "d3"}
     assert {doc.id for doc in current_docs} == {"d2", "d3"}
     assert all("魔佛" not in (doc.content or "") for doc in current_docs)
+
+
+@pytest.mark.asyncio
+async def test_get_current_by_type_ignores_archived_documents(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "setting", "势力格局", "旧内容", version=1)
+    archived = await repo.create("d2", "n1", "setting", "势力格局", "已归档新内容", version=2)
+    archived.archived_at = datetime(2026, 5, 4, 12, 0, 0)
+    await repo.create("d3", "n1", "setting", "修炼体系", "体系内容", version=1)
+    await async_session.commit()
+
+    current_docs = await repo.get_current_by_type("n1", "setting")
+
+    assert {doc.id for doc in current_docs} == {"d1", "d3"}
+    assert all(doc.archived_at is None for doc in current_docs)
 
 
 @pytest.mark.asyncio

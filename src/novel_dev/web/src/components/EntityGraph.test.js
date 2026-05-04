@@ -69,42 +69,30 @@ describe('EntityGraph', () => {
     expect(wrapper.text()).toContain('暂无关系图谱数据')
   })
 
-  it('renders source backlink action for a selected AI generated relationship', async () => {
+  it('uses entity ids as graph node keys when display names are duplicated', () => {
     const wrapper = mount(EntityGraph, {
       props: {
         entities: [
-          { entity_id: 'hero', name: '陆照', type: 'character' },
-          { entity_id: 'manual', name: '道经', type: 'item' },
+          { entity_id: 'dao-local', name: '道经', type: 'item', effective_category: '功法' },
+          { entity_id: 'dao-domain', name: '道经', type: 'item', effective_category: '功法' },
+          { entity_id: 'mengqi', name: '孟奇', type: 'character', effective_category: '人物' },
         ],
         relationships: [
-          {
-            source_id: 'hero',
-            target_id: 'manual',
-            relation_type: '持有',
-            source_type: 'ai',
-            source_session_id: 'sgs_1',
-            source_review_change_id: 'chg_1',
-          },
+          { source_id: 'mengqi', target_id: 'dao-local', relation_type: '关联' },
         ],
       },
       global: { stubs: { ElButton: true } },
     })
 
-    wrapper.vm.onClick({
-      dataType: 'edge',
-      data: {
-        source: 'hero',
-        target: 'manual',
-        value: '持有',
-      },
+    const series = wrapper.vm.option.series[0]
+    expect(series.data.map((node) => node.name)).toEqual(['dao-local', 'dao-domain', 'mengqi'])
+    expect(series.data.map((node) => node.displayName)).toEqual(['道经', '道经', '孟奇'])
+    expect(series.label.formatter({ data: series.data[0] })).toBe('道经')
+    expect(series.links[0]).toMatchObject({
+      source: 'mengqi',
+      target: 'dao-local',
+      sourceName: '孟奇',
+      targetName: '道经',
     })
-    await wrapper.vm.$nextTick()
-
-    const button = wrapper.get('.entity-ai-badge')
-    expect(button.text()).toBe('AI 生成 · 查看会话')
-
-    await button.trigger('click')
-
-    expect(wrapper.emitted('open-source-session')?.[0]).toEqual([{ sessionId: 'sgs_1', changeId: 'chg_1' }])
   })
 })

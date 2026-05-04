@@ -61,6 +61,8 @@ def _find_language_style_issues(text: str) -> list[str]:
     for match in _LATIN_WORD_RE.finditer(text or ""):
         word = match.group(0)
         key = word.lower()
+        if len(set(key)) == 1:
+            continue
         if key in seen:
             continue
         seen.add(key)

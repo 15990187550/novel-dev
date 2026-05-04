@@ -1,106 +1,97 @@
-from datetime import datetime
-from typing import Any, Literal, Optional
+from typing import Any, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-SessionStatus = Literal["clarifying", "ready_to_generate", "generating", "generated", "failed", "archived"]
-BatchStatus = Literal["pending", "partially_approved", "approved", "rejected", "superseded", "failed"]
-ChangeStatus = Literal["pending", "approved", "rejected", "edited_approved", "failed"]
-TargetType = Literal["setting_card", "entity", "relationship"]
-ChangeOperation = Literal["create", "update", "delete"]
-ReviewDecision = Literal["approve", "reject", "edit_approve"]
+from pydantic import BaseModel, Field
 
 
-class SettingGenerationSessionCreate(BaseModel):
+class SettingGenerationSessionCreateRequest(BaseModel):
     title: str
     initial_idea: str = ""
     target_categories: list[str] = Field(default_factory=list)
-    focused_target: Optional[dict[str, Any]] = None
 
 
 class SettingGenerationSessionResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
     novel_id: str
     title: str
-    status: SessionStatus
+    status: str
     target_categories: list[str] = Field(default_factory=list)
     clarification_round: int = 0
     conversation_summary: Optional[str] = None
-    focused_target: Optional[dict[str, Any]] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class SettingGenerationMessageResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
     session_id: str
     role: str
     content: str
-    meta: Optional[dict[str, Any]] = None
-    created_at: Optional[datetime] = None
+    meta: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
 
 
-class SettingSessionReplyRequest(BaseModel):
-    content: str
-    metadata: Optional[dict[str, Any]] = None
+class SettingGenerationSessionListResponse(BaseModel):
+    items: list[SettingGenerationSessionResponse] = Field(default_factory=list)
+
+
+class SettingGenerationSessionDetailResponse(BaseModel):
+    session: SettingGenerationSessionResponse
+    messages: list[SettingGenerationMessageResponse] = Field(default_factory=list)
+
+
+class SettingConsolidationStartRequest(BaseModel):
+    selected_pending_ids: list[str] = Field(default_factory=list)
+
+
+class SettingConsolidationStartResponse(BaseModel):
+    job_id: str
+    status: str
 
 
 class SettingReviewChangeResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
     batch_id: str
-    target_type: TargetType
-    operation: ChangeOperation
+    target_type: str
+    operation: str
     target_id: Optional[str] = None
-    status: ChangeStatus
+    status: str
     before_snapshot: Optional[dict[str, Any]] = None
     after_snapshot: Optional[dict[str, Any]] = None
     conflict_hints: list[dict[str, Any]] = Field(default_factory=list)
-    source_session_id: Optional[str] = None
     error_message: Optional[str] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
 
 
 class SettingReviewBatchResponse(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
     id: str
     novel_id: str
     source_type: str
     source_file: Optional[str] = None
     source_session_id: Optional[str] = None
-    source_session_title: Optional[str] = None
-    status: BatchStatus
+    job_id: Optional[str] = None
+    status: str
     summary: str = ""
+    input_snapshot: dict[str, Any] = Field(default_factory=dict)
     error_message: Optional[str] = None
-    counts: dict[str, int] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class SettingReviewBatchListResponse(BaseModel):
+    items: list[SettingReviewBatchResponse] = Field(default_factory=list)
+
+
+class SettingReviewBatchDetailResponse(BaseModel):
+    batch: SettingReviewBatchResponse
     changes: list[SettingReviewChangeResponse] = Field(default_factory=list)
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
 
 
-class SettingWorkbenchPayload(BaseModel):
-    novel_id: str
-    sessions: list[SettingGenerationSessionResponse] = Field(default_factory=list)
-    review_batches: list[SettingReviewBatchResponse] = Field(default_factory=list)
+class SettingReviewApproveRequest(BaseModel):
+    change_ids: list[str] = Field(default_factory=list)
+    approve_all: bool = False
 
 
-class SettingBatchGenerateRequest(BaseModel):
-    force: bool = False
-
-
-class SettingReviewDecision(BaseModel):
+class SettingConflictResolutionRequest(BaseModel):
     change_id: str
-    decision: ReviewDecision
-    edited_after_snapshot: Optional[dict[str, Any]] = None
-
-
-class SettingReviewApplyRequest(BaseModel):
-    decisions: list[SettingReviewDecision] = Field(default_factory=list)
+    resolved_after_snapshot: dict[str, Any]

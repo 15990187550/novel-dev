@@ -12,5 +12,6 @@ output/
 .server.pid
 .vite.pid
 server.log
+.superpowers/
 src/novel_dev/web/node_modules/
 src/novel_dev/web/dist/

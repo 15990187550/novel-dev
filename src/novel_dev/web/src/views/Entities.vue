@@ -38,10 +38,22 @@
             <div class="entities-page__meta text-sm">
               {{ workspaceStatusText }}
             </div>
-            <el-radio-group v-model="workspaceView" size="small">
-              <el-radio-button label="workspace">工作区</el-radio-button>
-              <el-radio-button label="graph">关系图谱</el-radio-button>
-            </el-radio-group>
+            <div class="flex flex-wrap items-center gap-3">
+              <label class="entities-page__meta inline-flex items-center gap-2 text-sm">
+                <input
+                  v-model="includeArchivedEntities"
+                  data-testid="entity-archive-toggle"
+                  type="checkbox"
+                  class="h-4 w-4"
+                  @change="fetchIfReady"
+                />
+                <span>已归档 / 已整合</span>
+              </label>
+              <el-radio-group v-model="workspaceView" size="small">
+                <el-radio-button label="workspace">工作区</el-radio-button>
+                <el-radio-button label="graph">关系图谱</el-radio-button>
+              </el-radio-group>
+            </div>
           </div>
 
           <template v-if="workspaceView === 'workspace'">
@@ -133,6 +145,7 @@ const router = useRouter()
 const graphFullscreenVisible = ref(false)
 const entityLoading = ref(false)
 const workspaceView = ref('workspace')
+const includeArchivedEntities = ref(false)
 
 function countTreeNodes(nodes = []) {
   return nodes.reduce((total, node) => total + 1 + countTreeNodes(node.children || []), 0)
@@ -275,7 +288,7 @@ async function runEntitySearch() {
   }
   entityLoading.value = true
   try {
-    await store.searchEntities(query)
+    await store.searchEntities(query, { includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }
@@ -285,7 +298,7 @@ async function resetEntityWorkspace() {
   entityLoading.value = true
   try {
     store.clearEntityWorkspaceState()
-    await store.fetchEntities()
+    await store.fetchEntities({ includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }
@@ -296,7 +309,7 @@ async function saveClassification(entity, payload) {
   const entityIds = entity.merged_entity_ids?.length ? entity.merged_entity_ids : [entity.entity_id]
   entityLoading.value = true
   try {
-    await store.saveEntityClassification(entityIds, payload)
+    await store.saveEntityClassification(entityIds, payload, { includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }
@@ -316,7 +329,7 @@ async function saveEntity(entity, payload) {
   if (!entity?.entity_id) return
   entityLoading.value = true
   try {
-    await store.updateEntity(entity.entity_id, payload)
+    await store.updateEntity(entity.entity_id, payload, { includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }
@@ -336,7 +349,7 @@ async function deleteEntity(entity) {
   )
   entityLoading.value = true
   try {
-    await store.deleteEntity(entity.entity_id)
+    await store.deleteEntity(entity.entity_id, { includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }
@@ -346,7 +359,7 @@ async function fetchIfReady() {
   if (!store.novelId) return
   entityLoading.value = true
   try {
-    await store.fetchEntities()
+    await store.fetchEntities({ includeArchived: includeArchivedEntities.value })
   } finally {
     entityLoading.value = false
   }

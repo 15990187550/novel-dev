@@ -523,6 +523,7 @@ class LibrarianAgent:
                 meta=rel.meta,
                 chapter_id=chapter_id,
                 novel_id=novel_id,
+                replace_existing_pair=True,
             )
             persist_stats["created"]["relationships"] += 1
         log_agent_detail(
