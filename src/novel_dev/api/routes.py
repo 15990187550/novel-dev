@@ -2746,7 +2746,10 @@ async def generate_setting_review_batch(
         batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
     except LLMTimeoutError as exc:
         await session.rollback()
-        raise HTTPException(status_code=504, detail="设定工作台生成超时，请缩小生成范围或稍后重试") from exc
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="AI 生成设定审核记录超时，请稍后重试",
+        ) from exc
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status_code=409, detail=str(exc)) from exc

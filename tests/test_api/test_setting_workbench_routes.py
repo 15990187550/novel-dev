@@ -133,3 +133,38 @@ async def test_apply_setting_review_batch_applies_pending_changes(test_client, a
     )
     doc = result.scalar_one()
     assert doc.content == "境界分为炼气、筑基、金丹。"
+
+
+@pytest.mark.asyncio
+async def test_generate_setting_review_batch_returns_504_on_llm_timeout(
+    test_client,
+    async_session,
+    monkeypatch,
+):
+    from novel_dev.llm.exceptions import LLMTimeoutError
+    from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-timeout-api",
+        title="超时测试",
+        target_categories=["worldview"],
+    )
+    await async_session.commit()
+
+    async def timeout(self, novel_id, session_id):
+        raise LLMTimeoutError("Request timed out")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.SettingWorkbenchService.generate_review_batch",
+        timeout,
+    )
+
+    async with test_client as client:
+        response = await client.post(
+            f"/api/novels/novel-timeout-api/settings/sessions/{session.id}/generate",
+            json={},
+        )
+
+    assert response.status_code == 504
+    assert response.json()["detail"] == "AI 生成设定审核记录超时，请稍后重试"
