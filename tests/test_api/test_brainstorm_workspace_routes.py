@@ -21,11 +21,16 @@ def test_client(async_session):
     app.dependency_overrides.clear()
 
 
-async def _seed_route_suggestion_card(async_session, novel_id: str, status: str = "active"):
+async def _seed_route_suggestion_card(
+    async_session,
+    novel_id: str,
+    status: str = "active",
+    phase: Phase = Phase.BRAINSTORMING,
+):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
         novel_id,
-        phase=Phase.BRAINSTORMING,
+        phase=phase,
         checkpoint_data={},
         volume_id=None,
         chapter_id=None,
@@ -109,6 +114,44 @@ async def test_patch_suggestion_card_returns_409_for_illegal_status(
 
     assert resp.status_code == 409
     assert "cannot be reactivated" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_patch_suggestion_card_returns_400_for_unsupported_action(
+    async_session,
+    test_client,
+):
+    await _seed_route_suggestion_card(async_session, "n_workspace_card_bad_action")
+
+    async with test_client as client:
+        resp = await client.patch(
+            "/api/novels/n_workspace_card_bad_action/brainstorm/suggestion_cards/card_route_1",
+            json={"action": "archive"},
+        )
+
+    assert resp.status_code == 400
+    assert "unsupported suggestion card action" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_suggestion_card_returns_409_for_wrong_phase(
+    async_session,
+    test_client,
+):
+    await _seed_route_suggestion_card(
+        async_session,
+        "n_workspace_card_wrong_phase",
+        phase=Phase.VOLUME_PLANNING,
+    )
+
+    async with test_client as client:
+        resp = await client.patch(
+            "/api/novels/n_workspace_card_wrong_phase/brainstorm/suggestion_cards/card_route_1",
+            json={"action": "resolve"},
+        )
+
+    assert resp.status_code == 409
+    assert "brainstorming phase" in resp.json()["detail"].lower()
 
 
 @pytest.mark.asyncio

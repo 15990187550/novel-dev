@@ -254,23 +254,36 @@ class BrainstormWorkspaceService:
             hint = self.build_suggestion_card_action_hint(target)
             if "submit_to_pending" not in hint.available_actions:
                 raise ValueError(f"Suggestion card cannot be submitted: {target.card_id}")
-            pending_payload = (
-                await self.extraction_service.build_pending_payload_from_suggestion_card(
-                    novel_id,
-                    target,
-                )
-            )
-            pending = await self.extraction_service.persist_pending_payload(
+            existing_pending = await self._find_existing_pending_for_suggestion_card(
                 novel_id,
-                pending_payload,
+                target,
             )
-            pending_summary = PendingExtractionSummary(
-                id=pending.id,
-                status=pending.status,
-                source_filename=pending.source_filename,
-                extraction_type=pending.extraction_type,
-            )
-            cards[target_index]["status"] = "submitted"
+            if existing_pending is not None:
+                pending_summary = PendingExtractionSummary(
+                    id=existing_pending.id,
+                    status=existing_pending.status,
+                    source_filename=existing_pending.source_filename,
+                    extraction_type=existing_pending.extraction_type,
+                )
+                cards[target_index]["status"] = "submitted"
+            else:
+                pending_payload = (
+                    await self.extraction_service.build_pending_payload_from_suggestion_card(
+                        novel_id,
+                        target,
+                    )
+                )
+                pending = await self.extraction_service.persist_pending_payload(
+                    novel_id,
+                    pending_payload,
+                )
+                pending_summary = PendingExtractionSummary(
+                    id=pending.id,
+                    status=pending.status,
+                    source_filename=pending.source_filename,
+                    extraction_type=pending.extraction_type,
+                )
+                cards[target_index]["status"] = "submitted"
         else:
             raise ValueError(f"Unsupported suggestion card action: {action}")
 
@@ -311,7 +324,16 @@ class BrainstormWorkspaceService:
 
         if active_cards:
             entity_cards = [
-                card for card in active_cards if card.card_type != "relationship"
+                card
+                for card in active_cards
+                if card.card_type != "relationship"
+                and self._can_submit_suggestion_card_as_pending(card)
+            ]
+            skipped_non_setting_cards = [
+                card
+                for card in active_cards
+                if card.card_type != "relationship"
+                and not self._can_submit_suggestion_card_as_pending(card)
             ]
             relationship_cards = [
                 card for card in active_cards if card.card_type == "relationship"
@@ -339,12 +361,18 @@ class BrainstormWorkspaceService:
             )
             (
                 resolved_relationships,
-                submit_warnings,
+                relationship_warnings,
             ) = await self._resolve_relationship_cards(
                 novel_id=novel_id,
                 cards=relationship_cards,
                 active_cards=active_cards,
             )
+            submit_warnings = [
+                *self._build_skipped_suggestion_card_submit_warnings(
+                    skipped_non_setting_cards
+                ),
+                *relationship_warnings,
+            ]
         else:
             pending_payloads = [
                 await self.extraction_service.build_pending_payload_from_setting_draft(
@@ -501,6 +529,24 @@ class BrainstormWorkspaceService:
         text = f"{summary} {json.dumps(payload, ensure_ascii=False)}"
         return any(keyword in text for keyword in OUTLINE_SUGGESTION_KEYWORDS)
 
+    def _can_submit_suggestion_card_as_pending(
+        self,
+        card: SettingSuggestionCardPayload,
+    ) -> bool:
+        return "submit_to_pending" in self.build_suggestion_card_action_hint(
+            card
+        ).available_actions
+
+    def _build_skipped_suggestion_card_submit_warnings(
+        self,
+        cards: list[SettingSuggestionCardPayload],
+    ) -> list[str]:
+        return [
+            f"Skipped suggestion card {card.merge_key}: {card.title} 适合继续优化大纲，"
+            "最终确认时未转为待审批设定"
+            for card in cards
+        ]
+
     def _serialize_workspace(self, workspace: Any) -> BrainstormWorkspacePayload:
         suggestion_cards = []
         for item in workspace.setting_suggestion_cards or []:
@@ -563,6 +609,23 @@ class BrainstormWorkspaceService:
         card: SettingSuggestionCardPayload,
     ) -> dict[str, Any]:
         return card.model_dump(exclude={"action_hint"})
+
+    async def _find_existing_pending_for_suggestion_card(
+        self,
+        novel_id: str,
+        card: SettingSuggestionCardPayload,
+    ) -> Any | None:
+        source_filename = f"brainstorm-{card.merge_key}.md"
+        pending_items = await self.extraction_service.pending_repo.list_by_novel(novel_id)
+        return next(
+            (
+                item
+                for item in pending_items
+                if item.source_filename == source_filename
+                and item.extraction_type == "setting"
+            ),
+            None,
+        )
 
     def _merge_pending_payloads(
         self,
@@ -651,7 +714,12 @@ class BrainstormWorkspaceService:
     ) -> tuple[list[dict[str, Any]], list[str]]:
         resolved_relationships: list[dict[str, Any]] = []
         warnings: list[str] = []
-        entity_cards = [card for card in active_cards if card.card_type != "relationship"]
+        entity_cards = [
+            card
+            for card in active_cards
+            if card.card_type != "relationship"
+            and self._can_submit_suggestion_card_as_pending(card)
+        ]
         entity_cards_by_key = {card.merge_key: card for card in entity_cards}
 
         for card in cards:

@@ -455,6 +455,174 @@ describe('VolumePlan', () => {
     expect(text.indexOf('设定建议卡')).toBeLessThan(text.indexOf('OUTLINE SIDEBAR'))
   })
 
+  it('fills suggestion card prompt into conversation without submitting feedback', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.submitOutlineFeedback = vi.fn()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [
+        {
+          card_id: 'card-1',
+          card_type: 'revision',
+          merge_key: 'revision:hook',
+          title: '结尾钩子新颖度提升',
+          summary: '开放钩子需要更独特。',
+          status: 'active',
+          source_outline_refs: ['synopsis'],
+          payload: { focus: '结尾钩子' },
+          action_hint: {
+            recommended_action: 'continue_outline_feedback',
+            primary_label: '继续优化',
+            available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss'],
+            reason: '适合继续优化大纲。',
+          },
+        },
+      ],
+    }
+
+    let submittedFeedback = null
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: {
+            template: '<div data-testid="conversation-stub" />',
+            methods: {
+              setDraft(value) {
+                submittedFeedback = value
+              },
+            },
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="suggestion-primary-action"]').trigger('click')
+
+    expect(submittedFeedback).toContain('请根据这张设定建议卡继续优化当前大纲')
+    expect(submittedFeedback).toContain('结尾钩子新颖度提升')
+    expect(submittedFeedback).toContain('开放钩子需要更独特')
+    expect(store.submitOutlineFeedback).not.toHaveBeenCalled()
+  })
+
+  it('updates suggestion card through store when component emits update-card', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.updateBrainstormSuggestionCard = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [
+        {
+          card_id: 'card-1',
+          card_type: 'character',
+          merge_key: 'character:lin-feng',
+          title: '林风',
+          summary: '主角建议卡',
+          status: 'active',
+          source_outline_refs: ['synopsis'],
+          payload: { canonical_name: '林风' },
+          action_hint: {
+            recommended_action: 'submit_to_pending',
+            primary_label: '转设定',
+            available_actions: ['open_detail', 'fill_conversation', 'resolve', 'dismiss', 'submit_to_pending'],
+            reason: '可转为待审批设定。',
+          },
+        },
+      ],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+        },
+      },
+    })
+
+    await flushPromises()
+    await wrapper.get('[data-testid="suggestion-primary-action"]').trigger('click')
+
+    expect(store.updateBrainstormSuggestionCard).toHaveBeenCalledWith('card-1', 'submit_to_pending')
+  })
+
+  it('ignores suggestion card update without payload', async () => {
+    const pinia = createPinia()
+    setActivePinia(pinia)
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    store.novelState.current_phase = 'brainstorming'
+    store.refreshOutlineWorkbench = vi.fn().mockResolvedValue()
+    store.updateBrainstormSuggestionCard = vi.fn().mockResolvedValue()
+    store.outlineWorkbench.selection = {
+      outline_type: 'synopsis',
+      outline_ref: 'synopsis',
+    }
+    store.brainstormWorkspace.data = {
+      workspace_id: 'ws-1',
+      novel_id: 'novel-1',
+      status: 'active',
+      outline_drafts: {
+        'synopsis:synopsis': { title: '总纲' },
+      },
+      setting_docs_draft: [],
+      setting_suggestion_cards: [],
+    }
+
+    const wrapper = mount(VolumePlan, {
+      global: {
+        plugins: [pinia],
+        stubs: {
+          OutlineSidebar: true,
+          OutlineDetailPanel: true,
+          OutlineConversation: true,
+          BrainstormSuggestionCards: {
+            template: '<button data-testid="emit-empty-update" @click="$emit(\'update-card\')">emit</button>',
+          },
+        },
+      },
+    })
+
+    await flushPromises()
+    await expect(wrapper.get('[data-testid="emit-empty-update"]').trigger('click')).resolves.toBeUndefined()
+
+    expect(store.updateBrainstormSuggestionCard).not.toHaveBeenCalled()
+  })
+
   it('renders brainstorm submit warnings from workspace data', async () => {
     const pinia = createPinia()
     setActivePinia(pinia)
