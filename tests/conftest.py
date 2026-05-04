@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import sys
@@ -275,6 +276,12 @@ async def setup_test_db():
 @pytest_asyncio.fixture(autouse=True)
 async def cleanup_tables():
     yield
+    from novel_dev.api.routes import document_upload_tasks
+    from novel_dev.services.log_service import log_service
+
+    if document_upload_tasks:
+        await asyncio.gather(*list(document_upload_tasks), return_exceptions=True)
+    await log_service.flush_pending()
     await engine.dispose()
     async with engine.begin() as conn:
         for table in reversed(Base.metadata.sorted_tables):
