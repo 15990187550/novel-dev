@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import os
 import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
@@ -150,7 +151,13 @@ class LLMFactory:
         return self._build_task_config({**raw, "fallback": fallback})
 
     def _resolve_api_key(self, provider: str, base_url: Optional[str], config: Optional[dict] = None) -> Optional[str]:
-        # API key can be overridden per-profile
+        if config and config.get("api_key_env"):
+            env_name = config["api_key_env"]
+            key = os.getenv(env_name)
+            if not key:
+                raise LLMConfigError(f"Missing API key environment variable: {env_name}")
+            return key
+
         if config and config.get("api_key"):
             return config["api_key"]
 

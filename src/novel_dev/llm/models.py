@@ -39,6 +39,7 @@ class TaskConfig(BaseModel):
     retries: int = 2
     temperature: float = 0.7
     max_tokens: Optional[int] = None
+    api_key_env: Optional[str] = None
     api_key: Optional[str] = None
     structured_output: Optional[StructuredOutputConfig] = None
     response_tool_name: Optional[str] = None

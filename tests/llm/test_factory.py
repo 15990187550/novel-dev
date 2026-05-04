@@ -111,6 +111,34 @@ def test_missing_api_key_raises(temp_yaml):
         factory.get("test_agent")
 
 
+def test_resolve_api_key_prefers_profile_api_key_env(tmp_path, monkeypatch):
+    config_path = tmp_path / "llm_config.yaml"
+    config_path.write_text(
+        "defaults:\n"
+        "  timeout: 30\n"
+        "models:\n"
+        "  kimi:\n"
+        "    provider: anthropic\n"
+        "    model: kimi-test\n"
+        "    base_url: https://api.kimi.com/coding\n"
+        "    api_key_env: KIMI_API_KEY\n"
+        "agents:\n"
+        "  writer_agent:\n"
+        "    model: kimi\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("KIMI_API_KEY", "sk-env-kimi")
+
+    from novel_dev.config import Settings
+    from novel_dev.llm.factory import LLMFactory
+
+    factory = LLMFactory(Settings(llm_config_path=str(config_path)))
+    client = factory.get("writer_agent")
+
+    assert client.config.api_key_env == "KIMI_API_KEY"
+    assert factory._resolve_api_key("anthropic", "https://api.kimi.com/coding", client.config.model_dump()) == "sk-env-kimi"
+
+
 def test_factory_returns_fallback_driver_when_fallback_configured(temp_yaml):
     settings = Settings(llm_config_path=temp_yaml, anthropic_api_key="ak", openai_api_key="ok")
     factory = LLMFactory(settings)

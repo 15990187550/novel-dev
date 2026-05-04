@@ -8,7 +8,7 @@ models:
     provider: anthropic
     model: kimi-for-coding
     base_url: https://api.kimi.com/coding
-    api_key: sk-kimi-EXbF6ISoRPj9ZHHxbxQ0awuTGyF4nkYrGyy6MF3mbIyd6IUzA8ulPrUqz2Skl7Bt
+    api_key_env: KIMI_API_KEY
     structured_output:
       mode: anthropic_tool
       fallback_to_text: true
@@ -16,7 +16,7 @@ models:
     provider: anthropic
     model: Minimax-2.7
     base_url: https://api.minimaxi.com/anthropic
-    api_key: sk-cp-gOseCfRIMr1ln7jbl3Eou9Gq08GE-UHW7rtVXfIVKLqrpWgwsCqMMc5rAUwSKSQ1MTEk1qrOBRFKFrrycPmRYDzeYpq-pET8PDOYubBzVBug7XzOVE-hiSE
+    api_key_env: MINIMAX_API_KEY
     structured_output:
       mode: anthropic_tool
       fallback_to_text: true
@@ -24,7 +24,7 @@ models:
     provider: anthropic
     model: deepseek-v4-flash
     base_url: https://api.deepseek.com/anthropic
-    api_key: sk-ce73a14386654de1b1a14167be055320
+    api_key_env: DEEPSEEK_API_KEY
     structured_output:
       mode: anthropic_tool
       tool_choice: auto
