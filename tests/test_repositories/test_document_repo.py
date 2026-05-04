@@ -132,3 +132,14 @@ async def test_save_new_version_starts_at_one_when_type_has_no_documents(async_s
     )
 
     assert saved.version == 1
+
+
+@pytest.mark.asyncio
+async def test_list_by_novel_supports_doc_type(async_session):
+    repo = DocumentRepository(async_session)
+    await repo.create("d1", "n1", "worldview", "世界观", "a", version=1)
+    await repo.create("d2", "n1", "concept", "人物设定", "b", version=1)
+
+    docs = await repo.list_by_novel("n1", doc_type="concept")
+
+    assert [doc.id for doc in docs] == ["d2"]

@@ -141,7 +141,7 @@ class DocumentRepository:
         stmt = select(NovelDocument).where(NovelDocument.novel_id == novel_id)
         if doc_type:
             stmt = stmt.where(NovelDocument.doc_type == doc_type)
-        stmt = stmt.order_by(NovelDocument.updated_at.desc())
+        stmt = stmt.order_by(NovelDocument.updated_at.desc(), NovelDocument.id.desc())
         result = await self.session.execute(stmt)
         return result.scalars().all()
 
