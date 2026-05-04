@@ -405,6 +405,9 @@ export const useNovelStore = defineStore('novel', {
     outlineWorkbench: createOutlineWorkbenchState(),
     brainstormWorkspace: createBrainstormWorkspaceState(),
     settingWorkbench: createSettingWorkbenchState(),
+    documents: [],
+    documentDetail: null,
+    documentVersions: [],
     loadingActions: {},
     flowActivity: {
       active: false,
@@ -479,6 +482,9 @@ export const useNovelStore = defineStore('novel', {
       this.timelines = []
       this.foreshadowings = []
       this.pendingDocs = []
+      this.documents = []
+      this.documentDetail = null
+      this.documentVersions = []
       this.pendingDocActions = createPendingDocActionState()
       this.dashboardPanels = createDashboardPanels()
       this.dashboardLastUpdated = ''
@@ -854,8 +860,33 @@ export const useNovelStore = defineStore('novel', {
     },
 
     async fetchDocuments() {
-      const pending = await api.getPendingDocs(this.novelId).catch(() => ({ items: [] }))
+      const [pending, documents] = await Promise.all([
+        api.getPendingDocs(this.novelId).catch(() => ({ items: [] })),
+        api.getDocuments(this.novelId).catch(() => ({ items: [] })),
+      ])
       this.pendingDocs = pending.items || []
+      this.documents = documents.items || []
+    },
+
+    async fetchDocumentDetail(documentId) {
+      this.documentDetail = await api.getDocumentDetail(this.novelId, documentId)
+    },
+
+    async fetchDocumentVersions(docType) {
+      const res = await api.getDocumentVersions(this.novelId, docType)
+      this.documentVersions = res.items || []
+    },
+
+    async saveDocumentVersion(documentId, payload) {
+      const saved = await api.saveDocumentVersion(this.novelId, documentId, payload)
+      await this.fetchDocuments()
+      await this.fetchDocumentDetail(saved.id)
+      await this.fetchDocumentVersions(saved.doc_type)
+      return saved
+    },
+
+    async reindexDocument(documentId) {
+      return api.reindexDocument(this.novelId, documentId)
     },
 
     async fetchSettingWorkbench() {

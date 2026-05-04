@@ -128,6 +128,23 @@ class DocumentRepository:
         result = await self.session.execute(select(NovelDocument).where(NovelDocument.id == doc_id))
         return result.scalar_one_or_none()
 
+    async def get_by_id_for_novel(self, novel_id: str, doc_id: str) -> Optional[NovelDocument]:
+        result = await self.session.execute(
+            select(NovelDocument).where(
+                NovelDocument.id == doc_id,
+                NovelDocument.novel_id == novel_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def list_by_novel(self, novel_id: str, doc_type: Optional[str] = None) -> List[NovelDocument]:
+        stmt = select(NovelDocument).where(NovelDocument.novel_id == novel_id)
+        if doc_type:
+            stmt = stmt.where(NovelDocument.doc_type == doc_type)
+        stmt = stmt.order_by(NovelDocument.updated_at.desc())
+        result = await self.session.execute(stmt)
+        return result.scalars().all()
+
     async def get_by_type(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
         result = await self.session.execute(
             select(NovelDocument)
@@ -234,3 +251,33 @@ class DocumentRepository:
             )
         )
         return result.scalar_one_or_none()
+
+    async def list_versions(self, novel_id: str, doc_type: str) -> List[NovelDocument]:
+        result = await self.session.execute(
+            select(NovelDocument)
+            .where(
+                NovelDocument.novel_id == novel_id,
+                NovelDocument.doc_type == doc_type,
+            )
+            .order_by(NovelDocument.version.desc())
+        )
+        return result.scalars().all()
+
+    async def save_new_version(
+        self,
+        doc_id: str,
+        novel_id: str,
+        doc_type: str,
+        title: str,
+        content: str,
+    ) -> NovelDocument:
+        latest = await self.get_latest_by_type(novel_id, doc_type)
+        next_version = 1 if latest is None else latest.version + 1
+        return await self.create(
+            doc_id=doc_id,
+            novel_id=novel_id,
+            doc_type=doc_type,
+            title=title,
+            content=content,
+            version=next_version,
+        )
