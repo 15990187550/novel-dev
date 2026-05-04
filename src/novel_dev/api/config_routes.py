@@ -167,6 +167,7 @@ async def test_llm_model(
         model=model,
         base_url=profile.get("base_url") or None,
         api_key=profile.get("api_key") or None,
+        api_key_env=profile.get("api_key_env") or None,
         timeout=timeout,
         retries=0,
         temperature=0,

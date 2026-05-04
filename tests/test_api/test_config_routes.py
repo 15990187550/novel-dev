@@ -206,6 +206,41 @@ async def test_test_llm_model_uses_submitted_profile(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_test_llm_model_preserves_api_key_env(monkeypatch):
+    driver = type(
+        "Driver",
+        (),
+        {"acomplete": AsyncMock(return_value=LLMResponse(text="pong"))},
+    )()
+    create_driver = MagicMock(return_value=driver)
+
+    def build_driver(self, config):
+        return create_driver(config)
+
+    monkeypatch.setattr("novel_dev.api.config_routes.llm_factory", type("Factory", (), {"_create_driver": build_driver})())
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/config/llm/test_model",
+            json={
+                "name": "kimi",
+                "profile": {
+                    "provider": "anthropic",
+                    "model": "kimi-k2-test",
+                    "api_key_env": "KIMI_API_KEY",
+                },
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    call_config = create_driver.call_args.args[0]
+    assert call_config.api_key_env == "KIMI_API_KEY"
+    assert call_config.api_key is None
+
+
+@pytest.mark.asyncio
 async def test_test_llm_model_reports_connection_failure(monkeypatch):
     driver = type("Driver", (), {"acomplete": AsyncMock(side_effect=RuntimeError("network down"))})()
 
