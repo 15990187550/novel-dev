@@ -45,3 +45,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "novel_dev.export" = ["templates/*.md"]
+"novel_dev.testing" = ["fixtures/*.yaml"]

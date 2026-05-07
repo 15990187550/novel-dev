@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-BUILTIN_FIXTURE = REPO_ROOT / "tests" / "generation" / "fixtures" / "minimal_novel.yaml"
+BUILTIN_FIXTURE = "fixtures/minimal_novel.yaml"
 
 
 @dataclass(frozen=True)
@@ -46,10 +46,13 @@ def _from_data(data: dict[str, Any]) -> GenerationFixture:
 
 def load_generation_fixture(source: str) -> GenerationFixture:
     if source == "minimal_builtin":
-        return _from_data(_read_yaml(BUILTIN_FIXTURE))
+        resource = files("novel_dev.testing").joinpath(BUILTIN_FIXTURE)
+        return _from_data(_read_yaml(resource))
 
     path = Path(source)
     if path.is_dir():
         return _from_data(_read_yaml(path / "fixture.yaml"))
+    if path.is_file():
+        return _from_data(_read_yaml(path))
 
     raise ValueError(f"Unknown generation fixture source: {source}")

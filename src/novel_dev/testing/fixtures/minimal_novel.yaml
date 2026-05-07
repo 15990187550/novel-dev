@@ -1,0 +1,12 @@
+dataset: minimal_builtin
+title: Codex 最小生成验收
+initial_setting_idea: |
+  初始设定目标：生成一部东方玄幻短篇测试小说。
+  世界需要包含宗门、修炼规则、主角、对立势力、核心冲突和第一章可执行目标。
+  主角林照出身青云宗外门，目标是查明家族覆灭真相。
+minimum_chapter_chars: 120
+watched_terms:
+  - 青云宗
+  - 林照
+  - 玄火盟
+  - 血海殿
