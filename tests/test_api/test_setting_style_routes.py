@@ -289,9 +289,16 @@ async def test_batch_upload_continues_when_one_item_times_out(async_session, mon
             assert succeeded["pending_id"] is not None
             assert succeeded["status"] == "processing"
 
-            await asyncio.sleep(0.05)
-            resp2 = await client.get("/api/novels/n1/documents/pending")
-            items_by_name = {item["source_filename"]: item for item in resp2.json()["items"]}
+            items_by_name = {}
+            for _ in range(20):
+                resp2 = await client.get("/api/novels/n1/documents/pending")
+                items_by_name = {item["source_filename"]: item for item in resp2.json()["items"]}
+                if (
+                    items_by_name.get("good.txt", {}).get("status") == "pending"
+                    and items_by_name.get("bad.txt", {}).get("status") == "failed"
+                ):
+                    break
+                await asyncio.sleep(0.05)
             assert items_by_name["good.txt"]["status"] == "pending"
             assert items_by_name["bad.txt"]["status"] == "failed"
             assert "超时" in items_by_name["bad.txt"]["error_message"]
