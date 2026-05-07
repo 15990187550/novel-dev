@@ -39,6 +39,53 @@ def test_provider_timeout_message_is_external_blocker():
     assert issue.is_external_blocker is True
 
 
+def test_internal_task_queue_timeout_is_system_timeout():
+    issue = classify_exception(
+        "orchestration",
+        LLMTimeoutError("internal task queue timed out after 600s"),
+        True,
+    )
+
+    assert issue.type == "TIMEOUT_INTERNAL"
+    assert issue.is_external_blocker is False
+
+
+def test_provider_queue_timeout_remains_external_blocker():
+    issue = classify_exception(
+        "worldbuilding",
+        LLMTimeoutError("provider queue timeout from upstream"),
+        True,
+    )
+
+    assert issue.type == "EXTERNAL_BLOCKED"
+    assert issue.is_external_blocker is True
+
+
+def test_runtime_parse_failure_is_llm_parse_error():
+    issue = classify_exception(
+        "chapter_draft",
+        RuntimeError("LLM parse failed after 3 attempts"),
+        True,
+    )
+
+    assert issue.type == "LLM_PARSE_ERROR"
+    assert issue.is_external_blocker is False
+
+
+def test_value_error_without_parse_marker_is_system_bug():
+    issue = classify_exception("state_load", ValueError("Novel state not found"), False)
+
+    assert issue.type == "SYSTEM_BUG"
+    assert issue.is_external_blocker is False
+
+
+def test_value_error_with_json_parse_marker_is_llm_parse_error():
+    issue = classify_exception("chapter_draft", ValueError("JSON parse failed"), True)
+
+    assert issue.type == "LLM_PARSE_ERROR"
+    assert issue.is_external_blocker is False
+
+
 def test_fake_rerun_does_not_clear_system_failure():
     assert should_fake_rerun_affect_final_status("SYSTEM_BUG") is False
     assert should_fake_rerun_affect_final_status("TIMEOUT_INTERNAL") is False

@@ -21,7 +21,13 @@ class GenerationRunOptions:
 
 
 def _timeout_is_external(message: str) -> bool:
-    markers = ("provider", "upstream", "rate", "quota", "queue", "network")
+    markers = ("provider", "upstream", "rate", "quota", "network")
+    normalized = message.lower()
+    return any(marker in normalized for marker in markers)
+
+
+def _exception_is_parse_failure(message: str) -> bool:
+    markers = ("parse", "json", "validation")
     normalized = message.lower()
     return any(marker in normalized for marker in markers)
 
@@ -39,7 +45,7 @@ def classify_exception(stage: str, exc: Exception, real_llm: bool) -> Issue:
             is_external_blocker = True
         else:
             issue_type = "TIMEOUT_INTERNAL"
-    elif isinstance(exc, (ValueError, KeyError)):
+    elif _exception_is_parse_failure(str(exc)):
         issue_type = "LLM_PARSE_ERROR"
     else:
         issue_type = "SYSTEM_BUG"
