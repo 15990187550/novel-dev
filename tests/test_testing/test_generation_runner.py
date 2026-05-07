@@ -113,6 +113,42 @@ def test_http_status_error_is_system_bug_even_with_json_message():
     assert issue.is_external_blocker is False
 
 
+def test_http_429_status_error_is_external_blocker():
+    request = httpx.Request("POST", "http://testserver/api/novels")
+    response = httpx.Response(429, request=request, text="rate limited")
+
+    issue = classify_exception(
+        "generate_setting_review_batch",
+        httpx.HTTPStatusError(
+            "rate limited",
+            request=request,
+            response=response,
+        ),
+        True,
+    )
+
+    assert issue.type == "EXTERNAL_BLOCKED"
+    assert issue.is_external_blocker is True
+
+
+def test_http_504_without_external_marker_is_internal_timeout():
+    request = httpx.Request("POST", "http://testserver/api/novels")
+    response = httpx.Response(504, request=request, text="local worker timed out")
+
+    issue = classify_exception(
+        "volume_plan",
+        httpx.HTTPStatusError(
+            "local worker timed out",
+            request=request,
+            response=response,
+        ),
+        True,
+    )
+
+    assert issue.type == "TIMEOUT_INTERNAL"
+    assert issue.is_external_blocker is False
+
+
 def test_fake_rerun_does_not_clear_system_failure():
     assert should_fake_rerun_affect_final_status("SYSTEM_BUG") is False
     assert should_fake_rerun_affect_final_status("TIMEOUT_INTERNAL") is False
@@ -149,6 +185,33 @@ async def test_run_stage_with_classification_runs_fake_diagnostic_for_external_b
     )
 
     assert calls == ["real", "fake"]
+    assert issue is not None
+    assert issue.type == "EXTERNAL_BLOCKED"
+    assert issue.fake_rerun_status == "passed"
+    assert fake_status == "passed"
+
+
+@pytest.mark.asyncio
+async def test_run_stage_with_classification_marks_http_external_fake_rerun_status():
+    request = httpx.Request("POST", "http://testserver/api/novels/x/brainstorm")
+    response = httpx.Response(429, request=request, text="rate limited")
+
+    async def real_step():
+        raise httpx.HTTPStatusError(
+            "rate limited",
+            request=request,
+            response=response,
+        )
+
+    async def fake_step():
+        return None
+
+    issue, fake_status = await run_stage_with_classification(
+        "brainstorm",
+        real_step,
+        fake_step,
+    )
+
     assert issue is not None
     assert issue.type == "EXTERNAL_BLOCKED"
     assert issue.fake_rerun_status == "passed"
