@@ -18,6 +18,14 @@ from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _disable_setting_workbench_orchestration_by_default(monkeypatch):
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.llm_factory.resolve_orchestration_config",
+        lambda agent_name, task: None,
+    )
+
+
 async def test_apply_review_batch_creates_ai_sourced_setting_card_and_entity(async_session):
     repo = SettingWorkbenchRepository(async_session)
     session = await repo.create_session(
@@ -980,8 +988,19 @@ async def test_generate_review_batch_creates_changes_from_agent(async_session, m
     assert (await service.repo.get_session(session.id)).status == "generated"
 
 
-async def test_generate_review_batch_rejects_partial_output_for_suggested_batches(async_session, monkeypatch):
+async def test_generate_review_batch_rejects_missing_output_for_individual_suggested_batch(
+    async_session,
+    monkeypatch,
+):
     service = SettingWorkbenchService(async_session)
+    for domain in ("阳神", "完美世界", "吞噬星空"):
+        await service.doc_repo.create(
+            f"doc_required_{domain}",
+            "novel-ai-required-sections",
+            "domain_setting",
+            f"{domain} / 修炼体系",
+            f"{domain} 修炼境界资料。",
+        )
     session = await service.create_generation_session(
         novel_id="novel-ai-required-sections",
         title="外部宇宙规划",
@@ -1017,23 +1036,23 @@ async def test_generate_review_batch_rejects_partial_output_for_suggested_batche
         assert task == "setting_workbench_generate_batch"
         assert "必须完整生成以下建议批次" in prompt
         assert "批次1：18卷整体结构规划" in prompt
-        assert "批次2：外部宇宙统一对标体系" in prompt
-        assert "批次3：跨作品联动剧情框架与关键节点设计" in prompt
+        assert "批次2：外部宇宙统一对标体系" not in prompt
+        assert "批次3：跨作品联动剧情框架与关键节点设计" not in prompt
         assert model_cls is SettingBatchDraft
         assert config_agent_name == "setting_workbench_service"
         assert novel_id == "novel-ai-required-sections"
         assert max_retries == 2
         return SettingBatchDraft.model_validate(
             {
-                "summary": "18卷整体结构规划",
+                "summary": "无关设定",
                 "changes": [
                     {
                         "target_type": "setting_card",
                         "operation": "create",
                         "after_snapshot": {
                             "doc_type": "setting",
-                            "title": "18卷整体结构规划",
-                            "content": "只生成了第一批。",
+                            "title": "无关设定",
+                            "content": "没有覆盖当前建议批次。",
                         },
                     }
                 ],
@@ -1045,7 +1064,7 @@ async def test_generate_review_batch_rejects_partial_output_for_suggested_batche
         fake_call_and_parse_model,
     )
 
-    with pytest.raises(ValueError, match="Missing required suggested batches.*批次2.*批次3"):
+    with pytest.raises(ValueError, match="Missing required suggested batches.*批次1"):
         await service.generate_review_batch(novel_id="novel-ai-required-sections", session_id=session.id)
 
     assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
@@ -1057,6 +1076,403 @@ async def test_generate_review_batch_rejects_partial_output_for_suggested_batche
     changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
     assert batches == []
     assert changes == []
+
+
+async def test_generate_review_batch_repairs_missing_output_for_individual_suggested_batch(
+    async_session,
+    monkeypatch,
+):
+    service = SettingWorkbenchService(async_session)
+    for domain in ("阳神", "完美世界", "吞噬星空"):
+        await service.doc_repo.create(
+            f"doc_repair_{domain}",
+            "novel-ai-required-repair",
+            "domain_setting",
+            f"{domain} / 修炼体系",
+            f"{domain} 修炼境界资料。",
+        )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-required-repair",
+        title="外部宇宙规划",
+        initial_idea="规划外部宇宙联动。",
+        target_categories=["世界观"],
+    )
+    await service.repo.add_message(
+        session_id=session.id,
+        role="assistant",
+        content=(
+            "已确认所有关键参数。\n\n"
+            "**建议生成批次：**\n"
+            "- 批次1：18卷整体结构规划（含真实界+外部宇宙穿插叙事）\n"
+            "- 批次2：外部宇宙统一对标体系（含阳神、完美世界、吞噬星空等境界映射）\n"
+            "- 批次3：跨作品联动剧情框架与关键节点设计\n"
+        ),
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    prompts: list[str] = []
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        prompts.append(prompt)
+        if "批次2：外部宇宙统一对标体系" in prompt and "上一次输出缺少以下建议批次" not in prompt:
+            return SettingBatchDraft.model_validate(
+                {
+                    "summary": "无关设定",
+                    "changes": [
+                        {
+                            "target_type": "setting_card",
+                            "operation": "create",
+                            "after_snapshot": {
+                                "doc_type": "setting",
+                                "title": "无关设定",
+                                "content": "没有覆盖第二批。",
+                            },
+                        }
+                    ],
+                }
+            )
+
+        if "上一次输出缺少以下建议批次" in prompt:
+            assert "批次2：外部宇宙统一对标体系" in prompt
+            assert "批次1：18卷整体结构规划" not in prompt
+            assert "批次3：跨作品联动剧情框架与关键节点设计" not in prompt
+            title = "外部宇宙统一对标体系"
+            summary = "补全外部宇宙统一对标体系"
+        elif "批次1：18卷整体结构规划" in prompt:
+            title = "18卷整体结构规划"
+            summary = title
+        elif "批次3：跨作品联动剧情框架与关键节点设计" in prompt:
+            title = "跨作品联动剧情框架与关键节点设计"
+            summary = title
+        else:
+            raise AssertionError("prompt should target one suggested batch")
+
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": summary,
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": title,
+                            "content": f"{title}完整内容。",
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(novel_id="novel-ai-required-repair", session_id=session.id)
+
+    assert batch.summary == "18卷整体结构规划；补全外部宇宙统一对标体系；跨作品联动剧情框架与关键节点设计"
+    assert len(prompts) == 4
+    changes = await service.repo.list_review_changes(batch.id)
+    assert [change.after_snapshot["title"] for change in changes] == [
+        "18卷整体结构规划",
+        "外部宇宙统一对标体系",
+        "跨作品联动剧情框架与关键节点设计",
+    ]
+
+
+async def test_generate_review_batch_generates_suggested_batches_individually(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    for domain in ("阳神", "完美世界", "吞噬星空"):
+        await service.doc_repo.create(
+            f"doc_split_{domain}",
+            "novel-ai-required-split",
+            "domain_setting",
+            f"{domain} / 修炼体系",
+            f"{domain} 修炼境界资料。",
+        )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-required-split",
+        title="外部宇宙规划",
+        initial_idea="规划外部宇宙联动。",
+        target_categories=["世界观"],
+    )
+    await service.repo.add_message(
+        session_id=session.id,
+        role="assistant",
+        content=(
+            "**建议生成批次：**\n"
+            "- 批次1：18卷整体结构规划（含真实界+外部宇宙穿插叙事）\n"
+            "- 批次2：外部宇宙统一对标体系（含阳神、完美世界、吞噬星空等境界映射）\n"
+            "- 批次3：跨作品联动剧情框架与关键节点设计\n"
+        ),
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    prompts: list[str] = []
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        prompts.append(prompt)
+        section_titles = [
+            "18卷整体结构规划",
+            "外部宇宙统一对标体系",
+            "跨作品联动剧情框架与关键节点设计",
+        ]
+        title = section_titles[len(prompts) - 1]
+        assert title in prompt
+        for other_title in section_titles:
+            if other_title != title:
+                assert f"：{other_title}" not in prompt
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": title,
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": title,
+                            "content": f"{title}内容。",
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(novel_id="novel-ai-required-split", session_id=session.id)
+
+    assert len(prompts) == 3
+    assert batch.summary == "18卷整体结构规划；外部宇宙统一对标体系；跨作品联动剧情框架与关键节点设计"
+    changes = await service.repo.list_review_changes(batch.id)
+    assert [change.after_snapshot["title"] for change in changes] == [
+        "18卷整体结构规划",
+        "外部宇宙统一对标体系",
+        "跨作品联动剧情框架与关键节点设计",
+    ]
+
+
+async def test_generate_review_batch_blocks_external_mapping_without_source_coverage(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-source-gate",
+        title="外部宇宙对标",
+        initial_idea="请生成仙逆、遮天、灭运图录对标一世之尊的境界映射。",
+        target_categories=["世界观"],
+    )
+    await service.repo.add_message(
+        session_id=session.id,
+        role="assistant",
+        content=(
+            "**建议生成批次：**\n"
+            "- 批次1：外部宇宙统一对标体系（含仙逆、遮天、灭运图录境界映射）\n"
+        ),
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def should_not_call_model(*args, **kwargs):
+        raise AssertionError("LLM should not be called when required source coverage is missing")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        should_not_call_model,
+    )
+
+    with pytest.raises(ValueError, match="Source coverage insufficient.*仙逆.*遮天.*灭运图录"):
+        await service.generate_review_batch(novel_id="novel-ai-source-gate", session_id=session.id)
+
+    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
+    batches = (
+        await async_session.execute(
+            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-source-gate")
+        )
+    ).scalars().all()
+    assert batches == []
+
+
+async def test_source_coverage_accepts_canonical_world_docs_outside_domain_types(async_session):
+    service = SettingWorkbenchService(async_session)
+    await service.doc_repo.create(
+        "doc_yishi_realm",
+        "novel-ai-yishi-source",
+        "setting",
+        "修炼体系",
+        "一世之尊体系，从低到高：开窍→外景→法身→传说→造化→彼岸。",
+    )
+    await service.doc_repo.create(
+        "doc_zhetian_realm_source",
+        "novel-ai-yishi-source",
+        "domain_setting",
+        "遮天 / 修炼体系",
+        "遮天修炼境界：四极、化龙、仙台、圣人、大帝、红尘仙。",
+    )
+
+    coverage = await service._build_source_coverage(
+        novel_id="novel-ai-yishi-source",
+        title="外部宇宙对标",
+        target_categories=["世界观"],
+        messages=[
+            {
+                "role": "user",
+                "content": "生成遮天对标一世之尊的境界映射。",
+            }
+        ],
+        required_sections=[],
+    )
+
+    assert coverage["required"] is True
+    assert coverage["missing_domains"] == []
+    matched = {item["name"]: item["matched_doc_ids"] for item in coverage["domains"]}
+    assert matched["一世之尊"] == ["doc_yishi_realm"]
+    assert matched["遮天"] == ["doc_zhetian_realm_source"]
+
+
+async def test_source_coverage_does_not_match_other_domain_docs_by_incidental_content(async_session):
+    service = SettingWorkbenchService(async_session)
+    await service.doc_repo.create(
+        "doc_perfect_realm_mentions_zhetian",
+        "novel-ai-domain-noise",
+        "domain_setting",
+        "完美世界 / 修炼体系",
+        "完美世界修炼体系，补充说明：与遮天世界存在后续关联。",
+    )
+    await service.doc_repo.create(
+        "doc_zhetian_realm_clean",
+        "novel-ai-domain-noise",
+        "domain_setting",
+        "遮天 / 修炼体系",
+        "遮天修炼境界：四极、化龙、仙台、红尘仙。",
+    )
+
+    coverage = await service._build_source_coverage(
+        novel_id="novel-ai-domain-noise",
+        title="外部宇宙对标",
+        target_categories=["世界观"],
+        messages=[{"role": "user", "content": "生成遮天对标一世之尊的境界映射。"}],
+        required_sections=[],
+    )
+
+    matched = {item["name"]: item["matched_doc_ids"] for item in coverage["domains"]}
+    assert matched["遮天"] == ["doc_zhetian_realm_clean"]
+
+
+async def test_validate_batch_draft_rejects_non_monotonic_external_realm_mapping(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "错误境界对标",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "setting",
+                        "title": "遮天世界境界对标",
+                        "source_doc_ids": ["doc_zhetian_realm"],
+                        "content": (
+                            "| 遮天境界 | 对标一世之尊 |\n"
+                            "|----------|-------------|\n"
+                            "| 大帝/古皇 | 传说~造化 |\n"
+                            "| 红尘仙 | 初入传说 |\n"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Realm mapping order regression.*红尘仙"):
+        SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_batch_draft_rejects_cross_world_protagonist_contamination(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "错误联动",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "setting",
+                        "title": "跨作品联动剧情框架",
+                        "source_doc_ids": ["doc_mieyun_plot"],
+                        "content": "灭运图录：与纪宁共同探索永恒奥秘，参与混沌宇宙战争。",
+                    },
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Canonical world/protagonist mismatch.*灭运图录.*纪宁"):
+        SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_draft_source_evidence_requires_docs_to_cover_mentioned_domains(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    service = SettingWorkbenchService(async_session)
+    await service.doc_repo.create(
+        "doc_yangshen_realm",
+        "novel-ai-evidence",
+        "domain_setting",
+        "阳神 / 修炼体系",
+        "阳神世界修炼体系资料。",
+    )
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "错误来源",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "setting",
+                        "title": "仙逆世界境界对标",
+                        "source_doc_ids": ["doc_yangshen_realm"],
+                        "content": (
+                            "| 仙逆境界 | 对标一世之尊 |\n"
+                            "|----------|-------------|\n"
+                            "| 踏天 | 传说 |\n"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Source evidence mismatch.*仙逆"):
+        await service._validate_draft_source_evidence("novel-ai-evidence", draft)
 
 
 async def test_generate_review_batch_emits_progress_logs(async_session, monkeypatch):
@@ -1103,28 +1519,29 @@ async def test_generate_review_batch_emits_progress_logs(async_session, monkeypa
         from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
         assert "必须完整生成以下建议批次" in prompt
+        if "修炼体系总览" in prompt:
+            title = "修炼体系总览"
+            content = "修炼体系。"
+            assert "势力格局总览" not in prompt
+        elif "势力格局总览" in prompt:
+            title = "势力格局总览"
+            content = "势力格局。"
+            assert "修炼体系总览" not in prompt
+        else:
+            raise AssertionError("prompt should target one suggested batch")
         return SettingBatchDraft.model_validate(
             {
-                "summary": "生成两条设定卡",
+                "summary": title,
                 "changes": [
                     {
                         "target_type": "setting_card",
                         "operation": "create",
                         "after_snapshot": {
                             "doc_type": "setting",
-                            "title": "修炼体系总览",
-                            "content": "修炼体系。",
+                            "title": title,
+                            "content": content,
                         },
-                    },
-                    {
-                        "target_type": "setting_card",
-                        "operation": "create",
-                        "after_snapshot": {
-                            "doc_type": "setting",
-                            "title": "势力格局总览",
-                            "content": "势力格局。",
-                        },
-                    },
+                    }
                 ],
             }
         )
@@ -1140,6 +1557,10 @@ async def test_generate_review_batch_emits_progress_logs(async_session, monkeypa
     assert events == [
         "setting_generate_prepare",
         "setting_generate_llm",
+        "setting_generate_section",
+        "setting_generate_section",
+        "setting_generate_section",
+        "setting_generate_section",
         "setting_generate_llm",
         "setting_generate_validate",
         "setting_generate_persist",
@@ -1147,7 +1568,9 @@ async def test_generate_review_batch_emits_progress_logs(async_session, monkeypa
     assert emitted_logs[0]["metadata"]["message_count"] == 2
     assert emitted_logs[0]["metadata"]["required_section_count"] == 2
     assert emitted_logs[0]["metadata"]["prompt_chars"] > 0
-    assert emitted_logs[2]["duration_ms"] >= 0
+    assert emitted_logs[3]["duration_ms"] >= 0
+    assert emitted_logs[2]["metadata"]["section"]["title"] == "修炼体系总览"
+    assert emitted_logs[4]["metadata"]["section"]["title"] == "势力格局总览"
     assert emitted_logs[-1]["metadata"]["batch_id"] == batch.id
     assert emitted_logs[-1]["metadata"]["change_count"] == 2
 
@@ -1161,6 +1584,18 @@ async def test_generate_review_batch_uses_orchestrated_context_tools_when_config
         "秘境细节",
         "深层设定细节不应该进入首轮提示，但工具可以读取。",
     )
+    await service.entity_service.create_entity(
+        "ent_orch_guardian",
+        "character",
+        "守境人",
+        novel_id="novel-ai-orch",
+        initial_state={
+            "境界": "深层实体状态不应该进入首轮提示",
+            "职责": "看守秘境",
+            "_merged_duplicate_entities": [{"entity_id": "ent_old_guardian"}],
+        },
+        use_llm_for_classification=False,
+    )
     session = await service.create_generation_session(
         novel_id="novel-ai-orch",
         title="秘境补全",
@@ -1170,9 +1605,9 @@ async def test_generate_review_batch_uses_orchestrated_context_tools_when_config
     await service.repo.update_session_state(session.id, status="ready_to_generate")
 
     orchestration_config = OrchestratedTaskConfig(
-        tool_allowlist=["get_setting_workbench_context", "get_novel_documents"],
-        max_tool_calls=2,
-        max_tool_result_chars=1200,
+        tool_allowlist=["get_setting_workbench_context", "query_entity", "get_novel_documents"],
+        max_tool_calls=3,
+        max_tool_result_chars=1600,
     )
     monkeypatch.setattr(
         "novel_dev.services.setting_workbench_service.llm_factory.resolve_orchestration_config",
@@ -1205,12 +1640,16 @@ async def test_generate_review_batch_uses_orchestrated_context_tools_when_config
         assert task_config is orchestration_config
         assert "补一个秘境设定" in prompt
         assert "深层设定细节不应该进入首轮提示" not in prompt
+        assert "query_entity" in prompt
         tool_names = [tool.name for tool in tools]
         assert "get_setting_workbench_context" in tool_names
+        assert "query_entity" in tool_names
         assert "get_novel_documents" in tool_names
         context_tool = next(tool for tool in tools if tool.name == "get_setting_workbench_context")
         context = await context_tool.handler({"novel_id": "novel-ai-orch"})
         assert context["documents"][0]["content_preview"] == "深层设定细节不应该进入首轮提示，但工具可以读取。"
+        assert context["entities"][0]["state"]["境界"] == "深层实体状态不应该进入首轮提示"
+        assert "_merged_duplicate_entities" not in context["entities"][0]["state"]
         return SettingBatchDraft.model_validate(
             {
                 "summary": "新增秘境设定",
@@ -1276,7 +1715,13 @@ async def test_generate_review_batch_includes_existing_setting_context(async_ses
         "character",
         "陆照",
         novel_id="novel-ai-context",
-        initial_state={"identity": "主角", "goal": "寻找道经"},
+        initial_state={
+            "identity": "主角",
+            "goal": "寻找道经",
+            "_merged_duplicate_entities": [
+                {"entity_id": "ent_old_luzhao", "state": {"identity": "旧重复实体"}}
+            ],
+        },
     )
     await entity_service.create_entity(
         "ent_ctx_daojing",
@@ -1318,6 +1763,8 @@ async def test_generate_review_batch_includes_existing_setting_context(async_ses
         assert "炼气、筑基、金丹三境" in prompt
         assert "ent_ctx_luzhao" in prompt
         assert "陆照" in prompt
+        assert "_merged_duplicate_entities" not in prompt
+        assert "ent_old_luzhao" not in prompt
         assert "ent_ctx_daojing" in prompt
         assert "修炼功法" in prompt
         return SettingBatchDraft.model_validate(
@@ -1981,12 +2428,16 @@ async def test_llm_config_sets_setting_workbench_service_generation_budget():
     setting_workbench = config["agents"]["setting_workbench_service"]
     assert setting_workbench["temperature"] == 0.55
     assert setting_workbench["max_tokens"] == 12000
-    assert setting_workbench["orchestration"]["enabled"] is False
+    assert setting_workbench["orchestration"]["enabled"] is True
     assert setting_workbench["orchestration"]["tool_allowlist"] == [
         "get_setting_workbench_context",
+        "query_entity",
         "get_novel_state",
         "get_novel_documents",
+        "search_domain_documents",
         "get_novel_document_full",
     ]
+    assert setting_workbench["orchestration"]["max_tool_calls"] == 8
+    assert setting_workbench["orchestration"]["max_tool_result_chars"] == 6000
     assert setting_workbench["orchestration"]["enable_subtasks"] is True
     assert setting_workbench["orchestration"]["repairer_subtask"] == "schema_repair"

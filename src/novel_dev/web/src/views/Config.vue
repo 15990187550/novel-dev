@@ -452,8 +452,10 @@ const orchestrationToolCatalog = {
   ],
   setting_workbench_service: [
     { value: 'get_setting_workbench_context', label: '设定工作台上下文' },
+    { value: 'query_entity', label: '实体详情' },
     { value: 'get_novel_state', label: '小说状态' },
     { value: 'get_novel_documents', label: '文档摘要列表' },
+    { value: 'search_domain_documents', label: '规则域资料检索' },
     { value: 'get_novel_document_full', label: '全文文档' },
   ],
   'volume_planner_agent.generate_volume_plan': [

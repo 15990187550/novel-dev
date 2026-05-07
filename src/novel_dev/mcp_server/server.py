@@ -1,7 +1,9 @@
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
+from sqlalchemy import select
 
+from novel_dev.db.models import EntityRelationship
 from novel_dev.db.engine import async_session_maker
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.extraction_service import ExtractionService
@@ -26,18 +28,53 @@ from novel_dev.services.export_service import ExportService
 import uuid as uuid_mod
 from novel_dev.config import Settings
 from novel_dev.mcp_server.registry import MCPToolRegistry
+from novel_dev.services.entity_context_sanitizer import sanitize_entity_state_for_context
 
 mcp = FastMCP("novel-dev")
 
 
 @mcp.tool()
-async def query_entity(entity_id: str) -> dict:
+async def query_entity(entity_id: str, novel_id: str = "") -> dict:
     async with async_session_maker() as session:
-        embedder = llm_factory.get_embedder()
-        embedding_service = EmbeddingService(session, embedder)
-        svc = EntityService(session, embedding_service)
-        state = await svc.get_latest_state(entity_id)
-        return {"entity_id": entity_id, "state": state}
+        svc = EntityService(session)
+        entity = await svc.entity_repo.get_by_id(entity_id)
+        if not entity:
+            return {"error": "Entity not found", "entity_id": entity_id}
+        if novel_id and entity.novel_id != novel_id:
+            return {"error": "Entity not found in novel", "entity_id": entity_id, "novel_id": novel_id}
+        state = sanitize_entity_state_for_context(await svc.get_latest_state(entity_id) or {})
+        relationship_result = await session.execute(
+            select(EntityRelationship)
+            .where(
+                EntityRelationship.novel_id == entity.novel_id,
+                EntityRelationship.is_active == True,
+                (
+                    (EntityRelationship.source_id == entity_id)
+                    | (EntityRelationship.target_id == entity_id)
+                ),
+            )
+            .order_by(EntityRelationship.id.desc())
+            .limit(30)
+        )
+        relationships = [
+            {
+                "id": relationship.id,
+                "source_id": relationship.source_id,
+                "target_id": relationship.target_id,
+                "relation_type": relationship.relation_type,
+                "meta": relationship.meta or {},
+            }
+            for relationship in relationship_result.scalars().all()
+        ]
+        return {
+            "entity_id": entity_id,
+            "novel_id": entity.novel_id,
+            "type": entity.type,
+            "name": entity.name,
+            "current_version": entity.current_version,
+            "state": state,
+            "relationships": relationships,
+        }
 
 
 @mcp.tool()
@@ -91,6 +128,109 @@ async def get_novel_documents(novel_id: str, doc_type: str) -> list:
         repo = DocumentRepository(session)
         docs = await repo.get_by_type(novel_id, doc_type)
         return [{"id": d.id, "title": d.title, "content": d.content[:500]} for d in docs]
+
+
+@mcp.tool()
+async def search_domain_documents(
+    novel_id: str,
+    query: str,
+    domain_name: str = "",
+    doc_type: str = "",
+    limit: int = 5,
+) -> dict:
+    async with async_session_maker() as session:
+        repo = DocumentRepository(session)
+        doc_types = [doc_type] if doc_type else [
+            "domain_setting",
+            "domain_worldview",
+            "domain_synopsis",
+            "domain_concept",
+            "setting",
+            "worldview",
+            "synopsis",
+            "concept",
+        ]
+        docs = []
+        for current_type in doc_types:
+            docs.extend(await repo.get_current_by_type(novel_id, current_type))
+
+        terms = _expand_domain_search_terms(query)
+        domain_names = _split_domain_names(domain_name)
+        scored = []
+        for doc in docs:
+            title = doc.title or ""
+            content = doc.content or ""
+            haystack = f"{title}\n{content}"
+            if domain_names and not any(
+                _document_matches_domain_name(doc.doc_type, title, content, name)
+                for name in domain_names
+            ):
+                continue
+            if terms and not any(term in haystack for term in terms):
+                continue
+            score = 0
+            for name in domain_names:
+                if name in title:
+                    score += 20
+                elif name in content:
+                    score += 10
+            for term in terms:
+                if term in title:
+                    score += 6
+                if term in content:
+                    score += 2
+            scored.append((score, doc))
+
+        scored.sort(
+            key=lambda item: (
+                item[0],
+                item[1].updated_at.timestamp() if item[1].updated_at else 0,
+            ),
+            reverse=True,
+        )
+        max_limit = min(max(int(limit or 5), 1), 10)
+        return {
+            "documents": [
+                {
+                    "id": doc.id,
+                    "doc_type": doc.doc_type,
+                    "title": doc.title,
+                    "version": doc.version,
+                    "content_preview": doc.content[:1200],
+                    "score": score,
+                }
+                for score, doc in scored[:max_limit]
+            ]
+        }
+
+
+def _split_domain_names(domain_name: str) -> list[str]:
+    normalized = (
+        domain_name.replace("，", ",")
+        .replace("、", ",")
+        .replace("；", ",")
+        .replace(";", ",")
+        .replace("/", ",")
+    )
+    return [item.strip() for item in normalized.split(",") if item.strip()]
+
+
+def _expand_domain_search_terms(query: str) -> list[str]:
+    normalized = query.replace("，", " ").replace(",", " ").replace("、", " ")
+    terms = [term.strip() for term in normalized.split() if term.strip()]
+    if any(marker in query for marker in ("境界", "修炼", "对标", "映射")):
+        terms.extend(["境界", "修炼", "体系"])
+    if any(marker in query for marker in ("剧情", "梗概", "事件", "节点")):
+        terms.extend(["剧情", "梗概", "事件"])
+    if any(marker in query for marker in ("人物", "主角", "角色")):
+        terms.extend(["人物", "主角"])
+    return list(dict.fromkeys(terms))
+
+
+def _document_matches_domain_name(doc_type: str, title: str, content: str, domain_name: str) -> bool:
+    if str(doc_type or "").startswith("domain_"):
+        return domain_name in title
+    return domain_name in f"{title}\n{content}"
 
 
 @mcp.tool()

@@ -105,7 +105,13 @@ class SettingWorkbenchAgent:
             [
                 "你是小说设定工作台的设定生成助手。",
                 "只生成待审核批次，不直接写入正式设定。",
+                "准确率第一：不得新增、遗漏、改写用户已确认事实；资料不足时必须标注待确认，禁止凭模型记忆补原著设定。",
                 "必须基于当前已生效设定上下文生成，避免重复、串域和覆盖既有设定。",
+                "如果当前已生效设定上下文标记 catalog_only，实体 state 只保留索引；涉及已有实体细节、境界、阵营或关系判断时，先调用 query_entity 读取完整详情，不要凭名称猜测。",
+                "如果 current_setting_context.source_coverage 已提供 matched_doc_ids，优先用这些 doc_id 调用 get_novel_document_full 获取来源正文；不要重复用 search_domain_documents 搜索同一批已覆盖资料。",
+                "涉及外部作品、原著境界体系、跨作品联动、人物归属或世界观对标时，必须先调用 search_domain_documents 按作品名和主题检索资料；需要全文时再调用 get_novel_document_full。",
+                "外部作品设定卡的 after_snapshot 必须写入 source_doc_ids，列出支撑该设定的文档 ID；没有足够来源时不要硬生成结论。",
+                "同一世界的境界对标必须保持阶梯单调，低境界不能映射到高于后续高境界的层级；人物和主角归属必须以来源资料为准。",
                 "如需修改或删除已有设定/实体/关系，必须使用上下文中的真实 ID 作为 target_id。",
                 "每个批次必须包含至少 1 个 changes，change target_type 只能是 setting_card、entity、relationship。",
                 "operation 只能是 create、update、delete。",

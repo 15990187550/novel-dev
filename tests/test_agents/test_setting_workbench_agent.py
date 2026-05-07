@@ -65,6 +65,30 @@ def test_setting_batch_draft_counts_setting_cards_entities_and_relationships():
     assert "target_ref" not in prompt
 
 
+def test_generation_prompt_prefers_existing_source_coverage_doc_ids():
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="外部宇宙对标",
+        target_categories=["setting"],
+        messages=[{"role": "user", "content": "生成阳神对标一世之尊境界映射。"}],
+        current_setting_context={
+            "source_coverage": {
+                "required": True,
+                "domains": [
+                    {
+                        "name": "阳神",
+                        "status": "covered",
+                        "matched_doc_ids": ["doc_yangshen_realm"],
+                    }
+                ],
+                "missing_domains": [],
+            }
+        },
+    )
+
+    assert "source_coverage 已提供 matched_doc_ids" in prompt
+    assert "优先用这些 doc_id 调用 get_novel_document_full" in prompt
+
+
 def test_setting_batch_draft_rejects_empty_changes():
     with pytest.raises(ValidationError):
         SettingBatchDraft.model_validate({"summary": "没有变更", "changes": []})

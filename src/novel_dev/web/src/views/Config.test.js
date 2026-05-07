@@ -338,6 +338,8 @@ describe('Config', () => {
 
     expect(wrapper.text()).toContain('新链路 Orchestration')
     expect(wrapper.text()).toContain('设定工作台上下文')
+    expect(wrapper.text()).toContain('实体详情')
     expect(wrapper.text()).toContain('文档摘要列表')
+    expect(wrapper.text()).toContain('规则域资料检索')
   })
 })

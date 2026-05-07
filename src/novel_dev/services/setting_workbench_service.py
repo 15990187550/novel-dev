@@ -22,6 +22,7 @@ from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+from novel_dev.services.entity_context_sanitizer import INTERNAL_ENTITY_STATE_KEYS, sanitize_entity_state_for_context
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.log_service import log_service
 
@@ -33,6 +34,65 @@ def _new_id(prefix: str) -> str:
 class SettingWorkbenchService:
     MAX_CLARIFICATION_ROUNDS = 5
     GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 300
+    SOURCE_CRITICAL_MARKERS = (
+        "外部宇宙",
+        "跨作品",
+        "对标",
+        "境界映射",
+        "境界对标",
+        "联动",
+    )
+    SOURCE_TOPIC_KEYWORDS = (
+        "修炼",
+        "境界",
+        "体系",
+        "人物",
+        "主角",
+        "世界观",
+        "设定",
+    )
+    SOURCE_COVERAGE_DOC_TYPES = (
+        "domain_setting",
+        "domain_worldview",
+        "domain_synopsis",
+        "domain_concept",
+        "setting",
+        "worldview",
+        "synopsis",
+        "concept",
+    )
+    KNOWN_EXTERNAL_DOMAINS = (
+        "一世之尊",
+        "仙逆",
+        "遮天",
+        "灭运图录",
+        "阳神",
+        "完美世界",
+        "吞噬星空",
+        "莽荒纪",
+        "凡人修仙传",
+        "星辰变",
+    )
+    CANONICAL_WORLD_PROTAGONISTS = {
+        "一世之尊": "孟奇",
+        "仙逆": "王林",
+        "遮天": "叶凡",
+        "灭运图录": "石轩",
+        "阳神": "洪易",
+        "完美世界": "石昊",
+        "吞噬星空": "罗峰",
+        "莽荒纪": "纪宁",
+        "凡人修仙传": "韩立",
+        "星辰变": "秦羽",
+    }
+    YISHI_REALM_RANKS = {
+        "开窍": 1,
+        "外景": 2,
+        "法身": 3,
+        "传说": 4,
+        "造化": 5,
+        "彼岸": 6,
+    }
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -139,8 +199,18 @@ class SettingWorkbenchService:
 
         await self.repo.update_session_state(session_id, status="generating")
         messages = await self.repo.list_messages(session_id)
+        message_items = self._message_items(messages)
+        generation_message_items = self._message_items_for_generation(messages)
         required_sections = self._extract_suggested_generation_batches(messages)
         current_setting_context = await self._build_generation_context(novel_id)
+        source_coverage = await self._build_source_coverage(
+            novel_id=novel_id,
+            title=setting_session.title,
+            target_categories=setting_session.target_categories or [],
+            messages=message_items,
+            required_sections=required_sections,
+        )
+        current_setting_context["source_coverage"] = source_coverage
         orchestration_config = llm_factory.resolve_orchestration_config(
             "setting_workbench_service",
             "setting_workbench_generate_batch",
@@ -153,7 +223,7 @@ class SettingWorkbenchService:
         prompt = SettingWorkbenchAgent.build_generation_prompt(
             title=setting_session.title,
             target_categories=setting_session.target_categories or [],
-            messages=self._message_items(messages),
+            messages=generation_message_items,
             conversation_summary=setting_session.conversation_summary,
             focused_context=setting_session.focused_target,
             current_setting_context=prompt_context,
@@ -170,6 +240,7 @@ class SettingWorkbenchService:
             "required_section_count": len(required_sections),
             "required_sections": required_sections,
             "context": context_stats,
+            "source_coverage": source_coverage,
             "prompt_chars": len(prompt),
             "orchestration_enabled": orchestration_config is not None,
             "timeout_seconds": self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS,
@@ -186,6 +257,7 @@ class SettingWorkbenchService:
         )
         await self._release_connection_before_external_call()
         try:
+            self._validate_source_coverage(source_coverage)
             llm_started_at = time.perf_counter()
             log_service.add_log(
                 novel_id,
@@ -204,32 +276,16 @@ class SettingWorkbenchService:
             )
             try:
                 async with asyncio.timeout(self.GENERATE_BATCH_WALL_TIMEOUT_SECONDS):
-                    if orchestration_config is not None:
-                        draft = await orchestrated_call_and_parse_model(
-                            agent_name="SettingWorkbenchService",
-                            task="setting_workbench_generate_batch",
-                            prompt=prompt,
-                            model_cls=SettingBatchDraft,
-                            tools=self._build_generation_tools(
-                                novel_id=novel_id,
-                                current_setting_context=current_setting_context,
-                                orchestration_config=orchestration_config,
-                            ),
-                            task_config=orchestration_config,
-                            config_agent_name="setting_workbench_service",
-                            novel_id=novel_id,
-                            max_retries=2,
-                        )
-                    else:
-                        draft = await call_and_parse_model(
-                            agent_name="SettingWorkbenchService",
-                            task="setting_workbench_generate_batch",
-                            prompt=prompt,
-                            model_cls=SettingBatchDraft,
-                            config_agent_name="setting_workbench_service",
-                            novel_id=novel_id,
-                            max_retries=2,
-                        )
+                    draft = await self._generate_draft_with_optional_section_split(
+                        novel_id=novel_id,
+                        setting_session=setting_session,
+                        message_items=generation_message_items,
+                        current_setting_context=current_setting_context,
+                        prompt_context=prompt_context,
+                        required_sections=required_sections,
+                        orchestration_config=orchestration_config,
+                        common_metadata=common_metadata,
+                    )
             except TimeoutError as exc:
                 raise LLMTimeoutError(
                     "Setting workbench generation timed out "
@@ -253,6 +309,7 @@ class SettingWorkbenchService:
             )
 
             self._validate_batch_draft(draft, required_sections=required_sections)
+            await self._validate_draft_source_evidence(novel_id, draft)
             log_service.add_log(
                 novel_id,
                 "SettingWorkbenchService",
@@ -491,7 +548,10 @@ class SettingWorkbenchService:
                 "type": entity.type,
                 "name": entity.name,
                 "current_version": entity.current_version,
-                "state": self._trim_struct(latest_states.get(entity.id) or {}, max_text=260),
+                "state": self._trim_struct(
+                    sanitize_entity_state_for_context(latest_states.get(entity.id) or {}),
+                    max_text=260,
+                ),
             }
             for entity in entities
         ]
@@ -553,11 +613,16 @@ class SettingWorkbenchService:
                 for item in context.get("entities", [])
             ],
             "relationships": context.get("relationships", []),
+            "source_coverage": context.get("source_coverage") or {},
             "limits": {
                 **(context.get("limits") or {}),
                 "catalog_only": True,
             },
-            "tool_hint": "可按需调用只读上下文工具获取完整设定详情。",
+            "tool_hint": (
+                "当前上下文仅保留目录。需要已有实体完整状态或关系时，"
+                "按 entities[].id 调用 query_entity；需要按作品或关键词查资料时调用 search_domain_documents；"
+                "需要文档全文时调用 get_novel_document_full。"
+            ),
         }
 
     def _build_generation_tools(
@@ -598,6 +663,200 @@ class SettingWorkbenchService:
             timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
         ))
         return tools
+
+    async def _generate_draft_with_optional_section_split(
+        self,
+        *,
+        novel_id: str,
+        setting_session: Any,
+        message_items: list[dict[str, Any]],
+        current_setting_context: dict[str, Any],
+        prompt_context: dict[str, Any],
+        required_sections: list[dict[str, str]],
+        orchestration_config: OrchestratedTaskConfig | None,
+        common_metadata: dict[str, Any],
+    ) -> SettingBatchDraft:
+        if len(required_sections) <= 1:
+            prompt = SettingWorkbenchAgent.build_generation_prompt(
+                title=setting_session.title,
+                target_categories=setting_session.target_categories or [],
+                messages=message_items,
+                conversation_summary=setting_session.conversation_summary,
+                focused_context=setting_session.focused_target,
+                current_setting_context=prompt_context,
+                required_sections=required_sections,
+            )
+            return await self._call_and_repair_generation_model(
+                novel_id=novel_id,
+                prompt=prompt,
+                current_setting_context=current_setting_context,
+                orchestration_config=orchestration_config,
+                required_sections=required_sections,
+                common_metadata=common_metadata,
+            )
+
+        drafts: list[SettingBatchDraft] = []
+        for index, section in enumerate(required_sections):
+            section_prompt = SettingWorkbenchAgent.build_generation_prompt(
+                title=setting_session.title,
+                target_categories=setting_session.target_categories or [],
+                messages=message_items,
+                conversation_summary=setting_session.conversation_summary,
+                focused_context=setting_session.focused_target,
+                current_setting_context=prompt_context,
+                required_sections=[section],
+            )
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                f"开始生成建议批次 {section.get('label') or index + 1}：{section.get('title') or ''}",
+                event="agent.progress",
+                status="started",
+                node="setting_generate_section",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "section_index": index,
+                    "section": section,
+                    "section_prompt_chars": len(section_prompt),
+                },
+            )
+            section_started_at = time.perf_counter()
+            section_draft = await self._call_and_repair_generation_model(
+                novel_id=novel_id,
+                prompt=section_prompt,
+                current_setting_context=current_setting_context,
+                orchestration_config=orchestration_config,
+                required_sections=[section],
+                common_metadata={
+                    **common_metadata,
+                    "section_index": index,
+                    "section": section,
+                },
+            )
+            self._validate_batch_draft(section_draft, required_sections=[section])
+            drafts.append(section_draft)
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                f"建议批次 {section.get('label') or index + 1} 生成完成",
+                event="agent.progress",
+                status="succeeded",
+                node="setting_generate_section",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "section_index": index,
+                    "section": section,
+                    "draft": self._draft_stats(section_draft),
+                },
+                duration_ms=self._elapsed_ms(section_started_at),
+            )
+
+        return self._merge_generation_drafts(drafts)
+
+    async def _call_and_repair_generation_model(
+        self,
+        *,
+        novel_id: str,
+        prompt: str,
+        current_setting_context: dict[str, Any],
+        orchestration_config: OrchestratedTaskConfig | None,
+        required_sections: list[dict[str, str]],
+        common_metadata: dict[str, Any],
+    ) -> SettingBatchDraft:
+        draft = await self._call_generation_model(
+            novel_id=novel_id,
+            prompt=prompt,
+            current_setting_context=current_setting_context,
+            orchestration_config=orchestration_config,
+        )
+        missing_sections = self._missing_required_sections(draft, required_sections)
+        if not missing_sections:
+            return draft
+
+        log_service.add_log(
+            novel_id,
+            "SettingWorkbenchService",
+            "设定审核草稿缺少建议批次，开始补全生成",
+            event="agent.progress",
+            status="started",
+            node="setting_generate_repair",
+            task="setting_workbench_generate_batch",
+            metadata={
+                **common_metadata,
+                "missing_required_sections": missing_sections,
+                "draft": self._draft_stats(draft),
+            },
+        )
+        return await self._call_generation_model(
+            novel_id=novel_id,
+            prompt=self._build_missing_required_sections_prompt(prompt, missing_sections),
+            current_setting_context=current_setting_context,
+            orchestration_config=orchestration_config,
+        )
+
+    @staticmethod
+    def _merge_generation_drafts(drafts: list[SettingBatchDraft]) -> SettingBatchDraft:
+        summaries = [draft.summary.strip() for draft in drafts if draft.summary.strip()]
+        changes = [
+            change
+            for draft in drafts
+            for change in draft.changes
+        ]
+        return SettingBatchDraft(summary="；".join(summaries), changes=changes)
+
+    async def _call_generation_model(
+        self,
+        *,
+        novel_id: str,
+        prompt: str,
+        current_setting_context: dict[str, Any],
+        orchestration_config: OrchestratedTaskConfig | None,
+    ) -> SettingBatchDraft:
+        if orchestration_config is not None:
+            return await orchestrated_call_and_parse_model(
+                agent_name="SettingWorkbenchService",
+                task="setting_workbench_generate_batch",
+                prompt=prompt,
+                model_cls=SettingBatchDraft,
+                tools=self._build_generation_tools(
+                    novel_id=novel_id,
+                    current_setting_context=current_setting_context,
+                    orchestration_config=orchestration_config,
+                ),
+                task_config=orchestration_config,
+                config_agent_name="setting_workbench_service",
+                novel_id=novel_id,
+                max_retries=2,
+            )
+        return await call_and_parse_model(
+            agent_name="SettingWorkbenchService",
+            task="setting_workbench_generate_batch",
+            prompt=prompt,
+            model_cls=SettingBatchDraft,
+            config_agent_name="setting_workbench_service",
+            novel_id=novel_id,
+            max_retries=2,
+        )
+
+    @staticmethod
+    def _build_missing_required_sections_prompt(base_prompt: str, missing_sections: list[dict[str, str]]) -> str:
+        missing_lines = [
+            f"- {section.get('label') or '批次'}：{section.get('title') or ''}".strip("：")
+            for section in missing_sections
+        ]
+        return "\n".join(
+            [
+                base_prompt,
+                "",
+                "上一次输出缺少以下建议批次：",
+                *missing_lines,
+                "请重新输出完整 SettingBatchDraft JSON。",
+                "最终 changes 必须覆盖全部建议批次，而不只是补充缺失项；每个建议批次对应 1 条独立 setting_card create change。",
+                "不要省略已覆盖批次，不要把多个建议批次合并到同一条 change。",
+            ]
+        )
 
     async def _apply_change(
         self,
@@ -814,17 +1073,39 @@ class SettingWorkbenchService:
             return [cls._trim_struct(item, max_text=max_text) for item in value[:8]]
         if isinstance(value, dict):
             result: dict[str, Any] = {}
-            for index, (key, item) in enumerate(value.items()):
-                if index >= 12:
+            added_count = 0
+            for key, item in value.items():
+                if str(key) in INTERNAL_ENTITY_STATE_KEYS:
+                    continue
+                if added_count >= 12:
                     result["_truncated"] = True
                     break
                 result[str(key)] = cls._trim_struct(item, max_text=max_text)
+                added_count += 1
             return result
         return value
 
     @staticmethod
     def _message_items(messages: list[Any]) -> list[dict[str, Any]]:
         return [{"role": message.role, "content": message.content} for message in messages]
+
+    @classmethod
+    def _message_items_for_generation(cls, messages: list[Any]) -> list[dict[str, Any]]:
+        return [
+            {
+                "role": message.role,
+                "content": cls._strip_suggested_generation_batches(getattr(message, "content", "") or ""),
+            }
+            for message in messages
+        ]
+
+    @staticmethod
+    def _strip_suggested_generation_batches(content: str) -> str:
+        for marker in ("**建议生成批次", "建议生成批次"):
+            marker_index = content.find(marker)
+            if marker_index >= 0:
+                return content[:marker_index].strip()
+        return content
 
     @classmethod
     def _extract_suggested_generation_batches(cls, messages: list[Any]) -> list[dict[str, str]]:
@@ -887,6 +1168,236 @@ class SettingWorkbenchService:
                 same_batch_entity_ids=same_batch_entity_ids,
                 has_same_batch_entity_create_without_id=has_same_batch_entity_create_without_id,
             )
+            self._validate_accuracy_guardrails(item, index=index)
+
+    async def _build_source_coverage(
+        self,
+        *,
+        novel_id: str,
+        title: str,
+        target_categories: list[str],
+        messages: list[dict[str, Any]],
+        required_sections: list[dict[str, str]],
+    ) -> dict[str, Any]:
+        source_text = "\n".join(
+            [
+                title,
+                " ".join(target_categories),
+                *[item.get("content", "") for item in messages],
+                *[section.get("title", "") for section in required_sections],
+            ]
+        )
+        domains = [domain for domain in self.KNOWN_EXTERNAL_DOMAINS if domain in source_text]
+        required = bool(domains and any(marker in source_text for marker in self.SOURCE_CRITICAL_MARKERS))
+        if not required:
+            return {"required": False, "domains": [], "missing_domains": []}
+
+        domain_docs = []
+        for doc_type in self.SOURCE_COVERAGE_DOC_TYPES:
+            domain_docs.extend(await self.doc_repo.get_current_by_type(novel_id, doc_type))
+
+        coverage_domains: list[dict[str, Any]] = []
+        missing_domains: list[str] = []
+        for domain in domains:
+            matches = []
+            for doc in domain_docs:
+                haystack = f"{doc.title}\n{doc.content}"
+                if not self._document_matches_domain(doc, domain):
+                    continue
+                if not any(keyword in haystack for keyword in self.SOURCE_TOPIC_KEYWORDS):
+                    continue
+                matches.append({
+                    "id": doc.id,
+                    "doc_type": doc.doc_type,
+                    "title": doc.title,
+                    "version": doc.version,
+                })
+            if not matches:
+                missing_domains.append(domain)
+            coverage_domains.append({
+                "name": domain,
+                "status": "covered" if matches else "missing",
+                "matched_doc_ids": [item["id"] for item in matches[:5]],
+                "matched_documents": matches[:5],
+            })
+        return {
+            "required": True,
+            "reason": "accuracy_first_external_setting_generation",
+            "domains": coverage_domains,
+            "missing_domains": missing_domains,
+        }
+
+    @staticmethod
+    def _document_matches_domain(doc: NovelDocument, domain: str) -> bool:
+        title = doc.title or ""
+        if str(doc.doc_type or "").startswith("domain_"):
+            return domain in title
+        return domain in f"{title}\n{doc.content or ''}"
+
+    @staticmethod
+    def _validate_source_coverage(source_coverage: dict[str, Any]) -> None:
+        if not source_coverage.get("required"):
+            return
+        missing_domains = [str(item) for item in source_coverage.get("missing_domains") or [] if str(item)]
+        if not missing_domains:
+            return
+        raise ValueError(
+            "Source coverage insufficient for accuracy-first setting generation: "
+            f"{', '.join(missing_domains)}. "
+            "请先导入这些世界的修炼体系/人物/世界观资料，或在会话中提供可核验资料后再生成。"
+        )
+
+    def _validate_accuracy_guardrails(self, item: SettingBatchChangeDraft, *, index: int) -> None:
+        if item.target_type != "setting_card" or item.operation not in {"create", "update"}:
+            return
+        snapshot = item.after_snapshot or {}
+        text = "\n".join(
+            str(snapshot.get(key) or "")
+            for key in ("title", "content", "description")
+        )
+        if not text.strip():
+            return
+        self._validate_source_doc_ids_for_source_critical_snapshot(snapshot, text, index=index)
+        self._validate_canonical_world_protagonists(text, index=index)
+        self._validate_realm_mapping_order(text, index=index)
+
+    async def _validate_draft_source_evidence(self, novel_id: str, draft: SettingBatchDraft) -> None:
+        for index, item in enumerate(draft.changes):
+            if item.target_type != "setting_card" or item.operation not in {"create", "update"}:
+                continue
+            snapshot = item.after_snapshot or {}
+            text = "\n".join(
+                str(snapshot.get(key) or "")
+                for key in ("title", "content", "description")
+            )
+            source_doc_ids = self._source_doc_ids(snapshot)
+            if not source_doc_ids:
+                continue
+
+            docs = []
+            for doc_id in source_doc_ids:
+                doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+                if doc is None:
+                    raise ValueError(
+                        f"Draft change {index} source evidence document not found: {doc_id}"
+                    )
+                docs.append(doc)
+
+            mentioned_domains = [domain for domain in self.KNOWN_EXTERNAL_DOMAINS if domain in text]
+            if not mentioned_domains:
+                continue
+            evidence_text = "\n".join(f"{doc.title}\n{doc.content}" for doc in docs)
+            missing_domains = [domain for domain in mentioned_domains if domain not in evidence_text]
+            if missing_domains:
+                raise ValueError(
+                    f"Draft change {index} Source evidence mismatch for domains: "
+                    f"{', '.join(missing_domains)}"
+                )
+
+    def _validate_source_doc_ids_for_source_critical_snapshot(
+        self,
+        snapshot: dict[str, Any],
+        text: str,
+        *,
+        index: int,
+    ) -> None:
+        mentions_domain = any(domain in text for domain in self.KNOWN_EXTERNAL_DOMAINS)
+        source_critical = mentions_domain and any(marker in text for marker in self.SOURCE_CRITICAL_MARKERS)
+        if not source_critical:
+            return
+        source_doc_ids = self._source_doc_ids(snapshot)
+        if not source_doc_ids:
+            raise ValueError(
+                f"Draft change {index} source evidence required for external/cross-work setting content"
+            )
+
+    @staticmethod
+    def _source_doc_ids(snapshot: dict[str, Any]) -> list[str]:
+        source_doc_ids = snapshot.get("source_doc_ids") or snapshot.get("evidence_doc_ids") or []
+        if isinstance(source_doc_ids, str):
+            source_doc_ids = [source_doc_ids]
+        if not isinstance(source_doc_ids, list):
+            return []
+        return [str(doc_id).strip() for doc_id in source_doc_ids if str(doc_id).strip()]
+
+    def _validate_canonical_world_protagonists(self, text: str, *, index: int) -> None:
+        protagonist_home = {
+            protagonist: world
+            for world, protagonist in self.CANONICAL_WORLD_PROTAGONISTS.items()
+        }
+        segments = [segment.strip() for segment in re.split(r"[\n。；;]", text) if segment.strip()]
+        for segment in segments:
+            mentioned_worlds = [world for world in self.CANONICAL_WORLD_PROTAGONISTS if world in segment]
+            if not mentioned_worlds:
+                continue
+            for protagonist, home_world in protagonist_home.items():
+                if protagonist not in segment:
+                    continue
+                for world in mentioned_worlds:
+                    if world == home_world or home_world in segment:
+                        continue
+                    raise ValueError(
+                        f"Draft change {index} Canonical world/protagonist mismatch: "
+                        f"{world} segment mentions {protagonist}, whose canonical world is {home_world}"
+                    )
+
+    def _validate_realm_mapping_order(self, text: str, *, index: int) -> None:
+        rows = self._extract_yishi_mapping_rows(text)
+        if len(rows) < 2:
+            return
+        previous_rank = None
+        previous_source = ""
+        for source_realm, target_mapping in rows:
+            rank = self._yishi_mapping_rank(target_mapping)
+            if rank is None:
+                continue
+            if previous_rank is not None and rank < previous_rank:
+                raise ValueError(
+                    f"Draft change {index} Realm mapping order regression: "
+                    f"{source_realm} maps to {target_mapping}, below previous row {previous_source}"
+                )
+            previous_rank = rank
+            previous_source = source_realm
+
+    @staticmethod
+    def _extract_yishi_mapping_rows(text: str) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        in_mapping_table = False
+        source_index = 0
+        target_index = 1
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("|") or "|" not in line[1:]:
+                in_mapping_table = False
+                continue
+            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            if len(cells) < 2:
+                continue
+            if all(re.fullmatch(r":?-{2,}:?", cell.replace(" ", "")) for cell in cells):
+                continue
+            if any("对标一世之尊" in cell for cell in cells):
+                in_mapping_table = True
+                source_index = 0
+                target_index = next(
+                    (idx for idx, cell in enumerate(cells) if "对标一世之尊" in cell),
+                    1,
+                )
+                continue
+            if not in_mapping_table or len(cells) <= max(source_index, target_index):
+                continue
+            rows.append((cells[source_index], cells[target_index]))
+        return rows
+
+    @classmethod
+    def _yishi_mapping_rank(cls, target_mapping: str) -> int | None:
+        ranks = [
+            rank
+            for realm, rank in cls.YISHI_REALM_RANKS.items()
+            if realm in target_mapping
+        ]
+        if not ranks:
+            return None
+        return max(ranks)
 
     @classmethod
     def _missing_required_sections(

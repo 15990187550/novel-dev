@@ -12,6 +12,7 @@ def test_mcp_server_has_tools():
         "get_spaceline_chain",
         "get_novel_state",
         "get_novel_documents",
+        "search_domain_documents",
         "upload_document",
         "get_pending_documents",
         "approve_pending_documents",
@@ -51,6 +52,63 @@ def test_mcp_internal_registry_reuses_external_tool_functions():
 
 
 @pytest.mark.asyncio
+async def test_mcp_query_entity_returns_entity_details_and_relationships():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.relationship_repo import RelationshipRepository
+    from novel_dev.services.entity_service import EntityService
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_entity_query_{suffix}"
+    source_id = f"ent_source_{suffix}"
+    target_id = f"ent_target_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        svc = EntityService(session)
+        await svc.create_entity(
+            source_id,
+            "character",
+            "陆照",
+            novel_id=novel_id,
+            initial_state={
+                "境界": "蕴气",
+                "_merged_duplicate_entities": [{"entity_id": f"ent_old_{suffix}", "name": "旧陆照"}],
+            },
+            use_llm_for_classification=False,
+        )
+        await svc.create_entity(
+            target_id,
+            "item",
+            "道种",
+            novel_id=novel_id,
+            initial_state={"状态": "未觉醒"},
+            use_llm_for_classification=False,
+        )
+        await RelationshipRepository(session).create(
+            source_id,
+            target_id,
+            "持有",
+            novel_id=novel_id,
+        )
+        await session.commit()
+
+    result = await mcp._tool_manager._tools["query_entity"].fn(entity_id=source_id, novel_id=novel_id)
+
+    assert result["entity_id"] == source_id
+    assert result["name"] == "陆照"
+    assert result["type"] == "character"
+    assert result["state"]["境界"] == "蕴气"
+    assert "_merged_duplicate_entities" not in result["state"]
+    assert f"ent_old_{suffix}" not in str(result)
+    assert result["relationships"][0]["target_id"] == target_id
+    assert result["relationships"][0]["relation_type"] == "持有"
+
+    mismatch = await mcp._tool_manager._tools["query_entity"].fn(entity_id=source_id, novel_id="other")
+    assert mismatch["error"] == "Entity not found in novel"
+
+
+@pytest.mark.asyncio
 async def test_mcp_get_novel_document_full():
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -70,6 +128,102 @@ async def test_mcp_get_novel_document_full():
     result = await mcp._tool_manager._tools["get_novel_document_full"].fn(novel_id=novel_id, doc_id=doc.id)
     assert result["content"] == content
     assert result["doc_type"] == "worldview"
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_domain_documents_filters_by_domain_and_query():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_doc_search_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        repo = DocumentRepository(session)
+        zhetian_doc = await repo.create(
+            f"d_zhetian_{suffix}",
+            novel_id,
+            "domain_setting",
+            "遮天 / 修炼体系",
+            "四极、化龙、仙台、圣人、大圣、准帝、大帝、红尘仙。",
+        )
+        await repo.create(
+            f"d_xian ni_{suffix}",
+            novel_id,
+            "domain_setting",
+            "仙逆 / 修炼体系",
+            "元婴、化神、婴变、问鼎、阴虚、阳实、踏天。",
+        )
+        await repo.create(
+            f"d_perfect_{suffix}",
+            novel_id,
+            "domain_setting",
+            "完美世界 / 修炼体系",
+            "完美世界体系，正文提及遮天和红尘仙作为后续关联。",
+        )
+        await session.commit()
+
+    result = await mcp._tool_manager._tools["search_domain_documents"].fn(
+        novel_id=novel_id,
+        domain_name="遮天",
+        query="红尘仙 境界",
+        doc_type="domain_setting",
+    )
+
+    assert result["documents"][0]["id"] == zhetian_doc.id
+    assert result["documents"][0]["title"] == "遮天 / 修炼体系"
+    assert "红尘仙" in result["documents"][0]["content_preview"]
+    assert len(result["documents"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_mcp_search_domain_documents_handles_multi_domain_abstract_realm_query():
+    from novel_dev.db.engine import engine
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from novel_dev.repositories.document_repo import DocumentRepository
+
+    suffix = uuid.uuid4().hex[:8]
+    novel_id = f"n_doc_search_multi_{suffix}"
+
+    async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+    async with async_session_local() as session:
+        repo = DocumentRepository(session)
+        yangshen_doc = await repo.create(
+            f"d_yangshen_{suffix}",
+            novel_id,
+            "domain_setting",
+            "阳神 / 修炼体系",
+            "武道修命体系与仙道修性体系，终极境界为彼岸。",
+        )
+        perfect_doc = await repo.create(
+            f"d_perfect_{suffix}",
+            novel_id,
+            "domain_setting",
+            "完美世界 / 修炼体系",
+            "搬血、洞天、铭纹、尊者、真仙、仙王等境界。",
+        )
+        await repo.create(
+            f"d_zhetian_{suffix}",
+            novel_id,
+            "domain_setting",
+            "遮天 / 修炼体系",
+            "轮海、道宫、四极、化龙、仙台。",
+        )
+        await session.commit()
+
+    result = await mcp._tool_manager._tools["search_domain_documents"].fn(
+        novel_id=novel_id,
+        domain_name="阳神、完美世界、吞噬星空",
+        query="境界映射",
+        doc_type="domain_setting",
+    )
+
+    ids = [item["id"] for item in result["documents"]]
+    assert yangshen_doc.id in ids
+    assert perfect_doc.id in ids
+    assert all("遮天" not in item["title"] for item in result["documents"])
 
 
 @pytest.mark.asyncio

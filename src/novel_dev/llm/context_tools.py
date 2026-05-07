@@ -9,7 +9,9 @@ from novel_dev.mcp_server.registry import MCPToolRegistry
 
 _TOOL_DESCRIPTIONS = {
     "get_novel_state": "Read the current phase and checkpoint data for a novel.",
+    "query_entity": "Read one entity by id, including latest state and active relationships.",
     "get_novel_documents": "List document summaries for a novel and document type.",
+    "search_domain_documents": "Search source documents by novel, domain/work name, document type, and query terms.",
     "get_novel_document_full": "Read a full document by novel id and document id.",
     "get_synopsis": "Read the accepted synopsis document and structured synopsis data.",
     "get_volume_plan": "Read the current persisted volume plan.",
@@ -26,6 +28,14 @@ _TOOL_SCHEMAS = {
         "properties": {"novel_id": {"type": "string"}},
         "required": ["novel_id"],
     },
+    "query_entity": {
+        "type": "object",
+        "properties": {
+            "entity_id": {"type": "string"},
+            "novel_id": {"type": "string"},
+        },
+        "required": ["entity_id"],
+    },
     "get_novel_documents": {
         "type": "object",
         "properties": {
@@ -33,6 +43,17 @@ _TOOL_SCHEMAS = {
             "doc_type": {"type": "string"},
         },
         "required": ["novel_id", "doc_type"],
+    },
+    "search_domain_documents": {
+        "type": "object",
+        "properties": {
+            "novel_id": {"type": "string"},
+            "query": {"type": "string"},
+            "domain_name": {"type": "string"},
+            "doc_type": {"type": "string"},
+            "limit": {"type": "integer"},
+        },
+        "required": ["novel_id", "query"],
     },
     "get_novel_document_full": {
         "type": "object",

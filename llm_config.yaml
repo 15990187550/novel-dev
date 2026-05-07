@@ -38,7 +38,7 @@ embedding:
   dimensions: 1024
 agents:
   brainstorm_agent:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 240
     retries: 3
     temperature: 0.9
@@ -76,11 +76,11 @@ agents:
         orchestration:
           enabled: false
           tool_allowlist:
-            - get_volume_planner_context
-            - get_novel_state
-            - get_synopsis
-            - get_novel_documents
-            - get_novel_document_full
+          - get_volume_planner_context
+          - get_novel_state
+          - get_synopsis
+          - get_novel_documents
+          - get_novel_document_full
           max_tool_calls: 3
           tool_timeout_seconds: 5
           max_tool_result_chars: 6000
@@ -182,20 +182,22 @@ agents:
           retries: 1
           temperature: 0.5
   setting_workbench_service:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 180
     temperature: 0.55
     max_tokens: 12000
     orchestration:
-      enabled: false
+      enabled: true
       tool_allowlist:
-        - get_setting_workbench_context
-        - get_novel_state
-        - get_novel_documents
-        - get_novel_document_full
-      max_tool_calls: 3
+      - get_setting_workbench_context
+      - query_entity
+      - get_novel_state
+      - get_novel_documents
+      - search_domain_documents
+      - get_novel_document_full
+      max_tool_calls: 8
       tool_timeout_seconds: 5
-      max_tool_result_chars: 4000
+      max_tool_result_chars: 6000
       retriever_subtasks: []
       enable_subtasks: true
       repairer_subtask: schema_repair
@@ -211,12 +213,12 @@ agents:
     orchestration:
       enabled: true
       tool_allowlist:
-        - get_context_location_details
-        - get_context_entity_states
-        - get_context_foreshadowing_details
-        - get_context_timeline_events
-        - get_novel_state
-        - get_chapter_draft_status
+      - get_context_location_details
+      - get_context_entity_states
+      - get_context_foreshadowing_details
+      - get_context_timeline_events
+      - get_novel_state
+      - get_chapter_draft_status
       max_tool_calls: 3
       tool_timeout_seconds: 5
       max_tool_result_chars: 1600
