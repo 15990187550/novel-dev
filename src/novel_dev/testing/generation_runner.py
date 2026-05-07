@@ -4,6 +4,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any, Awaitable, Callable, Literal
 
 import httpx
@@ -397,15 +398,30 @@ def _run_fake_generation_diagnostic(fixture: GenerationFixture) -> None:
 
 
 def _timeout_is_external(message: str) -> bool:
-    markers = ("provider", "upstream", "rate", "quota", "network")
-    normalized = message.lower()
-    return any(marker in normalized for marker in markers)
+    return _has_external_marker(message)
 
 
 def _quota_or_provider_is_external(message: str) -> bool:
-    markers = ("quota", "rate", "provider", "upstream")
+    return _has_external_marker(message)
+
+
+def _has_external_marker(message: str) -> bool:
     normalized = message.lower()
-    return any(marker in normalized for marker in markers)
+    tokens = set(re.findall(r"[a-z0-9]+", normalized))
+    phrases = (
+        "rate limit",
+        "rate limited",
+        "provider timeout",
+        "upstream timeout",
+        "upstream queue",
+        "external provider",
+    )
+    localized_markers = ("限流", "配额", "上游", "供应商")
+    return (
+        bool(tokens & {"rate", "quota", "provider", "upstream", "network"})
+        or any(phrase in normalized for phrase in phrases)
+        or any(marker in message for marker in localized_markers)
+    )
 
 
 def _exception_is_parse_failure(message: str) -> bool:

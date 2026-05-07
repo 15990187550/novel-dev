@@ -174,6 +174,31 @@ def test_http_504_in_setting_generation_stage_remains_internal_timeout():
     assert issue.is_external_blocker is False
 
 
+def test_http_504_raise_for_status_generate_url_does_not_match_rate_marker():
+    request = httpx.Request(
+        "POST",
+        "http://testserver/api/novels/n/settings/sessions/s/generate",
+    )
+    response = httpx.Response(
+        504,
+        request=request,
+        text="AI 生成设定审核记录超时，请稍后重试",
+    )
+
+    with pytest.raises(httpx.HTTPStatusError) as raised:
+        response.raise_for_status()
+
+    issue = classify_exception(
+        "generate_setting_review_batch",
+        raised.value,
+        True,
+    )
+
+    assert "generate" in str(raised.value)
+    assert issue.type == "TIMEOUT_INTERNAL"
+    assert issue.is_external_blocker is False
+
+
 def test_fake_rerun_does_not_clear_system_failure():
     assert should_fake_rerun_affect_final_status("SYSTEM_BUG") is False
     assert should_fake_rerun_affect_final_status("TIMEOUT_INTERNAL") is False
