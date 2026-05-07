@@ -15,6 +15,22 @@ from novel_dev.testing.report import Issue, IssueType, ReportWriter, TestRunRepo
 
 LLMMode = Literal["fake", "real", "real_then_fake_on_external_block"]
 Step = Callable[[], Awaitable[None]]
+API_GENERATION_STAGES = (
+    "preflight_health",
+    "create_novel",
+    "create_setting_session",
+    "advance_setting_session",
+    "generate_setting_review_batch",
+    "upload_seed_setting",
+    "approve_seed_setting",
+    "brainstorm",
+    "volume_plan",
+    "export",
+)
+LLM_HTTP_TIMEOUT_EXTERNAL_STAGES = {
+    "advance_setting_session",
+    "generate_setting_review_batch",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,8 +56,18 @@ def validate_run_id(run_id: str | None) -> str | None:
     return run_id
 
 
+def validate_stage(stage: str | None) -> str | None:
+    if stage is None:
+        return None
+    if stage not in API_GENERATION_STAGES:
+        valid = ", ".join(API_GENERATION_STAGES)
+        raise ValueError(f"Unknown generation stage: {stage}. Valid stages: {valid}")
+    return stage
+
+
 async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunReport:
     started = time.monotonic()
+    target_stage = validate_stage(options.stage)
     fixture = load_generation_fixture(options.dataset)
     run_id = validate_run_id(options.run_id) or make_run_id("generation-real")
 
@@ -56,6 +82,8 @@ async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunRep
     )
     report.artifacts["fixture_title"] = fixture.title
     report.artifacts["acceptance_scope"] = "settings_brainstorm_volume_export"
+    if target_stage is not None:
+        report.artifacts["target_stage"] = target_stage
     if options.llm_mode == "fake":
         try:
             _run_fake_generation_diagnostic(fixture)
@@ -116,6 +144,7 @@ async def _run_api_smoke_flow(
     options: GenerationRunOptions,
     fixture: GenerationFixture,
 ) -> tuple[dict[str, str], list[Issue]]:
+    target_stage = validate_stage(options.stage)
     artifacts: dict[str, str] = {
         "acceptance_scope": "settings_brainstorm_volume_export",
     }
@@ -144,12 +173,20 @@ async def _run_api_smoke_flow(
             return False
         return True
 
+    def should_stop_after(stage: str) -> bool:
+        if target_stage != stage:
+            return False
+        artifacts["stopped_at_stage"] = stage
+        return True
+
     async with httpx.AsyncClient(base_url=options.api_base_url, timeout=60) as client:
         async def preflight_health() -> None:
             response = await client.get("/healthz")
             response.raise_for_status()
 
         if not await run_stage("preflight_health", preflight_health):
+            return artifacts, issues
+        if should_stop_after("preflight_health"):
             return artifacts, issues
 
         async def create_novel() -> None:
@@ -159,6 +196,8 @@ async def _run_api_smoke_flow(
             artifacts["novel_id"] = _require_string(data, "novel_id", "create_novel")
 
         if not await run_stage("create_novel", create_novel):
+            return artifacts, issues
+        if should_stop_after("create_novel"):
             return artifacts, issues
 
         novel_id = artifacts["novel_id"]
@@ -182,8 +221,39 @@ async def _run_api_smoke_flow(
 
         if not await run_stage("create_setting_session", create_setting_session):
             return artifacts, issues
+        if should_stop_after("create_setting_session"):
+            return artifacts, issues
 
         setting_session_id = artifacts["setting_session_id"]
+
+        async def advance_setting_session() -> None:
+            data = await _request_json(
+                client.post(
+                    f"/api/novels/{novel_id}/settings/sessions/"
+                    f"{setting_session_id}/reply",
+                    json={
+                        "content": (
+                            "设定目标已经明确，请直接进入可生成状态。"
+                            f"\n\n{fixture.initial_setting_idea}"
+                        )
+                    },
+                )
+            )
+            session = data.get("session")
+            if not isinstance(session, dict):
+                raise RuntimeError("advance_setting_session response missing session")
+            status = _first_string(session, "status")
+            if status is not None:
+                artifacts["setting_session_status"] = status
+            if status != "ready_to_generate":
+                raise RuntimeError(
+                    "advance_setting_session did not reach ready_to_generate"
+                )
+
+        if not await run_stage("advance_setting_session", advance_setting_session):
+            return artifacts, issues
+        if should_stop_after("advance_setting_session"):
+            return artifacts, issues
 
         async def generate_setting_review_batch() -> None:
             data = await _request_json(
@@ -200,6 +270,8 @@ async def _run_api_smoke_flow(
             "generate_setting_review_batch",
             generate_setting_review_batch,
         ):
+            return artifacts, issues
+        if should_stop_after("generate_setting_review_batch"):
             return artifacts, issues
 
         async def upload_seed_setting() -> None:
@@ -218,6 +290,8 @@ async def _run_api_smoke_flow(
 
         if not await run_stage("upload_seed_setting", upload_seed_setting):
             return artifacts, issues
+        if should_stop_after("upload_seed_setting"):
+            return artifacts, issues
 
         async def approve_seed_setting() -> None:
             pending_id = artifacts.get("pending_id")
@@ -232,11 +306,15 @@ async def _run_api_smoke_flow(
 
         if not await run_stage("approve_seed_setting", approve_seed_setting):
             return artifacts, issues
+        if should_stop_after("approve_seed_setting"):
+            return artifacts, issues
 
         async def brainstorm() -> None:
             await _request_json(client.post(f"/api/novels/{novel_id}/brainstorm"))
 
         if not await run_stage("brainstorm", brainstorm):
+            return artifacts, issues
+        if should_stop_after("brainstorm"):
             return artifacts, issues
 
         async def volume_plan() -> None:
@@ -252,6 +330,8 @@ async def _run_api_smoke_flow(
 
         if not await run_stage("volume_plan", volume_plan):
             return artifacts, issues
+        if should_stop_after("volume_plan"):
+            return artifacts, issues
 
         async def export() -> None:
             data = await _request_json(
@@ -262,6 +342,8 @@ async def _run_api_smoke_flow(
                 artifacts["exported_path"] = exported_path
 
         await run_stage("export", export)
+        if should_stop_after("export"):
+            return artifacts, issues
         return artifacts, issues
 
 
@@ -350,7 +432,9 @@ def classify_exception(stage: str, exc: Exception, real_llm: bool) -> Issue:
             issue_type = "EXTERNAL_BLOCKED"
             is_external_blocker = True
         elif status_code == 504:
-            if _timeout_is_external(message):
+            if stage in LLM_HTTP_TIMEOUT_EXTERNAL_STAGES or _timeout_is_external(
+                message
+            ):
                 issue_type = "EXTERNAL_BLOCKED"
                 is_external_blocker = True
             else:

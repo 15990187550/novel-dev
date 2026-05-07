@@ -149,6 +149,31 @@ def test_http_504_without_external_marker_is_internal_timeout():
     assert issue.is_external_blocker is False
 
 
+def test_http_504_in_setting_generation_stage_is_external_blocker():
+    request = httpx.Request(
+        "POST",
+        "http://testserver/api/novels/n/settings/sessions/s/generate",
+    )
+    response = httpx.Response(
+        504,
+        request=request,
+        text="AI 生成设定审核记录超时，请稍后重试",
+    )
+
+    issue = classify_exception(
+        "generate_setting_review_batch",
+        httpx.HTTPStatusError(
+            "gateway timeout",
+            request=request,
+            response=response,
+        ),
+        True,
+    )
+
+    assert issue.type == "EXTERNAL_BLOCKED"
+    assert issue.is_external_blocker is True
+
+
 def test_fake_rerun_does_not_clear_system_failure():
     assert should_fake_rerun_affect_final_status("SYSTEM_BUG") is False
     assert should_fake_rerun_affect_final_status("TIMEOUT_INTERNAL") is False
@@ -279,3 +304,73 @@ async def test_generation_acceptance_classifies_api_smoke_flow_failure(monkeypat
     assert report.issues[0].stage == "api_smoke_flow"
     assert report.issues[0].type == "SYSTEM_BUG"
     assert report.issues[0].real_llm is False
+
+
+@pytest.mark.asyncio
+async def test_api_smoke_flow_replies_before_setting_generation(monkeypatch):
+    calls = []
+
+    class FakeAsyncClient:
+        def __init__(self, *, base_url, timeout):
+            self.base_url = str(base_url)
+            self.timeout = timeout
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def get(self, path):
+            calls.append(("GET", path, None))
+            return self._response("GET", path, {"ok": True})
+
+        async def post(self, path, json=None, params=None):
+            calls.append(("POST", path, json or params))
+            if path == "/api/novels":
+                return self._response("POST", path, {"novel_id": "novel-test"})
+            if path == "/api/novels/novel-test/settings/sessions":
+                return self._response("POST", path, {"id": "session-test"})
+            if path.endswith("/reply"):
+                return self._response(
+                    "POST",
+                    path,
+                    {
+                        "session": {
+                            "id": "session-test",
+                            "status": "ready_to_generate",
+                        },
+                        "assistant_message": "可以生成",
+                        "questions": [],
+                    },
+                )
+            if path.endswith("/generate"):
+                return self._response("POST", path, {"id": "batch-test"})
+            raise AssertionError(f"Unexpected request: {path}")
+
+        def _response(self, method, path, data):
+            request = httpx.Request(method, f"http://testserver{path}")
+            return httpx.Response(200, request=request, json=data)
+
+    monkeypatch.setattr(generation_runner.httpx, "AsyncClient", FakeAsyncClient)
+    fixture = generation_runner.load_generation_fixture("minimal_builtin")
+
+    artifacts, issues = await generation_runner._run_api_smoke_flow(
+        GenerationRunOptions(
+            llm_mode="real",
+            stage="generate_setting_review_batch",
+        ),
+        fixture,
+    )
+
+    paths = [path for _method, path, _payload in calls]
+    assert issues == []
+    assert paths == [
+        "/healthz",
+        "/api/novels",
+        "/api/novels/novel-test/settings/sessions",
+        "/api/novels/novel-test/settings/sessions/session-test/reply",
+        "/api/novels/novel-test/settings/sessions/session-test/generate",
+    ]
+    assert artifacts["setting_session_id"] == "session-test"
+    assert artifacts["review_batch_id"] == "batch-test"

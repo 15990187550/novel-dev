@@ -89,3 +89,25 @@ def test_generation_command_invalid_dataset_returns_config_error(tmp_path, capsy
     assert "Unknown generation fixture source: missing_dataset" in captured.err
     assert "Traceback" not in captured.err
     assert list(tmp_path.glob("*/summary.json")) == []
+
+
+def test_generation_command_rejects_unknown_stage(tmp_path, capsys):
+    exit_code = main(
+        [
+            "generation",
+            "--llm-mode",
+            "fake",
+            "--dataset",
+            "minimal_builtin",
+            "--report-root",
+            str(tmp_path),
+            "--stage",
+            "chapter_draft",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "Unknown generation stage: chapter_draft" in captured.err
+    assert "Traceback" not in captured.err
+    assert list(tmp_path.glob("*/summary.json")) == []
