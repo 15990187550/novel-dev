@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 from collections.abc import Sequence
+import sys
 
 from novel_dev.testing.generation_runner import (
     GenerationRunOptions,
@@ -42,7 +43,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             report_root=args.report_root,
             api_base_url=args.api_base_url,
         )
-        report = asyncio.run(run_generation_acceptance_and_write(options))
+        try:
+            report = asyncio.run(run_generation_acceptance_and_write(options))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
         return 0 if report.status in {"passed", "external_blocked"} else 1
 
     parser.error(f"Unknown command: {args.command}")

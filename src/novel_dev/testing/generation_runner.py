@@ -29,10 +29,18 @@ def make_run_id(prefix: str) -> str:
     return f"{stamp}-{prefix}"
 
 
+def validate_run_id(run_id: str | None) -> str | None:
+    if run_id is None:
+        return None
+    if Path(run_id).is_absolute() or "/" in run_id or "\\" in run_id or ".." in run_id:
+        raise ValueError("Unsafe run_id: use a simple name without paths.")
+    return run_id
+
+
 async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunReport:
     started = time.monotonic()
     fixture = load_generation_fixture(options.dataset)
-    run_id = options.run_id or make_run_id("generation-real")
+    run_id = validate_run_id(options.run_id) or make_run_id("generation-real")
 
     report = TestRunReport(
         run_id=run_id,
