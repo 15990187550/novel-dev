@@ -23,7 +23,7 @@ fi
 cd "${WEB_DIR}"
 npm install --prefer-offline --no-audit --fund=false
 
-npm run dev -- --host "${WEB_HOST}" --port "${WEB_PORT}" >"${VITE_LOG}" 2>&1 &
+VITE_API_PROXY_TARGET="${API_BASE_URL}" npm run dev -- --host "${WEB_HOST}" --port "${WEB_PORT}" --strictPort >"${VITE_LOG}" 2>&1 &
 VITE_PID="$!"
 trap 'kill "${VITE_PID}" >/dev/null 2>&1 || true' EXIT
 
@@ -49,5 +49,10 @@ fi
 export PLAYWRIGHT_BASE_URL="${VITE_URL}"
 export TEST_RUN_REPORT_DIR
 
-npm run test:e2e
-npm run test:visual
+PLAYWRIGHT_OUTPUT_DIR="${ARTIFACT_DIR}/flow-results" \
+PLAYWRIGHT_HTML_REPORT="${ARTIFACT_DIR}/flow-report" \
+  npm run test:e2e
+
+PLAYWRIGHT_OUTPUT_DIR="${ARTIFACT_DIR}/visual-results" \
+PLAYWRIGHT_HTML_REPORT="${ARTIFACT_DIR}/visual-report" \
+  npm run test:visual
