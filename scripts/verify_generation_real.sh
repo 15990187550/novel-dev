@@ -12,18 +12,25 @@ RUN_ID="${RUN_ID:-}"
 
 args=(
   generation
-  --dataset "${DATASET}"
-  --llm-mode "${LLM_MODE}"
-  --report-root "${REPORT_ROOT}"
-  --api-base-url "${API_BASE_URL}"
 )
 
-if [[ -n "${STAGE}" ]]; then
-  args+=(--stage "${STAGE}")
-fi
+if [[ "$#" -gt 0 ]]; then
+  args+=("$@")
+else
+  args+=(
+    --dataset "${DATASET}"
+    --llm-mode "${LLM_MODE}"
+    --report-root "${REPORT_ROOT}"
+    --api-base-url "${API_BASE_URL}"
+  )
 
-if [[ -n "${RUN_ID}" ]]; then
-  args+=(--run-id "${RUN_ID}")
+  if [[ -n "${STAGE}" ]]; then
+    args+=(--stage "${STAGE}")
+  fi
+
+  if [[ -n "${RUN_ID}" ]]; then
+    args+=(--run-id "${RUN_ID}")
+  fi
 fi
 
 cd "${ROOT_DIR}"
