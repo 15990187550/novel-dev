@@ -8,6 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run --config vitest.config.js",
+    "test:e2e": "playwright test e2e/flows",
+    "test:visual": "playwright test e2e/visual",
     "test:watch": "vitest --config vitest.config.js"
   },
   "dependencies": {
@@ -25,6 +27,7 @@
     "axios": "^1.6.8"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@vue/test-utils": "^2.4.6",
     "jsdom": "^25.0.1",
     "vite": "^5.2.0",
