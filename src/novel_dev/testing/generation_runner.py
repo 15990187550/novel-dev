@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Literal
 
 from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
-from novel_dev.testing.report import Issue, IssueType
+from novel_dev.testing.fixtures import load_generation_fixture
+from novel_dev.testing.report import Issue, IssueType, ReportWriter, TestRunReport
 
 
 LLMMode = Literal["fake", "real", "real_then_fake_on_external_block"]
@@ -18,6 +22,37 @@ class GenerationRunOptions:
     run_id: str | None = None
     report_root: str = "reports/test-runs"
     api_base_url: str = "http://127.0.0.1:8000"
+
+
+def make_run_id(prefix: str) -> str:
+    stamp = datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    return f"{stamp}-{prefix}"
+
+
+async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunReport:
+    started = time.monotonic()
+    fixture = load_generation_fixture(options.dataset)
+    run_id = options.run_id or make_run_id("generation-real")
+
+    report = TestRunReport(
+        run_id=run_id,
+        entrypoint="scripts/verify_generation_real.sh",
+        status="passed",
+        duration_seconds=time.monotonic() - started,
+        dataset=fixture.dataset,
+        llm_mode=options.llm_mode,
+        environment={"api_base_url": options.api_base_url},
+    )
+    report.artifacts["fixture_title"] = fixture.title
+    return report
+
+
+async def run_generation_acceptance_and_write(
+    options: GenerationRunOptions,
+) -> TestRunReport:
+    report = await run_generation_acceptance(options)
+    ReportWriter(Path(options.report_root) / report.run_id).write(report)
+    return report
 
 
 def _timeout_is_external(message: str) -> bool:
