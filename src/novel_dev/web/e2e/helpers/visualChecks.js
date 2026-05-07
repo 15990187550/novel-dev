@@ -16,6 +16,10 @@ export function installPageErrorCollector(page) {
   return errors
 }
 
+export function expectNoCollectedErrors(errors) {
+  expect(errors).toEqual([])
+}
+
 export async function expectUsablePage(page, errors, selector = '#app') {
   await page.waitForLoadState('networkidle')
 
@@ -33,5 +37,5 @@ export async function expectUsablePage(page, errors, selector = '#app') {
   }))
   expect(Math.max(overflow.body, overflow.document), 'page should not horizontally overflow').toBeLessThanOrEqual(1)
 
-  expect(errors).toEqual([])
+  expectNoCollectedErrors(errors)
 }
