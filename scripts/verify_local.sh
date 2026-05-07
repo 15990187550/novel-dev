@@ -16,6 +16,12 @@ echo "==> Python compile check"
   PYTHONPATH=src python3.11 -m compileall -q src/novel_dev
 )
 
+echo "==> Fake generation flow"
+(
+  cd "${ROOT_DIR}"
+  PYTHONPATH=src python3.11 -m pytest tests/generation/test_minimal_generation_flow.py -q
+)
+
 echo "==> Web tests"
 (
   cd "${WEB_DIR}"
