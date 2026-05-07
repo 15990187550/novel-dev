@@ -27,10 +27,6 @@ API_GENERATION_STAGES = (
     "volume_plan",
     "export",
 )
-LLM_HTTP_TIMEOUT_EXTERNAL_STAGES = {
-    "advance_setting_session",
-    "generate_setting_review_batch",
-}
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +121,7 @@ async def run_stage_with_classification(
         await real_step()
     except Exception as exc:
         issue = classify_exception(stage, exc, real_llm=True)
-        if not issue.is_external_blocker:
+        if not should_run_fake_diagnostic(issue.type):
             return issue, None
 
         try:
@@ -432,9 +428,7 @@ def classify_exception(stage: str, exc: Exception, real_llm: bool) -> Issue:
             issue_type = "EXTERNAL_BLOCKED"
             is_external_blocker = True
         elif status_code == 504:
-            if stage in LLM_HTTP_TIMEOUT_EXTERNAL_STAGES or _timeout_is_external(
-                message
-            ):
+            if _timeout_is_external(message):
                 issue_type = "EXTERNAL_BLOCKED"
                 is_external_blocker = True
             else:
@@ -465,8 +459,16 @@ def classify_exception(stage: str, exc: Exception, real_llm: bool) -> Issue:
         fake_rerun_status=None,
         message=str(exc),
         evidence=[],
-        reproduce=f"scripts/verify_generation_real.sh --stage {stage}",
+        reproduce=_reproduce_command_for_stage(stage),
     )
+
+
+def _reproduce_command_for_stage(stage: str) -> str:
+    if stage in API_GENERATION_STAGES:
+        return f"scripts/verify_generation_real.sh --stage {stage}"
+    if stage == "fake_generation_diagnostic":
+        return "scripts/verify_generation_real.sh --llm-mode fake"
+    return "scripts/verify_generation_real.sh"
 
 
 def _http_status_error_message(exc: httpx.HTTPStatusError) -> str:
@@ -480,3 +482,7 @@ def _http_status_error_message(exc: httpx.HTTPStatusError) -> str:
 
 def should_fake_rerun_affect_final_status(issue_type: IssueType) -> bool:
     return issue_type == "EXTERNAL_BLOCKED"
+
+
+def should_run_fake_diagnostic(issue_type: IssueType) -> bool:
+    return issue_type in {"EXTERNAL_BLOCKED", "TIMEOUT_INTERNAL"}

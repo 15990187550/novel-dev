@@ -23,7 +23,7 @@ def test_rate_limit_is_external_blocker():
     assert issue.fake_rerun_status is None
     assert issue.message == "quota exhausted"
     assert issue.evidence == []
-    assert issue.reproduce == "scripts/verify_generation_real.sh --stage chapter_draft"
+    assert issue.reproduce == "scripts/verify_generation_real.sh"
 
 
 def test_internal_timeout_message_is_system_timeout():
@@ -149,7 +149,7 @@ def test_http_504_without_external_marker_is_internal_timeout():
     assert issue.is_external_blocker is False
 
 
-def test_http_504_in_setting_generation_stage_is_external_blocker():
+def test_http_504_in_setting_generation_stage_remains_internal_timeout():
     request = httpx.Request(
         "POST",
         "http://testserver/api/novels/n/settings/sessions/s/generate",
@@ -170,8 +170,8 @@ def test_http_504_in_setting_generation_stage_is_external_blocker():
         True,
     )
 
-    assert issue.type == "EXTERNAL_BLOCKED"
-    assert issue.is_external_blocker is True
+    assert issue.type == "TIMEOUT_INTERNAL"
+    assert issue.is_external_blocker is False
 
 
 def test_fake_rerun_does_not_clear_system_failure():
@@ -289,6 +289,40 @@ async def test_run_stage_with_classification_does_not_fake_rerun_non_external_is
 
 
 @pytest.mark.asyncio
+async def test_run_stage_with_classification_runs_fake_diagnostic_for_timeout_issue():
+    request = httpx.Request("POST", "http://testserver/api/novels/n/documents/upload")
+    response = httpx.Response(
+        504,
+        request=request,
+        text="设定提取超时，请稍后重试或切换模型",
+    )
+    calls = []
+
+    async def real_step():
+        calls.append("real")
+        raise httpx.HTTPStatusError(
+            "gateway timeout",
+            request=request,
+            response=response,
+        )
+
+    async def fake_step():
+        calls.append("fake")
+
+    issue, fake_status = await run_stage_with_classification(
+        "upload_seed_setting",
+        real_step,
+        fake_step,
+    )
+
+    assert calls == ["real", "fake"]
+    assert issue is not None
+    assert issue.type == "TIMEOUT_INTERNAL"
+    assert issue.fake_rerun_status == "passed"
+    assert fake_status == "passed"
+
+
+@pytest.mark.asyncio
 async def test_generation_acceptance_classifies_api_smoke_flow_failure(monkeypatch):
     async def fail_api_smoke_flow(options, fixture):
         raise RuntimeError("local API unavailable")
@@ -304,6 +338,31 @@ async def test_generation_acceptance_classifies_api_smoke_flow_failure(monkeypat
     assert report.issues[0].stage == "api_smoke_flow"
     assert report.issues[0].type == "SYSTEM_BUG"
     assert report.issues[0].real_llm is False
+    assert report.issues[0].reproduce == "scripts/verify_generation_real.sh"
+
+
+@pytest.mark.asyncio
+async def test_fake_generation_diagnostic_failure_has_valid_reproduce_command(monkeypatch):
+    def fail_fake_generation_diagnostic(fixture):
+        raise RuntimeError("Fake diagnostic failed")
+
+    monkeypatch.setattr(
+        generation_runner,
+        "_run_fake_generation_diagnostic",
+        fail_fake_generation_diagnostic,
+    )
+
+    report = await run_generation_acceptance(
+        GenerationRunOptions(llm_mode="fake", run_id="fake-failure-test")
+    )
+
+    assert report.status == "failed"
+    assert len(report.issues) == 1
+    assert report.issues[0].stage == "fake_generation_diagnostic"
+    assert (
+        report.issues[0].reproduce
+        == "scripts/verify_generation_real.sh --llm-mode fake"
+    )
 
 
 @pytest.mark.asyncio
