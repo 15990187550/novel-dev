@@ -12,26 +12,23 @@ RUN_ID="${RUN_ID:-}"
 
 args=(
   generation
+  --dataset "${DATASET}"
+  --llm-mode "${LLM_MODE}"
+  --report-root "${REPORT_ROOT}"
+  --api-base-url "${API_BASE_URL}"
 )
 
-if [[ "$#" -gt 0 ]]; then
-  args+=("$@")
-else
-  args+=(
-    --dataset "${DATASET}"
-    --llm-mode "${LLM_MODE}"
-    --report-root "${REPORT_ROOT}"
-    --api-base-url "${API_BASE_URL}"
-  )
-
-  if [[ -n "${STAGE}" ]]; then
-    args+=(--stage "${STAGE}")
-  fi
-
-  if [[ -n "${RUN_ID}" ]]; then
-    args+=(--run-id "${RUN_ID}")
-  fi
+if [[ -n "${STAGE}" ]]; then
+  args+=(--stage "${STAGE}")
 fi
+
+if [[ -n "${RUN_ID}" ]]; then
+  args+=(--run-id "${RUN_ID}")
+fi
+
+# User-provided CLI args are appended last so argparse keeps explicit values
+# when an option is provided both by environment defaults and the command line.
+args+=("$@")
 
 cd "${ROOT_DIR}"
 PYTHONPATH=src "${PYTHON_BIN}" -m novel_dev.testing.cli "${args[@]}"
