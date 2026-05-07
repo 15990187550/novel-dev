@@ -62,6 +62,7 @@ test.describe('web generation flow', () => {
 
     await page.goto('/documents?tab=ai')
     await expectUsablePage(page, errors)
+    await loadNovelFromSidebar(page, novel.novel_id)
     await expect(page.locator('.page-shell')).toContainText(/AI 生成设定|设定生成|Knowledge Base|资料管理/)
     await expect(page.locator('.page-shell')).toContainText(new RegExp(`${sessionTitle}|AI 生成设定|设定会话|创建新设定`))
     expectNoCollectedErrors(errors)
