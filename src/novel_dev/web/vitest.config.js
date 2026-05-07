@@ -1,4 +1,4 @@
-import { defineConfig, mergeConfig } from 'vitest/config'
+import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config.js'
 
 export default mergeConfig(
@@ -9,6 +9,11 @@ export default mergeConfig(
       setupFiles: ['./src/test/setup.js'],
       globals: true,
       css: true,
+      exclude: [
+        ...configDefaults.exclude,
+        'e2e/**',
+        '**/e2e/**',
+      ],
     },
   }),
 )
