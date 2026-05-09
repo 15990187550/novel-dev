@@ -204,6 +204,8 @@ class SynopsisData(BaseModel):
         if isinstance(volume_outlines, list):
             normalized_outlines = []
             for index, item in enumerate(volume_outlines, start=1):
+                if hasattr(item, "model_dump"):
+                    item = item.model_dump()
                 if not isinstance(item, dict):
                     item = {"summary": item}
                 outline = dict(item)

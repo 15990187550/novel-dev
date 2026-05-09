@@ -22,6 +22,11 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=("fake", "real", "real_then_fake_on_external_block"),
         default="real_then_fake_on_external_block",
     )
+    generation.add_argument(
+        "--acceptance-scope",
+        choices=("real-contract", "real-e2e-export"),
+        default="real-contract",
+    )
     generation.add_argument("--stage")
     generation.add_argument("--run-id")
     generation.add_argument("--report-root", default="reports/test-runs")
@@ -38,6 +43,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         options = GenerationRunOptions(
             dataset=args.dataset,
             llm_mode=args.llm_mode,
+            acceptance_scope=args.acceptance_scope,
             stage=args.stage,
             run_id=args.run_id,
             report_root=args.report_root,

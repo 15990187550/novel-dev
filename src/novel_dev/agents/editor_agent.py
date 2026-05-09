@@ -10,6 +10,7 @@ from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
+from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
@@ -27,12 +28,18 @@ def split_beats(raw_draft: str) -> Tuple[List[str], bool]:
 
 
 class EditorAgent:
-    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
+    def __init__(
+        self,
+        session: AsyncSession,
+        embedding_service: Optional[EmbeddingService] = None,
+        structure_guard: Optional[ChapterStructureGuardService] = None,
+    ):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
+        self.structure_guard = structure_guard or ChapterStructureGuardService()
 
     @logged_agent_step("EditorAgent", "精修章节", node="edit", task="polish")
     async def polish(self, novel_id: str, chapter_id: str):
@@ -150,6 +157,14 @@ class EditorAgent:
                     polished = await self._rewrite_beat(
                         beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                     )
+                polished = await self._guard_editor_beat(
+                    novel_id=novel_id,
+                    chapter_context=chapter_context,
+                    beat_index=idx,
+                    source_text=beat_text,
+                    polished_text=polished,
+                    checkpoint=checkpoint,
+                )
                 log_agent_detail(
                     novel_id,
                     "EditorAgent",
@@ -270,6 +285,14 @@ class EditorAgent:
                 polished = await self._rewrite_beat(
                     beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                 )
+                polished = await self._guard_editor_beat(
+                    novel_id=novel_id,
+                    chapter_context=chapter_context,
+                    beat_index=idx,
+                    source_text=beat_text,
+                    polished_text=polished,
+                    checkpoint=checkpoint,
+                )
             else:
                 polished = beat_text
             polished_beats.append(polished)
@@ -283,6 +306,44 @@ class EditorAgent:
                 log_service.add_log(novel_id, "EditorAgent", f"独立精修章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
         return polished_text
+
+    async def _guard_editor_beat(
+        self,
+        *,
+        novel_id: str,
+        chapter_context: dict,
+        beat_index: int,
+        source_text: str,
+        polished_text: str,
+        checkpoint: dict,
+    ) -> str:
+        chapter_plan = chapter_context.get("chapter_plan") if isinstance(chapter_context, dict) else chapter_context
+        result = await self.structure_guard.check_editor_beat(
+            novel_id=novel_id,
+            chapter_plan=chapter_plan or {},
+            beat_index=beat_index,
+            source_text=source_text,
+            polished_text=polished_text,
+        )
+        if result.passed:
+            return polished_text
+
+        evidence = result.evidence(beat_index=beat_index, mode="editor")
+        evidence["source_chars"] = len(source_text)
+        evidence["polished_chars"] = len(polished_text)
+        checkpoint.setdefault("editor_guard_warnings", []).append(evidence)
+        checkpoint["chapter_structure_guard"] = evidence
+        log_agent_detail(
+            novel_id,
+            "EditorAgent",
+            f"节拍 {beat_index + 1} 润色触发结构守卫，回退原文",
+            node="editor_structure_guard",
+            task="polish",
+            status="failed",
+            level="warning",
+            metadata=evidence,
+        )
+        return source_text
 
     async def _rewrite_beat(
         self,
@@ -330,6 +391,9 @@ class EditorAgent:
             "保留最关键的 1-2 个画面,并落到身体反应、行动阻碍或具体后果。\n"
             "7. 现代吐槽只在风格约束明确允许时放大;否则改成短促、贴处境的内心念头,不要冲淡压迫感。\n"
             "8. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
+            "9. 不得新增章节计划未出现的新事实、新线索、新证据、新人物动机或新因果。\n"
+            "10. 不得新增计划外台词、旁白判断或额外谜团;若要强化钩子,只能放大当前节拍已存在的悬念。\n"
+            "11. 不得改动事件先后顺序,不要把上一节拍已完成的动作改写成下一节拍重新发生。\n",
             style_block,
             plan_block,
         ]

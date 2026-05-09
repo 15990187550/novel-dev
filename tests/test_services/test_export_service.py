@@ -30,7 +30,7 @@ async def test_export_volume_filters_archived(async_session, svc):
 
 @pytest.mark.asyncio
 async def test_export_novel_aggregates_volumes(async_session, svc):
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n1")
     await ChapterRepository(async_session).update_text("c1", polished_text="p1")
     await ChapterRepository(async_session).update_status("c1", "archived")
 
@@ -44,6 +44,26 @@ async def test_export_novel_aggregates_volumes(async_session, svc):
 
 
 @pytest.mark.asyncio
+async def test_export_novel_filters_chapters_by_novel(async_session, svc):
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Novel One", novel_id="n1")
+    await ChapterRepository(async_session).update_text("c1", polished_text="only n1")
+    await ChapterRepository(async_session).update_status("c1", "archived")
+
+    await ChapterRepository(async_session).create("c2", "v2", 1, "Novel Two", novel_id="n2")
+    await ChapterRepository(async_session).update_text("c2", polished_text="should not leak")
+    await ChapterRepository(async_session).update_status("c2", "archived")
+
+    path = await svc.export_novel("n1", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "only n1" in content
+    assert "should not leak" not in content
+    assert "## Volume v1" in content
+    assert "## Volume v2" not in content
+
+
+@pytest.mark.asyncio
 async def test_export_unsupported_format_raises(svc):
     with pytest.raises(ValueError, match="Unsupported format: pdf"):
         await svc.export_volume("n1", "v1", format="pdf")
@@ -53,7 +73,7 @@ async def test_export_unsupported_format_raises(svc):
 
 @pytest.mark.asyncio
 async def test_export_txt_format(async_session, svc):
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n1")
     await ChapterRepository(async_session).update_text("c1", polished_text="p1")
     await ChapterRepository(async_session).update_status("c1", "archived")
 

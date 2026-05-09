@@ -13,7 +13,7 @@ from novel_dev.agents.volume_planner import (
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
-from novel_dev.schemas.outline import SynopsisData, VolumeScoreResult, VolumePlan, VolumeBeat
+from novel_dev.schemas.outline import SynopsisData, SynopsisVolumeOutline, VolumeScoreResult, VolumePlan, VolumeBeat
 from novel_dev.schemas.context import BeatPlan
 import uuid
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -371,6 +371,111 @@ async def test_generate_volume_plan_repairs_semantic_conflicts(async_session):
     assert any(entry.get("node") == "volume_semantic_judge" and entry.get("status") == "failed" for entry in entries)
     assert any(entry.get("node") == "volume_semantic_judge" and entry.get("status") == "succeeded" for entry in entries)
 
+
+@pytest.mark.asyncio
+async def test_generate_volume_plan_semantic_repair_prompt_mentions_highlight_downgrade(async_session):
+    await DocumentRepository(async_session).create(
+        doc_id="doc_semantic_prompt",
+        novel_id="n_semantic_prompt",
+        doc_type="setting",
+        title="阶段边界",
+        content="卷一不得把未确认身份写成已证实事实，只能保留为线索或猜测。",
+    )
+    synopsis = SynopsisData(
+        title="青云遗族",
+        logline="林照追查灭族真相。",
+        core_conflict="林照 vs 青云宗长老会",
+        estimated_volumes=1,
+        estimated_total_chapters=2,
+        estimated_total_words=6000,
+        volume_outlines=[{
+            "volume_number": 1,
+            "title": "微末之迹",
+            "summary": "林照在外门追查第一条线索。",
+            "main_goal": "确认第一条线索",
+        }],
+    )
+    bad_blueprint = VolumePlanBlueprint.model_validate({
+        "volume_id": "vol_1",
+        "volume_number": 1,
+        "title": "微末之迹",
+        "summary": "林照遭到敌对势力监控。",
+        "total_chapters": 2,
+        "estimated_total_words": 6000,
+        "chapters": [
+            {"chapter_number": 1, "title": "矿洞遗证", "summary": "林照发现家族令牌。"},
+            {"chapter_number": 2, "title": "暗桩逼近", "summary": "沈瑶带着明确任务接近林照。"},
+        ],
+        "entity_highlights": {
+            "characters": ["沈瑶：内门长老安插在林照身边的暗桩师妹"],
+        },
+        "relationship_highlights": ["林照与沈瑶：监视与被监视关系已经成立"],
+    })
+    repaired_blueprint = VolumePlanBlueprint.model_validate({
+        "volume_id": "vol_1",
+        "volume_number": 1,
+        "title": "微末之迹",
+        "summary": "林照察觉身边人动机可疑。",
+        "total_chapters": 2,
+        "estimated_total_words": 6000,
+        "chapters": [
+            {"chapter_number": 1, "title": "矿洞遗证", "summary": "林照发现家族令牌。"},
+            {"chapter_number": 2, "title": "可疑接近", "summary": "沈瑶主动靠近林照，动机暂时成谜。"},
+        ],
+        "entity_highlights": {
+            "characters": ["沈瑶：主动接近林照的同门师妹，动机未明"],
+        },
+        "relationship_highlights": ["林照与沈瑶：从普通同门转为彼此试探"],
+    })
+    expanded = [
+        VolumeBeat(
+            chapter_id=f"vol_1_ch_{index}",
+            chapter_number=index,
+            title=chapter.title,
+            summary=chapter.summary,
+            target_word_count=3000,
+            target_mood="tense",
+            beats=[BeatPlan(summary=chapter.summary, target_mood="tense")],
+        )
+        for index, chapter in enumerate(repaired_blueprint.chapters, start=1)
+    ]
+
+    captured_prompts: list[str] = []
+
+    async def fake_acomplete(messages, **kwargs):
+        prompt = messages[0].content
+        captured_prompts.append(prompt)
+        call_no = len(captured_prompts)
+        if call_no == 1:
+            return LLMResponse(text=bad_blueprint.model_dump_json())
+        if call_no == 2:
+            return LLMResponse(text=VolumePlanSemanticJudgement(
+                passed=False,
+                hard_conflicts=["entity_highlights 把未确认身份写成了已证实事实。"],
+                repair_suggestions=["把相关 highlights 改成中性表述，或直接删除过度确定的条目。"],
+                confidence=0.97,
+            ).model_dump_json())
+        if call_no == 3:
+            assert "entity_highlights 与 relationship_highlights" in prompt
+            assert "卷摘要与章节摘要也必须同步修正" in prompt
+            return LLMResponse(text=repaired_blueprint.model_dump_json())
+        if call_no == 4:
+            return LLMResponse(text=VolumePlanSemanticJudgement(passed=True, confidence=0.93).model_dump_json())
+        if call_no == 5:
+            return LLMResponse(text=f"[{','.join(chapter.model_dump_json() for chapter in expanded)}]")
+        raise AssertionError(f"unexpected call #{call_no}")
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = fake_acomplete
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await VolumePlannerAgent(async_session)._generate_volume_plan(
+            synopsis,
+            1,
+            novel_id="n_semantic_prompt",
+            target_chapters=2,
+        )
 
 @pytest.mark.asyncio
 async def test_expand_volume_plan_batch_backfills_missing_skeleton_fields(async_session):
@@ -1106,7 +1211,7 @@ async def test_plan_volume_max_attempts(async_session):
 
     agent = VolumePlannerAgent(async_session)
 
-    async def _mock_generate_score(plan, novel_id=""):
+    async def _mock_generate_score(plan, novel_id="", target_chapters=None):
         return VolumeScoreResult(
             overall=50,
             outline_fidelity=50,
@@ -1197,6 +1302,189 @@ async def test_plan_volume_keeps_review_status_when_revise_fails(async_session):
     assert review_status["status"] == "revise_failed"
     assert review_status["score"]["overall"] == 50
     assert "parse failed" in review_status["reason"]
+
+
+@pytest.mark.asyncio
+async def test_plan_volume_passes_single_value_target_chapters(async_session):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="Test",
+        logline="Logline",
+        core_conflict="Conflict",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+        volume_outlines=[
+            SynopsisVolumeOutline(
+                volume_number=1,
+                title="第一卷",
+                summary="卷概要",
+                narrative_role="开局",
+                main_goal="查明线索",
+                main_conflict="外门压迫",
+                start_state="外门弟子",
+                end_state="得到线索",
+                climax="祠堂冲突",
+                hook_to_next="玉佩发热",
+                target_chapter_range="1-1",
+            )
+        ],
+    )
+    await director.save_checkpoint(
+        "n_target_single",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+    )
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=1,
+        estimated_total_words=3000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="章摘要",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B1", target_mood="tense")],
+            )
+        ],
+    )
+    agent = VolumePlannerAgent(async_session)
+    agent._generate_volume_plan = AsyncMock(return_value=plan)
+    agent._generate_score = AsyncMock(return_value=VolumeScoreResult(
+        overall=88,
+        outline_fidelity=88,
+        character_plot_alignment=88,
+        hook_distribution=88,
+        foreshadowing_management=88,
+        chapter_hooks=88,
+        page_turning=88,
+        summary_feedback="good",
+    ))
+
+    await agent.plan("n_target_single")
+
+    assert agent._generate_volume_plan.call_args.kwargs["target_chapters"] == 1
+
+
+@pytest.mark.asyncio
+async def test_plan_volume_does_not_force_range_target_chapters(async_session):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="Test",
+        logline="Logline",
+        core_conflict="Conflict",
+        estimated_volumes=1,
+        estimated_total_chapters=5,
+        estimated_total_words=15000,
+        volume_outlines=[
+            SynopsisVolumeOutline(
+                volume_number=1,
+                title="第一卷",
+                summary="卷概要",
+                narrative_role="开局",
+                main_goal="查明线索",
+                main_conflict="外门压迫",
+                start_state="外门弟子",
+                end_state="得到线索",
+                climax="祠堂冲突",
+                hook_to_next="玉佩发热",
+                target_chapter_range="3-5",
+            )
+        ],
+    )
+    await director.save_checkpoint(
+        "n_target_range",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+    )
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=3,
+        estimated_total_words=9000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="章摘要",
+                target_word_count=3000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B1", target_mood="tense")],
+            )
+        ],
+    )
+    agent = VolumePlannerAgent(async_session)
+    agent._generate_volume_plan = AsyncMock(return_value=plan)
+    agent._generate_score = AsyncMock(return_value=VolumeScoreResult(
+        overall=88,
+        outline_fidelity=88,
+        character_plot_alignment=88,
+        hook_distribution=88,
+        foreshadowing_management=88,
+        chapter_hooks=88,
+        page_turning=88,
+        summary_feedback="good",
+    ))
+
+    await agent.plan("n_target_range")
+
+    assert agent._generate_volume_plan.call_args.kwargs["target_chapters"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_score_uses_single_chapter_contract(async_session):
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=1,
+        estimated_total_words=1000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="章摘要",
+                target_word_count=1000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="B1", target_mood="tense")],
+            )
+        ],
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=VolumeScoreResult(
+        overall=88,
+        outline_fidelity=88,
+        character_plot_alignment=88,
+        hook_distribution=88,
+        foreshadowing_management=88,
+        chapter_hooks=88,
+        page_turning=88,
+        summary_feedback="good",
+    ).model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await VolumePlannerAgent(async_session)._generate_score(
+            plan,
+            novel_id="n_score_single",
+            target_chapters=1,
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "target_chapters=1" in prompt
+    assert "不得因为只有 1 章而要求扩展为多章或长卷" in prompt
+    assert "不要套用『每 2-3 章一个小高潮』" in prompt
 
 
 @pytest.mark.asyncio

@@ -130,6 +130,56 @@ describe('Config', () => {
     expect(wrapper.text()).toContain('12ms')
   })
 
+  it('hydrates masked api keys for env-backed model profiles', async () => {
+    vi.mocked(api.getLLMConfig).mockResolvedValue({
+      defaults: { timeout: 30, retries: 2, temperature: 0.7 },
+      models: {
+        deepseek: {
+          provider: 'anthropic',
+          model: 'deepseek-v4-flash',
+          base_url: 'https://api.deepseek.com/anthropic',
+          api_key_env: 'DEEPSEEK_API_KEY',
+          api_key: '********',
+        },
+      },
+      embedding: { provider: 'openai_compatible', model: 'bge-m3', base_url: 'http://127.0.0.1:9997/v1', dimensions: 1024 },
+      agents: {},
+    })
+
+    const wrapper = mount(Config, {
+      global: {
+        stubs: {
+          AgentModelForm: true,
+          ElButton: { template: '<button @click="$emit(\'click\')"><slot /></button>' },
+          ElCollapse: { template: '<div><slot /></div>' },
+          ElCollapseItem: { template: '<div><slot /></div>' },
+          ElEmpty: true,
+          ElForm: { template: '<form><slot /></form>' },
+          ElFormItem: { template: '<label><slot /></label>' },
+          ElInput: {
+            props: ['modelValue'],
+            template: '<input :value="modelValue" @input="$emit(\'update:modelValue\', $event.target.value)" />',
+          },
+          ElInputNumber: { template: '<input />' },
+          ElOption: true,
+          ElRadioButton: { template: '<button><slot /></button>' },
+          ElRadioGroup: { template: '<div><slot /></div>' },
+          ElSelect: { template: '<select><slot /></select>' },
+          ElSlider: true,
+          ElSwitch: true,
+          ElTag: { template: '<span><slot /></span>' },
+          ElText: { template: '<span><slot /></span>' },
+        },
+      },
+    })
+
+    await flushPromises()
+
+    await wrapper.findAll('.cursor-pointer').find(item => item.text().includes('模型 Profiles')).trigger('click')
+    const inputs = wrapper.findAll('input')
+    expect(inputs.some((input) => input.element.value === '********')).toBe(true)
+  })
+
   it('edits orchestration settings from the visual agent panel', async () => {
     vi.mocked(api.getLLMConfig).mockResolvedValue({
       defaults: { timeout: 30, retries: 2, temperature: 0.7 },

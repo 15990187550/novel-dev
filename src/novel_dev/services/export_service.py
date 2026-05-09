@@ -31,7 +31,10 @@ class ExportService:
         if format not in ("md", "txt"):
             raise ValueError(f"Unsupported format: {format}")
         result = await self.session.execute(
-            select(distinct(Chapter.volume_id)).where(Chapter.volume_id.isnot(None))
+            select(distinct(Chapter.volume_id)).where(
+                Chapter.novel_id == novel_id,
+                Chapter.volume_id.isnot(None),
+            )
         )
         volume_ids = result.scalars().all()
 

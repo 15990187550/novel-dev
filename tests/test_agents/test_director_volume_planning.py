@@ -39,6 +39,31 @@ async def test_advance_volume_planning_to_context_preparation(async_session, moc
 
 
 @pytest.mark.asyncio
+async def test_advance_blocks_unaccepted_volume_plan(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_dir_unaccepted",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "current_volume_plan": {
+                "volume_id": "vol_1",
+                "chapters": [{"chapter_id": "ch_1", "chapter_number": 1}],
+                "review_status": {
+                    "status": "needs_manual_review",
+                    "reason": "卷纲存在未达标维度",
+                },
+            },
+            "chapter_context": {"ready": True},
+        },
+        volume_id="vol_1",
+        chapter_id="ch_1",
+    )
+
+    with pytest.raises(ValueError, match="Volume plan is not accepted for chapter generation"):
+        await director.advance("n_dir_unaccepted")
+
+
+@pytest.mark.asyncio
 async def test_advance_drafting_missing_draft(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(

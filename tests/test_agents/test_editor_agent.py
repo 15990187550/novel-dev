@@ -6,6 +6,7 @@ from novel_dev.agents.editor_agent import EditorAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
+from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardResult
 from novel_dev.services.log_service import LogService
 
 
@@ -164,3 +165,88 @@ async def test_rewrite_beat_prompt_targets_low_ai_flavor_patterns(async_session)
     assert "奇观堆叠" in prompt
     assert "模板化入体" in prompt
     assert "保留最关键的 1-2 个画面" in prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_prompt_forbids_plan_external_additions(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把玉佩收入掌心，没有回头。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "林照把玉佩收入掌心，没有回头。",
+            {"hook_strength": 62},
+            [
+                {
+                    "dim": "hook_strength",
+                    "problem": "章末钩子偏弱",
+                    "suggestion": "强化已存在悬念，不要扩出新主线",
+                }
+            ],
+            [],
+            {
+                "style_profile": {},
+                "chapter_plan": {
+                    "summary": "林照得到玉佩后藏入怀中",
+                    "beats": [{"summary": "林照得到玉佩后藏入怀中"}],
+                },
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "不得新增章节计划未出现的新事实" in prompt
+    assert "不得新增计划外台词" in prompt
+    assert "不得改动事件先后顺序" in prompt
+
+
+@pytest.mark.asyncio
+async def test_polish_rolls_back_when_editor_guard_detects_plan_external_addition(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_guard",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "chapter_number": 1,
+                    "title": "Test",
+                    "target_word_count": 1000,
+                    "beats": [{"summary": "林照藏起玉佩", "target_mood": "tense"}],
+                }
+            },
+            "beat_scores": [
+                {"beat_index": 0, "scores": {"humanity": 60}},
+            ],
+        },
+        volume_id="v_guard",
+        chapter_id="c_guard",
+    )
+    await ChapterRepository(async_session).create("c_guard", "v_guard", 1, "Test")
+    await ChapterRepository(async_session).update_text("c_guard", raw_draft="林照藏起玉佩。")
+
+    class FakeGuard:
+        async def check_editor_beat(self, **kwargs):
+            return ChapterStructureGuardResult(
+                passed=False,
+                completed_current_beat=True,
+                premature_future_beat=False,
+                introduced_plan_external_fact=True,
+                changed_event_order=False,
+                issues=["新增计划外黑影台词"],
+                suggested_rewrite_focus="删除计划外台词",
+            )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照藏起玉佩。黑影说：你逃不掉。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session, structure_guard=FakeGuard())
+        await agent.polish("novel_edit_guard", "c_guard")
+
+    ch = await ChapterRepository(async_session).get_by_id("c_guard")
+    assert ch.polished_text == "林照藏起玉佩。"
+    state = await director.resume("novel_edit_guard")
+    assert state.checkpoint_data["editor_guard_warnings"][0]["issues"] == ["新增计划外黑影台词"]

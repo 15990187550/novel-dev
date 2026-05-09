@@ -138,6 +138,12 @@ def mock_llm_factory(monkeypatch):
             )
         elif agent == "EditorAgent":
             mock_client.acomplete.return_value = LLMResponse(text="润色后的正文内容，情节更紧凑，人物更鲜明，场景更细腻，读感更顺畅有力自然。")
+        elif agent == "ChapterStructureGuardService":
+            from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardResult
+
+            mock_client.acomplete.return_value = LLMResponse(
+                text=ChapterStructureGuardResult(passed=True).model_dump_json()
+            )
         elif agent == "FastReviewAgent":
             mock_client.acomplete.return_value = LLMResponse(
                 text='{"consistency_fixed": true, "beat_cohesion_ok": true, "notes": []}'

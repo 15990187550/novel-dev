@@ -1,5 +1,6 @@
 import json
 import math
+import re
 import uuid
 from typing import Any, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -341,6 +342,7 @@ class VolumePlannerAgent:
 
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)
+        target_chapters = self._infer_exact_target_chapters(synopsis, volume_number)
         log_agent_detail(
             novel_id,
             "VolumePlannerAgent",
@@ -353,6 +355,7 @@ class VolumePlannerAgent:
                 "synopsis_title": synopsis.title,
                 "estimated_volumes": synopsis.estimated_volumes,
                 "estimated_total_chapters": synopsis.estimated_total_chapters,
+                "target_chapters": target_chapters,
                 "current_volume_id": state.current_volume_id,
                 "current_chapter_id": state.current_chapter_id,
                 "checkpoint_keys": sorted(checkpoint.keys()),
@@ -361,13 +364,19 @@ class VolumePlannerAgent:
 
         world_snapshot = await self._load_world_snapshot(novel_id) if volume_number > 1 else None
         await self._release_connection_before_external_call()
-        volume_plan = await self._generate_volume_plan(synopsis, volume_number, world_snapshot, novel_id)
+        volume_plan = await self._generate_volume_plan(
+            synopsis,
+            volume_number,
+            world_snapshot,
+            novel_id,
+            target_chapters=target_chapters,
+        )
         plan_context = await self._build_plan_context(synopsis, world_snapshot, novel_id, volume_number)
 
         attempt = checkpoint.get("volume_plan_attempt_count", 0)
         skip_full_revise = len(volume_plan.chapters) > self.MAX_AUTOREVISE_CHAPTERS
         while True:
-            score = await self._generate_score(volume_plan, novel_id)
+            score = await self._generate_score(volume_plan, novel_id, target_chapters=target_chapters)
             log_agent_detail(
                 novel_id,
                 "VolumePlannerAgent",
@@ -532,6 +541,24 @@ class VolumePlannerAgent:
             upper = min(20, rough_chapters_per_volume + 2)
             return lower, max(lower, upper)
         return 20, 36
+
+    def _infer_exact_target_chapters(self, synopsis: SynopsisData, volume_number: int) -> Optional[int]:
+        for outline in synopsis.volume_outlines or []:
+            if outline.volume_number != volume_number:
+                continue
+            raw_range = (outline.target_chapter_range or "").strip()
+            if not raw_range:
+                return None
+            single = re.fullmatch(r"(\d+)", raw_range)
+            if single:
+                return int(single.group(1))
+            ranged = re.fullmatch(r"(\d+)\s*[-~—–至到]\s*(\d+)", raw_range)
+            if not ranged:
+                return None
+            lower = int(ranged.group(1))
+            upper = int(ranged.group(2))
+            return lower if lower == upper else None
+        return None
 
     def _is_acceptable(self, score) -> bool:
         if score.overall < self.OVERALL_THRESHOLD:
@@ -1166,7 +1193,11 @@ class VolumePlannerAgent:
             + "\n以下是修复建议：\n"
             + "\n".join(f"- {item}" for item in judgement.repair_suggestions[:8])
             + "\n修正要求：不得与设定事实、阶段边界、伏笔限制、人物/势力关系冲突；"
-            "如果信息不足，降级为传闻、残痕、误判或待确认线索。仍然只返回 VolumePlanBlueprint JSON。"
+            "如果信息不足，降级为传闻、残痕、误判或待确认线索。"
+            "entity_highlights 与 relationship_highlights 也必须同步修正，"
+            "不能保留旧的高确定性表述；必要时直接删除冲突条目。"
+            "卷摘要与章节摘要也必须同步修正，避免正文线索已降级但摘要仍保留已证实口吻。"
+            "仍然只返回 VolumePlanBlueprint JSON。"
         )
         await self._release_connection_before_external_call()
         repaired = await call_and_parse_model(
@@ -1440,11 +1471,36 @@ class VolumePlannerAgent:
             log_service.add_log(novel_id, "VolumePlannerAgent", f"世界快照加载失败: {exc}", level="warning")
             return {}
 
-    async def _generate_score(self, plan: VolumePlan, novel_id: str = "") -> VolumeScoreResult:
+    async def _generate_score(
+        self,
+        plan: VolumePlan,
+        novel_id: str = "",
+        target_chapters: Optional[int] = None,
+    ) -> VolumeScoreResult:
         log_service.add_log(novel_id, "VolumePlannerAgent", "开始评分卷纲")
+        scale_contract = ""
+        if target_chapters == 1:
+            scale_contract = (
+                "## 明确规模契约\n"
+                "本次上游明确要求 target_chapters=1。评审必须按『单章验收规划』评分，"
+                "不得因为只有 1 章而要求扩展为多章或长卷。\n"
+                "- hook_distribution: 评价单章内部是否包含清晰的小高潮、悬念推进和章末钩子；"
+                "不要套用『每 2-3 章一个小高潮』。\n"
+                "- foreshadowing_management: 允许单章内埋设并部分回收，或留下明确可承接线索；"
+                "不要因为缺少跨章节呼应而直接判低分。\n"
+                "- page_turning: 评价读者是否想继续读下一阶段/下一章，而不是是否存在多个章节。\n"
+                "- overall: 重点判断这 1 章是否可作为当前 scope 的最小可用章节计划。\n\n"
+            )
+        elif target_chapters:
+            scale_contract = (
+                "## 明确规模契约\n"
+                f"本次上游明确要求 target_chapters={target_chapters}。评审必须在该章节数约束内判断质量，"
+                "不得以扩展章节数作为主要修改建议。\n\n"
+            )
         prompt = (
             "你是一个小说分卷规划评审专家。请根据以下 VolumePlan JSON 进行多维度评分，"
             "返回严格符合 VolumeScoreResult Schema 的 JSON。\n\n"
+            f"{scale_contract}"
             "## Rubric\n"
             "- outline_fidelity >=75: 与 synopsis 主线、卷目标、章节推进一致，不偏题。\n"
             "- character_plot_alignment >=75: 角色目标、动机、行动与章节冲突推进一致。\n"

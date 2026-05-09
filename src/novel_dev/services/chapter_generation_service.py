@@ -14,6 +14,7 @@ from novel_dev.schemas.context import ChapterContext
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.log_service import log_service
+from novel_dev.services.volume_plan_guard_service import evaluate_volume_plan_readiness
 
 
 STOP_REASONS = {
@@ -22,6 +23,7 @@ STOP_REASONS = {
     "novel_completed",
     "flow_cancelled",
     "quality_blocked",
+    "volume_plan_not_ready",
     "failed",
 }
 
@@ -103,6 +105,29 @@ class ChapterGenerationService:
                 if state.current_phase == Phase.COMPLETED.value and not state.current_chapter_id:
                     stopped_reason = "novel_completed"
                     break
+                readiness = evaluate_volume_plan_readiness(state.checkpoint_data)
+                if (
+                    state.current_phase
+                    in {
+                        Phase.CONTEXT_PREPARATION.value,
+                        Phase.DRAFTING.value,
+                        Phase.REVIEWING.value,
+                        Phase.EDITING.value,
+                        Phase.FAST_REVIEWING.value,
+                        Phase.LIBRARIAN.value,
+                    }
+                    and not readiness.accepted
+                ):
+                    result = AutoRunChaptersResult(
+                        novel_id=novel_id,
+                        current_phase=state.current_phase,
+                        current_chapter_id=state.current_chapter_id,
+                        completed_chapters=completed,
+                        stopped_reason="volume_plan_not_ready",
+                        error=readiness.message,
+                    )
+                    await self._release_lock(novel_id, token, result)
+                    return result
 
                 archived_id = await self._run_current_chapter(novel_id)
                 completed.append(archived_id)
@@ -145,13 +170,15 @@ class ChapterGenerationService:
             await self.session.rollback()
             log_service.add_log(novel_id, "ChapterGenerationService", f"自动写章失败: {error_message}", level="error")
             state = await self.director.resume(novel_id)
+            if state is not None:
+                state = await self._persist_failure_diagnostics(novel_id, state, exc)
             result = AutoRunChaptersResult(
                 novel_id=novel_id,
                 current_phase=state.current_phase if state else "",
                 current_chapter_id=state.current_chapter_id if state else None,
                 completed_chapters=completed,
                 stopped_reason="failed",
-                failed_phase=state.current_phase if state else None,
+                failed_phase=getattr(exc, "failed_phase", None) or (state.current_phase if state else None),
                 failed_chapter_id=state.current_chapter_id if state else None,
                 error=error_message,
             )
@@ -219,6 +246,31 @@ class ChapterGenerationService:
             chapter_id=state.current_chapter_id,
         )
         await self.session.commit()
+
+    async def _persist_failure_diagnostics(self, novel_id: str, state, exc: Exception):
+        guard_evidence = getattr(exc, "chapter_structure_guard", None)
+        writer_failures = getattr(exc, "writer_guard_failures", None)
+        if not guard_evidence and not writer_failures:
+            return state
+
+        checkpoint = dict(state.checkpoint_data or {})
+        if writer_failures:
+            checkpoint["writer_guard_failures"] = list(writer_failures)
+        if guard_evidence:
+            checkpoint["chapter_structure_guard"] = dict(guard_evidence)
+
+        phase_value = getattr(exc, "failed_phase", None) or state.current_phase
+        try:
+            phase = Phase(phase_value)
+        except ValueError:
+            phase = Phase(state.current_phase)
+        return await self.director.save_checkpoint(
+            novel_id,
+            phase,
+            checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
 
     async def _run_current_chapter(self, novel_id: str) -> str:
         state = await self.director.resume(novel_id)

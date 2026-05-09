@@ -57,6 +57,35 @@ async def test_get_llm_config_masks_profile_api_keys(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_llm_config_surfaces_masked_env_backed_profile_api_key(tmp_path, monkeypatch):
+    config_path = tmp_path / "llm_config.yaml"
+    config_path.write_text(
+        "models:\n"
+        "  deepseek:\n"
+        "    provider: anthropic\n"
+        "    model: deepseek-v4-flash\n"
+        "    api_key_env: DEEPSEEK_API_KEY\n",
+        encoding="utf-8",
+    )
+
+    from novel_dev.config import Settings
+
+    settings = Settings(llm_config_path=str(config_path))
+    monkeypatch.setattr("novel_dev.api.config_routes.settings", settings)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-deepseek-live")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/api/config/llm")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["models"]["deepseek"]["api_key_env"] == "DEEPSEEK_API_KEY"
+    assert data["models"]["deepseek"]["api_key"] == "********"
+    assert "sk-deepseek-live" not in str(data)
+
+
+@pytest.mark.asyncio
 async def test_save_llm_config(tmp_path, monkeypatch):
     config_path = tmp_path / "llm_config.yaml"
     from novel_dev.config import Settings
@@ -289,6 +318,99 @@ async def test_test_llm_model_preserves_api_key_env(monkeypatch):
     call_config = create_driver.call_args.args[0]
     assert call_config.api_key_env == "KIMI_API_KEY"
     assert call_config.api_key is None
+
+
+@pytest.mark.asyncio
+async def test_test_llm_model_writes_api_key_to_env_and_reloads(tmp_path, monkeypatch):
+    import os
+
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    reload_calls = []
+    driver = type(
+        "Driver",
+        (),
+        {"acomplete": AsyncMock(return_value=LLMResponse(text="pong"))},
+    )()
+    create_driver = MagicMock(return_value=driver)
+
+    class Factory:
+        def _create_driver(self, config):
+            return create_driver(config)
+
+        def reload(self):
+            reload_calls.append(True)
+
+    monkeypatch.setattr("novel_dev.api.config_routes.llm_factory", Factory())
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/config/llm/test_model",
+            json={
+                "name": "deepseek",
+                "profile": {
+                    "provider": "anthropic",
+                    "model": "deepseek-v4-flash",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                    "api_key": "sk-deepseek-test",
+                },
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert reload_calls == [True]
+    assert "DEEPSEEK_API_KEY='sk-deepseek-test'" in env_file.read_text(encoding="utf-8")
+    assert os.environ["DEEPSEEK_API_KEY"] == "sk-deepseek-test"
+    call_config = create_driver.call_args.args[0]
+    assert call_config.api_key_env == "DEEPSEEK_API_KEY"
+    assert call_config.api_key is None
+
+
+@pytest.mark.asyncio
+async def test_test_llm_model_does_not_persist_masked_api_key(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEEPSEEK_API_KEY='sk-existing'\n", encoding="utf-8")
+    reload_calls = []
+    driver = type(
+        "Driver",
+        (),
+        {"acomplete": AsyncMock(return_value=LLMResponse(text="pong"))},
+    )()
+
+    class Factory:
+        def _create_driver(self, config):
+            return driver
+
+        def reload(self):
+            reload_calls.append(True)
+
+    monkeypatch.setattr("novel_dev.api.config_routes.llm_factory", Factory())
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-existing")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/config/llm/test_model",
+            json={
+                "name": "deepseek",
+                "profile": {
+                    "provider": "anthropic",
+                    "model": "deepseek-v4-flash",
+                    "api_key_env": "DEEPSEEK_API_KEY",
+                    "api_key": "********",
+                },
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+    assert reload_calls == []
+    assert env_file.read_text(encoding="utf-8") == "DEEPSEEK_API_KEY='sk-existing'\n"
 
 
 @pytest.mark.asyncio

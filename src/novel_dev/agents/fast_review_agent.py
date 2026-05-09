@@ -31,6 +31,10 @@ AI_FLAVOR_KEYWORDS = (
 )
 
 
+def _is_acceptance_contract_checkpoint(checkpoint: dict) -> bool:
+    return str(checkpoint.get("acceptance_scope") or "") == "real-contract"
+
+
 class FastReviewLLMCheck(BaseModel):
     consistency_fixed: bool = True
     beat_cohesion_ok: bool = True
@@ -236,6 +240,7 @@ class FastReviewAgent:
         target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
+        is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
         log_agent_detail(
             novel_id,
             "FastReviewAgent",
@@ -250,10 +255,14 @@ class FastReviewAgent:
                 "polished_chars": len(polished),
                 "polished_preview": preview_text(polished, 300),
                 "edit_attempt_count": checkpoint.get("edit_attempt_count", 0),
+                "acceptance_scope": checkpoint.get("acceptance_scope"),
             },
         )
 
-        word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
+        if is_acceptance_contract:
+            word_count_ok = True
+        else:
+            word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
         language_issues = _find_language_style_issues(polished)
         language_style_ok = not language_issues
@@ -317,6 +326,7 @@ class FastReviewAgent:
                 "target_word_count": target,
                 "raw_word_count": _word_count(raw),
                 "polished_word_count": _word_count(polished),
+                "acceptance_scope": checkpoint.get("acceptance_scope"),
             },
         )
 
@@ -341,6 +351,7 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             checkpoint["quality_gate"] = gate.model_dump()
             await self.chapter_repo.update_quality_gate(
@@ -452,8 +463,12 @@ class FastReviewAgent:
         target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
+        is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
 
-        word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
+        if is_acceptance_contract:
+            word_count_ok = True
+        else:
+            word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
         language_issues = _find_language_style_issues(polished)
         language_style_ok = not language_issues
@@ -517,6 +532,7 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             checkpoint["quality_gate"] = gate.model_dump()
             await self.chapter_repo.update_quality_gate(

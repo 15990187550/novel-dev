@@ -12,6 +12,7 @@ from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 
 
 _BEAT_ANCHOR_STRIP_RE = re.compile(r"<!--/?BEAT:\d+-->")
@@ -23,12 +24,18 @@ def _strip_anchors(text: str) -> str:
 
 
 class WriterAgent:
-    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
+    def __init__(
+        self,
+        session: AsyncSession,
+        embedding_service: Optional[EmbeddingService] = None,
+        structure_guard: Optional[ChapterStructureGuardService] = None,
+    ):
         self.session = session
         self.chapter_repo = ChapterRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
+        self.structure_guard = structure_guard or ChapterStructureGuardService()
 
     @logged_agent_step("WriterAgent", "写作章节草稿", node="draft", task="write")
     async def write(self, novel_id: str, context: ChapterContext, chapter_id: str) -> DraftMetadata:
@@ -188,6 +195,22 @@ class WriterAgent:
                     rewrite_plan,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+            inner, beat_text = await self._guard_writer_beat(
+                novel_id=novel_id,
+                context=context,
+                beat=beat,
+                inner=inner,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                rewrite_plan=rewrite_plan,
+                checkpoint=checkpoint,
+                state=state,
+                chapter_id=chapter_id,
+            )
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -368,6 +391,22 @@ class WriterAgent:
                     rewrite_plan,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+            inner, beat_text = await self._guard_writer_beat(
+                novel_id=novel_id,
+                context=context,
+                beat=beat,
+                inner=inner,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                rewrite_plan=rewrite_plan,
+                checkpoint={},
+                state=None,
+                chapter_id=chapter_id,
+            )
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -731,6 +770,105 @@ class WriterAgent:
             return context.beat_contexts[beat_idx]
         return None
 
+    async def _guard_writer_beat(
+        self,
+        *,
+        novel_id: str,
+        context: ChapterContext,
+        beat: BeatPlan,
+        inner: str,
+        relay_history: list,
+        last_beat_text: str,
+        idx: int,
+        total_beats: int,
+        is_last: bool,
+        rewrite_plan: dict | None,
+        checkpoint: dict,
+        state,
+        chapter_id: str,
+    ) -> tuple[str, str]:
+        result = await self.structure_guard.check_writer_beat(
+            novel_id=novel_id,
+            chapter_plan=context.chapter_plan,
+            beat_index=idx,
+            beat=beat,
+            generated_text=inner,
+            previous_text=last_beat_text,
+        )
+        if result.passed:
+            return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+        evidence = result.evidence(beat_index=idx, mode="writer")
+        checkpoint.setdefault("writer_guard_failures", []).append(evidence)
+        checkpoint["chapter_structure_guard"] = evidence
+        focus = result.suggested_rewrite_focus or "；".join(result.issues) or "严格停留在当前节拍计划内"
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"节拍 {idx + 1} 结构守卫未通过，按问题重写一次",
+            node="writer_structure_guard",
+            task="write",
+            status="failed",
+            level="warning",
+            metadata=evidence,
+        )
+        guard_rewrite_plan = dict(rewrite_plan or {})
+        prior_feedback = str(guard_rewrite_plan.get("summary_feedback") or "").strip()
+        guard_feedback = f"结构守卫反馈: {focus}"
+        guard_rewrite_plan["summary_feedback"] = (
+            f"{prior_feedback}\n{guard_feedback}".strip() if prior_feedback else guard_feedback
+        )
+        guard_rewrite_plan["structure_guard_focus"] = focus
+        rewritten = await self._rewrite_angle(
+            beat,
+            inner,
+            context,
+            relay_history,
+            last_beat_text,
+            idx,
+            total_beats,
+            is_last,
+            None,
+            novel_id,
+            guard_rewrite_plan,
+        )
+        retry = await self.structure_guard.check_writer_beat(
+            novel_id=novel_id,
+            chapter_plan=context.chapter_plan,
+            beat_index=idx,
+            beat=beat,
+            generated_text=rewritten,
+            previous_text=last_beat_text,
+        )
+        if retry.passed:
+            return rewritten, f"<!--BEAT:{idx}-->\n{rewritten}\n<!--/BEAT:{idx}-->"
+
+        retry_evidence = retry.evidence(beat_index=idx, mode="writer_retry")
+        checkpoint.setdefault("writer_guard_failures", []).append(retry_evidence)
+        checkpoint["chapter_structure_guard"] = retry_evidence
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"节拍 {idx + 1} 结构守卫重写后仍未通过，停止章节生成",
+            node="writer_structure_guard",
+            task="write",
+            status="failed",
+            level="error",
+            metadata=retry_evidence,
+        )
+        if state is not None:
+            await self.state_repo.save_checkpoint(
+                novel_id,
+                current_phase=Phase.DRAFTING.value,
+                checkpoint_data=checkpoint,
+                current_volume_id=state.current_volume_id,
+                current_chapter_id=state.current_chapter_id,
+            )
+        error = RuntimeError("Writer beat structure guard failed")
+        setattr(error, "chapter_structure_guard", retry_evidence)
+        setattr(error, "writer_guard_failures", list(checkpoint.get("writer_guard_failures") or []))
+        setattr(error, "failed_phase", Phase.DRAFTING.value)
+        raise error
 
     def _self_check_beat(self, inner: str, beat: BeatPlan, context: ChapterContext, beat_idx: int) -> BeatSelfCheck:
         beat_context = self._beat_context(context, beat_idx)
@@ -1010,11 +1148,22 @@ class WriterAgent:
             if self_check.contradictions:
                 issues.append("疑似违背约束: " + "；".join(self_check.contradictions))
             fix_block = "### 本次重写必须修复的问题\n" + "\n".join(f"- {issue}" for issue in issues) + "\n\n"
+        structure_guard_focus = str((rewrite_plan or {}).get("structure_guard_focus") or "").strip()
+        if structure_guard_focus:
+            fix_block += (
+                "### 结构守卫硬性修复\n"
+                f"- 必须修复: {structure_guard_focus}\n"
+                "- 删除计划外的具体地点、人物背景、物件来历、台词、线索和因果；不要换一种说法继续保留。\n"
+                "- 允许保留氛围、身体反应、动作承接和模糊悬念，但不得把模糊指向写成具体目的地或新设定。\n"
+                "- 当前 beat 摘要没有明确写出的专名和事实，不要新增。\n\n"
+            )
         user_content = (
             f"{context_msg}\n\n"
             f"{fix_block}"
             f"### 当前文本\n{original_text}\n\n"
-            "请在遵守上述约束的前提下重写，优先补足缺失信息并消除冲突。只返回重写后的正文，不添加解释："
+            "请在遵守上述约束的前提下重写，优先补足缺失信息并消除冲突。"
+            "如果本次是结构守卫重写，宁可删减具体化发挥，也不要新增计划外剧情。"
+            "只返回重写后的正文，不添加解释："
         )
         messages = [
             ChatMessage(role="system", content=system_prompt),

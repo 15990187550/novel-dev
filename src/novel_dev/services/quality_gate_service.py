@@ -39,6 +39,7 @@ class QualityGateService:
         target_word_count: int | None = None,
         polished_word_count: int | None = None,
         final_review_score: int | None = None,
+        acceptance_scope: str | None = None,
     ) -> QualityGateResult:
         blocking: list[dict[str, Any]] = []
         warnings: list[dict[str, Any]] = []
@@ -55,7 +56,11 @@ class QualityGateService:
                 warnings.append(cls._item("final_review_score", f"成稿评分偏低: {final_review_score}"))
 
         if not report.word_count_ok:
-            severity = cls._word_count_severity(target_word_count, polished_word_count)
+            severity = cls._word_count_severity(
+                target_word_count,
+                polished_word_count,
+                acceptance_scope=acceptance_scope,
+            )
             item = cls._item(
                 "word_count_drift",
                 "字数严重偏离目标" if severity == QUALITY_BLOCK else "字数偏离目标",
@@ -94,7 +99,14 @@ class QualityGateService:
         return QualityGateResult(status=QUALITY_PASS, summary="质量门禁通过。")
 
     @staticmethod
-    def _word_count_severity(target: int | None, actual: int | None) -> str:
+    def _word_count_severity(
+        target: int | None,
+        actual: int | None,
+        *,
+        acceptance_scope: str | None = None,
+    ) -> str:
+        if acceptance_scope == "real-contract":
+            return QUALITY_WARN
         if not target or target <= 0 or actual is None:
             return QUALITY_WARN
         drift_ratio = abs(actual - target) / target

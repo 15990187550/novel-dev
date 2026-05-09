@@ -624,6 +624,7 @@ class ContextAgent:
             '  "parent": "上级地点/区域（如有）",\n'
             '  "narrative": "完整的场景镜头描述（200-300字）"\n'
             "}\n\n"
+            f"章节计划：{json.dumps(self._build_scene_context_chapter_plan(chapter_plan), ensure_ascii=False)}\n"
             f"场景上下文：{json.dumps(prompt_scene_inputs, ensure_ascii=False)}\n"
         )
         if orchestration_config is not None:
@@ -666,6 +667,22 @@ class ContextAgent:
                 "get_context_foreshadowing_details。需要时间线时再调用 get_context_timeline_events。"
                 "最多查询 3 类最缺的细节；目录摘要足够时不要调用工具，不要全量查询。"
             ),
+        }
+
+    def _build_scene_context_chapter_plan(self, chapter_plan: ChapterPlan) -> dict:
+        return {
+            "chapter_number": chapter_plan.chapter_number,
+            "title": chapter_plan.title,
+            "target_word_count": chapter_plan.target_word_count,
+            "beats": [
+                {
+                    "summary": beat.summary,
+                    "target_mood": beat.target_mood,
+                    "key_entities": beat.key_entities,
+                    "foreshadowings_to_embed": beat.foreshadowings_to_embed,
+                }
+                for beat in chapter_plan.beats
+            ],
         }
 
     def _build_scene_context_tools(

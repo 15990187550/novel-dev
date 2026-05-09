@@ -331,3 +331,45 @@ async def test_fast_review_warns_word_count_only_at_edit_limit(async_session):
     state = await director.resume("novel_fr_warn")
     assert state.current_phase == Phase.LIBRARIAN.value
     assert state.checkpoint_data["quality_gate"]["status"] == "warn"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_real_contract_skips_strict_word_count_gate(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_contract",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-contract",
+            "chapter_context": {"chapter_plan": {"target_word_count": 1000}},
+        },
+        volume_id="v1",
+        chapter_id="c_contract",
+    )
+    await ChapterRepository(async_session).create("c_contract", "v1", 1, "Contract")
+    await ChapterRepository(async_session).update_text(
+        "c_contract",
+        raw_draft="甲" * 1000,
+        polished_text="甲" * 2200,
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ):
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_contract", "c_contract")
+
+    assert report.word_count_ok is True
+    assert "字数偏离目标超过10%" not in report.notes
+
+    chapter = await ChapterRepository(async_session).get_by_id("c_contract")
+    assert chapter.quality_status == "pass"
+
+    state = await director.resume("novel_fr_contract")
+    assert state.current_phase == Phase.LIBRARIAN.value

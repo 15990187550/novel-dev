@@ -22,6 +22,12 @@ ENV_SECRET_FIELDS = {
 }
 
 
+def _reload_llm_factory_if_possible() -> None:
+    reload_fn = getattr(llm_factory, "reload", None)
+    if callable(reload_fn):
+        reload_fn()
+
+
 class LLMConfigPayload(BaseModel):
     config: dict
 
@@ -63,6 +69,23 @@ def _mask_config_secrets(value: Any) -> Any:
     if isinstance(value, list):
         return [_mask_config_secrets(item) for item in value]
     return value
+
+
+def _hydrate_masked_model_api_keys(config: dict) -> dict:
+    models = config.get("models")
+    if not isinstance(models, dict):
+        return config
+
+    for profile in models.values():
+        if not isinstance(profile, dict):
+            continue
+        env_name = profile.get("api_key_env")
+        if not env_name:
+            continue
+        env_value = os.environ.get(str(env_name))
+        if env_value not in (None, ""):
+            profile["api_key"] = MASKED_SECRET
+    return config
 
 
 def _preserve_masked_config_secrets(submitted: Any, existing: Any = None) -> Any:
@@ -145,6 +168,7 @@ async def get_llm_config():
         return {}
     with open(settings.llm_config_path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
+    data = _hydrate_masked_model_api_keys(data)
     return _mask_config_secrets(data)
 
 
@@ -165,7 +189,7 @@ async def save_llm_config(
         os.makedirs(config_dir, exist_ok=True)
     with open(settings.llm_config_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(config, f, allow_unicode=True, sort_keys=False)
-    llm_factory.reload()
+    _reload_llm_factory_if_possible()
     return {"saved": True, "reloaded": True}
 
 
@@ -184,6 +208,19 @@ async def test_llm_model(
 ):
     _require_config_admin_token(x_novel_config_token)
     profile = payload.profile or {}
+    profile = dict(profile)
+    api_key = profile.get("api_key")
+    if api_key not in (None, "", MASKED_SECRET):
+        env_name = profile.get("api_key_env") or _default_model_api_key_env(
+            payload.name or profile.get("model") or "model"
+        )
+        _write_env_secret(str(env_name), str(api_key))
+        profile["api_key_env"] = env_name
+        profile.pop("api_key", None)
+        _reload_llm_factory_if_possible()
+    elif api_key == MASKED_SECRET:
+        profile.pop("api_key", None)
+
     provider = profile.get("provider")
     model = profile.get("model")
     if not provider or not model:

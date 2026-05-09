@@ -144,6 +144,8 @@ async def test_load_location_context_uses_orchestrated_scene_tools_when_configur
         assert "SECRET_ENTITY_STATE" not in prompt
         assert "SECRET_FORESHADOWING_DETAIL" not in prompt
         assert "优先用批量工具一次查询同类数据" in prompt
+        assert "章节计划" in prompt
+        assert "林风进入青云宗" in prompt
         tool_names = [tool.name for tool in tools]
         assert "get_context_scene_inputs" not in tool_names
         assert "get_context_location_details" in tool_names

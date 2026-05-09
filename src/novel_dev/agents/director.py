@@ -7,6 +7,7 @@ from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.db.models import NovelState
 from novel_dev.agents._log_helpers import log_agent_detail
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.volume_plan_guard_service import ensure_volume_plan_accepted
 
 
 class Phase(str, Enum):
@@ -112,6 +113,11 @@ class NovelDirector:
             )
             return await self._run_volume_planner(state)
         elif current == Phase.CONTEXT_PREPARATION:
+            try:
+                ensure_volume_plan_accepted(checkpoint)
+            except ValueError as exc:
+                log_service.add_log(novel_id, "NovelDirector", str(exc), level="error")
+                raise
             if not checkpoint.get("chapter_context"):
                 log_service.add_log(novel_id, "NovelDirector", "章节上下文未准备", level="error")
                 raise ValueError("Chapter context not prepared. Call POST /chapters/{cid}/context first.")

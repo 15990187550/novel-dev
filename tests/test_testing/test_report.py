@@ -12,6 +12,10 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
         dataset="minimal_builtin",
         llm_mode="real_then_fake_on_external_block",
         environment={"python": "3.11"},
+        artifacts={
+            "novel_id": "novel-test",
+            "exported_path": "./novel_output/novel-test/novel.md",
+        },
     )
     report.add_issue(
         Issue(
@@ -38,6 +42,9 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
 
     summary_md = paths.summary_md.read_text(encoding="utf-8")
     assert "# Test Run 2026-05-07T153000-generation-real" in summary_md
+    assert "## Artifacts" in summary_md
+    assert "`novel_id`" in summary_md
+    assert "`exported_path`" in summary_md
     assert "GEN-QUALITY-001" in summary_md
     assert "Chapter draft missed a required beat." in summary_md
 

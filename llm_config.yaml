@@ -244,9 +244,9 @@ agents:
       retries: 1
     tasks:
       generate_beat:
-        temperature: 0.95
-      rewrite_beat:
         temperature: 0.8
+      rewrite_beat:
+        temperature: 0.65
       generate_relay:
         model: deepseek
         timeout: 15
@@ -285,6 +285,23 @@ agents:
     tasks:
       polish_beat:
         temperature: 0.6
+    retries: 2
+  chapter_structure_guard_service:
+    model: kimi-for-coding
+    timeout: 35
+    temperature: 0.1
+    fallback:
+      model: deepseek
+      temperature: 0.1
+      timeout: 35
+      retries: 1
+    tasks:
+      check_writer_beat:
+        temperature: 0.1
+        max_tokens: 2048
+      check_editor_beat:
+        temperature: 0.1
+        max_tokens: 2048
     retries: 2
   fast_review_agent:
     model: deepseek

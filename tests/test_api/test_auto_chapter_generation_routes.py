@@ -45,6 +45,7 @@ def build_test_volume(volume_id: str, chapter_prefix: str, count: int = 2) -> Vo
         total_chapters=count,
         estimated_total_words=80 * count,
         chapters=chapters,
+        review_status={"status": "accepted", "reason": "test accepted"},
     )
 
 
@@ -120,6 +121,7 @@ async def test_auto_run_route_creates_queued_generation_job(async_session, monke
             total_chapters=2,
             estimated_total_words=160,
             chapters=chapters,
+            review_status={"status": "accepted", "reason": "test accepted"},
         )
         director = NovelDirector(session=async_session)
         await director.save_checkpoint(
@@ -1049,6 +1051,34 @@ async def test_auto_run_stops_at_volume_end(async_session):
 
 
 @pytest.mark.asyncio
+async def test_auto_run_stops_when_volume_plan_not_accepted(async_session):
+    plan = build_test_volume("vol_not_ready", "ch_not_ready", count=1)
+    plan_payload = plan.model_dump()
+    plan_payload["review_status"] = {
+        "status": "needs_manual_review",
+        "reason": "卷纲存在未达标维度",
+    }
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_not_ready",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "current_volume_plan": plan_payload,
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+        },
+        volume_id="vol_not_ready",
+        chapter_id="ch_not_ready_1",
+    )
+
+    service = ChapterGenerationService(async_session)
+    result = await service.auto_run("n_auto_not_ready", max_chapters=1)
+
+    assert result.stopped_reason == "volume_plan_not_ready"
+    assert result.error is not None
+    assert "needs_manual_review" in result.error
+
+
+@pytest.mark.asyncio
 async def test_auto_run_rejects_when_generation_job_is_active(async_session, monkeypatch):
     async def override():
         yield async_session
@@ -1223,6 +1253,50 @@ async def test_auto_run_job_stores_structured_failure_detail(async_session, monk
     state = await director.resume("n_auto_fail")
     assert "auto_run_lock" not in state.checkpoint_data
     assert state.checkpoint_data["auto_run_last_result"]["stopped_reason"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_auto_run_persists_writer_guard_failure_diagnostics(async_session, monkeypatch):
+    plan = build_test_volume("vol_guard_fail", "ch_guard_fail")
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_guard_fail",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+        },
+        volume_id="vol_guard_fail",
+        chapter_id="ch_guard_fail_1",
+    )
+    await async_session.commit()
+
+    evidence = {
+        "mode": "writer_retry",
+        "beat_index": 2,
+        "passed": False,
+        "issues": ["提前写到后续节拍"],
+    }
+
+    async def fail_run(self, novel_id):
+        error = RuntimeError("Writer beat structure guard failed")
+        setattr(error, "chapter_structure_guard", evidence)
+        setattr(error, "writer_guard_failures", [evidence])
+        setattr(error, "failed_phase", Phase.DRAFTING.value)
+        raise error
+
+    monkeypatch.setattr(ChapterGenerationService, "_run_current_chapter", fail_run)
+
+    service = ChapterGenerationService(async_session)
+    with pytest.raises(AutoRunFailedError) as exc_info:
+        await service.auto_run("n_auto_guard_fail", max_chapters=1)
+
+    assert exc_info.value.result.failed_phase == Phase.DRAFTING.value
+    state = await director.resume("n_auto_guard_fail")
+    assert "auto_run_lock" not in state.checkpoint_data
+    assert state.checkpoint_data["chapter_structure_guard"] == evidence
+    assert state.checkpoint_data["writer_guard_failures"] == [evidence]
+    assert state.checkpoint_data["auto_run_last_result"]["failed_phase"] == Phase.DRAFTING.value
 
 
 @pytest.mark.asyncio

@@ -9,6 +9,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, BeatPlan, EntityState, LocationContext
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
+from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardResult
 
 
 def test_write_does_not_fire_and_forget_chapter_indexing():
@@ -146,6 +147,89 @@ async def test_write_missing_context(async_session):
     agent = WriterAgent(async_session)
     with pytest.raises(ValueError, match="chapter_context missing"):
         await agent.write("novel_no_ctx", context, "ch_1")
+
+
+@pytest.mark.asyncio
+async def test_write_rewrites_once_when_structure_guard_fails(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=800,
+        beats=[
+            BeatPlan(summary="林照发现玉佩", target_mood="tense"),
+            BeatPlan(summary="追兵赶到", target_mood="danger"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current=""),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    await director.save_checkpoint(
+        "novel_guard_rewrite",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_guard",
+        chapter_id="ch_guard",
+    )
+    await ChapterRepository(async_session).create("ch_guard", "vol_guard", 1, "Test")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_writer_beat(self, **kwargs):
+            self.calls += 1
+            if kwargs["beat_index"] == 0 and self.calls == 1:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=True,
+                    premature_future_beat=True,
+                    introduced_plan_external_fact=False,
+                    changed_event_order=False,
+                    issues=["提前写到后续节拍"],
+                    suggested_rewrite_focus="停在玉佩发现，不要写追兵赶到",
+                )
+            return ChapterStructureGuardResult(passed=True)
+
+    guard = FakeGuard()
+    agent = WriterAgent(async_session, structure_guard=guard)
+    agent._generate_beat = AsyncMock(side_effect=[
+        "<!--BEAT:0-->\n林照在尘封供桌下发现玉佩，冷意沿着掌心钻入袖口，他屏住呼吸，只听见门外风声渐紧，仍没有任何人闯入屋内。\n<!--/BEAT:0-->",
+        "<!--BEAT:1-->\n追兵赶到，靴底踏碎门槛前的积雪，林照被迫后退半步，指节扣紧袖中的玉佩，视线扫过侧窗、倒塌香案和未灭的油灯，寻找从混乱里脱身的空隙。\n<!--/BEAT:1-->",
+    ])
+    agent._rewrite_angle = AsyncMock(return_value="林照发现玉佩，将它藏入袖中，指腹压住玉面上细小的裂痕。屋外风雪拍门，他没有急着起身，只把呼吸放得更轻。")
+    agent._generate_relay = AsyncMock(return_value=type(
+        "Relay",
+        (),
+        {
+            "scene_state": "state",
+            "emotional_tone": "tense",
+            "new_info_revealed": "",
+            "open_threads": "",
+            "next_beat_hook": "",
+            "model_dump": lambda self: {
+                "scene_state": self.scene_state,
+                "emotional_tone": self.emotional_tone,
+                "new_info_revealed": self.new_info_revealed,
+                "open_threads": self.open_threads,
+                "next_beat_hook": self.next_beat_hook,
+            },
+        },
+    )())
+
+    await agent.write("novel_guard_rewrite", context, "ch_guard")
+
+    agent._rewrite_angle.assert_awaited_once()
+    state = await director.resume("novel_guard_rewrite")
+    assert state.checkpoint_data["writer_guard_failures"][0]["beat_index"] == 0
+    ch = await ChapterRepository(async_session).get_by_id("ch_guard")
+    assert "林照发现玉佩，将它藏入袖中" in ch.raw_draft
 
 
 @pytest.mark.asyncio

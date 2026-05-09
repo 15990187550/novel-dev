@@ -95,9 +95,24 @@ class ReportWriter:
             f"- LLM mode: `{report.llm_mode}`",
             f"- Duration: `{report.duration_seconds:.1f}s`",
             "",
+        ]
+        if report.artifacts:
+            lines.extend(
+                [
+                    "## Artifacts",
+                    "",
+                ]
+            )
+            for key, value in report.artifacts.items():
+                lines.append(f"- `{key}`: `{value}`")
+            lines.append("")
+
+        lines.extend(
+            [
             "## Issues",
             "",
-        ]
+            ]
+        )
         if not report.issues:
             lines.append("No issues recorded.")
         for issue in report.issues:
