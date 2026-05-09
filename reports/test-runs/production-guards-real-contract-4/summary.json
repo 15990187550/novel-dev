@@ -1,0 +1,44 @@
+{
+  "run_id": "production-guards-real-contract-4",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 1127.7697083330713,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract",
+    "novel_id": "codex-5126",
+    "setting_session_id": "sgs_9169217b01e9456abe87f1e3e9717051",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "a02a0aa4b976459c9be0a4e4b4e719f1",
+    "pending_id": "pe_46870f5f",
+    "brainstorm_original_estimated_volumes": "5",
+    "brainstorm_original_estimated_total_chapters": "260",
+    "brainstorm_shrunk_estimated_total_chapters": "1",
+    "volume_id": "vol-1",
+    "chapter_id": "acceptance-codex-5126-ch1",
+    "chapter_plan_source": "current_chapter_plan",
+    "chapter_target_word_count": "1000",
+    "chapter_auto_run_job_id": "job_bd1ec7af570e"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-auto_run_chapters",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "auto_run_chapters",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "generation job polling timed out: job_bd1ec7af570e last_status=running",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage auto_run_chapters"
+    }
+  ]
+}

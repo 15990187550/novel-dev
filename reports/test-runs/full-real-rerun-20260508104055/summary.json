@@ -1,0 +1,29 @@
+{
+  "run_id": "full-real-rerun-20260508104055",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 0.3754218330141157,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-preflight_health",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "preflight_health",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "Server error '502 Bad Gateway' for url 'http://127.0.0.1:8000/healthz'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage preflight_health"
+    }
+  ]
+}

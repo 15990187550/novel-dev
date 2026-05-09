@@ -1,0 +1,23 @@
+{
+  "run_id": "stage-generate-fixed-20260508111211",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "passed",
+  "duration_seconds": 197.54971150006168,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "target_stage": "generate_setting_review_batch",
+    "novel_id": "codex-d87f",
+    "setting_session_id": "sgs_2a609a76ce104950b9a4d32b8d1d1d05",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "2",
+    "review_batch_id": "527a68243d4343cc905b78a9911a73d6",
+    "stopped_at_stage": "generate_setting_review_batch"
+  },
+  "issues": []
+}

@@ -1,0 +1,6 @@
++ curl -fsS http://127.0.0.1:8000/healthz
++ cd /Users/xuhuibin/Documents/popo/Modules/novel-dev/src/novel_dev/web
++ npm install --prefer-offline --no-audit --fund=false
++ VITE_API_PROXY_TARGET=http://127.0.0.1:8000 npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
++ curl -fsS http://127.0.0.1:5173/
++ PLAYWRIGHT_OUTPUT_DIR=/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/2026-05-08T104247-web-e2e/artifacts/flow-results PLAYWRIGHT_HTML_REPORT=/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/2026-05-08T104247-web-e2e/artifacts/flow-report npm run test:e2e

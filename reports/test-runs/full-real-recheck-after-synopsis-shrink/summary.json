@@ -1,0 +1,29 @@
+{
+  "run_id": "full-real-recheck-after-synopsis-shrink",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 897.1696902089752,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-api_smoke_flow",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "api_smoke_flow",
+      "is_external_blocker": false,
+      "real_llm": false,
+      "fake_rerun_status": null,
+      "message": "current_chapter_plan missing after volume_plan",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh"
+    }
+  ]
+}

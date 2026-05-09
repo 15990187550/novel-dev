@@ -1,0 +1,38 @@
+{
+  "run_id": "full-real-contract-classifyfix-escalated-20260509103348",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 590.7759351249551,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-volume_plan_contract",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "volume_plan_contract",
+      "is_external_blocker": false,
+      "real_llm": false,
+      "fake_rerun_status": null,
+      "message": "volume_plan review failed before a usable acceptance chapter plan was prepared",
+      "evidence": [
+        "response_keys=chapters,estimated_total_words,review_status,summary,title,total_chapters,volume_id,volume_number",
+        "checkpoint_keys=acceptance_scope,current_volume_plan,novel_title,synopsis_data,synopsis_doc_id,volume_plan_attempt_count",
+        "current_chapter_plan_present=false",
+        "current_volume_plan_keys=chapters,entity_highlights,estimated_total_words,relationship_highlights,review_status,summary,title,total_chapters,volume_id,volume_number",
+        "current_volume_plan_chapter_count=3",
+        "review_status_status=revise_failed",
+        "review_status_reason=已达最大自动修订次数，请在大纲工作台人工调整。"
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --stage volume_plan"
+    }
+  ]
+}

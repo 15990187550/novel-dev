@@ -1,0 +1,35 @@
+{
+  "run_id": "full-real-fixed3-20260508111718",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 366.0417502919445,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-d092",
+    "setting_session_id": "sgs_f4fc202b6fa44bacaa52f02ebc842615",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "a44e749c62ef4e82801f28de9edf2415",
+    "pending_id": "pe_74c2561c"
+  },
+  "issues": [
+    {
+      "id": "TIMEOUT_INTERNAL-brainstorm",
+      "type": "TIMEOUT_INTERNAL",
+      "severity": "high",
+      "stage": "brainstorm",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": "passed",
+      "message": "ReadTimeout",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage brainstorm"
+    }
+  ]
+}

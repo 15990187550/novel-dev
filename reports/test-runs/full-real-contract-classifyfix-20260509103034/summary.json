@@ -1,0 +1,30 @@
+{
+  "run_id": "full-real-contract-classifyfix-20260509103034",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 0.12131149997003376,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-preflight_health",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "preflight_health",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "All connection attempts failed",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage preflight_health"
+    }
+  ]
+}

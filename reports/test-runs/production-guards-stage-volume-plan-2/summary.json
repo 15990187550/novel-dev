@@ -1,0 +1,29 @@
+{
+  "run_id": "production-guards-stage-volume-plan-2",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "passed",
+  "duration_seconds": 505.7383096249541,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract",
+    "target_stage": "volume_plan",
+    "novel_id": "codex-1c1c",
+    "setting_session_id": "sgs_92f6913369c640e58ad8d67bcced89f6",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "2",
+    "review_batch_id": "aca2f464583f4a338c6670da3b15737a",
+    "pending_id": "pe_c06fcad4",
+    "brainstorm_original_estimated_volumes": "4",
+    "brainstorm_original_estimated_total_chapters": "140",
+    "brainstorm_shrunk_estimated_total_chapters": "1",
+    "volume_id": "vol-1",
+    "stopped_at_stage": "volume_plan"
+  },
+  "issues": []
+}

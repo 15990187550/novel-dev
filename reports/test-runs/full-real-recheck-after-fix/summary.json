@@ -1,0 +1,37 @@
+{
+  "run_id": "full-real-recheck-after-fix",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 1405.3448689170182,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-91f5",
+    "setting_session_id": "sgs_f566afdeb29a47cfa1601ab931161177",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "2",
+    "review_batch_id": "7e9ed354455943e2abcc3b23350a8669",
+    "pending_id": "pe_55f54be8",
+    "volume_id": "V1-QYXH",
+    "chapter_auto_run_job_id": "job_f39d01410877"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-auto_run_chapters",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "auto_run_chapters",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "generation job polling timed out: job_f39d01410877 last_status=running",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage auto_run_chapters"
+    }
+  ]
+}

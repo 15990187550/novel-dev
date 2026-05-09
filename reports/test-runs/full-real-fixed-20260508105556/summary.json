@@ -1,0 +1,32 @@
+{
+  "run_id": "full-real-fixed-20260508105556",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 13.411096042022109,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-6f91",
+    "setting_session_id": "sgs_434c336b642d4f63bee8253a825fe0e1",
+    "setting_session_status": "clarifying"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-advance_setting_session",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "advance_setting_session",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "advance_setting_session did not reach ready_to_generate",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage advance_setting_session"
+    }
+  ]
+}

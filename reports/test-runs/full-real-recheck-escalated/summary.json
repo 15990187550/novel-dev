@@ -1,0 +1,37 @@
+{
+  "run_id": "full-real-recheck-escalated",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 784.4653397910297,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-f88e",
+    "setting_session_id": "sgs_3f3c478c81544e68b33aa0d08ad1d553",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "cebbe398c4d44a448e9fdc5f62e2d19e",
+    "pending_id": "pe_12f3ea9f",
+    "volume_id": "vol-1-qingyunjin",
+    "exported_path": "./novel_output/codex-f88e/novel.md"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-export",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "export",
+      "is_external_blocker": false,
+      "real_llm": false,
+      "fake_rerun_status": null,
+      "message": "Exported novel file is empty: ./novel_output/codex-f88e/novel.md",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage export"
+    }
+  ]
+}

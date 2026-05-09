@@ -1,0 +1,57 @@
+{
+  "run_id": "full-real-contract-floorfix-20260508191339",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 1046.9443352909293,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract",
+    "novel_id": "codex-d143",
+    "setting_session_id": "sgs_873ca683ed4b4a5eadb644dc9640fcb0",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "d2fd2a9c94d1457e9a5ef242394e373d",
+    "pending_id": "pe_bfc38043",
+    "brainstorm_original_estimated_volumes": "4",
+    "brainstorm_original_estimated_total_chapters": "120",
+    "brainstorm_shrunk_estimated_total_chapters": "1",
+    "volume_id": "volume_1",
+    "chapter_id": "acceptance-codex-d143-ch1",
+    "chapter_plan_source": "current_volume_plan.chapters[0]",
+    "chapter_target_word_count": "1000",
+    "chapter_auto_run_job_id": "job_c69c5005890a",
+    "chapter_job_stopped_reason": "quality_blocked",
+    "chapter_text_status": "polished_text",
+    "chapter_text_length": "2215",
+    "quality_status": "block",
+    "quality_reasons": "blocking_items,status,summary,warning_items",
+    "archived_chapter_count": "0"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-quality_gate",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "quality_gate",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "Chapter generated text but quality gate blocked archival",
+      "evidence": [
+        "chapter_id=acceptance-codex-d143-ch1",
+        "job_id=job_c69c5005890a",
+        "chapter_job_stopped_reason=quality_blocked",
+        "archived_chapter_count=0",
+        "quality_status=block",
+        "quality_reasons=blocking_items,status,summary,warning_items"
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --stage auto_run_chapters"
+    }
+  ]
+}

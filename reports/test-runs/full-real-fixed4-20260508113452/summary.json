@@ -1,0 +1,24 @@
+{
+  "run_id": "full-real-fixed4-20260508113452",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "passed",
+  "duration_seconds": 769.2938310420141,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-0330",
+    "setting_session_id": "sgs_1cd53d09121547e587a7eda739ca035b",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "2",
+    "review_batch_id": "8d4b107908ad460f905f394fd45c3421",
+    "pending_id": "pe_f11f32ea",
+    "volume_id": "vol-001-qingyun-awakening",
+    "exported_path": "./novel_output/codex-0330/novel.md"
+  },
+  "issues": []
+}

@@ -1,0 +1,29 @@
+{
+  "run_id": "full-real-recheck-3",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 0.10622904100455344,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-preflight_health",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "preflight_health",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "All connection attempts failed",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage preflight_health"
+    }
+  ]
+}

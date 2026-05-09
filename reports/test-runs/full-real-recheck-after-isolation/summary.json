@@ -1,0 +1,38 @@
+{
+  "run_id": "full-real-recheck-after-isolation",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 1187.286142374971,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "acceptance_scope": "settings_brainstorm_volume_export",
+    "novel_id": "codex-d72e",
+    "setting_session_id": "sgs_797806368c104b16b441c96bc7f933c1",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "47eae1c50dba4e10aab32281d33fa28a",
+    "pending_id": "pe_c7a380ab",
+    "volume_id": "vol_01_canye_yishu",
+    "chapter_target_word_count": "120",
+    "chapter_auto_run_job_id": "job_d348607622f0"
+  },
+  "issues": [
+    {
+      "id": "LLM_PARSE_ERROR-auto_run_chapters",
+      "type": "LLM_PARSE_ERROR",
+      "severity": "high",
+      "stage": "auto_run_chapters",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "LLM orchestrated parse failed after 3 retries for ContextAgent/build_scene_context: build_scene_context failed validator subtask after repair: {'valid': False, 'reason': 'narrative_too_short', 'min_chars': 30, 'actual_chars': 0}",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage auto_run_chapters"
+    }
+  ]
+}

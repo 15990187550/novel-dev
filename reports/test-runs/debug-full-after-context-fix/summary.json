@@ -1,0 +1,37 @@
+{
+  "run_id": "debug-full-after-context-fix",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 0.1886432080063969,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract",
+    "novel_id": "codex-684f",
+    "setting_session_id": "sgs_f640cdd7fa0c44b29a5dd92b9d98dd7a",
+    "generation_snapshot_json": "/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/debug-full-after-context-fix/artifacts/generation_snapshot.json",
+    "quality_summary_json": "/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/debug-full-after-context-fix/quality-summary/summary.json",
+    "quality_summary_md": "/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/debug-full-after-context-fix/quality-summary/summary.md",
+    "quality_summary_status": "passed",
+    "quality_summary_run_id": "debug-full-after-context-fix-quality-summary"
+  },
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-advance_setting_session",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "advance_setting_session",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "Server error '500 Internal Server Error' for url 'http://127.0.0.1:8000/api/novels/codex-684f/settings/sessions/sgs_f640cdd7fa0c44b29a5dd92b9d98dd7a/reply'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+      "evidence": [],
+      "reproduce": "scripts/verify_generation_real.sh --stage advance_setting_session"
+    }
+  ]
+}

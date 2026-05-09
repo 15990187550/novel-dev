@@ -1,0 +1,14 @@
+{
+  "run_id": "debug-brainstorm-escalated-quality-summary",
+  "entrypoint": "novel-dev-testing quality-summary",
+  "status": "passed",
+  "duration_seconds": 0.0,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {},
+  "artifacts": {
+    "novel_id": "codex-a18b",
+    "chapter_count": "0"
+  },
+  "issues": []
+}

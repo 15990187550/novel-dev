@@ -1,0 +1,14 @@
+{
+  "run_id": "debug-full-after-context-fix-quality-summary",
+  "entrypoint": "novel-dev-testing quality-summary",
+  "status": "passed",
+  "duration_seconds": 0.0,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {},
+  "artifacts": {
+    "novel_id": "codex-684f",
+    "chapter_count": "0"
+  },
+  "issues": []
+}

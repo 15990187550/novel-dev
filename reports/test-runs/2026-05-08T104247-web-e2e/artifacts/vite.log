@@ -1,0 +1,9 @@
+
+> novel-dev-web@0.1.0 dev
+> vite --host --host 127.0.0.1 --port 5173 --strictPort
+
+Re-optimizing dependencies because lockfile has changed
+
+  VITE v5.4.21  ready in 572 ms
+
+  ➜  Local:   http://127.0.0.1:5173/
