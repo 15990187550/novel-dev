@@ -137,6 +137,136 @@ def test_reviewed_volume_plan_payload_includes_writability_summary(async_session
     assert payload["review_status"]["writability_status"]["failed_chapter_numbers"] == [1]
 
 
+def test_build_revise_feedback_includes_writability_repairs(async_session):
+    agent = VolumePlannerAgent(async_session)
+    score = VolumeScoreResult(
+        overall=72,
+        outline_fidelity=78,
+        character_plot_alignment=76,
+        hook_distribution=74,
+        foreshadowing_management=70,
+        chapter_hooks=82,
+        page_turning=80,
+        summary_feedback="单章事件过密，伏笔关联偏弱。",
+    )
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="起卷",
+        total_chapters=1,
+        estimated_total_words=4000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="林照发现玉简、参加大比、遭遇刺客。",
+                target_word_count=4000,
+                target_mood="紧张",
+                beats=[
+                    BeatPlan(summary="林照发现父亲玉简，得知真相。", target_mood="压抑", key_entities=["林照"]),
+                    BeatPlan(summary="林照在外门大比中为救人暴露修为，被迫参加内门考核。", target_mood="爆发", key_entities=["林照"]),
+                    BeatPlan(summary="林照夜里遭遇刺客，反杀后拿到令牌。", target_mood="肃杀", key_entities=["林照"]),
+                ],
+            )
+        ],
+    )
+
+    feedback = agent._build_revise_feedback(score, plan)
+
+    assert "节拍 1 缺少选择/代价" in feedback
+    assert "节拍 3 缺少选择/代价" in feedback
+    assert "角色目标 + 具体阻力 + 当场选择 + 失败代价 + 停点" in feedback
+
+
+def test_coerce_blueprint_to_target_chapters_merges_contiguous_skeletons(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=4,
+        estimated_total_words=12000,
+        chapters=[
+            {"chapter_number": 1, "title": "玉佩现踪", "summary": "林照看到家传玉佩，暂时收手。"},
+            {"chapter_number": 2, "title": "暗线试探", "summary": "林照顺着令牌暗查青云宗暗桩。"},
+            {"chapter_number": 3, "title": "残图牵引", "summary": "林照从残图看出旧矿脉与灭门案相连。"},
+            {"chapter_number": 4, "title": "血脉疑云", "summary": "林照察觉血脉印记可能只是另一条线索。"},
+        ],
+    )
+
+    coerced = agent._coerce_blueprint_to_target_chapters(
+        blueprint,
+        target_chapters=1,
+        novel_id="n_scale_coerce",
+        repair_stage="generate_volume_plan semantic repair",
+    )
+
+    assert coerced.total_chapters == 1
+    assert len(coerced.chapters) == 1
+    assert coerced.chapters[0].chapter_id == "vol_1_ch_1"
+    assert "家传玉佩" in coerced.chapters[0].summary
+    assert "血脉印记" in coerced.chapters[0].summary
+    entries = list(LogService._buffers["n_scale_coerce"])
+    assert any(entry.get("node") == "volume_plan_scale" and entry.get("status") == "degraded" for entry in entries)
+
+
+@pytest.mark.asyncio
+async def test_revise_volume_plan_prompt_requires_choice_cost_repairs(async_session, monkeypatch):
+    agent = VolumePlannerAgent(async_session)
+    original = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="旧卷摘要",
+        total_chapters=1,
+        estimated_total_words=4000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="第一章旧摘要",
+                target_word_count=4000,
+                target_mood="tense",
+                beats=[BeatPlan(summary="林照发现玉简，得知真相。", target_mood="tense", key_entities=["林照"])],
+            ),
+        ],
+    )
+    captured = {}
+
+    async def fake_call_and_parse_model(agent_name, task, prompt, model_cls, max_retries=3, novel_id=""):
+        captured["prompt"] = prompt
+        return VolumePlanPatch(
+            chapter_patches=[
+                {
+                    "chapter_number": 1,
+                    "beats": [
+                        {
+                            "summary": "林照发现玉简后必须决定是否立刻上报；若迟疑，陈松就会先一步封口，他只得冒险藏匿证据。",
+                            "target_mood": "紧张",
+                        }
+                    ],
+                }
+            ],
+        )
+
+    monkeypatch.setattr("novel_dev.agents.volume_planner.call_and_parse_model", fake_call_and_parse_model)
+
+    revised = await agent._revise_volume_plan(
+        original,
+        "节拍 1 缺少选择/代价",
+        "上下文",
+        "n_revise_prompt",
+    )
+
+    assert "每个需要重写的 beat 必须显式包含" in captured["prompt"]
+    assert "角色目标、具体阻力、当场选择、失败代价、章末停点" in captured["prompt"]
+    assert "林照发现玉简后必须决定是否立刻上报" in revised.chapters[0].beats[0].summary
+
+
 @pytest.mark.asyncio
 async def test_constraint_source_excludes_previous_volume_plan(async_session):
     repo = DocumentRepository(async_session)
@@ -544,6 +674,92 @@ async def test_generate_volume_plan_semantic_repair_prompt_mentions_highlight_do
             novel_id="n_semantic_prompt",
             target_chapters=2,
         )
+
+
+@pytest.mark.asyncio
+async def test_generate_volume_plan_semantic_repair_coerces_chapter_count(async_session):
+    await DocumentRepository(async_session).create(
+        doc_id="doc_semantic_contract",
+        novel_id="n_semantic_contract",
+        doc_type="setting",
+        title="线索边界",
+        content="设定事实：卷一只能写林照因看到家传玉佩而收手，不能改成玉佩碎裂后看到血脉印记才收手。",
+    )
+    synopsis = SynopsisData(
+        title="青云遗恨",
+        logline="林照追查灭门真相。",
+        core_conflict="林照 vs 青云宗长老会",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=4000,
+        volume_outlines=[{
+            "volume_number": 1,
+            "title": "遗佩初现",
+            "summary": "林照因家传玉佩发现第一条线索。",
+            "main_goal": "确认第一条线索",
+        }],
+    )
+    initial_blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="遗佩初现",
+        summary="林照追查家传玉佩的来历。",
+        total_chapters=1,
+        estimated_total_words=4000,
+        chapters=[
+            {"chapter_number": 1, "title": "矿洞见佩", "summary": "林照在矿洞见到家传玉佩，却被迫暂时收手。"},
+        ],
+    )
+    repaired_blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="遗佩初现",
+        summary="林照追查玉佩与灭门案的牵连。",
+        total_chapters=4,
+        estimated_total_words=4000,
+        chapters=[
+            {"chapter_number": 1, "title": "矿洞见佩", "summary": "林照在矿洞见到家传玉佩，当场收手。"},
+            {"chapter_number": 2, "title": "令牌暗查", "summary": "林照顺着令牌线索追查青云宗暗桩。"},
+            {"chapter_number": 3, "title": "残图浮现", "summary": "林照发现旧矿脉残图与灭门案相关。"},
+            {"chapter_number": 4, "title": "疑云未散", "summary": "林照察觉血脉印记只是未证实的后续线索。"},
+        ],
+    )
+    expanded = [{
+        "chapter_number": 1,
+        "target_word_count": 4000,
+        "target_mood": "tense",
+        "beats": [{"summary": "林照在矿洞见到家传玉佩，被迫压下追查冲动，转而记下所有异常。", "target_mood": "tense"}],
+    }]
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=initial_blueprint.model_dump_json()),
+        LLMResponse(text=VolumePlanSemanticJudgement(
+            passed=False,
+            hard_conflicts=["把'看到家传玉佩而收手'改写成了后续血脉印记触发，设定事实被改坏。"],
+            repair_suggestions=["保留家传玉佩触发收手，血脉印记最多作为未证实线索后置。"],
+            confidence=0.96,
+        ).model_dump_json()),
+        LLMResponse(text=repaired_blueprint.model_dump_json()),
+        LLMResponse(text=VolumePlanSemanticJudgement(passed=True, confidence=0.92).model_dump_json()),
+        LLMResponse(text=__import__("json").dumps(expanded, ensure_ascii=False)),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        plan = await VolumePlannerAgent(async_session)._generate_volume_plan(
+            synopsis,
+            1,
+            novel_id="n_semantic_contract",
+            target_chapters=1,
+        )
+
+    assert mock_client.acomplete.await_count == 5
+    assert plan.total_chapters == 1
+    assert len(plan.chapters) == 1
+    assert plan.chapters[0].chapter_number == 1
+    assert "家传玉佩" in plan.chapters[0].summary
+    entries = list(LogService._buffers["n_semantic_contract"])
+    assert any(entry.get("node") == "volume_plan_scale" and entry.get("status") == "degraded" for entry in entries)
 
 @pytest.mark.asyncio
 async def test_expand_volume_plan_batch_backfills_missing_skeleton_fields(async_session):

@@ -444,6 +444,18 @@ async def test_orchestrated_call_and_parse_model_retries_location_context_missin
     )
 
 
+def test_location_context_required_terms_prefers_explicit_terms_over_entity_catalog():
+    from novel_dev.agents._llm_helpers import _location_context_required_terms
+
+    prompt = (
+        "原始提示\n场景上下文："
+        "{\"entities\":[{\"name\":\"林风\"},{\"name\":\"守门长老\"},{\"name\":\"青云宗\"}],"
+        "\"required_terms\":[\"青云宗\",\"林风\"]}"
+    )
+
+    assert _location_context_required_terms(prompt) == ["青云宗", "林风"]
+
+
 @pytest.mark.asyncio
 async def test_call_and_parse_model_can_inherit_config_from_another_agent():
     mock_client = AsyncMock()

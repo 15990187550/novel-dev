@@ -1,8 +1,10 @@
+import json
 import httpx
 import pytest
 from contextlib import asynccontextmanager
 
 from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
+from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.testing import generation_runner
 from novel_dev.testing.generation_runner import (
     GenerationRunOptions,
@@ -14,6 +16,7 @@ from novel_dev.testing.generation_runner import (
 )
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.testing.report import TestRunReport
 
 
 def test_rate_limit_is_external_blocker():
@@ -1353,6 +1356,134 @@ async def test_generation_acceptance_reports_missing_export_path_as_export_contr
     assert report.issues[0].stage == "export_contract"
     assert report.issues[0].type == "SYSTEM_BUG"
     assert "missing" in report.issues[0].message.lower()
+
+
+@pytest.mark.asyncio
+async def test_build_generation_quality_snapshot_collects_checkpoint_chapters_and_setting_batch(
+    async_session,
+    monkeypatch,
+):
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel-snapshot",
+        "reviewing",
+        {
+            "synopsis_data": {"review_status": {"synopsis_quality_report": {"passed": True}}},
+            "current_volume_plan": {
+                "review_status": {"writability_status": {"passed": True, "failed_chapter_numbers": []}}
+            },
+        },
+        current_volume_id="vol-1",
+        current_chapter_id="ch-1",
+    )
+    chapter_repo = ChapterRepository(async_session)
+    await chapter_repo.create(
+        "ch-1",
+        "vol-1",
+        1,
+        title="第一章",
+        novel_id="novel-snapshot",
+    )
+    await chapter_repo.update_text("ch-1", raw_draft="draft text", polished_text="polished text")
+    await chapter_repo.update_quality_gate(
+        "ch-1",
+        quality_status="pass",
+        quality_reasons={"blocking_items": []},
+        final_review_score=88,
+    )
+    await SettingWorkbenchRepository(async_session).create_review_batch(
+        novel_id="novel-snapshot",
+        source_type="ai_generation",
+        input_snapshot={
+            "setting_quality_report": {
+                "passed": False,
+                "missing_sections": ["power_system"],
+            }
+        },
+    )
+    await async_session.commit()
+
+    @asynccontextmanager
+    async def fake_session_maker():
+        yield async_session
+
+    monkeypatch.setattr(generation_runner, "async_session_maker", fake_session_maker)
+
+    snapshot = await generation_runner._build_generation_quality_snapshot(
+        TestRunReport(
+            run_id="snapshot-run",
+            entrypoint="scripts/verify_generation_real.sh",
+            status="passed",
+            duration_seconds=1.0,
+            dataset="minimal_builtin",
+            llm_mode="real",
+            artifacts={"novel_id": "novel-snapshot"},
+        )
+    )
+
+    assert snapshot is not None
+    assert snapshot["novel_id"] == "novel-snapshot"
+    assert snapshot["dataset"] == "minimal_builtin"
+    assert snapshot["checkpoint"]["current_volume_id"] == "vol-1"
+    assert snapshot["chapters"][0]["chapter_id"] == "ch-1"
+    assert snapshot["chapters"][0]["quality_status"] == "pass"
+    assert snapshot["setting_review_batch"]["input_snapshot"]["setting_quality_report"]["passed"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_generation_acceptance_and_write_emits_snapshot_and_quality_summary(
+    monkeypatch,
+    tmp_path,
+):
+    async def fake_run_generation_acceptance(_options):
+        return TestRunReport(
+            run_id="quality-chain",
+            entrypoint="scripts/verify_generation_real.sh",
+            status="passed",
+            duration_seconds=1.0,
+            dataset="minimal_builtin",
+            llm_mode="real",
+            artifacts={"novel_id": "novel-chain"},
+        )
+
+    async def fake_build_generation_quality_snapshot(_report):
+        return {
+            "novel_id": "novel-chain",
+            "dataset": "minimal_builtin",
+            "llm_mode": "real",
+            "checkpoint": {
+                "setting_quality_report": {
+                    "passed": False,
+                    "missing_sections": ["power_system"],
+                }
+            },
+            "chapters": [],
+        }
+
+    monkeypatch.setattr(generation_runner, "run_generation_acceptance", fake_run_generation_acceptance)
+    monkeypatch.setattr(
+        generation_runner,
+        "_build_generation_quality_snapshot",
+        fake_build_generation_quality_snapshot,
+    )
+
+    report = await generation_runner.run_generation_acceptance_and_write(
+        GenerationRunOptions(
+            run_id="quality-chain",
+            report_root=str(tmp_path / "reports"),
+        )
+    )
+
+    assert report.status == "failed"
+    assert [issue.id for issue in report.issues] == ["SETTING-QUALITY-001"]
+    root = tmp_path / "reports" / "quality-chain"
+    snapshot_path = root / "artifacts" / "generation_snapshot.json"
+    quality_summary_path = root / "quality-summary" / "summary.json"
+    assert snapshot_path.exists()
+    assert quality_summary_path.exists()
+    summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
+    assert summary["artifacts"]["generation_snapshot_json"] == str(snapshot_path)
+    assert summary["artifacts"]["quality_summary_json"] == str(quality_summary_path)
+    assert summary["artifacts"]["quality_summary_status"] == "failed"
 
 
 @pytest.mark.asyncio

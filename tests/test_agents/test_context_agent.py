@@ -37,7 +37,7 @@ async def test_load_location_context(async_session):
             structured_payload={
                 "current": "青云宗大殿",
                 "parent": "青云宗",
-                "narrative": "晨光透过雕花窗棂，洒落在青石地面上，钟声从殿外传来，林风在光影里停住脚步。",
+                "narrative": "晨光透过青云宗大殿的雕花窗棂，洒落在青石地面上，钟声从殿外传来，林风在光影里停住脚步。",
             },
         ),
     ]
@@ -98,6 +98,39 @@ def test_context_agent_builds_writing_cards_from_chapter_plan(async_session):
     assert cards[0].objective
     assert cards[0].conflict
     assert cards[0].forbidden_future_events == ["陆照利用玉佩残光脱身"]
+
+
+def test_context_agent_limits_scene_context_required_terms(async_session):
+    agent = ContextAgent(async_session)
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="血月之下",
+        target_word_count=1000,
+        beats=[
+            BeatPlan(
+                summary="林照在青云宗外门试炼中觉醒血脉。",
+                target_mood="紧张",
+                key_entities=["林照", "青云宗", "长老会", "古血玉"],
+            )
+        ],
+    )
+
+    catalog = agent._build_scene_context_catalog(
+        {
+            "locations": [{"name": "青云宗", "narrative": "山门高耸"}],
+            "entity_states": [
+                {"name": "林照", "type": "character", "state": "紧张"},
+                {"name": "长老会", "type": "faction", "state": "监视"},
+                {"name": "古血玉", "type": "item", "state": "发烫"},
+                {"name": "外门弟子", "type": "group", "state": "惊惧"},
+            ],
+            "timeline_events": [],
+            "foreshadowings": [],
+        },
+        plan,
+    )
+
+    assert catalog["required_terms"] == ["青云宗", "林照", "古血玉"]
 
 
 @pytest.mark.asyncio

@@ -130,3 +130,16 @@ Run the full local gate before handing off changes:
 ```
 
 It runs backend tests, Python compile checks, web tests, and the web build from the expected project directories.
+
+## Generation Quality Summary
+
+After a real or fake generation run exports a snapshot JSON, summarize quality gates with:
+
+```bash
+PYTHONPATH=src python3.11 -m novel_dev.testing.cli quality-summary \
+  --input-json reports/test-runs/<run-id>/artifacts/generation_snapshot.json \
+  --report-root reports/test-runs \
+  --run-id <run-id>-quality
+```
+
+The command writes the standard `summary.json` and `summary.md` report. It fails the run when setting quality, synopsis quality, volume writability, or chapter quality gate checks contain blocking issues.
