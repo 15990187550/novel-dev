@@ -608,7 +608,7 @@ class ContextAgent:
             "build_scene_context",
         )
         prompt_scene_inputs = (
-            self._build_scene_context_catalog(scene_inputs)
+            self._build_scene_context_catalog(scene_inputs, chapter_plan)
             if orchestration_config is not None
             else scene_inputs
         )
@@ -652,7 +652,7 @@ class ContextAgent:
             LocationContext, max_retries=3, novel_id=novel_id
         )
 
-    def _build_scene_context_catalog(self, scene_inputs: dict) -> dict:
+    def _build_scene_context_catalog(self, scene_inputs: dict, chapter_plan: ChapterPlan) -> dict:
         return {
             "locations": [
                 {"name": item.get("name"), "has_narrative": bool(item.get("narrative"))}
@@ -666,6 +666,10 @@ class ContextAgent:
             "foreshadowing_ids": [
                 item.get("id") for item in scene_inputs.get("foreshadowings", [])
             ],
+            "required_terms": self._build_scene_context_required_terms(
+                scene_inputs,
+                chapter_plan,
+            ),
             "tool_hint": (
                 "可按需调用只读工具查询详情。优先用批量工具一次查询同类数据："
                 "get_context_location_details / get_context_entity_states / "
@@ -673,6 +677,35 @@ class ContextAgent:
                 "最多查询 3 类最缺的细节；目录摘要足够时不要调用工具，不要全量查询。"
             ),
         }
+
+    def _build_scene_context_required_terms(
+        self,
+        scene_inputs: dict,
+        chapter_plan: ChapterPlan,
+    ) -> list[str]:
+        terms: list[str] = []
+        entity_type_map = {
+            str(item.get("name") or "").strip(): str(item.get("type") or "").strip()
+            for item in scene_inputs.get("entity_states", [])
+            if str(item.get("name") or "").strip()
+        }
+        preferred_types = {"character", "item", "location"}
+
+        for location in scene_inputs.get("locations", []):
+            name = str(location.get("name") or "").strip()
+            if name and name not in terms:
+                terms.append(name)
+                break
+
+        for beat in chapter_plan.beats:
+            for raw_term in beat.key_entities:
+                term = str(raw_term or "").strip()
+                entity_type = entity_type_map.get(term)
+                if term and term not in terms and len(term) <= 12 and entity_type in preferred_types:
+                    terms.append(term)
+                if len(terms) >= 3:
+                    return terms
+        return terms
 
     def _build_scene_context_chapter_plan(self, chapter_plan: ChapterPlan) -> dict:
         return {

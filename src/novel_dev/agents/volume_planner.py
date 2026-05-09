@@ -420,7 +420,7 @@ class VolumePlannerAgent:
                 metadata={
                     "attempt": attempt,
                     "overall": score.overall,
-                    "reason": self._build_revise_feedback(score),
+                    "reason": self._build_revise_feedback(score, volume_plan),
                 },
             )
             if attempt >= 3:
@@ -442,7 +442,12 @@ class VolumePlannerAgent:
                 )
                 return volume_plan
             try:
-                volume_plan = await self._revise_volume_plan(volume_plan, self._build_revise_feedback(score), plan_context, novel_id)
+                volume_plan = await self._revise_volume_plan(
+                    volume_plan,
+                    self._build_revise_feedback(score, volume_plan),
+                    plan_context,
+                    novel_id,
+                )
             except RuntimeError as exc:
                 log_service.add_log(novel_id, "VolumePlannerAgent", f"自动修订失败，已保留当前卷纲: {exc}", level="error")
                 checkpoint["current_volume_plan"] = self._build_reviewed_volume_plan_payload(
@@ -569,7 +574,7 @@ class VolumePlannerAgent:
                 return False
         return True
 
-    def _build_revise_feedback(self, score) -> str:
+    def _build_revise_feedback(self, score, plan: VolumePlan | None = None) -> str:
         failing = []
         for dim, floor in self.KEY_DIM_THRESHOLDS.items():
             val = getattr(score, dim, 100)
@@ -580,6 +585,21 @@ class VolumePlannerAgent:
             lines.append("关键维度未达标: " + ", ".join(failing))
         if score.summary_feedback:
             lines.append(f"评审意见: {score.summary_feedback}")
+        if plan is not None:
+            writability = self._build_volume_writability_summary(plan)
+            if not writability.get("passed", True):
+                lines.append("章节可写性未通过，必须优先修正以下结构问题:")
+                for chapter in writability.get("chapters", []):
+                    report = chapter.get("report") or {}
+                    blocking = report.get("blocking_issues") or []
+                    if blocking:
+                        lines.append(
+                            f"- 第 {chapter.get('chapter_number')} 章《{chapter.get('title')}》: "
+                            + "；".join(str(item) for item in blocking[:4])
+                        )
+                    suggestions = report.get("repair_suggestions") or []
+                    for item in suggestions[:2]:
+                        lines.append(f"- 修复方式: {item}")
         lines.append(
             "请针对以上未达标维度逐项修正:"
             "爽点分布不足就增加每 2-3 章的小高潮与钩子;"
@@ -1103,6 +1123,7 @@ class VolumePlannerAgent:
             f"{base_prompt}\n\n"
             "### 设定约束校验失败，必须重写卷纲骨架\n"
             f"{chapter_rule}\n"
+            "绝对不得改变章节数量；如果返回章节数不符，系统会视为修复失败并做强制收缩。\n"
             "以下 hard 约束违反了设定，必须修正：\n"
             + "\n".join(f"- {item}" for item in violations)
             + "\n修正要求：缺失的设定节点必须落实到具体章节 title 或 summary 中，顺序必须符合设定链；"
@@ -1112,10 +1133,12 @@ class VolumePlannerAgent:
         repaired = await call_and_parse_model(
             "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
         )
-        if target_chapters and len(repaired.chapters) != target_chapters:
-            raise ValueError(
-                f"generate_volume_plan constraint repair returned {len(repaired.chapters)} chapters, expected {target_chapters}"
-            )
+        repaired = self._coerce_blueprint_to_target_chapters(
+            repaired,
+            target_chapters=target_chapters,
+            novel_id=novel_id,
+            repair_stage="generate_volume_plan constraint repair",
+        )
         remaining = self._validate_blueprint_constraints(repaired, constraint_context)
         if remaining:
             raise ValueError("generate_volume_plan violates setting constraints after repair: " + "；".join(remaining[:8]))
@@ -1162,6 +1185,81 @@ class VolumePlannerAgent:
             if any(candidate and candidate in chapter_text for candidate in candidates):
                 return index
         return -1
+
+    def _coerce_blueprint_to_target_chapters(
+        self,
+        blueprint: VolumePlanBlueprint,
+        *,
+        target_chapters: Optional[int],
+        novel_id: str,
+        repair_stage: str,
+    ) -> VolumePlanBlueprint:
+        if not target_chapters or len(blueprint.chapters) == target_chapters:
+            return blueprint
+        if len(blueprint.chapters) < target_chapters:
+            raise ValueError(
+                f"{repair_stage} returned {len(blueprint.chapters)} chapters, expected at least {target_chapters}"
+            )
+
+        total = len(blueprint.chapters)
+        merged_chapters: list[dict[str, Any]] = []
+        for index in range(target_chapters):
+            start = index * total // target_chapters
+            end = (index + 1) * total // target_chapters
+            group = blueprint.chapters[start:end]
+            if not group:
+                raise ValueError(f"{repair_stage} produced an empty chapter slice during chapter-count coercion")
+            merged_chapters.append(
+                self._merge_blueprint_chapter_group(
+                    blueprint.volume_number,
+                    chapter_number=index + 1,
+                    chapters=group,
+                )
+            )
+
+        payload = blueprint.model_dump()
+        payload["total_chapters"] = target_chapters
+        payload["chapters"] = merged_chapters
+        coerced = VolumePlanBlueprint.model_validate(payload)
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            f"{repair_stage} 返回 {total} 章，已自动收缩为 {target_chapters} 章以保持上游契约",
+            level="warning",
+            event="agent.progress",
+            status="degraded",
+            node="volume_plan_scale",
+            task="repair_volume_plan_scale",
+            metadata={
+                "repair_stage": repair_stage,
+                "returned_chapters": total,
+                "target_chapters": target_chapters,
+            },
+        )
+        return coerced
+
+    def _merge_blueprint_chapter_group(
+        self,
+        volume_number: int,
+        *,
+        chapter_number: int,
+        chapters: list[VolumeChapterSkeleton],
+    ) -> dict[str, Any]:
+        first = chapters[0]
+        last = chapters[-1]
+        title = first.title
+        if len(chapters) > 1 and last.title and last.title != first.title:
+            title = f"{first.title}至{last.title}"
+        summary_parts = [chapter.summary.strip().rstrip("。！？!?；;") for chapter in chapters if chapter.summary.strip()]
+        summary = "；".join(summary_parts) if summary_parts else first.summary
+        if summary and summary[-1] not in "。！？!?":
+            summary += "。"
+        return {
+            "chapter_number": chapter_number,
+            "chapter_id": VolumeChapterSkeleton.build_chapter_id(volume_number, chapter_number),
+            "title": title,
+            "summary": summary,
+        }
 
     async def _repair_blueprint_semantic_conflicts(
         self,
@@ -1210,6 +1308,7 @@ class VolumePlannerAgent:
             f"{base_prompt}\n\n"
             "### LLM 语义设定裁判失败，必须重写卷纲骨架\n"
             f"{chapter_rule}\n"
+            "绝对不得改变章节数量；如果返回章节数不符，系统会视为修复失败并做强制收缩。\n"
             "以下是必须修复的 hard 设定冲突：\n"
             + "\n".join(f"- {item}" for item in judgement.hard_conflicts)
             + "\n以下是修复建议：\n"
@@ -1225,10 +1324,12 @@ class VolumePlannerAgent:
         repaired = await call_and_parse_model(
             "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
         )
-        if target_chapters and len(repaired.chapters) != target_chapters:
-            raise ValueError(
-                f"generate_volume_plan semantic repair returned {len(repaired.chapters)} chapters, expected {target_chapters}"
-            )
+        repaired = self._coerce_blueprint_to_target_chapters(
+            repaired,
+            target_chapters=target_chapters,
+            novel_id=novel_id,
+            repair_stage="generate_volume_plan semantic repair",
+        )
         remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
         if remaining_hard:
             raise ValueError("generate_volume_plan violates setting constraints after semantic repair: " + "；".join(remaining_hard[:8]))
@@ -1550,7 +1651,10 @@ class VolumePlannerAgent:
             "1. 只返回需要修改的字段，不要重写整卷 VolumePlan。\n"
             "2. chapter_patches 只包含需要修改的章节，使用 chapter_number 定位。\n"
             "3. 不要新增、删除、重排章节；不要返回 total_chapters、volume_id、volume_number。\n"
-            "4. beats 只有在该章节拍确实需要替换时才返回完整新 beats。"
+            "4. beats 只有在该章节拍确实需要替换时才返回完整新 beats。\n"
+            "5. 每个需要重写的 beat 必须显式包含：角色目标、具体阻力、当场选择、失败代价、章末停点。\n"
+            "6. 如果评审指出事件过密，必须减少单个 beat 承担的大事件数量，避免一拍塞入多个关键转折。\n"
+            "7. 如果评审指出伏笔关联偏弱，必须让新埋设线索直接服务当前冲突或章末钩子，不要孤立悬空。"
             f"\n\n### 当前 VolumePlan\n{plan.model_dump_json()}"
             f"\n\n### 原始规划上下文\n{plan_context}"
             f"\n\n### 反馈\n{feedback}"

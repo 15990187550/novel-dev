@@ -9,6 +9,7 @@ from novel_dev.testing.generation_runner import (
     GenerationRunOptions,
     run_generation_acceptance_and_write,
 )
+from novel_dev.testing.quality_summary import write_quality_summary_report
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -32,6 +33,11 @@ def _build_parser() -> argparse.ArgumentParser:
     generation.add_argument("--report-root", default="reports/test-runs")
     generation.add_argument("--api-base-url", default="http://127.0.0.1:8000")
 
+    quality = subparsers.add_parser("quality-summary")
+    quality.add_argument("--input-json", required=True)
+    quality.add_argument("--run-id")
+    quality.add_argument("--report-root", default="reports/test-runs")
+
     return parser
 
 
@@ -51,6 +57,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         try:
             report = asyncio.run(run_generation_acceptance_and_write(options))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            return 2
+        return 0 if report.status in {"passed", "external_blocked"} else 1
+
+    if args.command == "quality-summary":
+        try:
+            report = write_quality_summary_report(
+                input_json=args.input_json,
+                report_root=args.report_root,
+                run_id=args.run_id,
+            )
         except ValueError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             return 2

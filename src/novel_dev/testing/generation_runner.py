@@ -10,10 +10,13 @@ import re
 from typing import Any, Awaitable, Callable, Literal
 
 import httpx
+from sqlalchemy import select
+from novel_dev.db.models import Chapter
 from novel_dev.db.engine import async_session_maker
 from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.agents.director import Phase
 from novel_dev.testing.generation_contracts import (
     build_volume_plan_contract_evidence,
@@ -222,8 +225,144 @@ async def run_generation_acceptance_and_write(
     options: GenerationRunOptions,
 ) -> TestRunReport:
     report = await run_generation_acceptance(options)
-    ReportWriter(Path(options.report_root) / report.run_id).write(report)
+    report_root = Path(options.report_root) / report.run_id
+    try:
+        snapshot = await _build_generation_quality_snapshot(report)
+        if snapshot is not None:
+            artifacts_dir = report_root / "artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_path = artifacts_dir / "generation_snapshot.json"
+            snapshot_path.write_text(
+                json.dumps(snapshot, ensure_ascii=False, indent=2) + "\n",
+                encoding="utf-8",
+            )
+            report.artifacts["generation_snapshot_json"] = str(snapshot_path)
+            quality_report = _write_quality_summary_bundle(
+                report_root=report_root,
+                snapshot=snapshot,
+                parent_run_id=report.run_id,
+            )
+            report.artifacts["quality_summary_json"] = str(
+                report_root / "quality-summary" / "summary.json"
+            )
+            report.artifacts["quality_summary_md"] = str(
+                report_root / "quality-summary" / "summary.md"
+            )
+            report.artifacts["quality_summary_status"] = quality_report.status
+            report.artifacts["quality_summary_run_id"] = quality_report.run_id
+            _merge_quality_summary_issues(report, quality_report)
+    except Exception as exc:
+        acceptance_scope = validate_acceptance_scope(
+            str(report.artifacts.get("acceptance_scope") or "real-contract")
+        )
+        report.add_issue(
+            classify_exception(
+                "quality_summary",
+                exc,
+                real_llm=False,
+                acceptance_scope=acceptance_scope,
+            )
+        )
+    ReportWriter(report_root).write(report)
     return report
+
+
+async def _build_generation_quality_snapshot(
+    report: TestRunReport,
+) -> dict[str, Any] | None:
+    novel_id = str(report.artifacts.get("novel_id") or "").strip()
+    if not novel_id:
+        return None
+
+    async with async_session_maker() as session:
+        state = await NovelStateRepository(session).get_state(novel_id)
+        chapter_rows = await session.execute(
+            select(Chapter)
+            .where(Chapter.novel_id == novel_id)
+            .order_by(Chapter.chapter_number.asc(), Chapter.id.asc())
+        )
+        chapters = chapter_rows.scalars().all()
+
+        review_repo = SettingWorkbenchRepository(session)
+        review_batch = None
+        review_batch_id = str(report.artifacts.get("review_batch_id") or "").strip()
+        if review_batch_id:
+            review_batch = await review_repo.get_review_batch(review_batch_id)
+        if review_batch is None:
+            batches = await review_repo.list_review_batches(novel_id)
+            review_batch = batches[0] if batches else None
+
+    checkpoint = dict(state.checkpoint_data or {}) if state is not None else {}
+    snapshot: dict[str, Any] = {
+        "run_id": report.run_id,
+        "novel_id": novel_id,
+        "dataset": report.dataset,
+        "llm_mode": report.llm_mode,
+        "checkpoint": {
+            **checkpoint,
+            "current_phase": getattr(state, "current_phase", None),
+            "current_volume_id": getattr(state, "current_volume_id", None),
+            "current_chapter_id": getattr(state, "current_chapter_id", None),
+        },
+        "chapters": [
+            {
+                "chapter_id": chapter.id,
+                "id": chapter.id,
+                "volume_id": chapter.volume_id,
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "status": chapter.status,
+                "quality_status": chapter.quality_status,
+                "quality_reasons": chapter.quality_reasons,
+                "draft_review_score": chapter.draft_review_score,
+                "fast_review_score": chapter.fast_review_score,
+                "final_review_score": chapter.final_review_score,
+                "world_state_ingested": chapter.world_state_ingested,
+                "raw_draft": chapter.raw_draft,
+                "polished_text": chapter.polished_text,
+            }
+            for chapter in chapters
+        ],
+    }
+    if review_batch is not None:
+        snapshot["setting_review_batch"] = {
+            "id": review_batch.id,
+            "status": review_batch.status,
+            "source_type": review_batch.source_type,
+            "summary": review_batch.summary,
+            "input_snapshot": review_batch.input_snapshot,
+            "error_message": review_batch.error_message,
+        }
+    return snapshot
+
+
+def _write_quality_summary_bundle(
+    *,
+    report_root: Path,
+    snapshot: dict[str, Any],
+    parent_run_id: str,
+) -> TestRunReport:
+    from novel_dev.testing.quality_summary import build_quality_summary_report
+
+    quality_report = build_quality_summary_report(
+        snapshot,
+        run_id=f"{parent_run_id}-quality-summary",
+    )
+    ReportWriter(report_root / "quality-summary").write(quality_report)
+    return quality_report
+
+
+def _merge_quality_summary_issues(
+    report: TestRunReport,
+    quality_report: TestRunReport,
+) -> None:
+    existing = {(issue.id, issue.stage, issue.message) for issue in report.issues}
+    for issue in quality_report.issues:
+        key = (issue.id, issue.stage, issue.message)
+        if key in existing:
+            continue
+        report.add_issue(issue)
+        existing.add(key)
 
 
 async def run_stage_with_classification(

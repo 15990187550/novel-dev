@@ -351,17 +351,20 @@ def _location_context_required_terms(prompt: str) -> list[str]:
     terms: list[str] = []
     scene_context = _extract_scene_context_json(prompt)
     if isinstance(scene_context, dict):
+        explicit_terms: list[str] = []
+        for field in ("required_terms", "key_entities"):
+            for value in scene_context.get(field, []):
+                term = str(value or "").strip()
+                if term and len(term) <= 12 and term not in explicit_terms:
+                    explicit_terms.append(term)
+        if explicit_terms:
+            return explicit_terms[:6]
         for item in scene_context.get("entities", []):
             if not isinstance(item, dict):
                 continue
             term = str(item.get("name") or "").strip()
             if term and len(term) <= 12 and term not in terms:
                 terms.append(term)
-        for field in ("required_terms", "key_entities"):
-            for value in scene_context.get(field, []):
-                term = str(value or "").strip()
-                if term and len(term) <= 12 and term not in terms:
-                    terms.append(term)
         return terms[:6]
 
     for marker in ("实体：",):
