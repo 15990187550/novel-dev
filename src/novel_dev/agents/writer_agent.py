@@ -538,6 +538,7 @@ class WriterAgent:
             parts.append(f"### 近期时间线\n{timeline_text}")
 
         beat_context = self._beat_context(context, idx)
+        writing_card = self._writing_card(context, idx)
         target_words = self._beat_target_word_count(context, total, beat)
 
         if beat_context and beat_context.guardrails:
@@ -588,6 +589,24 @@ class WriterAgent:
         if beat_context and beat_context.foreshadowings:
             fs_text = "\n".join(self._format_foreshadowing(fs) for fs in beat_context.foreshadowings[:5])
             parts.append(f"### 当前节拍伏笔安排\n{fs_text}")
+
+        if writing_card:
+            card_lines = []
+            if writing_card.objective:
+                card_lines.append(f"- 目标: {writing_card.objective}")
+            if writing_card.conflict:
+                card_lines.append(f"- 阻力/冲突: {writing_card.conflict}")
+            if writing_card.turning_point:
+                card_lines.append(f"- 转折/选择: {writing_card.turning_point}")
+            if writing_card.required_entities:
+                card_lines.append("- 必须出现实体: " + "、".join(writing_card.required_entities))
+            if writing_card.required_facts:
+                card_lines.append("- 必须遵守事实: " + "；".join(writing_card.required_facts[:4]))
+            if writing_card.forbidden_future_events:
+                card_lines.append("- 禁止提前发生: " + "；".join(writing_card.forbidden_future_events[:4]))
+            if writing_card.ending_hook:
+                card_lines.append(f"- 本节拍停点/钩子: {writing_card.ending_hook}")
+            parts.append("### 当前节拍写作卡\n" + "\n".join(card_lines))
 
         plan_lines = [f"本章：{context.chapter_plan.title}（共{total}个节拍）"]
         for i, b in enumerate(context.chapter_plan.beats):
@@ -768,6 +787,16 @@ class WriterAgent:
     def _beat_context(self, context: ChapterContext, beat_idx: int):
         if beat_idx < len(context.beat_contexts):
             return context.beat_contexts[beat_idx]
+        return None
+
+    def _writing_card(self, context: ChapterContext, beat_idx: int):
+        if beat_idx < len(context.writing_cards):
+            card = context.writing_cards[beat_idx]
+            if card.beat_index == beat_idx:
+                return card
+        for card in context.writing_cards:
+            if card.beat_index == beat_idx:
+                return card
         return None
 
     async def _guard_writer_beat(

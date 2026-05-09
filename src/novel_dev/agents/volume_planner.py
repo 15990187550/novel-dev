@@ -12,7 +12,7 @@ from novel_dev.schemas.outline import (
     VolumeScoreResult,
     SynopsisData,
 )
-from novel_dev.schemas.context import BeatPlan
+from novel_dev.schemas.context import BeatPlan, ChapterPlan
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
@@ -35,6 +35,7 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
 from novel_dev.services.domain_activation_service import DomainActivationService
+from novel_dev.services.story_quality_service import StoryQualityService
 
 
 class VolumeChapterSkeleton(BaseModel):
@@ -597,13 +598,34 @@ class VolumePlannerAgent:
         attempt: int,
     ) -> dict[str, Any]:
         payload = plan.model_dump()
+        writability = self._build_volume_writability_summary(plan)
         payload["review_status"] = {
             "status": status,
             "reason": reason,
             "attempt": attempt,
             "score": score.model_dump(),
+            "writability_status": writability,
         }
         return payload
+
+    def _build_volume_writability_summary(self, plan: VolumePlan) -> dict[str, Any]:
+        chapter_reports = []
+        failed_numbers = []
+        for chapter in plan.chapters:
+            report = StoryQualityService.evaluate_chapter_writability(chapter)
+            if not report.passed:
+                failed_numbers.append(chapter.chapter_number)
+            chapter_reports.append({
+                "chapter_id": chapter.chapter_id,
+                "chapter_number": chapter.chapter_number,
+                "title": chapter.title,
+                "report": report.model_dump(),
+            })
+        return {
+            "passed": not failed_numbers,
+            "failed_chapter_numbers": failed_numbers,
+            "chapters": chapter_reports,
+        }
 
     def _infer_volume_number(self, checkpoint: dict, state) -> int:
         if state.current_volume_id and state.current_volume_id.startswith("vol_"):
@@ -1583,4 +1605,10 @@ class VolumePlannerAgent:
             if not beats[0].get("foreshadowings_to_embed"):
                 beats[0]["foreshadowings_to_embed"] = list(volume_beat.foreshadowings_to_embed)
         chapter_plan["beats"] = beats
+        writable = StoryQualityService.evaluate_chapter_writability(volume_beat)
+        chapter_plan["writability_status"] = writable.model_dump()
+        chapter_plan["writing_cards"] = [
+            card.model_dump()
+            for card in StoryQualityService.build_writing_cards(ChapterPlan.model_validate(chapter_plan))
+        ]
         return chapter_plan

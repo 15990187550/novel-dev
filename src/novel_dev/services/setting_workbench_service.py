@@ -25,6 +25,7 @@ from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchReposi
 from novel_dev.services.entity_context_sanitizer import INTERNAL_ENTITY_STATE_KEYS, sanitize_entity_state_for_context
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.log_service import log_service
+from novel_dev.services.story_quality_service import SettingQualityReport, StoryQualityService
 
 
 def _new_id(prefix: str) -> str:
@@ -309,6 +310,7 @@ class SettingWorkbenchService:
             )
 
             self._validate_batch_draft(draft, required_sections=required_sections)
+            setting_quality_report = self._evaluate_generated_setting_quality(draft)
             await self._validate_draft_source_evidence(novel_id, draft)
             log_service.add_log(
                 novel_id,
@@ -330,6 +332,7 @@ class SettingWorkbenchService:
                 source_type="ai_session",
                 source_session_id=session_id,
                 summary=draft.summary,
+                input_snapshot={"setting_quality_report": setting_quality_report.model_dump()},
             )
             for item in draft.changes:
                 await self.repo.add_review_change(
@@ -1169,6 +1172,39 @@ class SettingWorkbenchService:
                 has_same_batch_entity_create_without_id=has_same_batch_entity_create_without_id,
             )
             self._validate_accuracy_guardrails(item, index=index)
+
+    @staticmethod
+    def _evaluate_generated_setting_quality(draft: SettingBatchDraft) -> SettingQualityReport:
+        payload: dict[str, Any] = {
+            "worldview": "",
+            "power_system": "",
+            "plot_synopsis": "",
+            "character_profiles": [],
+            "core_conflicts": [],
+        }
+        for change in draft.changes:
+            snapshot = change.after_snapshot or {}
+            if not isinstance(snapshot, dict):
+                continue
+            doc_type = str(snapshot.get("doc_type") or snapshot.get("type") or "").lower()
+            title = str(snapshot.get("title") or snapshot.get("name") or "")
+            content = str(snapshot.get("content") or snapshot.get("description") or snapshot.get("state") or "")
+            combined = f"{title}\n{content}".strip()
+            if change.target_type == "entity":
+                entity_state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+                payload["character_profiles"].append({
+                    "name": snapshot.get("name") or title,
+                    "goal": entity_state.get("goal") or entity_state.get("motivation") or "",
+                    "conflict": entity_state.get("conflict") or "",
+                })
+            if doc_type in {"worldview", "domain_worldview"} or "世界" in title:
+                payload["worldview"] = f"{payload['worldview']}\n{combined}".strip()
+            if doc_type in {"power_system", "domain_power_system"} or any(token in title for token in ("力量", "修炼", "境界")):
+                payload["power_system"] = f"{payload['power_system']}\n{combined}".strip()
+            if doc_type in {"synopsis", "plot", "concept"} or any(token in title for token in ("剧情", "主线", "冲突", "梗概")):
+                payload["plot_synopsis"] = f"{payload['plot_synopsis']}\n{combined}".strip()
+                payload["core_conflicts"].append(combined)
+        return StoryQualityService.evaluate_setting_payload(payload)
 
     async def _build_source_coverage(
         self,

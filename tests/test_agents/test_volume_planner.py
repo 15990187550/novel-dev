@@ -69,6 +69,74 @@ def test_volume_plan_blueprint_backfills_missing_chapter_titles():
     assert [chapter.chapter_id for chapter in blueprint.chapters] == ["vol_1_ch_1", "vol_1_ch_2"]
 
 
+def test_extract_chapter_plan_adds_writability_status_and_writing_cards(async_session):
+    chapter = VolumeBeat(
+        chapter_id="ch_1",
+        chapter_number=1,
+        title="第一章",
+        summary="陆照偷药救妹。",
+        target_word_count=2000,
+        target_mood="紧张",
+        key_entities=["陆照"],
+        beats=[
+            BeatPlan(
+                summary="陆照为救妹妹潜入药库，却被执事发现；他必须在交出玉佩和暴露身世之间选择，结尾听见追兵逼近。",
+                target_mood="紧张",
+                key_entities=["陆照"],
+            )
+        ],
+    )
+
+    payload = VolumePlannerAgent(async_session)._extract_chapter_plan(chapter)
+
+    assert payload["writability_status"]["passed"] is True
+    assert payload["writing_cards"][0]["objective"]
+    assert payload["writing_cards"][0]["conflict"]
+
+
+def test_reviewed_volume_plan_payload_includes_writability_summary(async_session):
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="起卷",
+        total_chapters=1,
+        estimated_total_words=3000,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="第一章",
+                summary="陆照醒来。",
+                target_word_count=3000,
+                target_mood="平静",
+                beats=[BeatPlan(summary="陆照醒来，了解世界。", target_mood="平静")],
+            )
+        ],
+    )
+    score = VolumeScoreResult(
+        overall=80,
+        outline_fidelity=80,
+        character_plot_alignment=80,
+        hook_distribution=80,
+        foreshadowing_management=80,
+        chapter_hooks=80,
+        page_turning=80,
+        summary_feedback="ok",
+    )
+
+    payload = VolumePlannerAgent(async_session)._build_reviewed_volume_plan_payload(
+        plan,
+        score=score,
+        status="accepted",
+        reason="ok",
+        attempt=1,
+    )
+
+    assert payload["review_status"]["writability_status"]["passed"] is False
+    assert payload["review_status"]["writability_status"]["failed_chapter_numbers"] == [1]
+
+
 @pytest.mark.asyncio
 async def test_constraint_source_excludes_previous_volume_plan(async_session):
     repo = DocumentRepository(async_session)
