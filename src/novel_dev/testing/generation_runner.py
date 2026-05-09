@@ -927,6 +927,11 @@ async def _prepare_minimal_chapter_plan(
                 normalized_beats.append(beat_payload)
             current_chapter_plan["beats"] = normalized_beats
         checkpoint["current_chapter_plan"] = current_chapter_plan
+        chapter_context = checkpoint.get("chapter_context")
+        if isinstance(chapter_context, dict):
+            chapter_context = dict(chapter_context)
+            chapter_context["chapter_plan"] = dict(current_chapter_plan)
+            checkpoint["chapter_context"] = chapter_context
 
         current_volume_plan["volume_id"] = isolated_volume_id
         current_volume_plan["estimated_total_words"] = target_word_count

@@ -211,6 +211,18 @@ class WriterAgent:
                 state=state,
                 chapter_id=chapter_id,
             )
+            inner, beat_text = await self._enforce_beat_word_budget(
+                beat=beat,
+                inner=inner,
+                context=context,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                novel_id=novel_id,
+                rewrite_plan=rewrite_plan,
+            )
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -407,6 +419,18 @@ class WriterAgent:
                 state=None,
                 chapter_id=chapter_id,
             )
+            inner, beat_text = await self._enforce_beat_word_budget(
+                beat=beat,
+                inner=inner,
+                context=context,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                novel_id=novel_id,
+                rewrite_plan=rewrite_plan,
+            )
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -540,6 +564,7 @@ class WriterAgent:
         beat_context = self._beat_context(context, idx)
         writing_card = self._writing_card(context, idx)
         target_words = self._beat_target_word_count(context, total, beat)
+        min_words, max_words = self._beat_word_budget(context, total, beat)
 
         if beat_context and beat_context.guardrails:
             guardrail_text = "\n".join(f"- {item}" for item in beat_context.guardrails[:8])
@@ -626,7 +651,11 @@ class WriterAgent:
                 "禁止提前写后续节拍的核心事件、揭示、战斗、奇遇、昏迷、追兵到达或章末钩子；"
                 "当前节拍结尾只能留下通向下一节拍的轻微预兆或动作，不得让下一节拍事件实际发生。"
             )
-        parts.append(f"### 当前节拍目标字数\n约 {target_words} 字，允许 ±20%，不要明显缩水或灌水。")
+        parts.append(
+            "### 当前节拍目标字数\n"
+            f"目标约 {target_words} 字；硬范围 {min_words}-{max_words} 字。"
+            "不得明显超出上限，优先用动作、对话和冲突推进承载信息，避免灌水。"
+        )
 
         rewrite_focus = self._rewrite_focus_for_beat(rewrite_plan or {}, idx)
         if rewrite_focus:
@@ -654,6 +683,89 @@ class WriterAgent:
         total_beats = max(1, total)
         target = context.chapter_plan.target_word_count or 0
         return max(1, round(target / total_beats)) if target else 800
+
+    @staticmethod
+    def _beat_word_budget(context: ChapterContext, total: int, beat: BeatPlan | None = None) -> tuple[int, int]:
+        target = WriterAgent._beat_target_word_count(context, total, beat)
+        return max(1, round(target * 0.8)), max(1, round(target * 1.25))
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len((text or "").replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+
+    async def _enforce_beat_word_budget(
+        self,
+        *,
+        beat: BeatPlan,
+        inner: str,
+        context: ChapterContext,
+        relay_history: list,
+        last_beat_text: str,
+        idx: int,
+        total_beats: int,
+        is_last: bool,
+        novel_id: str,
+        rewrite_plan: dict | None,
+    ) -> tuple[str, str]:
+        min_words, max_words = self._beat_word_budget(context, total_beats, beat)
+        current = self._word_count(inner)
+        if current <= max_words:
+            return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+        budget_plan = dict(rewrite_plan or {})
+        prior_feedback = str(budget_plan.get("summary_feedback") or "").strip()
+        budget_feedback = (
+            f"当前节拍 {current} 字，超过硬上限 {max_words} 字。"
+            f"请压缩到 {min_words}-{max_words} 字，保留目标、阻力、选择、代价和停点，删除重复描写与旁枝。"
+        )
+        budget_plan["summary_feedback"] = f"{prior_feedback}\n{budget_feedback}".strip()
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"节拍 {idx + 1} 超出字数预算，触发压缩重写",
+            node="draft_word_budget",
+            task="write",
+            status="failed",
+            level="warning",
+            metadata={
+                "beat_index": idx,
+                "current_word_count": current,
+                "min_word_count": min_words,
+                "max_word_count": max_words,
+            },
+        )
+        rewritten = await self._rewrite_angle(
+            beat,
+            inner,
+            context,
+            relay_history,
+            last_beat_text,
+            idx,
+            total_beats,
+            is_last,
+            None,
+            novel_id,
+            budget_plan,
+        )
+        if self._word_count(rewritten) > max_words:
+            rewritten = self._truncate_to_budget(rewritten, max_words)
+        return rewritten, f"<!--BEAT:{idx}-->\n{rewritten}\n<!--/BEAT:{idx}-->"
+
+    @staticmethod
+    def _truncate_to_budget(text: str, max_words: int) -> str:
+        cleaned = (text or "").strip()
+        if max_words <= 0 or WriterAgent._word_count(cleaned) <= max_words:
+            return cleaned
+        count = 0
+        result: list[str] = []
+        for ch in cleaned:
+            if ch not in " \n\t\r":
+                count += 1
+            if count > max_words:
+                break
+            result.append(ch)
+        truncated = "".join(result).rstrip("，,；;、 ")
+        return truncated if truncated.endswith(("。", "！", "？", "…")) else f"{truncated}。"
 
     @staticmethod
     def _rewrite_focus_for_beat(rewrite_plan: dict, beat_idx: int) -> str:

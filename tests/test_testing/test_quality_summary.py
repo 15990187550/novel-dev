@@ -87,6 +87,36 @@ def test_quality_summary_passes_clean_snapshot():
     assert report.issues == []
 
 
+def test_quality_summary_reports_target_word_count_mismatch_root_cause():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-mismatch",
+            "checkpoint": {
+                "current_chapter_plan": {"target_word_count": 1000},
+                "chapter_context": {"chapter_plan": {"target_word_count": 3000}},
+                "setting_quality_report": {"passed": True},
+            },
+            "chapters": [{
+                "chapter_id": "ch_1",
+                "quality_status": "block",
+                "final_review_score": 72,
+                "quality_reasons": {
+                    "blocking_items": [{
+                        "code": "word_count_drift",
+                        "message": "字数严重偏离目标",
+                        "detail": {"target_word_count": 3000, "polished_word_count": 5400},
+                    }]
+                },
+            }],
+        },
+        run_id="quality-mismatch",
+    )
+
+    assert report.status == "failed"
+    assert report.issues[0].id == "CHAPTER-TARGET-MISMATCH-001"
+    assert any("root_cause=checkpoint_target_mismatch" in item for item in report.issues[0].evidence)
+
+
 def test_quality_summary_cli_writes_report(tmp_path):
     from novel_dev.testing.cli import main
 

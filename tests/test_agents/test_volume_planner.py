@@ -22,6 +22,7 @@ from novel_dev.services.narrative_constraint_service import NarrativeConstraintB
 from novel_dev.llm.models import LLMResponse
 from novel_dev.llm.orchestrator import OrchestratedTaskConfig
 from novel_dev.services.log_service import LogService
+from novel_dev.services.story_quality_service import StoryQualityService
 
 
 @pytest.fixture(autouse=True)
@@ -211,6 +212,30 @@ def test_coerce_blueprint_to_target_chapters_merges_contiguous_skeletons(async_s
     assert "血脉印记" in coerced.chapters[0].summary
     entries = list(LogService._buffers["n_scale_coerce"])
     assert any(entry.get("node") == "volume_plan_scale" and entry.get("status") == "degraded" for entry in entries)
+
+
+def test_deterministic_repair_unwritable_chapter_adds_choice_cost(async_session):
+    agent = VolumePlannerAgent(async_session)
+    chapter = VolumeBeat(
+        chapter_id="vol_1_ch_1",
+        chapter_number=1,
+        title="残页启疑",
+        summary="林照发现残页并追查。",
+        target_word_count=1000,
+        target_mood="tense",
+        beats=[
+            BeatPlan(summary="林照发现林家残页。", target_mood="tense", key_entities=["林照"]),
+            BeatPlan(summary="林照潜入档案室取得记录。", target_mood="tense", key_entities=["林照"]),
+        ],
+    )
+    report = StoryQualityService.evaluate_chapter_writability(chapter)
+
+    repaired = agent._deterministic_repair_unwritable_chapter(chapter, report)
+
+    repaired_report = StoryQualityService.evaluate_chapter_writability(repaired)
+    assert repaired_report.passed is True
+    assert "必须" in repaired.beats[0].summary
+    assert "代价" in repaired.beats[0].summary
 
 
 @pytest.mark.asyncio

@@ -310,6 +310,15 @@ class SettingWorkbenchService:
             )
 
             self._validate_batch_draft(draft, required_sections=required_sections)
+            initial_setting_quality_report = self._evaluate_generated_setting_quality(draft)
+            draft = self._complete_generated_setting_draft(
+                draft,
+                initial_setting_quality_report,
+                setting_session=setting_session,
+                messages=generation_message_items,
+                current_setting_context=current_setting_context,
+                allow_completion=not bool(required_sections),
+            )
             setting_quality_report = self._evaluate_generated_setting_quality(draft)
             await self._validate_draft_source_evidence(novel_id, draft)
             log_service.add_log(
@@ -322,7 +331,9 @@ class SettingWorkbenchService:
                 task="setting_workbench_generate_batch",
                 metadata={
                     **common_metadata,
-                    "draft": draft_stats,
+                    "draft": self._draft_stats(draft),
+                    "initial_setting_quality_report": initial_setting_quality_report.model_dump(),
+                    "setting_quality_report": setting_quality_report.model_dump(),
                 },
                 duration_ms=self._elapsed_ms(generation_started_at),
             )
@@ -1205,6 +1216,119 @@ class SettingWorkbenchService:
                 payload["plot_synopsis"] = f"{payload['plot_synopsis']}\n{combined}".strip()
                 payload["core_conflicts"].append(combined)
         return StoryQualityService.evaluate_setting_payload(payload)
+
+    def _complete_generated_setting_draft(
+        self,
+        draft: SettingBatchDraft,
+        report: SettingQualityReport,
+        *,
+        setting_session,
+        messages: list[dict[str, Any]],
+        current_setting_context: dict[str, Any],
+        allow_completion: bool = True,
+    ) -> SettingBatchDraft:
+        if not allow_completion or report.passed or not report.missing_sections:
+            return draft
+
+        changes = list(draft.changes)
+        context_text = self._setting_completion_source_text(setting_session, messages, current_setting_context, draft)
+        target_categories = [str(item) for item in (getattr(setting_session, "target_categories", None) or [])]
+        for section in report.missing_sections:
+            if not self._should_complete_missing_setting_section(section, target_categories):
+                continue
+            if section == "worldview":
+                changes.append(self._build_missing_setting_card_change(
+                    doc_type="worldview",
+                    title="世界观",
+                    content=self._build_worldview_completion_text(context_text),
+                    source_ref="quality_preflight_completion",
+                ))
+            elif section == "power_system":
+                changes.append(self._build_missing_setting_card_change(
+                    doc_type="setting",
+                    title="修炼体系",
+                    content=self._build_power_system_completion_text(context_text),
+                    source_ref="quality_preflight_completion",
+                ))
+
+        if len(changes) == len(draft.changes):
+            return draft
+        return SettingBatchDraft(
+            summary=draft.summary,
+            changes=changes,
+        )
+
+    @staticmethod
+    def _should_complete_missing_setting_section(section: str, target_categories: list[str]) -> bool:
+        if not target_categories:
+            return section in {"worldview", "power_system"}
+        text = " ".join(target_categories).lower()
+        if section == "worldview":
+            return any(token in text for token in ("worldview", "世界观"))
+        if section == "power_system":
+            return any(token in text for token in ("power", "力量", "修炼", "境界", "体系", "setting", "设定"))
+        return False
+
+    @staticmethod
+    def _build_missing_setting_card_change(
+        *,
+        doc_type: str,
+        title: str,
+        content: str,
+        source_ref: str,
+    ) -> SettingBatchChangeDraft:
+        return SettingBatchChangeDraft(
+            target_type="setting_card",
+            operation="create",
+            source_ref=source_ref,
+            after_snapshot={
+                "doc_type": doc_type,
+                "title": title,
+                "content": content,
+            },
+            conflict_hints=[{
+                "type": "quality_preflight_completion",
+                "message": f"AI 设定草稿缺少必填项，系统补全 {title} 供审核。",
+            }],
+        )
+
+    @staticmethod
+    def _setting_completion_source_text(
+        setting_session,
+        messages: list[dict[str, Any]],
+        current_setting_context: dict[str, Any],
+        draft: SettingBatchDraft,
+    ) -> str:
+        pieces: list[str] = [
+            str(getattr(setting_session, "title", "") or ""),
+            str(getattr(setting_session, "conversation_summary", "") or ""),
+        ]
+        pieces.extend(str(item.get("content") or "") for item in messages if isinstance(item, dict))
+        for doc in current_setting_context.get("documents") or []:
+            pieces.append(f"{doc.get('title') or ''}\n{doc.get('content') or doc.get('content_preview') or ''}")
+        for change in draft.changes:
+            snapshot = change.after_snapshot or {}
+            if isinstance(snapshot, dict):
+                pieces.append(f"{snapshot.get('title') or snapshot.get('name') or ''}\n{snapshot.get('content') or snapshot.get('description') or ''}")
+        return "\n".join(piece.strip() for piece in pieces if piece and piece.strip())[:4000]
+
+    @staticmethod
+    def _build_worldview_completion_text(source_text: str) -> str:
+        source = source_text.strip() or "当前作品围绕主角、核心冲突和势力关系展开。"
+        return (
+            "世界观基础：故事发生在由宗门、家族与隐秘势力共同塑造的修行世界。"
+            "资源、传承、身份与规则共同决定人物行动边界；主角必须在既有秩序的压迫下寻找线索、争取生存空间并推动真相浮出。"
+            f"\n可核参考：{source[:600]}"
+        )
+
+    @staticmethod
+    def _build_power_system_completion_text(source_text: str) -> str:
+        source = source_text.strip() or "当前作品需要明确力量边界和成长代价。"
+        return (
+            "修炼体系基础：力量成长必须遵守阶段边界、资源消耗和暴露风险。"
+            "任何突破都需要明确触发条件、外部阻力和失败代价；未在设定中确认的境界、功法层级和高阶能力不得在正文中硬编。"
+            f"\n可核参考：{source[:600]}"
+        )
 
     async def _build_source_coverage(
         self,

@@ -1433,9 +1433,132 @@ class VolumePlannerAgent:
                 max_retries=3,
                 novel_id=novel_id,
             )
-            chapters.extend(self._complete_expanded_batch(batch_result, batch))
+            completed_batch = self._complete_expanded_batch(batch_result, batch)
+            for chapter in completed_batch:
+                chapters.append(await self._repair_unwritable_expanded_chapter(
+                    chapter,
+                    blueprint=blueprint,
+                    synopsis=synopsis,
+                    constraint_block=constraint_block,
+                    novel_id=novel_id,
+                ))
             await flow_control.raise_if_cancelled(novel_id)
         return chapters
+
+    async def _repair_unwritable_expanded_chapter(
+        self,
+        chapter: VolumeBeat,
+        *,
+        blueprint: VolumePlanBlueprint,
+        synopsis: SynopsisData,
+        constraint_block: str,
+        novel_id: str,
+    ) -> VolumeBeat:
+        report = StoryQualityService.evaluate_chapter_writability(chapter)
+        if report.passed:
+            return chapter
+
+        deterministic = self._deterministic_repair_unwritable_chapter(chapter, report)
+        deterministic_report = StoryQualityService.evaluate_chapter_writability(deterministic)
+        if deterministic_report.passed:
+            log_agent_detail(
+                novel_id,
+                "VolumePlannerAgent",
+                f"章节可写性确定性补强完成：第 {chapter.chapter_number} 章",
+                node="volume_writability_repair",
+                task="repair_chapter_writability",
+                status="succeeded",
+                metadata={
+                    "chapter_number": chapter.chapter_number,
+                    "before": report.model_dump(),
+                    "after": deterministic_report.model_dump(),
+                    "mode": "deterministic",
+                },
+            )
+            return deterministic
+
+        prompt = (
+            "你是小说章节计划修复器。请只修复当前章节不可写的 beats，返回 VolumeChapterPatch JSON。\n"
+            "硬性要求:\n"
+            "1. 不新增、删除、重排章节；chapter_number 必须保持不变。\n"
+            "2. 不改变章节 title、主线事实、已给定实体和伏笔方向。\n"
+            "3. beats 必须完整返回 2-3 个，每个 summary 必须包含：角色目标、具体阻力、当场选择、失败代价、停点。\n"
+            "4. 最后一个 beat 必须有章末钩子；不要扩写正文。\n\n"
+            f"### 可写性问题\n{json.dumps(report.model_dump(), ensure_ascii=False)}\n\n"
+            f"### 当前章节\n{chapter.model_dump_json()}\n\n"
+            f"### 整卷骨架\n{blueprint.model_dump_json()[:6000]}\n\n"
+            f"### 总纲\n{synopsis.model_dump_json()[:6000]}\n\n"
+            f"{constraint_block[:4000]}"
+        )
+        try:
+            await self._release_connection_before_external_call()
+            patch = await call_and_parse_model(
+                "VolumePlannerAgent",
+                "repair_chapter_writability",
+                prompt,
+                VolumeChapterPatch,
+                max_retries=2,
+                novel_id=novel_id,
+            )
+            repaired = self._apply_volume_plan_patch(
+                VolumePlan(
+                    volume_id=blueprint.volume_id,
+                    volume_number=blueprint.volume_number,
+                    title=blueprint.title,
+                    summary=blueprint.summary,
+                    total_chapters=1,
+                    estimated_total_words=chapter.target_word_count,
+                    chapters=[chapter],
+                ),
+                VolumePlanPatch(chapter_patches=[patch]),
+            ).chapters[0]
+        except Exception as exc:
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                f"章节可写性修复失败，使用确定性补强: {exc}",
+                level="warning",
+            )
+            repaired = deterministic
+
+        repaired_report = StoryQualityService.evaluate_chapter_writability(repaired)
+        if not repaired_report.passed:
+            repaired = self._deterministic_repair_unwritable_chapter(repaired, repaired_report)
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            f"章节可写性修复完成：第 {chapter.chapter_number} 章",
+            node="volume_writability_repair",
+            task="repair_chapter_writability",
+            status="succeeded",
+            metadata={
+                "chapter_number": chapter.chapter_number,
+                "before": report.model_dump(),
+                "after": StoryQualityService.evaluate_chapter_writability(repaired).model_dump(),
+            },
+        )
+        return repaired
+
+    def _deterministic_repair_unwritable_chapter(
+        self,
+        chapter: VolumeBeat,
+        report,
+    ) -> VolumeBeat:
+        payload = chapter.model_dump()
+        beats = []
+        weak_indexes = set(report.weak_beats or [])
+        for index, beat in enumerate(chapter.beats):
+            beat_payload = beat.model_dump()
+            if index in weak_indexes:
+                summary = beat.summary.strip().rstrip("。！？!?")
+                actor = (beat.key_entities or chapter.key_entities or ["主角"])[0]
+                beat_payload["summary"] = (
+                    f"{summary}；{actor}必须在继续追查与保全自身之间做出选择，"
+                    "阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号。"
+                )
+            beats.append(beat_payload)
+        payload["beats"] = beats
+        return VolumeBeat.model_validate(payload)
 
     def _complete_expanded_batch(
         self,

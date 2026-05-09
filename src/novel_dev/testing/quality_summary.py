@@ -72,16 +72,24 @@ def build_quality_summary_report(
         final_score = chapter.get("final_review_score")
         if quality_status == "block" or (isinstance(final_score, (int, float)) and final_score < 60):
             chapter_id = str(chapter.get("chapter_id") or chapter.get("id") or "unknown")
+            target_mismatch = _target_word_count_mismatch(checkpoint, chapter)
             evidence = [
                 f"chapter_id={chapter_id}",
                 f"quality_status={quality_status}",
                 f"final_review_score={final_score}",
+                *target_mismatch,
                 *_flatten_evidence(chapter.get("quality_reasons") or {}),
             ]
+            issue_id = "CHAPTER-TARGET-MISMATCH-001" if target_mismatch else "CHAPTER-QUALITY-001"
+            message = (
+                "章节质量目标字数来源不一致，质量报告可能存在误判。"
+                if target_mismatch
+                else "章节质量门禁阻断或成稿评分过低。"
+            )
             report.add_issue(_issue(
-                "CHAPTER-QUALITY-001",
+                issue_id,
                 "chapter_final_review",
-                "章节质量门禁阻断或成稿评分过低。",
+                message,
                 evidence,
             ))
             break
@@ -125,6 +133,32 @@ def _issue(id_: str, stage: str, message: str, evidence: list[str]) -> Issue:
         evidence=evidence[:12],
         reproduce="novel-dev-testing quality-summary --input-json <snapshot.json>",
     )
+
+
+def _target_word_count_mismatch(checkpoint: dict[str, Any], chapter: dict[str, Any]) -> list[str]:
+    current_plan = checkpoint.get("current_chapter_plan") or {}
+    context_plan = (checkpoint.get("chapter_context") or {}).get("chapter_plan") or {}
+    current_target = current_plan.get("target_word_count")
+    context_target = context_plan.get("target_word_count")
+    gate_items = ((chapter.get("quality_reasons") or {}).get("blocking_items") or []) + (
+        (chapter.get("quality_reasons") or {}).get("warning_items") or []
+    )
+    gate_targets = []
+    for item in gate_items:
+        if not isinstance(item, dict) or item.get("code") != "word_count_drift":
+            continue
+        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        if "target_word_count" in detail:
+            gate_targets.append(detail.get("target_word_count"))
+    targets = [value for value in [current_target, context_target, *gate_targets] if value not in (None, "")]
+    if len({str(value) for value in targets}) <= 1:
+        return []
+    return [
+        "root_cause=checkpoint_target_mismatch",
+        f"current_chapter_plan.target_word_count={current_target}",
+        f"chapter_context.chapter_plan.target_word_count={context_target}",
+        f"quality_gate.target_word_count={gate_targets[0] if gate_targets else None}",
+    ]
 
 
 def _flatten_evidence(value: Any, *, prefix: str = "") -> list[str]:

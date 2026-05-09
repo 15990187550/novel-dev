@@ -116,3 +116,39 @@ def test_setting_workbench_builds_quality_report_from_generated_draft():
     assert report.passed is False
     assert "power_system" in report.missing_sections
     assert any("核心冲突" in issue for issue in report.weaknesses)
+
+
+def test_setting_workbench_completes_missing_worldview_for_target_category():
+    draft = SettingBatchDraft(
+        summary="生成角色设定",
+        changes=[
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "setting",
+                    "title": "修炼体系",
+                    "content": "修炼需要资源、阶段边界和失败代价。",
+                },
+            )
+        ],
+    )
+    report = SettingWorkbenchService._evaluate_generated_setting_quality(draft)
+    session = type("Session", (), {
+        "title": "世界观补全",
+        "conversation_summary": "青云宗外门弟子追查灭门真相。",
+        "target_categories": ["worldview"],
+    })()
+    service = SettingWorkbenchService.__new__(SettingWorkbenchService)
+
+    completed = service._complete_generated_setting_draft(
+        draft,
+        report,
+        setting_session=session,
+        messages=[{"role": "user", "content": "青云宗、林家遗孤、莫怀山压迫。"}],
+        current_setting_context={"documents": []},
+    )
+
+    snapshots = [change.after_snapshot for change in completed.changes]
+    assert any(item.get("doc_type") == "worldview" and item.get("content") for item in snapshots)
+    assert len(completed.changes) == 2

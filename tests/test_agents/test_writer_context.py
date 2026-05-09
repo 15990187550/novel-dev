@@ -68,6 +68,7 @@ class TestBuildContextMessage:
         assert "Test" in result
         assert "开场" in result
         assert "当前节拍目标字数" in result
+        assert "硬范围" in result
 
     def test_marks_future_beats_as_boundaries_not_content_to_write_now(self):
         ctx = _make_context(
@@ -140,6 +141,34 @@ class TestBuildContextMessage:
             chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=2000, beats=[beat])
         )
         assert WriterAgent._beat_target_word_count(ctx, 1, beat) == 1200
+
+    @pytest.mark.asyncio
+    async def test_enforce_beat_word_budget_rewrites_overlong_beat(self):
+        beat = BeatPlan(summary="林照发现残页，必须藏起证据。", target_mood="紧张", target_word_count=100)
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="Test", target_word_count=100, beats=[beat])
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+
+        async def fake_rewrite_angle(*args, **kwargs):
+            return "林照发现残页，压住心口震动，选择先藏证据再离开。"
+
+        agent._rewrite_angle = fake_rewrite_angle
+        inner, beat_text = await agent._enforce_beat_word_budget(
+            beat=beat,
+            inner="长" * 180,
+            context=ctx,
+            relay_history=[],
+            last_beat_text="",
+            idx=0,
+            total_beats=1,
+            is_last=True,
+            novel_id="n_budget",
+            rewrite_plan={},
+        )
+
+        assert "选择先藏证据" in inner
+        assert "<!--BEAT:0-->" in beat_text
 
     def test_includes_relay_history(self):
         ctx = _make_context()
