@@ -11,6 +11,7 @@ from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.schemas.context import ChapterContext, ChapterPlan, EntityState, LocationContext, ForeshadowingContext, BeatContext
 from novel_dev.schemas.similar_document import SimilarDocument
 from novel_dev.services.embedding_service import EmbeddingService
+from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.entity_repo import EntityRepository
@@ -312,6 +313,7 @@ class ContextAgent:
             similar_chapters=similar_chapters,
             guardrails=guardrails,
             beat_contexts=beat_contexts,
+            writing_cards=self._build_writing_cards(chapter_plan),
         )
         context_source_metadata = {
             "query": query_text,
@@ -431,6 +433,9 @@ class ContextAgent:
                 for bc in beat_contexts
             ],
         }
+
+    def _build_writing_cards(self, chapter_plan: ChapterPlan):
+        return StoryQualityService.build_writing_cards(chapter_plan)
 
     def _extract_key_entities_from_plan(self, chapter_plan: ChapterPlan) -> List[str]:
         names = set()

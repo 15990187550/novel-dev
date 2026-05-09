@@ -52,6 +52,42 @@ def test_synopsis_data_backfills_missing_title_from_logline():
     assert synopsis.title == "道经继承者陆照在末劫前争夺超脱路径"
 
 
+def test_brainstorm_review_status_includes_synopsis_quality_report(async_session):
+    synopsis = SynopsisData(
+        title="天玄纪",
+        logline="少年在乱世中成长。",
+        core_conflict="正邪对立",
+        themes=["成长"],
+        character_arcs=[CharacterArc(name="陆照", arc_summary="成长", key_turning_points=["入门"])],
+        milestones=[PlotMilestone(act="一", summary="修炼", climax_event="突破")],
+        estimated_volumes=1,
+        estimated_total_chapters=3,
+        estimated_total_words=9000,
+        volume_outlines=[],
+    )
+    score = SynopsisScoreResult(
+        overall=80,
+        logline_specificity=80,
+        conflict_concreteness=80,
+        character_arc_depth=80,
+        structural_turns=80,
+        hook_strength=80,
+        summary_feedback="ok",
+    )
+
+    reviewed = BrainstormAgent(async_session)._with_review_status(
+        synopsis,
+        score=score,
+        status="accepted",
+        reason="ok",
+        attempt=1,
+    )
+
+    quality = reviewed.review_status["synopsis_quality_report"]
+    assert quality["passed"] is False
+    assert quality["conflict_score"] < 75
+
+
 @pytest.mark.asyncio
 async def test_brainstorm_success(async_session):
     await DocumentRepository(async_session).create(

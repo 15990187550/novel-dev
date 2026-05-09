@@ -9,6 +9,7 @@ from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.services.narrative_constraint_service import NarrativeConstraintBuilder
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.story_quality_service import StoryQualityService
 
 
 class BrainstormAgent:
@@ -271,12 +272,14 @@ class BrainstormAgent:
         reason: str,
         attempt: int,
     ) -> SynopsisData:
+        quality_report = StoryQualityService.evaluate_synopsis(synopsis)
         return synopsis.model_copy(update={
             "review_status": {
                 "status": status,
                 "reason": reason,
                 "attempt": attempt,
                 "score": score.model_dump(),
+                "synopsis_quality_report": quality_report.model_dump(),
                 "optimization_suggestion": self._build_score_feedback(score),
             }
         })

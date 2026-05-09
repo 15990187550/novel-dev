@@ -74,6 +74,32 @@ def test_llm_config_enables_context_agent_orchestration():
     assert orchestration["repairer_subtask"] == "schema_repair"
 
 
+def test_context_agent_builds_writing_cards_from_chapter_plan(async_session):
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="第一章",
+        target_word_count=2000,
+        beats=[
+            BeatPlan(
+                summary="陆照为救妹妹潜入药库，却被执事发现；他必须在交出玉佩和暴露身世之间选择，结尾听见追兵逼近。",
+                target_mood="紧张",
+                key_entities=["陆照"],
+            ),
+            BeatPlan(
+                summary="陆照利用玉佩残光脱身，但发现妹妹病情恶化，决定参加宗门试炼换药。",
+                target_mood="压迫",
+            ),
+        ],
+    )
+
+    cards = ContextAgent(async_session)._build_writing_cards(plan)
+
+    assert len(cards) == 2
+    assert cards[0].objective
+    assert cards[0].conflict
+    assert cards[0].forbidden_future_events == ["陆照利用玉佩残光脱身"]
+
+
 @pytest.mark.asyncio
 async def test_load_location_context_uses_orchestrated_scene_tools_when_configured(async_session, monkeypatch):
     from novel_dev.db.models import Entity, EntityVersion, NovelState
