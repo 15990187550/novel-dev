@@ -269,7 +269,7 @@ class NovelDirector:
         await ChapterRepository(self.session).mark_world_state_ingested(chapter_id, True)
 
         settings = Settings()
-        archive_svc = ArchiveService(self.session, settings.markdown_output_dir)
+        archive_svc = ArchiveService(self.session, settings.data_dir)
         await archive_svc.archive(state.novel_id, chapter_id)
         log_agent_detail(
             state.novel_id,

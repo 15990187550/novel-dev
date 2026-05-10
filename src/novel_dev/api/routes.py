@@ -15,6 +15,7 @@ from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
+from novel_dev.storage.paths import StoragePaths
 from novel_dev.config import Settings
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
@@ -677,7 +678,7 @@ async def update_novel(novel_id: str, req: UpdateNovelRequest, session: AsyncSes
 
 @router.delete("/api/novels/{novel_id}", status_code=204)
 async def delete_novel(novel_id: str, session: AsyncSession = Depends(get_session)):
-    deleted = await NovelDeletionService(session, settings.markdown_output_dir).delete_novel(novel_id)
+    deleted = await NovelDeletionService(session, settings.data_dir).delete_novel(novel_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Novel state not found")
     return None
@@ -1246,7 +1247,7 @@ async def export_chapter(novel_id: str, chapter_id: str, session: AsyncSession =
     ch = await repo.get_by_id(chapter_id)
     if not ch or not ch.polished_text:
         raise HTTPException(status_code=404, detail="Chapter content not found")
-    sync = MarkdownSync(settings.markdown_output_dir)
+    sync = MarkdownSync(storage_paths=StoragePaths(settings.data_dir))
     path = await sync.write_chapter(novel_id, ch.volume_id, chapter_id, ch.polished_text)
     return {"exported_path": path, "content": ch.polished_text}
 
@@ -2938,7 +2939,7 @@ async def run_librarian(novel_id: str, session: AsyncSession = Depends(get_sessi
 @router.get("/api/novels/{novel_id}/volumes/{volume_id}/export")
 async def export_volume(novel_id: str, volume_id: str, format: str = "md", session: AsyncSession = Depends(get_session)):
     from novel_dev.services.export_service import ExportService
-    svc = ExportService(session, settings.markdown_output_dir)
+    svc = ExportService(session, settings.data_dir)
     try:
         path = await svc.export_volume(novel_id, volume_id, format=format)
     except ValueError as e:
@@ -2949,7 +2950,7 @@ async def export_volume(novel_id: str, volume_id: str, format: str = "md", sessi
 @router.post("/api/novels/{novel_id}/export")
 async def export_novel(novel_id: str, format: str = "md", session: AsyncSession = Depends(get_session)):
     from novel_dev.services.export_service import ExportService
-    svc = ExportService(session, settings.markdown_output_dir)
+    svc = ExportService(session, settings.data_dir)
     try:
         path = await svc.export_novel(novel_id, format=format)
     except ValueError as e:

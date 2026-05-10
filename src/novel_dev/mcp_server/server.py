@@ -560,7 +560,7 @@ async def run_librarian(novel_id: str) -> dict:
 async def export_novel(novel_id: str, format: str = "md") -> dict:
     settings = Settings()
     async with async_session_maker() as session:
-        svc = ExportService(session, settings.markdown_output_dir)
+        svc = ExportService(session, settings.data_dir)
         try:
             path = await svc.export_novel(novel_id, format=format)
             return {"exported_path": path, "format": format}

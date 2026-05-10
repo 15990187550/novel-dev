@@ -1,6 +1,8 @@
 import pytest
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
+from pathlib import Path
+from unittest.mock import patch
 
 from novel_dev.api.routes import router, get_session
 from novel_dev.agents.director import NovelDirector, Phase
@@ -76,5 +78,37 @@ async def test_draft_without_context(async_session):
             resp = await client.post("/api/novels/n_no_ctx/chapters/c1/draft")
             assert resp.status_code == 400
             assert "Chapter context not prepared" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_export_chapter_writes_under_data_dir(async_session, tmp_path):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        await ChapterRepository(async_session).create("c_export", "v_export", 1, "Export Me", novel_id="n_export")
+        await ChapterRepository(async_session).update_text("c_export", polished_text="polished chapter")
+        await async_session.commit()
+
+        mock_settings = type("MockSettings", (), {"data_dir": str(tmp_path)})()
+        with patch("novel_dev.api.routes.settings", mock_settings):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/novels/n_export/chapters/c_export/export.md")
+
+        assert resp.status_code == 200
+        exported_path = Path(resp.json()["exported_path"])
+        assert exported_path == (
+            tmp_path.resolve()
+            / "novels"
+            / "n_export"
+            / "archive"
+            / "v_export"
+            / "c_export.md"
+        )
+        assert exported_path.read_text(encoding="utf-8") == "polished chapter"
     finally:
         app.dependency_overrides.clear()

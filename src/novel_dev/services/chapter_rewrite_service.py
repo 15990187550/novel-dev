@@ -198,7 +198,7 @@ class ChapterRewriteService:
                 await librarian.persist(extraction, chapter_id, novel_id)
                 await self.chapter_repo.mark_world_state_ingested(chapter_id, True)
 
-            archive_result = await ArchiveService(self.session, settings.markdown_output_dir).archive_chapter_only(
+            archive_result = await ArchiveService(self.session, settings.data_dir).archive_chapter_only(
                 novel_id,
                 chapter_id,
             )

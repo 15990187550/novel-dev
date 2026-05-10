@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import patch, AsyncMock
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
+from pathlib import Path
 
 from novel_dev.api.routes import router, get_session
 from novel_dev.agents.director import NovelDirector, Phase
@@ -13,7 +14,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_post_librarian_success(async_session):
+async def test_post_librarian_success(async_session, tmp_path):
     async def override():
         yield async_session
 
@@ -34,7 +35,11 @@ async def test_post_librarian_success(async_session):
         await ChapterRepository(async_session).update_text("c1", polished_text="abc")
         await async_session.commit()
 
-        with patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'):
+        mock_settings = type("MockSettings", (), {"data_dir": str(tmp_path)})()
+        with (
+            patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'),
+            patch("novel_dev.config.Settings", return_value=mock_settings),
+        ):
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 response = await client.post("/api/novels/n_api_lib/librarian")
         assert response.status_code == 200
@@ -65,13 +70,16 @@ async def test_post_export_success(async_session):
             await svc.archive("n_api_exp", "c1")
             await async_session.commit()
 
-            mock_settings = type("MockSettings", (), {"markdown_output_dir": tmpdir})()
+            mock_settings = type("MockSettings", (), {"data_dir": tmpdir})()
             with patch("novel_dev.api.routes.settings", mock_settings):
                 async with AsyncClient(transport=transport, base_url="http://test") as client:
                     response = await client.post("/api/novels/n_api_exp/export?format=md")
             assert response.status_code == 200
             assert response.json()["format"] == "md"
             assert "exported_path" in response.json()
+            assert Path(response.json()["exported_path"]).is_relative_to(
+                Path(tmpdir).resolve() / "novels" / "n_api_exp" / "exports"
+            )
     finally:
         app.dependency_overrides.clear()
 
