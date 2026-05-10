@@ -14,8 +14,8 @@ async def svc(async_session):
 
 @pytest.mark.asyncio
 async def test_export_volume_filters_archived(async_session, svc):
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
-    await ChapterRepository(async_session).create("c2", "v1", 2, "Ch2")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n1")
+    await ChapterRepository(async_session).create("c2", "v1", 2, "Ch2", novel_id="n1")
     await ChapterRepository(async_session).update_text("c1", polished_text="p1")
     await ChapterRepository(async_session).update_text("c2", polished_text="p2")
     await ChapterRepository(async_session).update_status("c1", "archived")
@@ -28,6 +28,28 @@ async def test_export_volume_filters_archived(async_session, svc):
     assert "# Ch1" in content
     assert "p1" in content
     assert "p2" not in content
+
+
+@pytest.mark.asyncio
+async def test_export_volume_filters_shared_volume_id_by_novel(async_session, svc):
+    await ChapterRepository(async_session).create(
+        "c_shared_n1", "shared", 1, "Novel One", novel_id="n1"
+    )
+    await ChapterRepository(async_session).update_text("c_shared_n1", polished_text="only n1")
+    await ChapterRepository(async_session).update_status("c_shared_n1", "archived")
+
+    await ChapterRepository(async_session).create(
+        "c_shared_n2", "shared", 2, "Novel Two", novel_id="n2"
+    )
+    await ChapterRepository(async_session).update_text("c_shared_n2", polished_text="leak n2")
+    await ChapterRepository(async_session).update_status("c_shared_n2", "archived")
+
+    path = await svc.export_volume("n1", "shared", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "only n1" in content
+    assert "leak n2" not in content
 
 
 @pytest.mark.asyncio
@@ -65,6 +87,28 @@ async def test_export_novel_filters_chapters_by_novel(async_session, svc):
     assert "should not leak" not in content
     assert "## Volume v1" in content
     assert "## Volume v2" not in content
+
+
+@pytest.mark.asyncio
+async def test_export_novel_filters_shared_volume_id_by_novel(async_session, svc):
+    await ChapterRepository(async_session).create(
+        "c_shared_n1", "shared", 1, "Novel One", novel_id="n1"
+    )
+    await ChapterRepository(async_session).update_text("c_shared_n1", polished_text="only n1")
+    await ChapterRepository(async_session).update_status("c_shared_n1", "archived")
+
+    await ChapterRepository(async_session).create(
+        "c_shared_n2", "shared", 2, "Novel Two", novel_id="n2"
+    )
+    await ChapterRepository(async_session).update_text("c_shared_n2", polished_text="leak n2")
+    await ChapterRepository(async_session).update_status("c_shared_n2", "archived")
+
+    path = await svc.export_novel("n1", format="md")
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    assert "only n1" in content
+    assert "leak n2" not in content
 
 
 @pytest.mark.asyncio
