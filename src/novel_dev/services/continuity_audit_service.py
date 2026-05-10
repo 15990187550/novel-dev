@@ -82,6 +82,42 @@ class ContinuityAuditService:
             )
         return ContinuityAuditResult(status="pass", summary="连续性审计通过。")
 
+    @classmethod
+    def build_rewrite_plan(cls, audit_data: dict[str, Any]) -> dict[str, Any]:
+        blocking_items = audit_data.get("blocking_items") if isinstance(audit_data, dict) else []
+        if not isinstance(blocking_items, list):
+            blocking_items = []
+        global_issues = [
+            cls._rewrite_issue_from_blocking_item(item)
+            for item in blocking_items
+            if isinstance(item, dict)
+        ]
+        return {
+            "source": "continuity_audit",
+            "rewrite_all": True,
+            "global_issues": global_issues,
+            "summary": str(audit_data.get("summary") or "连续性审计发现硬冲突，需要按长期设定修复正文。"),
+        }
+
+    @staticmethod
+    def _rewrite_issue_from_blocking_item(item: dict[str, Any]) -> dict[str, Any]:
+        code = str(item.get("code") or "continuity_conflict")
+        message = str(item.get("message") or "正文与长期设定存在冲突。")
+        detail = item.get("detail") if isinstance(item.get("detail"), dict) else {}
+        entity = str(detail.get("entity") or "").strip()
+        suggestions = {
+            "dead_entity_acted": "不要让死亡/尸身状态角色行动、开口或醒来；保留其死亡事实，改为他人发现、回忆、遗留物或环境反应推动剧情。",
+            "canonical_identity_drift": "不得改写角色固定身份、阵营或出身；删除临时套用的新身份称谓，回到固定档案中的身份表达。",
+        }
+        return {
+            "code": code,
+            "dim": "continuity",
+            "problem": message,
+            "suggestion": suggestions.get(code, "按章节上下文和长期设定重写冲突段落，不新增会覆盖旧设定的事实。"),
+            "entity": entity,
+            "detail": detail,
+        }
+
     @staticmethod
     def _active_entities(chapter_context: dict[str, Any]) -> list[dict[str, Any]]:
         entities = chapter_context.get("active_entities") or []

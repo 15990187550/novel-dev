@@ -258,6 +258,57 @@ async def test_polish_rolls_back_when_editor_guard_detects_plan_external_additio
 
 
 @pytest.mark.asyncio
+async def test_polish_standalone_uses_continuity_rewrite_plan_without_low_scores(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_continuity_edit", "v_continuity_edit", 1, "Continuity Edit")
+    await repo.update_text(
+        "c_continuity_edit",
+        raw_draft="林照忽然醒来，开口说出隐藏多年的真相。",
+    )
+    await async_session.commit()
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照的尸身没有醒来，仍停在黑水城寒榻上。")
+
+    checkpoint = {
+        "chapter_context": {
+            "chapter_plan": {
+                "chapter_number": 1,
+                "title": "Continuity Edit",
+                "target_word_count": 20,
+                "beats": [{"summary": "处理林照尸身异常", "target_mood": "tense"}],
+            }
+        },
+        "continuity_rewrite_plan": {
+            "source": "continuity_audit",
+            "rewrite_all": True,
+            "global_issues": [{
+                "code": "dead_entity_acted",
+                "dim": "continuity",
+                "problem": "林照 当前状态为死亡/尸身，但成稿写成了可行动角色。",
+                "suggestion": "不要让死亡/尸身状态角色行动、开口或醒来。",
+            }],
+        },
+    }
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish_standalone(
+            "novel_continuity_edit",
+            "c_continuity_edit",
+            checkpoint,
+        )
+
+    assert mock_client.acomplete.await_count == 1
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "连续性" in prompt
+    assert "不要让死亡/尸身状态角色行动、开口或醒来" in prompt
+
+    chapter = await repo.get_by_id("c_continuity_edit")
+    assert chapter.polished_text == "林照的尸身没有醒来，仍停在黑水城寒榻上。"
+
+
+@pytest.mark.asyncio
 async def test_polish_retries_once_with_guard_focus_before_rollback(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
