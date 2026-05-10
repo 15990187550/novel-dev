@@ -1707,7 +1707,7 @@ class VolumePlannerAgent:
             fs_lines = [f"- {fs.content}" for fs in fs_list[:30]]
             fs_text = "\n".join(fs_lines) if fs_lines else "无"
 
-            tick = await self.timeline_repo.get_current_tick() or 0
+            tick = await self.timeline_repo.get_current_tick(novel_id=novel_id) or 0
             events = await self.timeline_repo.get_around_tick(tick, radius=5, novel_id=novel_id)
             tl_lines = [f"- tick={e.tick}: {e.narrative}" for e in events[:15]]
             tl_text = "\n".join(tl_lines) if tl_lines else "无"

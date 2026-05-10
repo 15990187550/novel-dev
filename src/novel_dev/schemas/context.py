@@ -172,6 +172,7 @@ class ChapterContext(BaseModel):
     guardrails: List[str] = Field(default_factory=list)
     beat_contexts: List[BeatContext] = Field(default_factory=list)
     writing_cards: List[BeatWritingCard] = Field(default_factory=list)
+    story_contract: dict = Field(default_factory=dict)
 
     @field_validator("worldview_summary", "previous_chapter_summary", mode="before")
     @classmethod

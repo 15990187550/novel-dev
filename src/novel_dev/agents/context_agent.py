@@ -314,6 +314,7 @@ class ContextAgent:
             guardrails=guardrails,
             beat_contexts=beat_contexts,
             writing_cards=self._build_writing_cards(chapter_plan),
+            story_contract=checkpoint.get("story_contract") if isinstance(checkpoint.get("story_contract"), dict) else {},
         )
         context_source_metadata = {
             "query": query_text,

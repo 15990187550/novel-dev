@@ -110,6 +110,34 @@ async def test_assemble_without_embedding_service_has_empty_related_entities(asy
 
 
 @pytest.mark.asyncio
+async def test_assemble_carries_story_contract_from_checkpoint(async_session, mock_llm_factory):
+    story_contract = {
+        "protagonist_goal": "查清灭门真相",
+        "core_conflict": "家族旧案与宗门暗线",
+        "must_carry_forward": ["父亲玉佩"],
+    }
+    state = NovelState(
+        novel_id="n_contract_context",
+        current_phase="context_preparation",
+        checkpoint_data={
+            "story_contract": story_contract,
+            "current_chapter_plan": {
+                "chapter_number": 1,
+                "title": "第一章",
+                "target_word_count": 3000,
+                "beats": [{"summary": "陆照握住父亲玉佩入局", "target_mood": "压抑", "key_entities": []}],
+            },
+        },
+    )
+    async_session.add(state)
+    await async_session.flush()
+
+    context = await ContextAgent(async_session).assemble("n_contract_context", "ch_contract")
+
+    assert context.story_contract == story_contract
+
+
+@pytest.mark.asyncio
 async def test_assemble_logs_specific_context_sources(async_session, mock_llm_factory):
     state = NovelState(
         novel_id="n_ctx_log", current_phase="context_preparation",
