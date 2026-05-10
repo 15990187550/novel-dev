@@ -1245,7 +1245,7 @@ async def get_chapter_text(novel_id: str, chapter_id: str, session: AsyncSession
 async def export_chapter(novel_id: str, chapter_id: str, session: AsyncSession = Depends(get_session)):
     repo = ChapterRepository(session)
     ch = await repo.get_by_id(chapter_id)
-    if not ch or not ch.polished_text:
+    if not ch or ch.novel_id != novel_id or not ch.polished_text:
         raise HTTPException(status_code=404, detail="Chapter content not found")
     sync = MarkdownSync(storage_paths=StoragePaths(settings.data_dir))
     path = await sync.write_chapter(novel_id, ch.volume_id, chapter_id, ch.polished_text)

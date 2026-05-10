@@ -39,6 +39,8 @@ class ArchiveService:
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch or not ch.polished_text:
             raise ValueError("Chapter has no polished text to archive")
+        if ch.novel_id != novel_id:
+            raise ValueError("Chapter not found for novel")
         if getattr(ch, "quality_status", "unchecked") == "block":
             raise ValueError("Chapter quality gate blocked archive")
         if ch.status == "archived":

@@ -59,6 +59,35 @@ async def test_prepare_context_and_generate_draft(async_session, mock_llm_factor
 
 
 @pytest.mark.asyncio
+async def test_export_chapter_rejects_other_novel_chapter(async_session, tmp_path):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        await ChapterRepository(async_session).create(
+            "c_other_export",
+            "v_export",
+            1,
+            "Other Export",
+            novel_id="n_owner",
+        )
+        await ChapterRepository(async_session).update_text("c_other_export", polished_text="polished")
+        await async_session.commit()
+
+        mock_settings = type("MockSettings", (), {"data_dir": str(tmp_path)})()
+        with patch("novel_dev.api.routes.settings", mock_settings):
+            async with AsyncClient(transport=transport, base_url="http://test") as client:
+                resp = await client.get("/api/novels/n_request/chapters/c_other_export/export.md")
+
+        assert resp.status_code == 404
+        assert not (tmp_path / "novels" / "n_request").exists()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_draft_without_context(async_session):
     async def override():
         yield async_session

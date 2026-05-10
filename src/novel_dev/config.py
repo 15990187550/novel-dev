@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="")
+    model_config = SettingsConfigDict(env_prefix="", populate_by_name=True)
 
     database_url: str = "postgresql+asyncpg://localhost/novel_dev"
     data_dir: str = Field("~/NovelDevData", validation_alias="NOVEL_DEV_DATA_DIR")
