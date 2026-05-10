@@ -8,7 +8,8 @@ def test_database_url_from_env(monkeypatch):
     assert settings.database_url == "postgresql+asyncpg://test:test@localhost/test"
 
 
-def test_data_dir_default():
+def test_data_dir_default(monkeypatch):
+    monkeypatch.delenv("NOVEL_DEV_DATA_DIR", raising=False)
     from novel_dev.config import Settings
 
     settings = Settings()
