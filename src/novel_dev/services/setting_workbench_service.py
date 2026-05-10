@@ -309,6 +309,7 @@ class SettingWorkbenchService:
                 duration_ms=llm_duration_ms,
             )
 
+            self._repair_same_batch_entity_create_ids(draft)
             self._validate_batch_draft(draft, required_sections=required_sections)
             initial_setting_quality_report = self._evaluate_generated_setting_quality(draft)
             draft = self._complete_generated_setting_draft(
@@ -1184,6 +1185,53 @@ class SettingWorkbenchService:
             )
             self._validate_accuracy_guardrails(item, index=index)
 
+    @classmethod
+    def _repair_same_batch_entity_create_ids(cls, draft: SettingBatchDraft) -> None:
+        explicit_entity_ids = cls._same_batch_entity_create_ids(draft.changes)
+        relationship_entity_ids: list[str] = []
+        for item in draft.changes:
+            if item.target_type != "relationship" or item.operation != "create":
+                continue
+            snapshot = item.after_snapshot or {}
+            for field in ("source_id", "target_id"):
+                entity_id = str(snapshot.get(field) or "").strip()
+                if entity_id and entity_id not in relationship_entity_ids:
+                    relationship_entity_ids.append(entity_id)
+
+        candidates = [
+            entity_id for entity_id in relationship_entity_ids
+            if entity_id not in explicit_entity_ids
+        ]
+        used_ids = set(explicit_entity_ids)
+        for index, item in enumerate(draft.changes):
+            if item.target_type != "entity" or item.operation != "create":
+                continue
+            snapshot = dict(item.after_snapshot or {})
+            if str(snapshot.get("id") or "").strip():
+                continue
+            entity_id = ""
+            while candidates and not entity_id:
+                candidate = candidates.pop(0)
+                if candidate not in used_ids:
+                    entity_id = candidate
+            if not entity_id:
+                entity_id = cls._fallback_same_batch_entity_id(snapshot, index, used_ids)
+            snapshot["id"] = entity_id
+            item.after_snapshot = snapshot
+            used_ids.add(entity_id)
+
+    @staticmethod
+    def _fallback_same_batch_entity_id(snapshot: dict[str, Any], index: int, used_ids: set[str]) -> str:
+        name = str(snapshot.get("name") or snapshot.get("title") or "").strip()
+        ascii_slug = re.sub(r"[^a-zA-Z0-9_]+", "_", name).strip("_").lower()
+        base = f"ent_{ascii_slug}" if ascii_slug else f"ent_generated_{index + 1}"
+        entity_id = base
+        suffix = 2
+        while entity_id in used_ids:
+            entity_id = f"{base}_{suffix}"
+            suffix += 1
+        return entity_id
+
     @staticmethod
     def _evaluate_generated_setting_quality(draft: SettingBatchDraft) -> SettingQualityReport:
         payload: dict[str, Any] = {
@@ -1192,27 +1240,55 @@ class SettingWorkbenchService:
             "plot_synopsis": "",
             "character_profiles": [],
             "core_conflicts": [],
+            "factions": [],
         }
         for change in draft.changes:
             snapshot = change.after_snapshot or {}
             if not isinstance(snapshot, dict):
                 continue
-            doc_type = str(snapshot.get("doc_type") or snapshot.get("type") or "").lower()
+            raw_doc_type = str(snapshot.get("doc_type") or snapshot.get("type") or "").strip()
+            doc_type = raw_doc_type.lower()
             title = str(snapshot.get("title") or snapshot.get("name") or "")
             content = str(snapshot.get("content") or snapshot.get("description") or snapshot.get("state") or "")
             combined = f"{title}\n{content}".strip()
             if change.target_type == "entity":
-                entity_state = snapshot.get("state") if isinstance(snapshot.get("state"), dict) else {}
+                entity_state_value = snapshot.get("state")
+                entity_state = entity_state_value if isinstance(entity_state_value, dict) else {}
+                entity_state_text = (
+                    StoryQualityService._stringify(entity_state_value)
+                    if entity_state_value is not None
+                    else combined
+                )
                 payload["character_profiles"].append({
                     "name": snapshot.get("name") or title,
-                    "goal": entity_state.get("goal") or entity_state.get("motivation") or "",
-                    "conflict": entity_state.get("conflict") or "",
+                    "goal": (
+                        entity_state.get("goal")
+                        or entity_state.get("motivation")
+                        or (
+                            entity_state_text
+                            if SettingWorkbenchService._text_mentions_character_goal(entity_state_text)
+                            else ""
+                        )
+                    ),
+                    "conflict": entity_state.get("conflict") or (
+                        entity_state_text
+                        if StoryQualityService._has_conflict(entity_state_text)
+                        else ""
+                    ),
                 })
-            if doc_type in {"worldview", "domain_worldview"} or "世界" in title:
+                if SettingWorkbenchService._is_faction_snapshot(raw_doc_type, title, snapshot):
+                    payload["factions"].append(combined or entity_state_text)
+            if SettingWorkbenchService._is_worldview_snapshot(doc_type, raw_doc_type, title):
                 payload["worldview"] = f"{payload['worldview']}\n{combined}".strip()
-            if doc_type in {"power_system", "domain_power_system"} or any(token in title for token in ("力量", "修炼", "境界")):
+            if SettingWorkbenchService._is_power_system_snapshot(doc_type, raw_doc_type, title):
                 payload["power_system"] = f"{payload['power_system']}\n{combined}".strip()
-            if doc_type in {"synopsis", "plot", "concept"} or any(token in title for token in ("剧情", "主线", "冲突", "梗概")):
+            if SettingWorkbenchService._is_character_profile_snapshot(doc_type, raw_doc_type, title):
+                payload["character_profiles"].append({
+                    "name": title or "主角",
+                    "goal": combined if SettingWorkbenchService._text_mentions_character_goal(combined) else "",
+                    "conflict": combined if StoryQualityService._has_conflict(combined) else "",
+                })
+            if SettingWorkbenchService._is_plot_or_conflict_snapshot(doc_type, raw_doc_type, title):
                 payload["plot_synopsis"] = f"{payload['plot_synopsis']}\n{combined}".strip()
                 payload["core_conflicts"].append(combined)
         return StoryQualityService.evaluate_setting_payload(payload)
@@ -1227,7 +1303,7 @@ class SettingWorkbenchService:
         current_setting_context: dict[str, Any],
         allow_completion: bool = True,
     ) -> SettingBatchDraft:
-        if not allow_completion or report.passed or not report.missing_sections:
+        if not allow_completion or report.passed:
             return draft
 
         changes = list(draft.changes)
@@ -1250,6 +1326,40 @@ class SettingWorkbenchService:
                     content=self._build_power_system_completion_text(context_text),
                     source_ref="quality_preflight_completion",
                 ))
+            elif section == "character_profiles" and self._should_complete_story_foundation(target_categories):
+                changes.append(self._build_missing_setting_card_change(
+                    doc_type="character_profile",
+                    title="主角目标与当前动机",
+                    content=self._build_character_goal_completion_text(context_text),
+                    source_ref="quality_preflight_completion",
+                ))
+
+        weakness_text = "\n".join(report.weaknesses)
+        existing_titles = {
+            str((change.after_snapshot or {}).get("title") or "")
+            for change in changes
+            if isinstance(change.after_snapshot, dict)
+        }
+        if self._should_complete_story_foundation(target_categories) and (
+            "主角目标" in weakness_text or "当前动机" in weakness_text
+        ):
+            if "主角目标与当前动机" not in existing_titles:
+                changes.append(self._build_missing_setting_card_change(
+                    doc_type="character_profile",
+                    title="主角目标与当前动机",
+                    content=self._build_character_goal_completion_text(context_text),
+                    source_ref="quality_preflight_completion",
+                ))
+        if self._should_complete_story_foundation(target_categories) and (
+            "核心冲突" in weakness_text or "阻力来源" in weakness_text
+        ):
+            if "核心冲突与阻力来源" not in existing_titles:
+                changes.append(self._build_missing_setting_card_change(
+                    doc_type="core_conflict",
+                    title="核心冲突与阻力来源",
+                    content=self._build_core_conflict_completion_text(context_text),
+                    source_ref="quality_preflight_completion",
+                ))
 
         if len(changes) == len(draft.changes):
             return draft
@@ -1261,13 +1371,39 @@ class SettingWorkbenchService:
     @staticmethod
     def _should_complete_missing_setting_section(section: str, target_categories: list[str]) -> bool:
         if not target_categories:
-            return section in {"worldview", "power_system"}
+            return section in {"worldview", "power_system", "character_profiles"}
         text = " ".join(target_categories).lower()
         if section == "worldview":
             return any(token in text for token in ("worldview", "世界观"))
         if section == "power_system":
             return any(token in text for token in ("power", "力量", "修炼", "境界", "体系", "setting", "设定"))
+        if section == "character_profiles":
+            return SettingWorkbenchService._should_complete_story_foundation(target_categories)
         return False
+
+    @staticmethod
+    def _should_complete_story_foundation(target_categories: list[str]) -> bool:
+        if not target_categories:
+            return True
+        text = " ".join(target_categories).lower()
+        return any(
+            token in text
+            for token in (
+                "character",
+                "角色",
+                "人物",
+                "protagonist",
+                "主角",
+                "plot",
+                "剧情",
+                "conflict",
+                "冲突",
+                "goal",
+                "目标",
+                "全量",
+                "默认",
+            )
+        )
 
     @staticmethod
     def _build_missing_setting_card_change(
@@ -1329,6 +1465,61 @@ class SettingWorkbenchService:
             "任何突破都需要明确触发条件、外部阻力和失败代价；未在设定中确认的境界、功法层级和高阶能力不得在正文中硬编。"
             f"\n可核参考：{source[:600]}"
         )
+
+    @staticmethod
+    def _build_character_goal_completion_text(source_text: str) -> str:
+        source = source_text.strip() or "当前作品需要主角围绕核心真相展开行动。"
+        return (
+            "主角目标与当前动机：主角当前目标必须是一个可执行行动，而不是抽象成长。"
+            "他需要查明关键真相、保护自身处境，并在资源不足和外部监视下推进下一条线索；"
+            "失败代价是线索被夺、身份暴露或被迫放弃追查。"
+            f"\n可核参考：{source[:600]}"
+        )
+
+    @staticmethod
+    def _build_core_conflict_completion_text(source_text: str) -> str:
+        source = source_text.strip() or "当前作品需要明确谁阻止主角、争夺什么、失败代价是什么。"
+        return (
+            "核心冲突与阻力来源：主角为了查明真相并取得第一条关键线索，"
+            "必须对抗试图掩盖事实的宗门/敌对势力眼线。双方争夺线索、身份安全和行动主动权；"
+            "若主角失败，将失去证据、暴露调查意图，并被更强势力追逼。"
+            f"\n可核参考：{source[:600]}"
+        )
+
+    @staticmethod
+    def _is_worldview_snapshot(doc_type: str, raw_doc_type: str, title: str) -> bool:
+        text = f"{raw_doc_type} {title}"
+        return doc_type in {"worldview", "domain_worldview"} or any(token in text for token in ("世界", "世界观"))
+
+    @staticmethod
+    def _is_power_system_snapshot(doc_type: str, raw_doc_type: str, title: str) -> bool:
+        text = f"{raw_doc_type} {title}"
+        return doc_type in {"power_system", "domain_power_system"} or any(
+            token in text for token in ("力量", "修炼", "境界", "体系", "规则")
+        )
+
+    @staticmethod
+    def _is_plot_or_conflict_snapshot(doc_type: str, raw_doc_type: str, title: str) -> bool:
+        text = f"{raw_doc_type} {title}"
+        return doc_type in {"synopsis", "plot", "concept", "core_conflict"} or any(
+            token in text for token in ("剧情", "主线", "冲突", "梗概", "对立势力", "第一章", "目标")
+        )
+
+    @staticmethod
+    def _is_character_profile_snapshot(doc_type: str, raw_doc_type: str, title: str) -> bool:
+        text = f"{raw_doc_type} {title}"
+        return doc_type in {"character_profile", "characters", "character"} or any(
+            token in text for token in ("人物", "角色", "主角")
+        )
+
+    @staticmethod
+    def _is_faction_snapshot(raw_doc_type: str, title: str, snapshot: dict[str, Any]) -> bool:
+        text = f"{raw_doc_type} {title} {snapshot.get('type') or ''}"
+        return any(token in text for token in ("势力", "组织", "宗门", "盟", "殿"))
+
+    @staticmethod
+    def _text_mentions_character_goal(text: str) -> bool:
+        return any(token in text for token in ("目标", "动机", "查明", "调查", "必须", "决定", "想要", "试图"))
 
     async def _build_source_coverage(
         self,

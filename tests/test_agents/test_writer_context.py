@@ -3,6 +3,7 @@ from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.schemas.context import (
     ChapterContext, ChapterPlan, BeatPlan, LocationContext,
     EntityState, NarrativeRelay, ForeshadowingContext, BeatContext,
+    BeatWritingCard,
 )
 
 
@@ -30,16 +31,17 @@ class TestBuildSystemPrompt:
         agent = WriterAgent.__new__(WriterAgent)
         result = agent._build_system_prompt(ctx, is_last=False)
         assert "简洁有力" in result
-        assert "禁用词" in result
-        assert "禁止输出英文" in result
+        assert "写作方向" in result
+        assert "读者读感" in result
+        assert "自然中文表达" in result
 
     def test_prompt_contains_low_ai_flavor_style_controls(self):
         ctx = _make_context(style_profile={})
         agent = WriterAgent.__new__(WriterAgent)
         result = agent._build_system_prompt(ctx, is_last=False)
-        assert "比喻密度" in result
-        assert "抽象玄幻词" in result
-        assert "奇观堆叠" in result
+        assert "比喻服务画面和情绪" in result
+        assert "抽象玄幻概念" in result
+        assert "最有辨识度" in result
         assert "现代吐槽" in result
         assert "style_profile" in result
 
@@ -386,3 +388,54 @@ class TestSelfCheck:
         result = agent._self_check_beat(text, beat0, ctx, 0)
         assert result.needs_rewrite is True
         assert any("后续节拍" in item for item in result.contradictions)
+
+    def test_self_check_marks_missing_last_beat_payoff_and_hook(self):
+        beat = BeatPlan(
+            summary="林照击倒监视者后搜查遗物发现密函，新的危险信号逼近。",
+            target_mood="压迫",
+            key_entities=["林照", "监视者"],
+        )
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="试炼惊变", target_word_count=1800, beats=[beat]),
+            writing_cards=[
+                BeatWritingCard(
+                    beat_index=0,
+                    objective="林照处理倒下的监视者。",
+                    required_entities=["林照", "监视者"],
+                    required_payoffs=["林照搜查遗物发现密函", "新的危险信号逼近"],
+                    ending_hook="密函指向宗门内应，新的危险信号逼近。",
+                    reader_takeaway="读者应明确知道林照拿到第一条线索，同时更大的危险正在靠近。",
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+
+        result = agent._self_check_beat("林照盯着倒下的监视者，慢慢收回手。夜风从试炼林里吹过，他没有再多停留。", beat, ctx, 0)
+
+        assert result.needs_rewrite is True
+        assert any("未兑现" in item for item in result.contradictions)
+
+    def test_self_check_allows_last_beat_payoff_and_hook_when_present(self):
+        beat = BeatPlan(
+            summary="林照击倒监视者后搜查遗物发现密函，新的危险信号逼近。",
+            target_mood="压迫",
+            key_entities=["林照", "监视者"],
+        )
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(chapter_number=1, title="试炼惊变", target_word_count=1800, beats=[beat]),
+            writing_cards=[
+                BeatWritingCard(
+                    beat_index=0,
+                    objective="林照处理倒下的监视者。",
+                    required_entities=["林照", "监视者"],
+                    required_payoffs=["林照搜查遗物发现密函", "新的危险信号逼近"],
+                    ending_hook="密函指向宗门内应，新的危险信号逼近。",
+                    reader_takeaway="读者应明确知道林照拿到第一条线索，同时更大的危险正在靠近。",
+                )
+            ],
+        )
+        agent = WriterAgent.__new__(WriterAgent)
+
+        result = agent._self_check_beat("林照蹲下搜查监视者遗物，从衣襟暗袋里摸出一封密函。密函末尾的内应暗记让他后背发冷，林外随即传来第二声短哨，新的危险信号已经逼近。", beat, ctx, 0)
+
+        assert result.needs_rewrite is False

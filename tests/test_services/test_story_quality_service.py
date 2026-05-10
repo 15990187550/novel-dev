@@ -1,7 +1,7 @@
 from novel_dev.schemas.context import BeatPlan, ChapterPlan
 from novel_dev.schemas.outline import CharacterArc, PlotMilestone, SynopsisData, VolumeBeat
 from novel_dev.services.story_quality_service import StoryQualityService
-from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft
+from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft, SettingWorkbenchAgent
 from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 
 
@@ -91,8 +91,39 @@ def test_build_writing_cards_from_executable_chapter_plan():
     assert "陆照" in cards[0].required_entities
     assert cards[0].conflict
     assert cards[0].ending_hook
+    assert cards[0].required_payoffs
+    assert cards[0].reader_takeaway
     assert "陆照利用玉佩残光脱身" in cards[0].forbidden_future_events
     assert cards[0].target_word_count == 1000
+
+
+def test_build_writing_cards_extracts_last_beat_payoff_and_reader_hook():
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="试炼惊变",
+        target_word_count=1800,
+        beats=[
+            BeatPlan(
+                summary="林照在外门试炼中被狼群围住，必须权衡是否暴露隐藏实力。",
+                target_mood="紧张",
+                key_entities=["林照"],
+            ),
+            BeatPlan(
+                summary="监视者倒下后，林照搜查遗物发现密函，意识到宗门内应已经盯上他，新的危险信号逼近。",
+                target_mood="压迫",
+                key_entities=["林照", "监视者"],
+                foreshadowings_to_embed=["密函露出林家覆灭线索"],
+            ),
+        ],
+    )
+
+    cards = StoryQualityService.build_writing_cards(plan)
+
+    last = cards[-1]
+    assert any("密函" in item for item in last.required_payoffs)
+    assert any("危险信号" in item or "内应" in item for item in last.required_payoffs)
+    assert "读者" in last.reader_takeaway
+    assert "密函" in last.ending_hook
 
 
 def test_setting_workbench_builds_quality_report_from_generated_draft():
@@ -116,6 +147,118 @@ def test_setting_workbench_builds_quality_report_from_generated_draft():
     assert report.passed is False
     assert "power_system" in report.missing_sections
     assert any("核心冲突" in issue for issue in report.weaknesses)
+
+
+def test_setting_workbench_quality_accepts_chinese_doc_types_and_string_entity_state():
+    draft = SettingBatchDraft(
+        summary="生成最小可用设定",
+        changes=[
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "修炼规则",
+                    "title": "青云宗修炼体系",
+                    "content": "炼气到筑基需要资源、阶段边界和失败代价。",
+                },
+            ),
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "核心冲突",
+                    "title": "林照调查与玄火盟阻挠",
+                    "content": "林照调查家族覆灭真相，玄火盟爪牙试图阻挠并争夺线索。",
+                },
+            ),
+            SettingBatchChangeDraft(
+                target_type="entity",
+                operation="create",
+                after_snapshot={
+                    "type": "人物",
+                    "name": "林照",
+                    "state": "青云宗外门弟子，当前目标是查明家族覆灭真相，必须避开玄火盟眼线。",
+                },
+            ),
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "世界观",
+                    "title": "世界观",
+                    "content": "青云宗统治周边山门，宗门、家族与隐秘势力共同塑造修行秩序。",
+                },
+            ),
+        ],
+    )
+
+    report = SettingWorkbenchService._evaluate_generated_setting_quality(draft)
+
+    assert report.passed is True
+    assert report.missing_sections == []
+    assert report.weaknesses == []
+
+
+def test_setting_workbench_completes_missing_story_foundation_weaknesses():
+    draft = SettingBatchDraft(
+        summary="生成基础设定",
+        changes=[
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "worldview",
+                    "title": "世界观",
+                    "content": "青云宗外门和内门等级森严。",
+                },
+            ),
+            SettingBatchChangeDraft(
+                target_type="setting_card",
+                operation="create",
+                after_snapshot={
+                    "doc_type": "power_system",
+                    "title": "修炼体系",
+                    "content": "炼气到筑基需要资源和失败代价。",
+                },
+            ),
+        ],
+    )
+    report = SettingWorkbenchService._evaluate_generated_setting_quality(draft)
+    session = type("Session", (), {
+        "title": "最小验收设定",
+        "conversation_summary": "林照出身青云宗外门，目标是查明家族覆灭真相。",
+        "target_categories": [],
+    })()
+    service = SettingWorkbenchService.__new__(SettingWorkbenchService)
+
+    completed = service._complete_generated_setting_draft(
+        draft,
+        report,
+        setting_session=session,
+        messages=[{"role": "user", "content": "对立势力包括玄火盟或血海殿，第一章要拿到第一条真相线索。"}],
+        current_setting_context={"documents": []},
+    )
+
+    completed_report = SettingWorkbenchService._evaluate_generated_setting_quality(completed)
+    snapshots = [change.after_snapshot for change in completed.changes]
+    titles = [item.get("title") for item in snapshots]
+    assert "主角目标与当前动机" in titles
+    assert "核心冲突与阻力来源" in titles
+    assert completed_report.passed is True
+
+
+def test_setting_generation_prompt_requires_quality_foundation_contract():
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="最小验收设定",
+        target_categories=[],
+        messages=[{"role": "user", "content": "生成东方玄幻短篇测试小说设定。"}],
+    )
+
+    assert "doc_type 使用规范值" in prompt
+    assert "worldview" in prompt
+    assert "power_system" in prompt
+    assert "core_conflict" in prompt
+    assert "entity.after_snapshot.state 优先输出结构化对象" in prompt
 
 
 def test_setting_workbench_completes_missing_worldview_for_target_category():

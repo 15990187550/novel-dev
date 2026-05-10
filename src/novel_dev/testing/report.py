@@ -39,6 +39,15 @@ class Issue:
 
 
 @dataclass(slots=True)
+class Detail:
+    id: str
+    stage: str
+    title: str
+    evidence: list[str]
+    recommendation: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class TestRunReport:
     __test__ = False
 
@@ -50,6 +59,7 @@ class TestRunReport:
     llm_mode: str
     environment: dict[str, Any] = field(default_factory=dict)
     artifacts: dict[str, str] = field(default_factory=dict)
+    details: list[Detail] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
 
     def add_issue(self, issue: Issue) -> None:
@@ -106,6 +116,26 @@ class ReportWriter:
             for key, value in report.artifacts.items():
                 lines.append(f"- `{key}`: `{value}`")
             lines.append("")
+
+        if report.details:
+            lines.extend(
+                [
+                    "## Details",
+                    "",
+                ]
+            )
+            for detail in report.details:
+                lines.extend(
+                    [
+                        f"### {detail.id}",
+                        "",
+                        f"- Stage: `{detail.stage}`",
+                        f"- Title: {detail.title}",
+                        f"- Evidence: {', '.join(detail.evidence) if detail.evidence else 'none'}",
+                        f"- Recommendation: {', '.join(detail.recommendation) if detail.recommendation else 'none'}",
+                        "",
+                    ]
+                )
 
         lines.extend(
             [

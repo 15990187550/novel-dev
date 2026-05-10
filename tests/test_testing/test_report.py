@@ -1,6 +1,6 @@
 import json
 
-from novel_dev.testing.report import Issue, ReportWriter, TestRunReport
+from novel_dev.testing.report import Detail, Issue, ReportWriter, TestRunReport
 
 
 def test_report_writer_creates_json_and_markdown(tmp_path):
@@ -16,6 +16,15 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
             "novel_id": "novel-test",
             "exported_path": "./novel_output/novel-test/novel.md",
         },
+        details=[
+            Detail(
+                id="CHAPTER-QUALITY-DETAIL-001",
+                stage="chapter_final_review",
+                title="章节具体质量评价",
+                evidence=["overall=75", "humanity=68"],
+                recommendation=["减少抽象玄幻词复读"],
+            )
+        ],
     )
     report.add_issue(
         Issue(
@@ -37,6 +46,7 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
 
     summary_json = json.loads(paths.summary_json.read_text(encoding="utf-8"))
     assert summary_json["status"] == "failed"
+    assert summary_json["details"][0]["id"] == "CHAPTER-QUALITY-DETAIL-001"
     assert summary_json["issues"][0]["id"] == "GEN-QUALITY-001"
     assert summary_json["issues"][0]["reproduce"].endswith("--stage chapter_draft")
 
@@ -45,6 +55,10 @@ def test_report_writer_creates_json_and_markdown(tmp_path):
     assert "## Artifacts" in summary_md
     assert "`novel_id`" in summary_md
     assert "`exported_path`" in summary_md
+    assert "## Details" in summary_md
+    assert "CHAPTER-QUALITY-DETAIL-001" in summary_md
+    assert "章节具体质量评价" in summary_md
+    assert "减少抽象玄幻词复读" in summary_md
     assert "GEN-QUALITY-001" in summary_md
     assert "Chapter draft missed a required beat." in summary_md
 

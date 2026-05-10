@@ -20,8 +20,10 @@ def test_writer_context_message_prefers_writing_card_details():
                 turning_point="陆照选择暴露玉佩残光换取逃生机会。",
                 required_entities=["陆照", "守库执事"],
                 required_facts=["寒露丹只能从内库取得"],
+                required_payoffs=["陆照拿到寒露丹", "追兵确认他还在药库"],
                 forbidden_future_events=["宗门试炼开始"],
                 ending_hook="门外响起追兵脚步。",
+                reader_takeaway="读者应明确感到陆照暂时得手，但下一刻会被堵在门内。",
                 target_word_count=1000,
             )
         ],
@@ -40,5 +42,7 @@ def test_writer_context_message_prefers_writing_card_details():
     assert "### 当前节拍写作卡" in message
     assert "陆照要偷到寒露丹救妹妹" in message
     assert "守库执事发现药架异响" in message
+    assert "陆照拿到寒露丹" in message
+    assert "读者应明确感到陆照暂时得手" in message
     assert "宗门试炼开始" in message
     assert "门外响起追兵脚步" in message

@@ -44,3 +44,73 @@ def test_evaluate_fast_review_non_acceptance_keeps_word_count_drift_blocking():
 
     assert gate.status == "block"
     assert any(item["code"] == "word_count_drift" for item in gate.blocking_items)
+
+
+def test_evaluate_fast_review_blocks_incomplete_final_text():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照撑",
+        acceptance_scope="real-contract",
+    )
+
+    assert gate.status == "block"
+    assert any(item["code"] == "text_integrity" for item in gate.blocking_items)
+
+
+def test_evaluate_fast_review_blocks_isolated_punctuation_paragraph():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照停在树影下。\n\n。\n\n密林深处传来短促哨音。",
+        acceptance_scope="real-contract",
+    )
+
+    assert gate.status == "block"
+    assert any(item["code"] == "text_integrity" for item in gate.blocking_items)
+
+
+def test_evaluate_fast_review_warns_when_required_payoff_missing():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照击倒监视者后离开试炼林，夜色重新安静下来。",
+        required_payoffs=["林照搜查遗物发现密函", "新的危险信号逼近"],
+        acceptance_scope="real-contract",
+    )
+
+    assert gate.status == "warn"
+    assert any(item["code"] == "required_payoff" for item in gate.warning_items)

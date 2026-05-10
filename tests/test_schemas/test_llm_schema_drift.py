@@ -4,6 +4,7 @@ from novel_dev.schemas.context import BeatPlan, LocationContext, NarrativeRelay
 from novel_dev.schemas.librarian import ExtractionResult
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat
 from novel_dev.schemas.review import FastReviewReport, ScoreResult
+from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
 
 def test_outline_coerces_text_and_string_list_fields():
@@ -175,6 +176,17 @@ def test_librarian_parses_stringified_json_array_fields_from_structured_payload(
     assert result.concept_updates[0].entity_id == "识海"
     assert result.character_updates[0].state == {"状态": "昏迷"}
     assert result.new_relationships[0].relation_type == "持有"
+
+
+def test_setting_batch_draft_parses_stringified_changes_array_from_structured_payload():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成全量设定",
+        "changes": '[{"target_type": "setting_card", "operation": "create", "after_snapshot": {"doc_type": "worldview", "title": "世界观", "content": "灵潮复苏。"}, "source_ref": "全量设定"}]',
+    })
+
+    assert len(result.changes) == 1
+    assert result.changes[0].target_type == "setting_card"
+    assert result.changes[0].after_snapshot["doc_type"] == "worldview"
 
 
 def test_librarian_coerces_text_diff_summary_to_dict():

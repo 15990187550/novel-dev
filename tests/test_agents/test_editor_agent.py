@@ -133,7 +133,8 @@ async def test_rewrite_beat_prompt_requires_cleaning_english_terms(async_session
         )
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
-    assert "禁止输出英文" in prompt
+    assert "自然中文表达" in prompt
+    assert "贴合角色处境" in prompt
     assert "snooze" in prompt
 
 
@@ -160,11 +161,11 @@ async def test_rewrite_beat_prompt_targets_low_ai_flavor_patterns(async_session)
         )
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "增强读感" in prompt
     assert "比喻过密" in prompt
     assert "抽象玄幻词" in prompt
-    assert "奇观堆叠" in prompt
-    assert "模板化入体" in prompt
-    assert "保留最关键的 1-2 个画面" in prompt
+    assert "最有辨识度的画面" in prompt
+    assert "身体反应、行动阻碍或具体后果" in prompt
 
 
 @pytest.mark.asyncio
@@ -196,9 +197,13 @@ async def test_rewrite_beat_prompt_forbids_plan_external_additions(async_session
         )
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
-    assert "不得新增章节计划未出现的新事实" in prompt
-    assert "不得新增计划外台词" in prompt
-    assert "不得改动事件先后顺序" in prompt
+    assert "保留叙事事实" in prompt
+    assert "使用已有悬念" in prompt
+    assert "有限留白" in prompt
+    assert "不发明新事件" in prompt
+    assert "计划和原段已经给出的事实" in prompt
+    assert "需要新线索时写入后续建议" in prompt
+    assert "正文只升级已有事实" in prompt
 
 
 @pytest.mark.asyncio
@@ -249,4 +254,67 @@ async def test_polish_rolls_back_when_editor_guard_detects_plan_external_additio
     ch = await ChapterRepository(async_session).get_by_id("c_guard")
     assert ch.polished_text == "林照藏起玉佩。"
     state = await director.resume("novel_edit_guard")
+    assert state.checkpoint_data["editor_guard_warnings"][0]["issues"] == ["新增计划外黑影台词"]
+
+
+@pytest.mark.asyncio
+async def test_polish_retries_once_with_guard_focus_before_rollback(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_guard_retry",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "chapter_number": 1,
+                    "title": "Test",
+                    "target_word_count": 1000,
+                    "beats": [{"summary": "林照藏起玉佩", "target_mood": "tense"}],
+                }
+            },
+            "beat_scores": [
+                {"beat_index": 0, "scores": {"humanity": 60}},
+            ],
+        },
+        volume_id="v_guard",
+        chapter_id="c_guard_retry",
+    )
+    await ChapterRepository(async_session).create("c_guard_retry", "v_guard", 1, "Test")
+    await ChapterRepository(async_session).update_text("c_guard_retry", raw_draft="林照藏起玉佩。")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_editor_beat(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=True,
+                    premature_future_beat=False,
+                    introduced_plan_external_fact=True,
+                    changed_event_order=False,
+                    issues=["新增计划外黑影台词"],
+                    suggested_rewrite_focus="删除计划外台词，只保留藏起玉佩",
+                )
+            assert "黑影" not in kwargs["polished_text"]
+            return ChapterStructureGuardResult(passed=True)
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="林照藏起玉佩。黑影说：你逃不掉。"),
+        LLMResponse(text="林照把玉佩压进袖中，指腹停在裂纹上，慢慢松开呼吸。"),
+    ]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        guard = FakeGuard()
+        agent = EditorAgent(async_session, structure_guard=guard)
+        await agent.polish("novel_edit_guard_retry", "c_guard_retry")
+
+    ch = await ChapterRepository(async_session).get_by_id("c_guard_retry")
+    assert ch.polished_text == "林照把玉佩压进袖中，指腹停在裂纹上，慢慢松开呼吸。"
+    assert mock_client.acomplete.await_count == 2
+    state = await director.resume("novel_edit_guard_retry")
     assert state.checkpoint_data["editor_guard_warnings"][0]["issues"] == ["新增计划外黑影台词"]

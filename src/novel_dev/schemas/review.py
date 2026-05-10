@@ -38,8 +38,9 @@ class DimensionIssue(BaseModel):
     beat_idx: Optional[int] = None  # None 表示跨 beat 的整章问题
     problem: str  # 具体问题描述(不要抽象标签)
     suggestion: str  # 具体修改建议
+    source_stage: Optional[str] = None  # setting_generation / brainstorm / volume_plan / drafting / editing
 
-    @field_validator("dim", "problem", "suggestion", mode="before")
+    @field_validator("dim", "problem", "suggestion", "source_stage", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)

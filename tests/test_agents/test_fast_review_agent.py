@@ -16,12 +16,12 @@ async def test_fast_review_pass(async_session):
     await director.save_checkpoint(
         "novel_fr_pass",
         phase=Phase.FAST_REVIEWING,
-        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 3}}},
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 4}}},
         volume_id="v1",
         chapter_id="c1",
     )
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
-    await ChapterRepository(async_session).update_text("c1", raw_draft="甲乙丙", polished_text="甲乙丙")
+    await ChapterRepository(async_session).update_text("c1", raw_draft="甲乙丙。", polished_text="甲乙丙。")
 
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(
@@ -158,12 +158,15 @@ async def test_fast_review_llm_prompt_asks_for_ai_flavor_residue_notes(async_ses
         )
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
-    assert "AI 味残留" in prompt
+    assert "读者体验" in prompt
+    assert "相信人物" in prompt
+    assert "愿意继续读" in prompt
+    assert "正向改写目标" in prompt
     assert "比喻过密" in prompt
     assert "抽象玄幻词" in prompt
     assert "最多 3 条" in prompt
     assert "不超过 60 个汉字" in prompt
-    assert "不要展开长段分析" in prompt
+    assert "简短指出" in prompt
     assert "notes" in prompt
 
 
@@ -173,7 +176,7 @@ async def test_fast_review_parse_failure_falls_back_to_editing(async_session):
     await director.save_checkpoint(
         "novel_fr_parse_fallback",
         phase=Phase.FAST_REVIEWING,
-        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 3}}},
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 4}}},
         volume_id="v1",
         chapter_id="c_parse_fallback",
     )
@@ -253,13 +256,13 @@ async def test_fast_review_records_final_review_score_from_polished_text(async_s
     await director.save_checkpoint(
         "novel_fr_final_score",
         phase=Phase.FAST_REVIEWING,
-        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 3}}},
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 4}}},
         volume_id="v1",
         chapter_id="c_final_score",
     )
     repo = ChapterRepository(async_session)
     await repo.create("c_final_score", "v1", 1, "Final Score")
-    await repo.update_text("c_final_score", raw_draft="甲乙丙", polished_text="甲乙丙")
+    await repo.update_text("c_final_score", raw_draft="甲乙丙。", polished_text="甲乙丙。")
     await repo.update_scores("c_final_score", 61, {"readability": 61}, {"summary": "草稿偏弱"})
 
     final_score = ScoreResult(
@@ -307,8 +310,8 @@ async def test_fast_review_warns_word_count_only_at_edit_limit(async_session):
     await ChapterRepository(async_session).create("c_warn", "v1", 1, "Warn")
     await ChapterRepository(async_session).update_text(
         "c_warn",
-        raw_draft="甲乙丙丁戊",
-        polished_text="甲乙丙丁戊己庚",
+        raw_draft="甲乙丙丁戊。",
+        polished_text="甲乙丙丁戊己庚。",
     )
 
     with patch(
@@ -350,7 +353,7 @@ async def test_fast_review_real_contract_skips_strict_word_count_gate(async_sess
     await ChapterRepository(async_session).update_text(
         "c_contract",
         raw_draft="甲" * 1000,
-        polished_text="甲" * 2200,
+        polished_text=("甲" * 2199) + "。",
     )
 
     with patch(

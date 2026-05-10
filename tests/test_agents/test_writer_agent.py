@@ -17,6 +17,21 @@ def test_write_does_not_fire_and_forget_chapter_indexing():
     assert "create_task(self.embedding_service.index_chapter" not in source
 
 
+def test_writing_rules_require_motivated_character_turns(async_session):
+    rules = WriterAgent(async_session)._build_writing_rules_block(is_last=False)
+
+    assert "写作方向" in rules
+    assert "读者读感" in rules
+    assert "动作、对话、物件" in rules
+    assert "人物态度转折" in rules
+    assert "触发点" in rules
+    assert "犹豫/识别" in rules
+    assert "选择代价" in rules
+    assert "角色处境" in rules
+    assert "禁用词表" not in rules
+    assert "写作硬约束" not in rules
+
+
 @pytest.mark.asyncio
 async def test_write_draft_success(async_session):
     director = NovelDirector(session=async_session)

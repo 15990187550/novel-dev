@@ -124,7 +124,7 @@ class EditorAgent:
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
                     "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
-                    "suggestion": "改写章末,给出以下任一要素:明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
+                    "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
                 }]
 
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
@@ -164,6 +164,13 @@ class EditorAgent:
                     source_text=beat_text,
                     polished_text=polished,
                     checkpoint=checkpoint,
+                    retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
+                        source_text=beat_text,
+                        scores=scores,
+                        guard_evidence=evidence,
+                        whole_chapter_issues=whole_chapter_issues,
+                        chapter_context=chapter_context,
+                    ),
                 )
                 log_agent_detail(
                     novel_id,
@@ -278,7 +285,7 @@ class EditorAgent:
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
                     "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
-                    "suggestion": "改写章末,给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
+                    "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
                 }]
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
             if needs_rewrite:
@@ -292,6 +299,13 @@ class EditorAgent:
                     source_text=beat_text,
                     polished_text=polished,
                     checkpoint=checkpoint,
+                    retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
+                        source_text=beat_text,
+                        scores=scores,
+                        guard_evidence=evidence,
+                        whole_chapter_issues=whole_chapter_issues,
+                        chapter_context=chapter_context,
+                    ),
                 )
             else:
                 polished = beat_text
@@ -316,6 +330,7 @@ class EditorAgent:
         source_text: str,
         polished_text: str,
         checkpoint: dict,
+        retry_factory=None,
     ) -> str:
         chapter_plan = chapter_context.get("chapter_plan") if isinstance(chapter_context, dict) else chapter_context
         result = await self.structure_guard.check_editor_beat(
@@ -343,7 +358,70 @@ class EditorAgent:
             level="warning",
             metadata=evidence,
         )
+        if retry_factory is not None:
+            retry_text = await retry_factory(evidence)
+            retry_result = await self.structure_guard.check_editor_beat(
+                novel_id=novel_id,
+                chapter_plan=chapter_plan or {},
+                beat_index=beat_index,
+                source_text=source_text,
+                polished_text=retry_text,
+            )
+            if retry_result.passed:
+                log_agent_detail(
+                    novel_id,
+                    "EditorAgent",
+                    f"节拍 {beat_index + 1} 润色越界后受限重试通过",
+                    node="editor_structure_guard_retry",
+                    task="polish",
+                    status="succeeded",
+                    metadata={
+                        "beat_index": beat_index,
+                        "source_chars": len(source_text),
+                        "retry_chars": len(retry_text),
+                        "original_guard_issues": evidence.get("issues") or [],
+                    },
+                )
+                return retry_text
+            retry_evidence = retry_result.evidence(beat_index=beat_index, mode="editor_retry")
+            retry_evidence["source_chars"] = len(source_text)
+            retry_evidence["polished_chars"] = len(retry_text)
+            checkpoint.setdefault("editor_guard_warnings", []).append(retry_evidence)
+            log_agent_detail(
+                novel_id,
+                "EditorAgent",
+                f"节拍 {beat_index + 1} 润色受限重试仍越界，回退原文",
+                node="editor_structure_guard_retry",
+                task="polish",
+                status="failed",
+                level="warning",
+                metadata=retry_evidence,
+            )
         return source_text
+
+    async def _retry_rewrite_beat_after_guard(
+        self,
+        *,
+        source_text: str,
+        scores: dict,
+        guard_evidence: dict,
+        whole_chapter_issues: list,
+        chapter_context: dict,
+    ) -> str:
+        issues = guard_evidence.get("issues") or []
+        focus = guard_evidence.get("suggested_rewrite_focus") or "回到原文和章节计划已有事实，保留表达优化。"
+        guard_issue = {
+            "dim": "consistency",
+            "problem": "上一版润色引入了计划外事实或改变了节拍边界：" + "；".join(str(item) for item in issues[:4]),
+            "suggestion": f"{focus}；正文只使用原文、章节计划和已给事实，保留句子顺滑、动作清晰和情绪层次。",
+        }
+        return await self._rewrite_beat(
+            source_text,
+            scores,
+            [guard_issue],
+            whole_chapter_issues,
+            chapter_context,
+        )
 
     async def _rewrite_beat(
         self,
@@ -378,22 +456,22 @@ class EditorAgent:
             plan_block = f"### 章节计划\n{json.dumps(chapter_plan, ensure_ascii=False)}\n\n"
 
         prompt_parts = [
-            "你是一位小说编辑。请在『保留原情节与原对话意图』的前提下,针对以下问题定点改写本段,"
+            "你是一位小说编辑。请在保留叙事事实和原对话意图的前提下,针对以下问题定点改写本段。"
             "只返回改写后的正文,不要添加任何解释、标签或编号。\n",
-            "## 改写准则(必须遵守)\n"
-            "1. 禁用 AI 腔词汇:于是/总之/综上所述/这一切/无比/仿佛/似乎(非必要时)/油然而生/涌上心头。\n"
-            "2. 显示不说(show don't tell):用动作/对话/细节替代『他感到 X』『她想到 Y』这类直述。\n"
-            "3. 删除冗余总结段,避免复读前文已交代的信息。\n"
-            "4. 禁止输出英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK),"
-            "把前世或现代概念转写成自然中文表达。\n"
-            "5. 重点清理低 AI 味问题:比喻过密、抽象玄幻词连环复读、感官描写平均用力、奇观堆叠、模板化入体/传承演出。\n"
-            "6. 遇到异象/奇遇段落,压缩泛化光影和『意识深处/存在/光点/沉入』套话,"
-            "保留最关键的 1-2 个画面,并落到身体反应、行动阻碍或具体后果。\n"
-            "7. 现代吐槽只在风格约束明确允许时放大;否则改成短促、贴处境的内心念头,不要冲淡压迫感。\n"
-            "8. 保持与原段相近的字数(±20%),不要大幅缩水或灌水。\n",
-            "9. 不得新增章节计划未出现的新事实、新线索、新证据、新人物动机或新因果。\n"
-            "10. 不得新增计划外台词、旁白判断或额外谜团;若要强化钩子,只能放大当前节拍已存在的悬念。\n"
-            "11. 不得改动事件先后顺序,不要把上一节拍已完成的动作改写成下一节拍重新发生。\n",
+            "## 改写方向\n"
+            "1. 增强读感:让句子更顺,让动作、对话和物件承担信息,让读者能自然跟住情绪和因果。\n"
+            "2. 自然中文表达:英文、拼音、网络缩写和 UI 术语原文转写为贴合角色处境的中文说法。\n"
+            "3. 情绪呈现:把直述心理改成动作、对话潜台词、身体反应或环境反衬,让读者自己感到人物变化。\n"
+            "4. 低 AI 味修整:处理比喻过密、抽象玄幻词连环复读、感官平均用力、奇观堆叠、模板化入体/传承演出。\n"
+            "5. 异象/奇遇段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
+            "6. 现代吐槽:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
+            "7. 字数节奏:保持与原段相近的字数(±20%),优先补顺断句、压缩重复解释、保留有效冲突。\n",
+            "## 事实边界\n"
+            "1. 使用计划和原段已经给出的事实强化表达,保留事件先后顺序和人物已完成动作。\n"
+            "2. 使用已有悬念增强章末钩子:放大当前风险、未完成选择、情绪余波或已埋伏笔。\n"
+            "3. 有限留白:当计划内信息不足以制造新反转时,用停顿、视线、动作未完成或既有风险的措辞强化,不发明新事件。\n"
+            "4. 正文只升级已有事实:新线索、新证据、新物件、新威胁、新动机和额外台词交给章节计划或后续节拍,"
+            "需要新线索时写入后续建议,本段用已给目标、阻力、选择和代价增强读感。\n",
             style_block,
             plan_block,
         ]

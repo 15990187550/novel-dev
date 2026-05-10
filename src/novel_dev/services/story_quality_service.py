@@ -45,6 +45,7 @@ class StoryQualityService:
     CONFLICT_TERMS = ("冲突", "对抗", "vs", "VS", "敌", "仇", "阻", "追", "逼", "威胁", "争", "夺", "杀", "发现", "暴露")
     CHOICE_TERMS = ("选择", "决定", "必须", "宁可", "只得", "被迫", "代价", "赌注", "否则")
     HOOK_TERMS = ("悬念", "反转", "追兵", "逼近", "发现", "暴露", "异动", "裂开", "传来", "出现", "留下")
+    PAYOFF_TERMS = ("发现", "拿到", "得到", "搜查", "密函", "线索", "真相", "危险信号", "内应", "暴露", "确认")
     ABSTRACT_CONFLICTS = ("正邪对立", "善恶之争", "命运", "成长", "人性", "宿命")
 
     @classmethod
@@ -184,8 +185,10 @@ class StoryQualityService:
                 turning_point=cls._extract_turning_point(beat.summary),
                 required_entities=list(beat.key_entities),
                 required_facts=[beat.summary],
+                required_payoffs=cls._extract_required_payoffs(beat.summary, list(beat.foreshadowings_to_embed), is_last=index == len(chapter_plan.beats) - 1),
                 forbidden_future_events=[next_forbidden] if next_forbidden else [],
                 ending_hook=cls._extract_hook(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
+                reader_takeaway=cls._reader_takeaway(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
                 target_word_count=beat.target_word_count or default_words,
             ))
         return cards
@@ -270,6 +273,42 @@ class StoryQualityService:
         if hook:
             return hook
         return clauses[-1] if is_last and clauses else ""
+
+    @classmethod
+    def _extract_required_payoffs(cls, text: str, foreshadowings: list[str], *, is_last: bool) -> list[str]:
+        clauses = cls._split_clauses(text)
+        payoffs = [clause for clause in clauses if any(term in clause for term in cls.PAYOFF_TERMS)]
+        if is_last and clauses and not payoffs:
+            payoffs.append(clauses[-1])
+        for item in foreshadowings:
+            cleaned = coerce_to_text(item).strip()
+            if cleaned:
+                payoffs.append(cleaned)
+        return cls._dedupe_text(payoffs)[:5]
+
+    @classmethod
+    def _reader_takeaway(cls, text: str, *, is_last: bool) -> str:
+        hook = cls._extract_hook(text, is_last=is_last)
+        if is_last:
+            if hook:
+                return f"读者应明确获得本章线索兑现，并被这一停点牵引到下一章：{hook}"
+            return "读者应明确知道本章当场冲突的结果，并感到新的问题正在逼近。"
+        turning_point = cls._extract_turning_point(text)
+        if turning_point:
+            return f"读者应看清本节拍的选择、代价或局势变化：{turning_point}"
+        return "读者应看清本节拍的目标、阻力和推进结果。"
+
+    @staticmethod
+    def _dedupe_text(items: list[str]) -> list[str]:
+        seen = set()
+        result = []
+        for item in items:
+            cleaned = coerce_to_text(item).strip()
+            if not cleaned or cleaned in seen:
+                continue
+            seen.add(cleaned)
+            result.append(cleaned)
+        return result
 
     @staticmethod
     def _split_clauses(text: str) -> list[str]:

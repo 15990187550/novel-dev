@@ -2210,7 +2210,7 @@ async def test_generate_review_batch_rejects_relationship_ref_fields_before_crea
     assert changes == []
 
 
-async def test_generate_review_batch_rejects_relationship_to_same_batch_entity_without_id(
+async def test_generate_review_batch_repairs_same_batch_entity_id_for_relationship(
     async_session,
     monkeypatch,
 ):
@@ -2272,21 +2272,20 @@ async def test_generate_review_batch_rejects_relationship_to_same_batch_entity_w
         fake_call_and_parse_model,
     )
 
-    with pytest.raises(ValueError, match="same-batch entity create.*after_snapshot.id"):
-        await service.generate_review_batch(
-            novel_id="novel-ai-rel-missing-entity-id",
-            session_id=session.id,
-        )
+    batch = await service.generate_review_batch(
+        novel_id="novel-ai-rel-missing-entity-id",
+        session_id=session.id,
+    )
 
-    assert (await service.repo.get_session(session.id)).status == "ready_to_generate"
-    batches = (
+    assert batch.status == "pending"
+    changes = (
         await async_session.execute(
-            select(SettingReviewBatch).where(SettingReviewBatch.novel_id == "novel-ai-rel-missing-entity-id")
+            select(SettingReviewChange).where(SettingReviewChange.batch_id == batch.id)
         )
     ).scalars().all()
-    changes = (await async_session.execute(select(SettingReviewChange))).scalars().all()
-    assert batches == []
-    assert changes == []
+    entity_change = next(change for change in changes if change.target_type == "entity")
+    assert entity_change.after_snapshot["id"] == "ent_luzhao"
+    assert (await service.repo.get_session(session.id)).status == "generated"
 
 
 async def test_validate_batch_draft_allows_relationship_to_same_batch_entity_id(async_session):

@@ -36,6 +36,7 @@ from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
 from novel_dev.services.domain_activation_service import DomainActivationService
 from novel_dev.services.story_quality_service import StoryQualityService
+from novel_dev.services.story_contract_service import StoryContractService
 
 
 class VolumeChapterSkeleton(BaseModel):
@@ -839,10 +840,34 @@ class VolumePlannerAgent:
             if orchestration_config is not None
             else synopsis.model_dump_json()[:MAX_CHARS]
         )
+        if orchestration_config is not None:
+            story_contract = {
+                "protagonist_goal": synopsis.logline,
+                "current_stage_goal": "",
+                "first_chapter_goal": "",
+                "core_conflict": synopsis.core_conflict,
+                "key_clues": [],
+                "antagonistic_pressure": "",
+                "must_carry_forward": [],
+            }
+        else:
+            story_contract = StoryContractService.build_from_snapshot({
+                "checkpoint": {
+                    "synopsis_data": synopsis.model_dump(mode="json"),
+                    "current_volume_number": volume_number,
+                }
+            })
+        story_contract_block = (
+            "## 故事契约\n"
+            f"{json.dumps(story_contract, ensure_ascii=False)}\n"
+            "当前卷章节摘要要继承 protagonist_goal、current_stage_goal、core_conflict,"
+            "并把主角目标、阻力、选择代价写进每章推进。"
+        )
         volume_context = {
             "novel_id": novel_id,
             "volume_number": volume_number,
             "synopsis": synopsis.model_dump(mode="json"),
+            "story_contract": story_contract,
             "world_snapshot": world_snapshot,
             "constraint_block": constraint_block,
             "generation_instruction": generation_instruction,
@@ -876,6 +901,7 @@ class VolumePlannerAgent:
             "5. 优先保证 JSON 完整，不要输出解释，不要输出 Markdown。\n\n"
             f"大纲数据:\n{synopsis_prompt_data}\n\n"
             f"{volume_contract_block}\n\n"
+            f"{story_contract_block}\n\n"
             f"{constraint_block}\n\n"
             f"当前卷号:{volume_number}"
             f"{world_block}"

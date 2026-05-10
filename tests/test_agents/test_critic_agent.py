@@ -92,7 +92,8 @@ async def test_generate_score_prompt_requires_flagging_english_terms(async_sessi
         await agent._generate_score("他想按掉 snooze 再睡。", _make_context().model_dump(), "novel_crit_lang")
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
-    assert "禁止英文" in prompt
+    assert "自然中文表达" in prompt
+    assert "读者体验" in prompt
     assert "snooze" in prompt
 
 
@@ -123,12 +124,45 @@ async def test_generate_score_prompt_flags_specific_ai_flavor_patterns(async_ses
         )
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "读者体验" in prompt
+    assert "相信人物" in prompt
+    assert "愿意继续读" in prompt
+    assert "正向改写目标" in prompt
     assert "比喻密度" in prompt
     assert "抽象玄幻词" in prompt
     assert "感官平均用力" in prompt
     assert "模板化奇遇" in prompt
     assert "现代吐槽突兀" in prompt
-    assert "删减连续三处像字比喻" in prompt
+    assert "只保留最有辨识度的一处" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_score_prompt_requests_source_stage_attribution(async_session):
+    score_result = ScoreResult(
+        overall=72,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=72, comment=""),
+            DimensionScore(name="characterization", score=75, comment=""),
+            DimensionScore(name="readability", score=75, comment=""),
+            DimensionScore(name="consistency", score=70, comment=""),
+            DimensionScore(name="humanity", score=75, comment=""),
+            DimensionScore(name="hook_strength", score=75, comment=""),
+        ],
+        summary_feedback="存在来源不清的新增线索。",
+        per_dim_issues=[],
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score("林照忽然发现银线袖口。", _make_context().model_dump(), "n_source_stage")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "source_stage" in prompt
+    assert "setting_generation / brainstorm / volume_plan / drafting / editing" in prompt
+    assert "问题来自哪个流程阶段" in prompt
 
 
 @pytest.mark.asyncio

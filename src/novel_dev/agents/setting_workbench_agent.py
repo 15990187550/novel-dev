@@ -1,3 +1,4 @@
+import json
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -47,6 +48,25 @@ class SettingBatchChangeDraft(BaseModel):
 class SettingBatchDraft(BaseModel):
     summary: str
     changes: list[SettingBatchChangeDraft] = Field(min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def parse_stringified_changes(cls, value: Any):
+        if not isinstance(value, dict):
+            return value
+        changes = value.get("changes")
+        if not isinstance(changes, str):
+            return value
+        text = changes.strip()
+        if not text:
+            return value
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return value
+        if not isinstance(parsed, list):
+            return value
+        return {**value, "changes": parsed}
 
 
 class SettingWorkbenchAgent:
@@ -117,7 +137,10 @@ class SettingWorkbenchAgent:
                 "operation 只能是 create、update、delete。",
                 "update/delete 必须提供 target_id，禁止用名称引用代替目标 ID。",
                 "setting_card 需要 after_snapshot.doc_type、title、content。",
+                "setting_card.after_snapshot.doc_type 使用规范值：worldview、power_system、plot、core_conflict、character_profile；中文展示名写入 title，不要把中文类别写入 doc_type。",
+                "全量设定生成必须覆盖：世界观、修炼/力量规则、主角目标与当前动机、核心冲突、第一章可执行目标。",
                 "entity 需要 after_snapshot.type、name、state。",
+                "entity.after_snapshot.state 优先输出结构化对象，至少包含 goal、motivation、conflict、constraints；不要只输出一段不可解析描述。",
                 "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type。",
                 "relationship create 的 source_id/target_id 必须引用已存在实体 ID，或同一批次中 entity create 的 after_snapshot.id。",
                 "如果无法确定实体 ID，不要生成 relationship change；只在实体 state 或设定 content 中描述关系，留待后续优化。",

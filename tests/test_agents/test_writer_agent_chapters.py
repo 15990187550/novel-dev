@@ -67,7 +67,8 @@ async def test_multi_message_prompt_structure(async_session):
 
     # System prompt should contain rules, not worldview dump
     system = beat_messages[0].content
-    assert "禁用词" in system
+    assert "写作方向" in system
+    assert "读者读感" in system
     assert "简洁有力" in system
 
     # User prompt should contain chapter plan and beat info
@@ -129,3 +130,60 @@ async def test_prompt_does_not_contain_full_context_dump(async_session):
     beat_messages = captured_messages[0]
     user_content = beat_messages[1].content
     assert "这段世界观不应该出现在用户消息中" not in user_content
+
+
+@pytest.mark.asyncio
+async def test_writer_prompt_carries_story_contract_goal(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=2000,
+        beats=[BeatPlan(summary="林照发现祠堂里的玉佩", target_mood="压抑")],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="祠堂"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        story_contract={
+            "protagonist_goal": "追查家族覆灭真相",
+            "current_stage_goal": "找到父亲玉佩里的第一条线索",
+            "first_chapter_goal": "让林照确认玉佩与覆灭真相有关",
+            "must_carry_forward": ["父亲玉佩"],
+        },
+    )
+    await director.save_checkpoint(
+        "novel_test_contract",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_1",
+        chapter_id="ch_contract",
+    )
+    await ChapterRepository(async_session).create("ch_contract", "vol_1", 1, "Test")
+
+    captured_messages = []
+
+    def capture_prompt(agent, task=None):
+        mock = AsyncMock()
+
+        async def acomplete(messages, config=None):
+            captured_messages.append(messages)
+            return LLMResponse(text="林照在祠堂里握住玉佩，寒意顺着掌心蔓延，他终于确认父亲留下的线索仍在。")
+
+        mock.acomplete.side_effect = acomplete
+        return mock
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.side_effect = capture_prompt
+        mock_factory._resolve_config.return_value = None
+        agent = WriterAgent(async_session)
+        await agent.write("novel_test_contract", context, "ch_contract")
+
+    user = captured_messages[0][1].content
+    assert "故事契约" in user
+    assert "追查家族覆灭真相" in user
+    assert "当前节拍动作要服务这个长期目标" in user

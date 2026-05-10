@@ -543,6 +543,24 @@ class WriterAgent:
         if context.worldview_summary:
             parts.append("### 世界观约束\n已加载到章节上下文；正文必须遵守检索到的设定与 guardrails，不要自行改写核心设定。")
 
+        if context.story_contract:
+            contract_lines = []
+            for label, key in [
+                ("主角长期目标", "protagonist_goal"),
+                ("当前阶段目标", "current_stage_goal"),
+                ("首章启动目标", "first_chapter_goal"),
+                ("核心冲突", "core_conflict"),
+            ]:
+                value = context.story_contract.get(key)
+                if value:
+                    contract_lines.append(f"- {label}: {value}")
+            carry = context.story_contract.get("must_carry_forward") or context.story_contract.get("key_clues") or []
+            if carry:
+                contract_lines.append("- 必须承接: " + "、".join(str(item) for item in carry[:6]))
+            if contract_lines:
+                contract_lines.append("- 当前节拍动作要服务这个长期目标，让读者看到目标、阻力和选择在同一条主线上推进。")
+                parts.append("### 故事契约\n" + "\n".join(contract_lines))
+
         if context.location_context:
             location_lines = []
             if context.location_context.current:
@@ -627,10 +645,16 @@ class WriterAgent:
                 card_lines.append("- 必须出现实体: " + "、".join(writing_card.required_entities))
             if writing_card.required_facts:
                 card_lines.append("- 必须遵守事实: " + "；".join(writing_card.required_facts[:4]))
+            if writing_card.required_payoffs:
+                card_lines.append("- 本节拍需要兑现给读者的信息: " + "；".join(writing_card.required_payoffs[:4]))
             if writing_card.forbidden_future_events:
                 card_lines.append("- 禁止提前发生: " + "；".join(writing_card.forbidden_future_events[:4]))
             if writing_card.ending_hook:
                 card_lines.append(f"- 本节拍停点/钩子: {writing_card.ending_hook}")
+            if writing_card.reader_takeaway:
+                card_lines.append(f"- 读者读完应获得: {writing_card.reader_takeaway}")
+            if is_last and (writing_card.required_payoffs or writing_card.ending_hook):
+                card_lines.append("- 章末处理方向: 收束本章当场冲突，让线索或结果落到纸面，再把新的危险或疑问留在最后一个完整句子里。")
             parts.append("### 当前节拍写作卡\n" + "\n".join(card_lines))
 
         plan_lines = [f"本章：{context.chapter_plan.title}（共{total}个节拍）"]
@@ -1015,10 +1039,11 @@ class WriterAgent:
         beat_context = self._beat_context(context, beat_idx)
         missing_entities = []
         missing_foreshadowings = []
+        missing_payoffs = []
         contradictions = []
+        normalized = self._normalize_for_check(inner)
 
         if beat_context:
-            normalized = self._normalize_for_check(inner)
             for entity in beat_context.entities:
                 if not self._entity_represented(entity, normalized, beat):
                     missing_entities.append(entity.name)
@@ -1032,12 +1057,24 @@ class WriterAgent:
                 ):
                     missing_foreshadowings.append(fs.content)
 
+        writing_card = self._writing_card(context, beat_idx)
+        if writing_card:
+            for payoff in writing_card.required_payoffs:
+                if not self._planned_text_represented(payoff, normalized):
+                    missing_payoffs.append(payoff)
+            if writing_card.ending_hook and beat_idx == len(context.chapter_plan.beats) - 1:
+                if not self._planned_text_represented(writing_card.ending_hook, normalized):
+                    missing_payoffs.append(writing_card.ending_hook)
+            if missing_payoffs:
+                contradictions.append("节拍写作卡未兑现: " + "；".join(missing_payoffs[:4]))
+
         contradictions.extend(self._future_beat_leakage(inner, context, beat_idx))
 
-        needs_rewrite = bool(missing_entities or missing_foreshadowings or contradictions)
+        needs_rewrite = bool(missing_entities or missing_foreshadowings or missing_payoffs or contradictions)
         return BeatSelfCheck(
             missing_entities=missing_entities,
             missing_foreshadowings=missing_foreshadowings,
+            missing_payoffs=missing_payoffs,
             contradictions=contradictions,
             needs_rewrite=needs_rewrite,
         )
@@ -1128,6 +1165,23 @@ class WriterAgent:
         if surface_hint and (surface_hint in normalized_text or cls._text_overlap(surface_hint, normalized_text) >= 0.55):
             return True
         return bool(content) and cls._text_overlap(content, normalized_text) >= 0.55
+
+    @classmethod
+    def _planned_text_represented(cls, planned: str, normalized_text: str) -> bool:
+        normalized_planned = cls._normalize_for_check(planned)
+        if not normalized_planned:
+            return True
+        if normalized_planned in normalized_text:
+            return True
+        terms = [
+            term for term in cls._beat_boundary_terms(planned)
+            if len(term) >= 2 and term not in cls._BEAT_TERM_STOPWORDS
+        ]
+        high_signal = [term for term in terms if len(term) >= 3 or term in cls._HIGH_SIGNAL_BEAT_TERMS]
+        matched = [term for term in high_signal if term in normalized_text]
+        if high_signal and len(matched) >= max(1, min(3, round(len(high_signal) * 0.45))):
+            return True
+        return cls._text_overlap(normalized_planned, normalized_text) >= 0.55
 
     @staticmethod
     def _text_overlap(needle: str, haystack: str) -> float:
@@ -1227,37 +1281,32 @@ class WriterAgent:
 
     def _build_writing_rules_block(self, is_last: bool) -> str:
         hook_clause = (
-            "- **章末钩子**:这是本章最后一个节拍,结尾必须给出明确悬念/反转/赌注升级/情绪爆点,"
-            "禁止平淡收束,禁止用说教式总结结尾。\n"
+            "- **章末钩子**:这是本章最后一个节拍,把已有风险、未完成选择或情绪余波推到台前,"
+            "让读者自然想知道下一章会怎样。\n"
         ) if is_last else (
-            "- **节拍内钩子**:结尾留一个能把读者推到下一个节拍的动作、疑问或冲突,不要写完整收束。\n"
+            "- **节拍内钩子**:结尾留一个能把读者推到下一个节拍的动作、疑问或冲突余波,让场景有继续向前的惯性。\n"
         )
         return (
-            "### 写作硬约束\n"
-            "- **禁用词表**(避免 AI 腔):于是、总之、综上所述、综合来看、总的来说、"
-            "这一切、一切的一切、无比、仿佛(非比喻不用)、似乎(非推测不用)、显然、无疑、"
-            "油然而生、涌上心头、心头一震、深深地/静静地/默默地(避免叠用)。\n"
-            "- **语言纯度**:禁止输出英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK),"
-            "除非章节计划明确要求角色说外语；前世概念也必须转写成自然中文表达。\n"
-            "- **显示不说**(show don't tell):禁止直接写『他感到愤怒』『她意识到』『他明白了』,"
-            "改为用具体动作、生理反应、对话潜台词、环境反衬来呈现情绪和认知。\n"
+            "### 写作方向\n"
+            "- **读者读感**:正文优先清楚、顺滑、有画面,让读者能跟住人物目标、阻力和情绪推进。\n"
+            "- **自然中文表达**:前世、现代或术语概念都转写成贴合角色处境的中文说法,让表达像角色会想到或说出口的话。\n"
+            "- **显示不说**:用动作、对话、物件、身体反应、环境反衬承载信息,让读者自己读出人物情绪和认知变化。\n"
+            "- **人物态度转折**:角色从敌对到放行、从冷淡到帮助、从拒绝到合作时,"
+            "按触发点 -> 犹豫/识别 -> 选择代价来呈现,让转向来自场景压力和人物判断。\n"
             "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或吐槽时,"
-            "默认写得克制、具体、生活化。控制比喻密度,同一节拍不要连续用 3 个以上『像/仿佛/似乎』解释感受;"
-            "减少『意识深处、存在、光点、温热感、沉入、古经』等抽象玄幻词连环复读。\n"
-            "- **奇遇/异象写法**:避免奇观堆叠和模板化传承演出。不要把视觉、听觉、触觉、痛觉平均铺满;"
-            "选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
-            "- **现代吐槽**:只有 style_profile 明确允许轻松吐槽/反差喜剧时才放大现代梗;"
-            "否则现代记忆只作短促念头,必须贴合角色处境,不得削弱当前场景压迫感。\n"
-            "- **对话占比**目标 30%-50%,对话要带潜台词/打断/回避,不要做问答式信息交代。\n"
+            "默认写得克制、具体、生活化。比喻服务画面和情绪,抽象玄幻概念落到人物能触到、看见、承受的后果。\n"
+            "- **奇遇/异象写法**:选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
+            "- **现代吐槽**:现代记忆作为短促念头贴合角色处境,在不削弱当前场景压迫感的前提下使用。\n"
+            "- **对话占比**目标 30%-50%,对话带潜台词、打断和回避,让人物关系在说话方式里显出来。\n"
             "- **句式节奏**:长短句交替,动作场景用短句推进,情绪/景物可用长句铺陈;"
-            "避免连续 3 句相同结构(如连续『XX 的 XX,XX 的 XX』)。\n"
-            "- **视点一致**:全章保持设定视点(默认紧贴主角),不得中途跳入他人内心。\n"
-            "- **开场多样性**:禁止以『清晨/黄昏/夜幕/阳光透过』等套路环境描写起笔,"
-            "用动作、对话、具象物件或反常细节切入。\n"
+            "相近句式连续出现时主动换成动作、短对白或具象物件。\n"
+            "- **视点一致**:全章保持设定视点(默认紧贴主角),通过主角可感知的信息组织场景。\n"
+            "- **开场多样性**:用动作、对话、具象物件或反常细节切入,让第一段立刻形成当下事件。\n"
             f"{hook_clause}"
             "- **字数**:按用户消息中的当前节拍目标字数写作,允许 ±20%。\n"
             "- **伏笔**:pending_foreshadowings 中标注 role_in_chapter=embed 的条目,"
-            "请自然嵌入文本(不要点破,不要写成注解)。\n"
+            "请自然嵌入文本,让它像场景的一部分。\n"
+            "- **事实边界**:章节计划和 guardrails 是叙事事实边界,当前节拍之外的核心事件留给后续节拍。\n"
         )
 
     async def _rewrite_angle(

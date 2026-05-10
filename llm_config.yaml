@@ -23,7 +23,7 @@ models:
   deepseek:
     provider: anthropic
     model: deepseek-v4-flash
-    base_url: https://api.deepseek.com/anthropic
+    base_url: https://api.aicodewith.com
     api_key_env: DEEPSEEK_API_KEY
     structured_output:
       mode: anthropic_tool
@@ -60,7 +60,7 @@ agents:
       score_synopsis:
         temperature: 0.2
   volume_planner_agent:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 240
     fallback:
       model: kimi-for-coding
@@ -132,7 +132,7 @@ agents:
         timeout: 240
         retries: 3
   style_profiler_agent:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 60
     fallback:
       model: minimax-2-7
@@ -162,7 +162,7 @@ agents:
       retries: 1
     retries: 2
   outline_workbench_service:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 180
     temperature: 0.5
     fallback:
@@ -227,18 +227,18 @@ agents:
       validator_subtask: location_context_quality
       repairer_subtask: schema_repair
     fallback:
-      model: kimi-for-coding
+      model: deepseek
       temperature: 0.45
       retries: 1
       timeout: 60
     retries: 2
     temperature: 0.45
   writer_agent:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 120
     temperature: 0.9
     fallback:
-      model: deepseek
+      model: kimi-for-coding
       temperature: 0.9
       timeout: 120
       retries: 1
@@ -258,11 +258,11 @@ agents:
           retries: 1
     retries: 2
   critic_agent:
-    model: kimi-for-coding
+    model: deepseek
     timeout: 180
     temperature: 0.3
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.3
       timeout: 60
       retries: 1
@@ -278,7 +278,7 @@ agents:
     timeout: 60
     temperature: 0.6
     fallback:
-      model: kimi-for-coding
+      model: deepseek
       temperature: 0.6
       timeout: 60
       retries: 1

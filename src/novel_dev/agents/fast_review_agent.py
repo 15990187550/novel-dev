@@ -123,13 +123,14 @@ class FastReviewAgent:
     ) -> FastReviewLLMCheck:
         prompt = (
             "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
-            "检查两点并返回严格 JSON:\n"
+            "从读者体验出发检查两点并返回严格 JSON:\n"
             "1. consistency_fixed: 精修文本是否修复了与设定/上下文的不一致\n"
             "2. beat_cohesion_ok: 节拍之间是否连贯\n"
             "3. notes: 问题列表(字符串数组),最多 3 条,每条不超过 60 个汉字。"
-            "只写结论短句,不要展开长段分析。若没有问题返回空数组。"
-            "如果精修文本仍有 AI 味残留,必须写入 notes,"
-            "尤其是比喻过密、抽象玄幻词复读、感官平均用力、模板化奇遇/入体演出或现代吐槽突兀。\n"
+            "简短指出最影响读感的问题和正向改写目标；若没有问题返回空数组。"
+            "检查读者是否看得懂、是否相信人物、是否愿意继续读。"
+            "如果精修文本仍有比喻过密、抽象玄幻词复读、感官平均用力、模板化奇遇/入体演出或现代吐槽突兀,"
+            "请写入 notes 并说明下一版应呈现什么效果。\n"
             "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
             f"### 章节上下文\n{json.dumps(chapter_context, ensure_ascii=False)}\n\n"
             f"### 原始草稿\n{raw}\n\n"
@@ -351,6 +352,8 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                polished_text=polished,
+                required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             checkpoint["quality_gate"] = gate.model_dump()
@@ -454,6 +457,29 @@ class FastReviewAgent:
             )
         return report
 
+    @staticmethod
+    def _required_payoffs_from_context(chapter_context: dict) -> list[str]:
+        if not isinstance(chapter_context, dict):
+            return []
+        payoffs: list[str] = []
+        for card in chapter_context.get("writing_cards") or []:
+            if not isinstance(card, dict):
+                continue
+            for key in ("required_payoffs", "ending_hook"):
+                value = card.get(key)
+                if isinstance(value, list):
+                    payoffs.extend(str(item) for item in value if str(item or "").strip())
+                elif value:
+                    payoffs.append(str(value))
+        seen = set()
+        result = []
+        for item in payoffs:
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
+
     async def review_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> FastReviewReport:
         log_service.add_log(novel_id, "FastReviewAgent", f"开始独立快速评审: {chapter_id}")
         ch = await self.chapter_repo.get_by_id(chapter_id)
@@ -532,6 +558,8 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                polished_text=polished,
+                required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             checkpoint["quality_gate"] = gate.model_dump()

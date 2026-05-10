@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from novel_dev.services.story_contract_service import StoryContractService
 from novel_dev.testing.generation_runner import make_run_id, validate_run_id
-from novel_dev.testing.report import Issue, ReportWriter, TestRunReport
+from novel_dev.testing.report import Detail, Issue, ReportWriter, TestRunReport
 
 
 def build_quality_summary_report(
@@ -32,6 +33,17 @@ def build_quality_summary_report(
     )
 
     setting_quality = _quality_report_from_snapshot(snapshot, checkpoint)
+    story_contract = checkpoint.get("story_contract")
+    if not isinstance(story_contract, dict):
+        story_contract = StoryContractService.build_from_snapshot(snapshot)
+    cross_stage_quality = checkpoint.get("cross_stage_quality")
+    if not isinstance(cross_stage_quality, dict):
+        cross_stage_quality = StoryContractService.evaluate_cross_stage_quality(snapshot, story_contract)
+
+    _add_setting_quality_detail(report, setting_quality, snapshot)
+    _add_synopsis_quality_detail(report, checkpoint)
+    _add_volume_quality_detail(report, checkpoint, story_contract, cross_stage_quality)
+
     if setting_quality and not setting_quality.get("passed", True):
         report.add_issue(_issue(
             "SETTING-QUALITY-001",
@@ -67,7 +79,18 @@ def build_quality_summary_report(
             [f"failed_chapter_numbers={failed}", *_flatten_evidence(writability)],
         ))
 
+    for item in cross_stage_quality.get("blocking_issues") or []:
+        if not isinstance(item, dict):
+            continue
+        report.add_issue(_issue(
+            "CROSS-STAGE-QUALITY-001",
+            str(item.get("source_stage") or "cross_stage"),
+            str(item.get("message") or "跨阶段故事契约质量未通过。"),
+            _flatten_evidence(item),
+        ))
+
     for chapter in chapters:
+        _add_chapter_quality_detail(report, checkpoint, chapter)
         quality_status = str(chapter.get("quality_status") or "unchecked")
         final_score = chapter.get("final_review_score")
         if quality_status == "block" or (isinstance(final_score, (int, float)) and final_score < 60):
@@ -95,6 +118,194 @@ def build_quality_summary_report(
             break
 
     return report
+
+
+def _add_setting_quality_detail(
+    report: TestRunReport,
+    setting_quality: dict[str, Any] | None,
+    snapshot: dict[str, Any],
+) -> None:
+    if not setting_quality and not (snapshot.get("setting_review_batch") or snapshot.get("setting_review_changes")):
+        return
+    evidence = _flatten_evidence(setting_quality or {})
+    batch = snapshot.get("setting_review_batch") if isinstance(snapshot.get("setting_review_batch"), dict) else {}
+    if batch:
+        evidence.extend(_flatten_evidence({
+            "review_batch_status": batch.get("status"),
+            "review_batch_summary": batch.get("summary"),
+        }))
+    report.details.append(Detail(
+        id=f"SETTING-QUALITY-DETAIL-{len(report.details) + 1:03d}",
+        stage="setting_generation",
+        title="世界观与设定质量详情",
+        evidence=evidence[:24],
+        recommendation=_recommendations_from_quality(setting_quality),
+    ))
+
+
+def _add_synopsis_quality_detail(report: TestRunReport, checkpoint: dict[str, Any]) -> None:
+    synopsis = checkpoint.get("synopsis_data") if isinstance(checkpoint.get("synopsis_data"), dict) else {}
+    review = synopsis.get("review_status") if isinstance(synopsis.get("review_status"), dict) else {}
+    synopsis_quality = review.get("synopsis_quality_report")
+    if not synopsis and not synopsis_quality:
+        return
+    evidence = []
+    if review.get("overall") is not None:
+        evidence.append(f"overall={review.get('overall')}")
+    evidence.extend(_flatten_evidence(synopsis_quality or {}))
+    if synopsis.get("core_conflict"):
+        evidence.append(f"core_conflict={synopsis.get('core_conflict')}")
+    report.details.append(Detail(
+        id=f"SYNOPSIS-QUALITY-DETAIL-{len(report.details) + 1:03d}",
+        stage="brainstorm",
+        title="总纲质量详情",
+        evidence=evidence[:24],
+        recommendation=_recommendations_from_quality(synopsis_quality),
+    ))
+
+
+def _add_volume_quality_detail(
+    report: TestRunReport,
+    checkpoint: dict[str, Any],
+    story_contract: dict[str, Any],
+    cross_stage_quality: dict[str, Any],
+) -> None:
+    plan = checkpoint.get("current_volume_plan") if isinstance(checkpoint.get("current_volume_plan"), dict) else {}
+    review = plan.get("review_status") if isinstance(plan.get("review_status"), dict) else {}
+    writability = review.get("writability_status") if isinstance(review.get("writability_status"), dict) else {}
+    cross_warnings = [
+        item for item in (cross_stage_quality.get("warnings") or [])
+        if isinstance(item, dict) and item.get("source_stage") != "editing"
+    ]
+    contract_present = any(
+        story_contract.get(key)
+        for key in ("protagonist_goal", "current_stage_goal", "first_chapter_goal", "core_conflict")
+    )
+    if not plan and not writability and not cross_warnings and not contract_present:
+        return
+    evidence = []
+    if review.get("overall") is not None:
+        evidence.append(f"overall={review.get('overall')}")
+    evidence.extend(_flatten_evidence(writability))
+    evidence.extend(
+        f"story_contract.{key}={value}"
+        for key, value in story_contract.items()
+        if key in {"protagonist_goal", "current_stage_goal", "first_chapter_goal", "core_conflict"} and value
+    )
+    evidence.extend(
+        f"cross_stage_warning.{item.get('code')}={item.get('message')}"
+        for item in cross_warnings
+        if isinstance(item, dict)
+    )
+    recommendation = _recommendations_from_quality(writability)
+    recommendation.extend(
+        str(item.get("recommendation"))
+        for item in cross_warnings
+        if isinstance(item, dict) and item.get("recommendation")
+    )
+    report.details.append(Detail(
+        id=f"VOLUME-QUALITY-DETAIL-{len(report.details) + 1:03d}",
+        stage="volume_plan",
+        title="卷纲与跨阶段承接质量详情",
+        evidence=evidence[:28],
+        recommendation=recommendation[:16],
+    ))
+
+
+def _add_chapter_quality_detail(
+    report: TestRunReport,
+    checkpoint: dict[str, Any],
+    chapter: dict[str, Any],
+) -> None:
+    critique = checkpoint.get("critique_feedback") or {}
+    per_dim_issues = checkpoint.get("per_dim_issues") or []
+    editor_guard_warnings = checkpoint.get("editor_guard_warnings") or []
+    quality_reasons = chapter.get("quality_reasons") or {}
+    quality_status = str(chapter.get("quality_status") or "unchecked")
+    final_score = chapter.get("final_review_score")
+    if quality_status == "unchecked" and final_score is None and not quality_reasons:
+        return
+    if not any([critique, per_dim_issues, editor_guard_warnings, quality_reasons]):
+        return
+
+    chapter_id = str(chapter.get("chapter_id") or chapter.get("id") or "unknown")
+    evidence = [
+        f"chapter_id={chapter_id}",
+        f"quality_status={quality_status}",
+        f"final_review_score={final_score}",
+    ]
+    recommendation: list[str] = []
+
+    if isinstance(critique, dict):
+        if critique.get("overall") is not None:
+            evidence.append(f"overall={critique.get('overall')}")
+        if critique.get("summary"):
+            evidence.append(f"summary={critique.get('summary')}")
+        breakdown = critique.get("breakdown") or {}
+        if isinstance(breakdown, dict):
+            for dim, value in breakdown.items():
+                score = value.get("score") if isinstance(value, dict) else value
+                if score is not None:
+                    evidence.append(f"{dim}={score}")
+
+    if isinstance(per_dim_issues, list):
+        for issue in per_dim_issues[:8]:
+            if not isinstance(issue, dict):
+                continue
+            dim = issue.get("dim") or "unknown"
+            beat = issue.get("beat_idx")
+            problem = issue.get("problem")
+            suggestion = issue.get("suggestion")
+            location = f"beat={beat}" if beat is not None else "whole_chapter"
+            if problem:
+                evidence.append(f"{dim}.{location}.problem={problem}")
+            if suggestion:
+                recommendation.append(f"{dim}.{location}.suggestion={suggestion}")
+
+    if isinstance(editor_guard_warnings, list):
+        evidence.append(f"editor_guard_warnings_count={len(editor_guard_warnings)}")
+        for warning in editor_guard_warnings[:5]:
+            if not isinstance(warning, dict):
+                continue
+            beat = warning.get("beat_index")
+            issues = warning.get("issues") or []
+            focus = warning.get("suggested_rewrite_focus")
+            if issues:
+                evidence.append(f"editor_guard.beat={beat}.issues={issues}")
+            if focus:
+                recommendation.append(f"editor_guard.beat={beat}.focus={focus}")
+
+    if isinstance(quality_reasons, dict):
+        for item in (quality_reasons.get("blocking_items") or []) + (quality_reasons.get("warning_items") or []):
+            if isinstance(item, dict):
+                evidence.append(f"quality_gate.{item.get('code')}={item.get('message')}")
+
+    report.details.append(
+        Detail(
+            id=f"CHAPTER-QUALITY-DETAIL-{len(report.details) + 1:03d}",
+            stage="chapter_final_review",
+            title="章节具体质量评价",
+            evidence=evidence[:24],
+            recommendation=recommendation[:16],
+        )
+    )
+
+
+def _recommendations_from_quality(value: dict[str, Any] | None) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    result: list[str] = []
+    for key in ("warnings", "warning_items", "weaknesses", "blocking_issues", "recommendations"):
+        items = value.get(key)
+        if isinstance(items, list):
+            for item in items[:8]:
+                if isinstance(item, dict):
+                    message = item.get("message") or item.get("recommendation") or item.get("suggestion")
+                    if message:
+                        result.append(str(message))
+                elif item not in (None, "", [], {}):
+                    result.append(str(item))
+    return result[:16]
 
 
 def write_quality_summary_report(

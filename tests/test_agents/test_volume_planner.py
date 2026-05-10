@@ -1321,6 +1321,9 @@ async def test_generate_volume_plan_prompt_limits_output_scale_for_large_project
     second_prompt = mock_client.acomplete.await_args_list[1].args[0][0].content
     assert "VolumePlanBlueprint" in first_prompt
     assert "本卷总纲契约" in first_prompt
+    assert "故事契约" in first_prompt
+    assert "protagonist_goal" in first_prompt
+    assert "当前卷章节摘要要继承 protagonist_goal" in first_prompt
     assert "夺回第一枚道印" in first_prompt
     assert "下一卷契约" in first_prompt
     assert "ActiveConstraintContext" in first_prompt

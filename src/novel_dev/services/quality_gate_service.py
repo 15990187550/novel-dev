@@ -39,6 +39,8 @@ class QualityGateService:
         target_word_count: int | None = None,
         polished_word_count: int | None = None,
         final_review_score: int | None = None,
+        polished_text: str | None = None,
+        required_payoffs: list[str] | None = None,
         acceptance_scope: str | None = None,
     ) -> QualityGateResult:
         blocking: list[dict[str, Any]] = []
@@ -79,6 +81,18 @@ class QualityGateService:
         if not report.language_style_ok:
             warnings.append(cls._item("language_style", "存在未授权外文、现代术语或风格问题", report.notes))
 
+        integrity_issue = cls._text_integrity_issue(polished_text)
+        if integrity_issue:
+            blocking.append(integrity_issue)
+
+        missing_payoffs = cls._missing_required_payoffs(polished_text, required_payoffs or [])
+        if missing_payoffs:
+            warnings.append(cls._item(
+                "required_payoff",
+                "章节计划要求的线索或章末钩子未充分兑现",
+                {"missing": missing_payoffs[:5]},
+            ))
+
         for note in report.notes:
             if cls._note_is_blocking(note):
                 blocking.append(cls._item("review_note", note))
@@ -117,6 +131,51 @@ class QualityGateService:
         lowered = str(note or "")
         blocking_keywords = ("设定冲突", "上下文冲突", "状态冲突", "人物关系冲突", "严重矛盾", "剧情断裂")
         return any(keyword in lowered for keyword in blocking_keywords)
+
+    @classmethod
+    def _text_integrity_issue(cls, polished_text: str | None) -> dict[str, Any] | None:
+        text = str(polished_text or "").rstrip()
+        if not text:
+            return None
+        for paragraph in text.splitlines():
+            stripped = paragraph.strip()
+            if stripped and len(stripped) <= 3 and all(char in "。，、；：！？!?…,. ;:" for char in stripped):
+                return cls._item("text_integrity", "正文包含孤立标点段落，疑似节拍拼接或生成清洗异常", {"paragraph": stripped})
+        last = text[-1]
+        if last in "。！？!?…」』”’）)":
+            return None
+        if last in "，、；：,. ;:":
+            return cls._item("text_integrity", "正文末尾停在连接性标点，疑似未完成断句", {"ending": text[-20:]})
+        if any("\u4e00" <= char <= "\u9fff" for char in text[-4:]):
+            return cls._item("text_integrity", "正文末尾缺少完整句读，疑似生成截断", {"ending": text[-20:]})
+        return None
+
+    @classmethod
+    def _missing_required_payoffs(cls, polished_text: str | None, required_payoffs: list[str]) -> list[str]:
+        normalized_text = cls._normalize_for_match(polished_text or "")
+        if not normalized_text:
+            return []
+        missing = []
+        for payoff in required_payoffs:
+            normalized_payoff = cls._normalize_for_match(str(payoff or ""))
+            if not normalized_payoff:
+                continue
+            if normalized_payoff in normalized_text:
+                continue
+            if cls._text_overlap(normalized_payoff, normalized_text) < 0.55:
+                missing.append(str(payoff))
+        return missing
+
+    @staticmethod
+    def _normalize_for_match(text: str) -> str:
+        return "".join(ch for ch in str(text or "") if not ch.isspace() and ch not in "，。！？；：、,.!?;:（）()[]【】“”\"'")
+
+    @staticmethod
+    def _text_overlap(needle: str, haystack: str) -> float:
+        needle_chars = set(needle)
+        if not needle_chars:
+            return 0.0
+        return len(needle_chars & set(haystack)) / len(needle_chars)
 
     @staticmethod
     def _item(code: str, message: str, detail: Any | None = None) -> dict[str, Any]:

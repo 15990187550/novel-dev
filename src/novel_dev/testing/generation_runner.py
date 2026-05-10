@@ -27,6 +27,7 @@ from novel_dev.testing.generation_contracts import (
 from novel_dev.testing.fixtures import GenerationFixture, load_generation_fixture
 from novel_dev.testing.quality import validate_outline, validate_settings
 from novel_dev.testing.report import Issue, IssueType, ReportWriter, TestRunReport
+from novel_dev.services.story_contract_service import StoryContractService
 
 
 LLMMode = Literal["fake", "real", "real_then_fake_on_external_block"]
@@ -291,8 +292,33 @@ async def _build_generation_quality_snapshot(
         if review_batch is None:
             batches = await review_repo.list_review_batches(novel_id)
             review_batch = batches[0] if batches else None
+        review_changes = await review_repo.list_review_changes(review_batch.id) if review_batch is not None else []
 
     checkpoint = dict(state.checkpoint_data or {}) if state is not None else {}
+    setting_review_changes = [
+        {
+            "id": change.id,
+            "object_type": change.target_type,
+            "target_type": change.target_type,
+            "operation": change.operation,
+            "target_id": change.target_id,
+            "status": change.status,
+            "before_snapshot": change.before_snapshot,
+            "after_snapshot": change.after_snapshot,
+            "conflict_hints": change.conflict_hints,
+        }
+        for change in review_changes
+    ]
+    enrichment_input = {
+        "checkpoint": checkpoint,
+        "setting_review_changes": setting_review_changes,
+    }
+    story_contract = checkpoint.get("story_contract")
+    if not isinstance(story_contract, dict):
+        story_contract = StoryContractService.build_from_snapshot(enrichment_input)
+    cross_stage_quality = checkpoint.get("cross_stage_quality")
+    if not isinstance(cross_stage_quality, dict):
+        cross_stage_quality = StoryContractService.evaluate_cross_stage_quality(enrichment_input, story_contract)
     snapshot: dict[str, Any] = {
         "run_id": report.run_id,
         "novel_id": novel_id,
@@ -300,6 +326,8 @@ async def _build_generation_quality_snapshot(
         "llm_mode": report.llm_mode,
         "checkpoint": {
             **checkpoint,
+            "story_contract": story_contract,
+            "cross_stage_quality": cross_stage_quality,
             "current_phase": getattr(state, "current_phase", None),
             "current_volume_id": getattr(state, "current_volume_id", None),
             "current_chapter_id": getattr(state, "current_chapter_id", None),
@@ -333,6 +361,7 @@ async def _build_generation_quality_snapshot(
             "input_snapshot": review_batch.input_snapshot,
             "error_message": review_batch.error_message,
         }
+        snapshot["setting_review_changes"] = setting_review_changes
     return snapshot
 
 

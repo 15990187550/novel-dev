@@ -142,16 +142,18 @@ class BeatWritingCard(BaseModel):
     turning_point: str = ""
     required_entities: List[str] = Field(default_factory=list)
     required_facts: List[str] = Field(default_factory=list)
+    required_payoffs: List[str] = Field(default_factory=list)
     forbidden_future_events: List[str] = Field(default_factory=list)
     ending_hook: str = ""
+    reader_takeaway: str = ""
     target_word_count: int = 800
 
-    @field_validator("objective", "conflict", "turning_point", "ending_hook", mode="before")
+    @field_validator("objective", "conflict", "turning_point", "ending_hook", "reader_takeaway", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)
 
-    @field_validator("required_entities", "required_facts", "forbidden_future_events", mode="before")
+    @field_validator("required_entities", "required_facts", "required_payoffs", "forbidden_future_events", mode="before")
     @classmethod
     def _coerce_string_list_fields(cls, value: Any) -> List[str]:
         return coerce_to_str_list(value)
@@ -172,6 +174,7 @@ class ChapterContext(BaseModel):
     guardrails: List[str] = Field(default_factory=list)
     beat_contexts: List[BeatContext] = Field(default_factory=list)
     writing_cards: List[BeatWritingCard] = Field(default_factory=list)
+    story_contract: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("worldview_summary", "previous_chapter_summary", mode="before")
     @classmethod
@@ -187,10 +190,11 @@ class ChapterContext(BaseModel):
 class BeatSelfCheck(BaseModel):
     missing_entities: List[str] = Field(default_factory=list)
     missing_foreshadowings: List[str] = Field(default_factory=list)
+    missing_payoffs: List[str] = Field(default_factory=list)
     contradictions: List[str] = Field(default_factory=list)
     needs_rewrite: bool = False
 
-    @field_validator("missing_entities", "missing_foreshadowings", "contradictions", mode="before")
+    @field_validator("missing_entities", "missing_foreshadowings", "missing_payoffs", "contradictions", mode="before")
     @classmethod
     def _coerce_string_list_fields(cls, value: Any) -> List[str]:
         return coerce_to_str_list(value)
