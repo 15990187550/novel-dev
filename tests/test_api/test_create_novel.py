@@ -177,11 +177,13 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
     async_session.add(EntityVersion(entity_id="e1", version=1, state={}))
     await async_session.commit()
 
-    novel_output_dir = tmp_path / "novel_output" / novel_id / "vol1"
-    novel_output_dir.mkdir(parents=True)
-    (novel_output_dir / "ch1.md").write_text("chapter", encoding="utf-8")
-    original_markdown_output_dir = routes.settings.markdown_output_dir
-    routes.settings.markdown_output_dir = str(tmp_path / "novel_output")
+    data_dir = tmp_path / "data"
+    novel_package_dir = data_dir / "novels" / novel_id
+    artifact_dir = novel_package_dir / "archive" / "vol1"
+    artifact_dir.mkdir(parents=True)
+    (artifact_dir / "ch1.md").write_text("chapter", encoding="utf-8")
+    original_data_dir = routes.settings.data_dir
+    routes.settings.data_dir = str(data_dir)
 
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
@@ -231,14 +233,14 @@ async def test_delete_novel_removes_all_scoped_data(async_session, tmp_path):
         )
         assert setting_messages.scalars().first() is None
 
-        assert not (tmp_path / "novel_output" / novel_id).exists()
+        assert not novel_package_dir.exists()
 
         remaining_state = await async_session.execute(
             select(NovelState).where(NovelState.novel_id == other_novel_id)
         )
         assert remaining_state.scalar_one_or_none() is not None
     finally:
-        routes.settings.markdown_output_dir = original_markdown_output_dir
+        routes.settings.data_dir = original_data_dir
         app.dependency_overrides.clear()
 
 
