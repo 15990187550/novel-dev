@@ -24,6 +24,16 @@ def test_clean_isolated_punctuation_paragraphs():
     assert cleaned == "林照撞进泥地。\n\n他撑着石壁起身。"
 
 
+def test_clean_text_integrity_fragments_repairs_semantic_truncation():
+    text = "追查，还是。\n\n密层在地下。烛火压得只剩豆大，照。\n\n他连站都站不。"
+
+    cleaned = EditorAgent._clean_text_integrity_fragments(text)
+
+    assert "追查，还是保全自身。" in cleaned
+    assert "烛火压得只剩豆大，照出一片昏黄。" in cleaned
+    assert "他连站都站不起来。" in cleaned
+
+
 @pytest.mark.asyncio
 async def test_polish_low_score_beats(async_session):
     director = NovelDirector(session=async_session)

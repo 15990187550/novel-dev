@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from typing import Any
 
 from novel_dev.schemas.review import FastReviewReport
@@ -141,6 +142,9 @@ class QualityGateService:
             stripped = paragraph.strip()
             if stripped and len(stripped) <= 3 and all(char in "。，、；：！？!?…,. ;:" for char in stripped):
                 return cls._item("text_integrity", "正文包含孤立标点段落，疑似节拍拼接或生成清洗异常", {"paragraph": stripped})
+            truncated = cls._semantic_truncation_issue(stripped)
+            if truncated:
+                return truncated
         last = text[-1]
         if last in "。！？!?…」』”’）)":
             return None
@@ -148,6 +152,20 @@ class QualityGateService:
             return cls._item("text_integrity", "正文末尾停在连接性标点，疑似未完成断句", {"ending": text[-20:]})
         if any("\u4e00" <= char <= "\u9fff" for char in text[-4:]):
             return cls._item("text_integrity", "正文末尾缺少完整句读，疑似生成截断", {"ending": text[-20:]})
+        return None
+
+    @classmethod
+    def _semantic_truncation_issue(cls, paragraph: str) -> dict[str, Any] | None:
+        if not paragraph:
+            return None
+        technical_endings = (
+            (r"，照[。.!]$", "正文句末停在未完成动词“照”，疑似生成截断"),
+            (r"，还是[。.!]$", "正文句末停在未完成选择结构，疑似生成截断"),
+            (r"站不[。.!]$", "正文句末停在未完成补语“站不”，疑似生成截断"),
+        )
+        for pattern, message in technical_endings:
+            if re.search(pattern, paragraph):
+                return cls._item("text_integrity", message, {"ending": paragraph[-30:]})
         return None
 
     @classmethod

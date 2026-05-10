@@ -92,6 +92,29 @@ def test_evaluate_fast_review_blocks_isolated_punctuation_paragraph():
     assert any(item["code"] == "text_integrity" for item in gate.blocking_items)
 
 
+def test_evaluate_fast_review_blocks_semantically_truncated_sentence():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照用肩膀抵地，试图撑起膝盖。逃，还是搏？他连站都站不。",
+        acceptance_scope="real-contract",
+    )
+
+    assert gate.status == "block"
+    assert any(item["code"] == "text_integrity" for item in gate.blocking_items)
+
+
 def test_evaluate_fast_review_warns_when_required_payoff_missing():
     report = FastReviewReport(
         word_count_ok=True,

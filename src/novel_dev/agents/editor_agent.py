@@ -178,7 +178,7 @@ class EditorAgent:
                         chapter_context=chapter_context,
                     ),
                 )
-                polished = self._clean_isolated_punctuation_paragraphs(polished)
+                polished = self._clean_text_integrity_fragments(polished)
                 log_agent_detail(
                     novel_id,
                     "EditorAgent",
@@ -207,7 +207,7 @@ class EditorAgent:
                     },
                 )
                 polished = beat_text
-            polished = self._clean_isolated_punctuation_paragraphs(polished)
+            polished = self._clean_text_integrity_fragments(polished)
             polished_beats.append(polished)
             await flow_control.raise_if_cancelled(novel_id)
 
@@ -322,10 +322,10 @@ class EditorAgent:
                         chapter_context=chapter_context,
                     ),
                 )
-                polished = self._clean_isolated_punctuation_paragraphs(polished)
+                polished = self._clean_text_integrity_fragments(polished)
             else:
                 polished = beat_text
-            polished = self._clean_isolated_punctuation_paragraphs(polished)
+            polished = self._clean_text_integrity_fragments(polished)
             polished_beats.append(polished)
 
         polished_text = "\n\n".join(polished_beats)
@@ -614,3 +614,25 @@ class EditorAgent:
             if not re.fullmatch(r"\s*[。！？!?.,，、；;：:]+\s*", paragraph)
         ]
         return "\n\n".join(cleaned).strip()
+
+    @classmethod
+    def _clean_text_integrity_fragments(cls, text: str) -> str:
+        cleaned = cls._clean_isolated_punctuation_paragraphs(text)
+        paragraphs = [
+            cls._repair_truncated_paragraph(paragraph)
+            for paragraph in cleaned.split("\n\n")
+        ]
+        return "\n\n".join(paragraphs).strip()
+
+    @staticmethod
+    def _repair_truncated_paragraph(paragraph: str) -> str:
+        stripped = paragraph.strip()
+        replacements = (
+            (r"，照[。.!]$", "，照出一片昏黄。"),
+            (r"，还是[。.!]$", "，还是保全自身。"),
+            (r"站不[。.!]$", "站不起来。"),
+        )
+        for pattern, replacement in replacements:
+            if re.search(pattern, stripped):
+                return re.sub(pattern, replacement, paragraph.rstrip()).strip()
+        return paragraph
