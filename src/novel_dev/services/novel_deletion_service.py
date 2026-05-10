@@ -1,5 +1,4 @@
 import shutil
-from pathlib import Path
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,12 +26,13 @@ from novel_dev.db.models import (
     Spaceline,
     Timeline,
 )
+from novel_dev.storage.paths import StoragePaths
 
 
 class NovelDeletionService:
-    def __init__(self, session: AsyncSession, markdown_output_dir: str):
+    def __init__(self, session: AsyncSession, data_dir: str):
         self.session = session
-        self.markdown_output_dir = Path(markdown_output_dir)
+        self.storage_paths = StoragePaths(data_dir)
 
     async def delete_novel(self, novel_id: str) -> bool:
         state = await self.session.get(NovelState, novel_id)
@@ -90,5 +90,5 @@ class NovelDeletionService:
         await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))
         await self.session.execute(delete(NovelState).where(NovelState.novel_id == novel_id))
         await self.session.commit()
-        shutil.rmtree(self.markdown_output_dir / novel_id, ignore_errors=True)
+        shutil.rmtree(self.storage_paths.novel_dir(novel_id), ignore_errors=True)
         return True

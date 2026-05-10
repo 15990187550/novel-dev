@@ -4,13 +4,14 @@ from sqlalchemy import select, distinct
 from novel_dev.db.models import Chapter
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
+from novel_dev.storage.paths import StoragePaths
 
 
 class ExportService:
-    def __init__(self, session: AsyncSession, markdown_base_dir: str):
+    def __init__(self, session: AsyncSession, data_dir: str):
         self.session = session
         self.chapter_repo = ChapterRepository(session)
-        self.sync = MarkdownSync(markdown_base_dir)
+        self.sync = MarkdownSync(storage_paths=StoragePaths(data_dir))
 
     def _render_chapters(self, chapters) -> str:
         lines = []

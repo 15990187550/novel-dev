@@ -3,14 +3,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
+from novel_dev.storage.paths import StoragePaths
 
 
 class ArchiveService:
-    def __init__(self, session: AsyncSession, markdown_base_dir: str):
+    def __init__(self, session: AsyncSession, data_dir: str):
         self.session = session
         self.chapter_repo = ChapterRepository(session)
         self.state_repo = NovelStateRepository(session)
-        self.sync = MarkdownSync(markdown_base_dir)
+        self.sync = MarkdownSync(storage_paths=StoragePaths(data_dir))
 
     async def archive(self, novel_id: str, chapter_id: str) -> dict:
         result = await self.archive_chapter_only(novel_id, chapter_id)

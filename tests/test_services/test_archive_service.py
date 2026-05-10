@@ -28,6 +28,9 @@ async def test_archive_service(async_session):
 
         assert result["word_count"] == 10
         assert os.path.exists(result["path_md"])
+        assert result["path_md"].endswith(
+            os.path.join("novels", "n_archive", "archive", "v1", "c1.md")
+        )
         with open(result["path_md"], "r", encoding="utf-8") as f:
             assert f.read() == polished_text
 
