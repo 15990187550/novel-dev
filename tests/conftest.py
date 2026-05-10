@@ -9,6 +9,7 @@ from pathlib import Path
 # (used by MCP server and non-overridden API routes) can connect
 # to the same database across connections.
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///./test_novel_dev.db"
+os.environ.setdefault("NOVEL_DEV_DATA_DIR", "/private/tmp/novel-dev-test-data")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 

@@ -243,7 +243,10 @@ async def test_save_llm_config_reloads_runtime_factory(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_test_llm_model_uses_submitted_profile(monkeypatch):
+async def test_test_llm_model_uses_submitted_profile(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr("novel_dev.api.config_routes.find_dotenv", lambda: str(env_file))
     driver = type(
         "Driver",
         (),
