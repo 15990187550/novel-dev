@@ -3,16 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WEB_DIR="${ROOT_DIR}/src/novel_dev/web"
+ENV_FILE="${NOVEL_DEV_ENV_FILE:-${ROOT_DIR}/.env}"
 
-if [[ -f "${ROOT_DIR}/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "${ROOT_DIR}/.env"
-  set +a
-fi
+# shellcheck disable=SC1091
+source "${ROOT_DIR}/scripts/lib/env.sh"
+novel_dev_load_env "${ENV_FILE}"
 
 LOG_DIR="${LOG_DIR:-/tmp/novel-dev}"
 PIP_INSTALL_MODE="${PIP_INSTALL_MODE:-auto}"
+SKIP_LLM_ENV_CHECK="${SKIP_LLM_ENV_CHECK:-0}"
 
 PYTHON_BIN="${PYTHON_BIN:-python3.11}"
 API_HOST="${API_HOST:-0.0.0.0}"
@@ -185,6 +184,9 @@ require_cmd npm
 require_cmd curl
 require_cmd pkill
 require_cmd alembic
+if [[ "${SKIP_LLM_ENV_CHECK}" != "1" ]]; then
+  novel_dev_require_env DEEPSEEK_API_KEY MINIMAX_API_KEY
+fi
 
 mkdir -p "${LOG_DIR}"
 
