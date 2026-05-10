@@ -13,6 +13,7 @@ from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QualityGateService
+from novel_dev.services.continuity_audit_service import ContinuityAuditService
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,23 @@ FAST_REVIEW_PASS_SCORE = 100
 FAST_REVIEW_FAIL_SCORE = 50
 # Editor ↔ FastReview 最大循环次数,防止极端情况下无限翻译
 MAX_EDIT_ATTEMPTS = 2
+
+
+def _apply_continuity_audit_to_gate(gate, audit):
+    if audit.status == QUALITY_BLOCK:
+        gate.status = QUALITY_BLOCK
+        gate.blocking_items.append({
+            "code": "continuity_audit",
+            "message": audit.summary or "连续性审计发现硬冲突",
+            "detail": audit.blocking_items,
+        })
+        gate.warning_items.extend(audit.warning_items)
+        gate.summary = audit.summary or gate.summary
+    elif audit.status == "warn" and gate.status == "pass":
+        gate.status = "warn"
+        gate.warning_items.extend(audit.warning_items)
+        gate.summary = audit.summary or "连续性审计发现可接受告警。"
+    return gate
 
 # 典型 AI 腔中文书面语词汇,Editor 应该减少其密度
 AI_FLAVOR_KEYWORDS = (
@@ -356,6 +374,12 @@ class FastReviewAgent:
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
+            continuity_audit = ContinuityAuditService.audit_chapter(
+                polished,
+                checkpoint.get("chapter_context", {}),
+            )
+            checkpoint["continuity_audit"] = continuity_audit.model_dump()
+            gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             checkpoint["quality_gate"] = gate.model_dump()
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
@@ -562,6 +586,12 @@ class FastReviewAgent:
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
+            continuity_audit = ContinuityAuditService.audit_chapter(
+                polished,
+                checkpoint.get("chapter_context", {}),
+            )
+            checkpoint["continuity_audit"] = continuity_audit.model_dump()
+            gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             checkpoint["quality_gate"] = gate.model_dump()
             await self.chapter_repo.update_quality_gate(
                 chapter_id,

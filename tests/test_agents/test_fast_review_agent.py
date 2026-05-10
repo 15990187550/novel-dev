@@ -376,3 +376,49 @@ async def test_fast_review_real_contract_skips_strict_word_count_gate(async_sess
 
     state = await director.resume("novel_fr_contract")
     assert state.current_phase == Phase.LIBRARIAN.value
+
+
+@pytest.mark.asyncio
+async def test_fast_review_blocks_librarian_when_continuity_audit_finds_hard_conflict(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_continuity_block",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 20},
+                "active_entities": [
+                    {"name": "林照", "type": "character", "current_state": "已死亡，尸身留在黑水城"}
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_continuity_block",
+    )
+    await ChapterRepository(async_session).create("c_continuity_block", "v1", 1, "Continuity Block")
+    await ChapterRepository(async_session).update_text(
+        "c_continuity_block",
+        raw_draft="林照忽然醒来，开口说出隐藏多年的真相。",
+        polished_text="林照忽然醒来，开口说出隐藏多年的真相。",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_continuity_block", "c_continuity_block")
+
+    chapter = await ChapterRepository(async_session).get_by_id("c_continuity_block")
+    assert chapter.quality_status == "block"
+    assert chapter.world_state_ingested is False
+
+    state = await director.resume("novel_fr_continuity_block")
+    assert state.current_phase == Phase.FAST_REVIEWING.value
+    assert state.checkpoint_data["continuity_audit"]["status"] == "block"
+    assert state.checkpoint_data["quality_gate"]["blocking_items"][0]["code"] == "continuity_audit"

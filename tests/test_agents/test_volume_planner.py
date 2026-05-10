@@ -13,6 +13,7 @@ from novel_dev.agents.volume_planner import (
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
+from novel_dev.repositories.timeline_repo import TimelineRepository
 from novel_dev.schemas.outline import SynopsisData, SynopsisVolumeOutline, VolumeScoreResult, VolumePlan, VolumeBeat
 from novel_dev.schemas.context import BeatPlan
 import uuid
@@ -47,6 +48,22 @@ def test_volume_plan_blueprint_accepts_flat_entity_highlights():
     assert blueprint.entity_highlights == {
         "general": ["陆照——道经继承者", "神秘遗迹——因果所化"],
     }
+
+
+@pytest.mark.asyncio
+async def test_world_snapshot_current_tick_is_scoped_to_novel(async_session):
+    timeline_repo = TimelineRepository(async_session)
+    await timeline_repo.create(7, "目标小说推进到第七日", novel_id="novel_target")
+    await timeline_repo.create(99, "其他小说的遥远未来", novel_id="novel_other")
+
+    agent = VolumePlannerAgent(async_session)
+    agent.timeline_repo.get_current_tick = AsyncMock(return_value=7)
+
+    snapshot = await agent._load_world_snapshot("novel_target")
+
+    agent.timeline_repo.get_current_tick.assert_awaited_once_with(novel_id="novel_target")
+    assert "目标小说推进到第七日" in snapshot["timeline"]
+    assert "其他小说的遥远未来" not in snapshot["timeline"]
 
 
 def test_volume_plan_blueprint_backfills_missing_chapter_titles():
