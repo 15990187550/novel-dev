@@ -16,7 +16,7 @@ async def test_minimal_generation_flow_uses_fake_llm_gate(async_session, tmp_pat
         yield async_session
 
     app.dependency_overrides[get_session] = override_session
-    monkeypatch.setattr(api_routes.settings, "markdown_output_dir", str(tmp_path))
+    monkeypatch.setattr(api_routes.settings, "data_dir", str(tmp_path))
 
     transport = ASGITransport(app=app)
 

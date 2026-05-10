@@ -1,5 +1,6 @@
 import uuid
 import pytest
+from pathlib import Path
 from unittest.mock import patch, AsyncMock
 from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
@@ -18,7 +19,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_llm_factory):
+async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, monkeypatch, mock_llm_factory):
     """Full pipeline: upload -> brainstorm -> volume plan -> context -> draft -> review -> edit -> fast review -> librarian -> export."""
 
     async def override():
@@ -26,6 +27,10 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
 
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
+    monkeypatch_data_dir = tmp_path / "data"
+    from novel_dev.api import routes as api_routes
+    monkeypatch.setattr(api_routes.settings, "data_dir", str(monkeypatch_data_dir))
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(monkeypatch_data_dir))
 
     try:
         suffix = uuid.uuid4().hex[:8]
@@ -202,6 +207,9 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
             export_resp = await client.post(f"/api/novels/{novel_id}/export?format=md")
             assert export_resp.status_code == 200
             assert "exported_path" in export_resp.json()
+            exported_path = Path(export_resp.json()["exported_path"])
+            assert exported_path.is_relative_to(monkeypatch_data_dir.resolve())
+            assert exported_path.exists()
 
             # 13. Get archive stats
             stats_resp = await client.get(f"/api/novels/{novel_id}/archive_stats")
@@ -214,7 +222,7 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, mock_
 
 
 @pytest.mark.asyncio
-async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, mock_llm_factory):
+async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkeypatch, mock_llm_factory):
     """Pipeline with 2 chapters in same volume to test chapter continuation."""
 
     async def override():
@@ -222,6 +230,10 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, mock_l
 
     app.dependency_overrides[get_session] = override
     transport = ASGITransport(app=app)
+    monkeypatch_data_dir = tmp_path / "data"
+    from novel_dev.api import routes as api_routes
+    monkeypatch.setattr(api_routes.settings, "data_dir", str(monkeypatch_data_dir))
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(monkeypatch_data_dir))
 
     try:
         suffix = uuid.uuid4().hex[:8]
@@ -372,6 +384,9 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, mock_l
             # Export
             export_resp = await client.post(f"/api/novels/{novel_id}/export?format=md")
             assert export_resp.status_code == 200
+            exported_path = Path(export_resp.json()["exported_path"])
+            assert exported_path.is_relative_to(monkeypatch_data_dir.resolve())
+            assert exported_path.exists()
 
             # Stats
             stats_resp = await client.get(f"/api/novels/{novel_id}/archive_stats")
