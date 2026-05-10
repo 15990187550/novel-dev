@@ -1,0 +1,23 @@
+{
+  "run_id": "2026-05-10T145708-generation-real-quality-summary",
+  "entrypoint": "novel-dev-testing quality-summary",
+  "status": "passed",
+  "duration_seconds": 0.0,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {},
+  "artifacts": {
+    "novel_id": "codex-8aea",
+    "chapter_count": "0"
+  },
+  "details": [
+    {
+      "id": "SYNOPSIS-QUALITY-DETAIL-001",
+      "stage": "brainstorm",
+      "title": "总纲质量详情",
+      "evidence": [],
+      "recommendation": []
+    }
+  ],
+  "issues": []
+}

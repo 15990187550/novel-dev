@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from novel_dev.schemas.outline import SynopsisData
+from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
 from novel_dev.testing.generation_runner import make_run_id, validate_run_id
 from novel_dev.testing.report import Detail, Issue, ReportWriter, TestRunReport
@@ -41,7 +43,8 @@ def build_quality_summary_report(
         cross_stage_quality = StoryContractService.evaluate_cross_stage_quality(snapshot, story_contract)
 
     _add_setting_quality_detail(report, setting_quality, snapshot)
-    _add_synopsis_quality_detail(report, checkpoint)
+    synopsis_quality = _synopsis_quality_from_checkpoint(checkpoint)
+    _add_synopsis_quality_detail(report, checkpoint, synopsis_quality)
     _add_volume_quality_detail(report, checkpoint, story_contract, cross_stage_quality)
 
     if setting_quality and not setting_quality.get("passed", True):
@@ -52,11 +55,6 @@ def build_quality_summary_report(
             _flatten_evidence(setting_quality),
         ))
 
-    synopsis_quality = (
-        (checkpoint.get("synopsis_data") or {})
-        .get("review_status", {})
-        .get("synopsis_quality_report")
-    )
     if synopsis_quality and not synopsis_quality.get("passed", True):
         report.add_issue(_issue(
             "SYNOPSIS-QUALITY-001",
@@ -143,10 +141,13 @@ def _add_setting_quality_detail(
     ))
 
 
-def _add_synopsis_quality_detail(report: TestRunReport, checkpoint: dict[str, Any]) -> None:
+def _add_synopsis_quality_detail(
+    report: TestRunReport,
+    checkpoint: dict[str, Any],
+    synopsis_quality: dict[str, Any] | None,
+) -> None:
     synopsis = checkpoint.get("synopsis_data") if isinstance(checkpoint.get("synopsis_data"), dict) else {}
     review = synopsis.get("review_status") if isinstance(synopsis.get("review_status"), dict) else {}
-    synopsis_quality = review.get("synopsis_quality_report")
     if not synopsis and not synopsis_quality:
         return
     evidence = []
@@ -329,6 +330,19 @@ def _quality_report_from_snapshot(snapshot: dict[str, Any], checkpoint: dict[str
     if isinstance(batch_input, dict) and isinstance(batch_input.get("setting_quality_report"), dict):
         return batch_input["setting_quality_report"]
     return None
+
+
+def _synopsis_quality_from_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+    synopsis = checkpoint.get("synopsis_data") if isinstance(checkpoint.get("synopsis_data"), dict) else {}
+    review = synopsis.get("review_status") if isinstance(synopsis.get("review_status"), dict) else {}
+    cached = review.get("synopsis_quality_report") if isinstance(review.get("synopsis_quality_report"), dict) else None
+    if not synopsis:
+        return cached
+    try:
+        model = SynopsisData.model_validate(synopsis)
+    except Exception:
+        return cached
+    return StoryQualityService.evaluate_synopsis(model).model_dump()
 
 
 def _issue(id_: str, stage: str, message: str, evidence: list[str]) -> Issue:

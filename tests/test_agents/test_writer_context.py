@@ -88,9 +88,11 @@ class TestBuildContextMessage:
         result = agent._build_context_message(
             ctx.chapter_plan.beats[0], ctx, [], "", 0, 2, False
         )
-        assert "后续节拍只是边界" in result
-        assert "禁止提前写" in result
-        assert "节拍2（后续边界，禁止提前发生）" in result
+        assert "后续节拍作为停点参考" in result
+        assert "当前节拍停在" in result
+        assert "节拍2（后续停点参考）" in result
+        assert "禁止提前写" not in result
+        assert "禁止提前发生" not in result
 
     def test_includes_rewrite_plan_for_current_beat(self):
         ctx = _make_context(

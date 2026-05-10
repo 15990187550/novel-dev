@@ -195,8 +195,8 @@ agents:
       - get_novel_documents
       - search_domain_documents
       - get_novel_document_full
-      max_tool_calls: 8
-      tool_timeout_seconds: 5
+      max_tool_calls: 20
+      tool_timeout_seconds: 50
       max_tool_result_chars: 6000
       retriever_subtasks: []
       enable_subtasks: true
@@ -219,9 +219,9 @@ agents:
       - get_context_timeline_events
       - get_novel_state
       - get_chapter_draft_status
-      max_tool_calls: 3
-      tool_timeout_seconds: 5
-      max_tool_result_chars: 1600
+      max_tool_calls: 20
+      tool_timeout_seconds: 50
+      max_tool_result_chars: 3200
       retriever_subtasks: []
       enable_subtasks: true
       validator_subtask: location_context_quality
@@ -234,11 +234,11 @@ agents:
     retries: 2
     temperature: 0.45
   writer_agent:
-    model: deepseek
+    model: kimi-for-coding
     timeout: 120
     temperature: 0.9
     fallback:
-      model: kimi-for-coding
+      model: deepseek
       temperature: 0.9
       timeout: 120
       retries: 1

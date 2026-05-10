@@ -1,0 +1,55 @@
+# Test Run 2026-05-10T153500-generation-real-quality-summary
+
+- Entrypoint: `novel-dev-testing quality-summary`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real_then_fake_on_external_block`
+- Duration: `0.0s`
+
+## Artifacts
+
+- `novel_id`: `codex-90c0`
+- `chapter_count`: `2`
+
+## Details
+
+### SETTING-QUALITY-DETAIL-001
+
+- Stage: `setting_generation`
+- Title: 世界观与设定质量详情
+- Evidence: passed=True, review_batch_status=pending, review_batch_summary=基于保守假设补全东方玄幻短篇测试小说最小可用设定：世界观（青云宗+血海殿对立）、修炼规则（练气→筑基→金丹→元婴→化神五境体系）、主角林照（练气三层，外门弟子，目标查明家族覆灭真相）、核心冲突（家族覆灭之谜与血海殿关联）、第一章可执行目标（黑风矿场任务发现族徽残片）。
+- Recommendation: none
+
+### SYNOPSIS-QUALITY-DETAIL-002
+
+- Stage: `brainstorm`
+- Title: 总纲质量详情
+- Evidence: passed=True, structure_score=85, marketability_score=85, conflict_score=85, character_arc_score=85, writability_score=85, core_conflict=林照 vs 覆灭林家的未知势力——围绕家族覆灭真相与势力博弈的追查与反制
+- Recommendation: none
+
+### VOLUME-QUALITY-DETAIL-003
+
+- Stage: `volume_plan`
+- Title: 卷纲与跨阶段承接质量详情
+- Evidence: passed=True, chapters[0]={'chapter_id': 'vol_1_ch_1', 'chapter_number': 1, 'title': '徽记残片', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, story_contract.protagonist_goal=在外门站稳脚跟，提升实力，追查林家覆灭的第一条有效线索。, story_contract.current_stage_goal=在外门站稳脚跟，提升实力，追查林家覆灭的第一条有效线索。, story_contract.first_chapter_goal=林照接受外门任务，前往青云宗辖下的黑风矿场调查灵石异常枯竭事件。抵达矿场后，发现矿脉深处有被强行抽取灵气的痕迹，手法与血道功法吻合。在矿洞最深处发现一枚刻有林家族徽的残片，确认家族覆灭与血海殿有关。返回途中遭遇血海殿密探拦截，首次正面冲突，林照凭借对矿场地形的熟悉险胜，从密探身上获得一枚记录部分信息的玉简，玉简中提到'钥匙'和'遗迹'字样，指向家族覆灭的真正原因。, story_contract.core_conflict=林照 vs 覆灭林家的未知势力——围绕家族覆灭真相与势力博弈的追查与反制
+- Recommendation: none
+
+### CHAPTER-QUALITY-DETAIL-004
+
+- Stage: `chapter_final_review`
+- Title: 章节具体质量评价
+- Evidence: chapter_id=acceptance-codex-90c0-ch1, quality_status=block, final_review_score=78, overall=72, summary=三条最影响读感的问题：一、感官描写密度过高，多处连续堆叠触觉/听觉/视觉，削弱了关键场景的冲击力，建议每处只保留最有辨识度的一个感官细节。二、Beat 2 处理尸体的段落呈流程化叙述，人物在动作中缺少内心挣扎或情绪余震，导致'人味'不足，建议在每步动作之间插入身体反应或闪念。三、章末钩子偏弱，'没有点灯'虽有留白但未形成新的悬念升级，暗杀者遗言已在段落中段交代完毕，读者对下一步走向过于可预测，建议在结尾增加一个微小的新危险信号（如门外脚步声）来拉读者进入下一章。, plot_tension=78, characterization=80, readability=72, consistency=85, humanity=70, hook_strength=68, readability.whole_chapter.problem=多处感官平均用力，如 Beat 0 中'露水顺着草叶滑进靴缝，凉得刺骨''溪水哗哗地冲''水珠甩进溪里，惊起一只灰雀'连续三句分别调用触觉、听觉、视觉，密度过高；Beat 1 中'山风停了''溪水声忽然变得很响''没有鸟叫，没有虫鸣'也是连续感官堆叠。, readability.beat=2.problem=出现'图腾'一词，在东方玄幻语境中该词带有西方人类学/印第安文化色彩，与世界观调性不一致。, humanity.beat=2.problem=Beat 2 中林照处理尸体的过程（'拖进石坳，覆上碎石断枝，撒了几把腐叶。血泊用溪水冲净，袖箭断刀沉入溪底'）是流程化叙述，缺少人物在此时的心理活动或身体反应，显得像操作手册。, hook_strength.beat=2.problem=章末'没有点灯'虽有留白意味，但暗杀者遗言'上面的人不会放过你'已在 Beat 2 中段交代完毕，结尾未形成新的悬念升级或反转，读者对下一步走向过于可预测（回外门、继续追查）。, plot_tension.beat=0.problem=Beat 0 中回忆部分（'梁柱炸裂的轰鸣，母亲推他入密道'）篇幅偏长，从'露水'到'惊起一只灰雀'共约200字，其中回忆占近一半，导致主线推进节奏拖沓，读者在 Beat 0 后半段才接触到核心冲突（残片发现）。, editor_guard_warnings_count=4, editor_guard.beat=0.issues=["润色后文本在结尾处新增了'山风停了，藤蔓叶片垂着不动，而三步之外的枯枝断口新鲜，白茬上还沾着泥'这一危险信号/环境异状，这属于提前写入了后续beat的核心事件（beat 1中暗杀者逼近的紧张氛围和袭击）。原稿结尾停留在林照发现徽记吻合后的震惊（'血液轰然冲上耳膜。这后山，这宗门，这他'），而润色后新增的内容将beat 0结尾的危险信号提前具体化，改变了事件节奏和悬念铺设方式。", "润色后删减了原稿中关于'采药令牌硬邦邦贴着胸口，提醒他此刻的身份——青云宗外门弟子，最底层的那种，连内门药圃都没资格进'的背景信息，虽然这不影响结构，但属于对人物处境信息的删减。", "润色后删减了原稿中关于回忆的具体画面（'梁柱炸裂的轰鸣，母亲推他入密道时指甲掐进肩肉的疼，身后追来的脚步声不重，却像敲在骨头上'），将具体回忆压缩为'火海那夜的轰鸣又涌上耳膜'，这属于对人物动机/情感深度的压缩。", "润色后新增了林照的心理挣扎段落（'他的手指在残片边缘停住。只要把它扔回石缝...'），这段内心独白在原稿中不存在，属于新增的人物心理活动和决策过程，虽不改变剧情走向，但新增了原章节计划外的内心活动细节。"], editor_guard.beat=1.issues=["润色后文本中，林照反杀第一人后，第二人服毒自尽的情节提前出现了。根据章节计划，'另一人重伤后服毒自尽'是beat 2的结尾事件，但润色后将其提前到了林照与第一人搏斗的过程中，且第二人服毒时林照还在场，改变了原计划的战斗节奏和事件顺序。", "润色后新增了'落石砸中那人的膝盖，身形一矮'这一细节，原计划中仅提到'利用一处陡坡制造落石阻滞敌人'，并未提及落石直接击中敌人膝盖，这属于新增的战斗细节。", "润色后改变了杀人方式：原计划是'右手攥着从地上抓起的尖石，全力捅进那人颈侧'，润色后改为'捡起地上的袖箭，扑上去刺进对方咽喉'，且第二人提前服毒自尽，导致beat 2的结尾事件被提前消耗。", '润色后文本在beat 1的位置提前完成了beat 2的部分核心内容（反杀第一人+第二人服毒），导致后续beat 2无内容可写，破坏了章节结构。'], editor_guard.beat=1.issues=["润色后文本在beat_index=1（第二幕：紧张搏杀）的结尾处提前泄露了第三幕的核心信息：'怀中的残片硌着肋骨，玉佩贴着它，纹路相嵌，像两半咬合的齿'。这一发现对应第三幕中'发现对方袖口暗纹与徽记残片纹路风格一致'的核心剧情，属于提前写后续beat的核心事件。", "润色后新增内容'袖箭的毒，他还没解'引入了新的威胁元素（中毒），这在原章节计划中未提及，属于新增计划外事实。", "润色后新增黑衣人'服毒自尽'前的异常行为（退入尘雾），改变了原定的'另一人重伤后服毒自尽'的情节走向，改变了事件结果。", "润色后的结尾将本应属于第三幕的'徽记残片与林家遗物的对应关系'这一伏笔提前到第二幕结尾揭示，破坏了原定的章节结构。"], editor_guard.beat=2.issues=["润色后新增黑衣人台词'你长得……真像你爹'，这是原文没有的全新信息，引入了林照父亲的外貌关联这一计划外事实", "润色后新增林照回忆'母亲推他入密道那晚，也是这样把染血的帕子按进井里'，这是原文没有的全新回忆/事实，属于新增计划外内容", "润色后新增结尾场景：林照摸出残片与玉佩并排放在桌上、月光照亮纹路、往内门方向走三步等动作，以及'门外传来极轻的脚步声，停在了他房前'这一新的危险信号。原文结尾是'回到居所，没有点灯'，润色后不仅新增了场景内容，还提前引入了新的危险信号（门外脚步声），改变了章节结尾结构"], quality_gate.text_integrity=正文包含孤立标点段落，疑似节拍拼接或生成清洗异常, quality_gate.required_payoff=章节计划要求的线索或章末钩子未充分兑现
+- Recommendation: readability.whole_chapter.suggestion=将连续三句感官描写压缩为一句，只保留最有辨识度的一个感官细节，例如删去'溪水哗哗地冲'，让'凉得刺骨'和'惊起灰雀'之间留出呼吸空间。, readability.beat=2.suggestion=将'图腾'改为'纹章'或'徽印'，保持东方玄幻语境的一致性。, humanity.beat=2.suggestion=在每步处理之间插入一个身体反应或内心闪念，例如'拖尸体时伤口崩裂，他咬住下唇不发出声音'或'沉刀时想起母亲推他入密道那晚也是这样处理痕迹'，让动作承载情绪。, hook_strength.beat=2.suggestion=在'没有点灯'之后增加一个微小的新信号，例如'黑暗中，他摸出残片与玉佩并排放在桌上，月光恰好照亮纹路——门外传来极轻的脚步声，停在了他房前'，让章末形成新的危险升级而非情绪收束。, plot_tension.beat=0.suggestion=将回忆压缩为一句身体反应，例如'指腹碾过徽记，火海那夜的轰鸣又涌上耳膜——他猛地闭眼，将玉佩塞回怀中'，删去'母亲推他入密道时指甲掐进肩肉的疼'等细节，让回忆更节制，提前进入残片发现的关键场景。, editor_guard.beat=0.focus=结尾处应删除'山风停了，藤蔓叶片垂着不动，而三步之外的枯枝断口新鲜，白茬上还沾着泥'这一提前预示暗杀者逼近的环境描写，恢复原文以发现徽记吻合后的震惊作为beat 0结尾的节奏；同时建议删除或简化新增的内心挣扎段落，避免在beat 0中提前展开本应在beat 1才出现的'阻力升级'元素。, editor_guard.beat=1.focus=恢复原文的战斗节奏：林照用尖石捅入第一人颈侧后，第二人不应立即服毒自尽，而应保持原文中'。'的截断感，将第二人的处理留到beat 2的后续部分。删除'落石砸中膝盖'的新增细节，保持'制造落石阻滞敌人'的原有表述。删除第二人提前服毒的情节，确保beat 2的核心事件不被提前泄露。, editor_guard.beat=1.focus=删除结尾处关于玉佩与残片纹路相嵌的描写（这是第三幕内容），删除'袖箭的毒，他还没解'的新增威胁，恢复第二幕以'血喷出来，烫得他手腕一抖'或符合原计划的搏斗结束场景，确保黑衣人的结局按原计划处理（另一人重伤后服毒自尽），不要将第三幕的发现提前到第二幕。, editor_guard.beat=2.focus=删除黑衣人关于林照父亲的台词，删除林照母亲推他入密道的回忆，删除结尾门外脚步声的新危险信号，保留原文'回到居所，没有点灯'作为结尾。只允许改善文风、删减冗余、压缩AI腔表达，不得新增任何情节、台词、回忆或危险信号。
+
+## Issues
+
+### CHAPTER-QUALITY-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `chapter_final_review`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 章节质量门禁阻断或成稿评分过低。
+- Evidence: chapter_id=acceptance-codex-90c0-ch1, quality_status=block, final_review_score=78, status=block, blocking_items[0]={'code': 'text_integrity', 'message': '正文包含孤立标点段落，疑似节拍拼接或生成清洗异常', 'detail': {'paragraph': '。'}}, warning_items[0]={'code': 'required_payoff', 'message': '章节计划要求的线索或章末钩子未充分兑现', 'detail': {'missing': ['林照必须在继续追查与保全自身之间做出选择，阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号']}}, summary=存在阻断级质量问题，停止归档和世界状态入库。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

@@ -541,7 +541,7 @@ class WriterAgent:
             parts.append(f"### 前情回顾\n{context.previous_chapter_summary}")
 
         if context.worldview_summary:
-            parts.append("### 世界观约束\n已加载到章节上下文；正文必须遵守检索到的设定与 guardrails，不要自行改写核心设定。")
+            parts.append("### 世界观约束\n已加载到章节上下文；正文以检索到的设定与 guardrails 为准，核心设定保持一致。")
 
         if context.story_contract:
             contract_lines = []
@@ -586,10 +586,10 @@ class WriterAgent:
 
         if beat_context and beat_context.guardrails:
             guardrail_text = "\n".join(f"- {item}" for item in beat_context.guardrails[:8])
-            parts.append(f"### 当前节拍不可违背事实\n{guardrail_text}")
+            parts.append(f"### 当前节拍事实准线\n{guardrail_text}")
         elif context.guardrails:
             guardrail_text = "\n".join(f"- {item}" for item in context.guardrails[:12])
-            parts.append(f"### 不可违背事实\n{guardrail_text}")
+            parts.append(f"### 本章事实准线\n{guardrail_text}")
 
         if beat_context and beat_context.entities:
             entity_text = "\n".join(
@@ -648,7 +648,7 @@ class WriterAgent:
             if writing_card.required_payoffs:
                 card_lines.append("- 本节拍需要兑现给读者的信息: " + "；".join(writing_card.required_payoffs[:4]))
             if writing_card.forbidden_future_events:
-                card_lines.append("- 禁止提前发生: " + "；".join(writing_card.forbidden_future_events[:4]))
+                card_lines.append("- 后续节拍保留内容: " + "；".join(writing_card.forbidden_future_events[:4]))
             if writing_card.ending_hook:
                 card_lines.append(f"- 本节拍停点/钩子: {writing_card.ending_hook}")
             if writing_card.reader_takeaway:
@@ -665,15 +665,16 @@ class WriterAgent:
             elif i == idx:
                 role = "当前必须完成"
             else:
-                role = "后续边界，禁止提前发生"
+                role = "后续停点参考"
             plan_lines.append(f"{marker}节拍{i+1}（{role}）: {b.summary}")
         parts.append("### 章节计划\n" + "\n".join(plan_lines))
         if idx + 1 < total:
             parts.append(
-                "### 节拍边界硬约束\n"
-                "后续节拍只是边界参考，用来知道当前节拍在哪里停止。"
-                "禁止提前写后续节拍的核心事件、揭示、战斗、奇遇、昏迷、追兵到达或章末钩子；"
-                "当前节拍结尾只能留下通向下一节拍的轻微预兆或动作，不得让下一节拍事件实际发生。"
+                "### 节拍停点参考\n"
+                "后续节拍作为停点参考，用来判断当前节拍推进到哪里收束。"
+                "当前节拍停在本节拍的目标、阻力、选择或代价完成处；"
+                "后续节拍的核心事件、揭示、战斗、奇遇、昏迷、追兵到达或章末钩子留到对应节拍展开。"
+                "当前结尾可留下通向下一节拍的轻微预兆、动作余波或未完成问题。"
             )
         parts.append(
             "### 当前节拍目标字数\n"
@@ -1011,6 +1012,33 @@ class WriterAgent:
         retry_evidence = retry.evidence(beat_index=idx, mode="writer_retry")
         checkpoint.setdefault("writer_guard_failures", []).append(retry_evidence)
         checkpoint["chapter_structure_guard"] = retry_evidence
+        fallback = self._build_conservative_guard_fallback(beat, is_last=is_last)
+        fallback_retry = await self.structure_guard.check_writer_beat(
+            novel_id=novel_id,
+            chapter_plan=context.chapter_plan,
+            beat_index=idx,
+            beat=beat,
+            generated_text=fallback,
+            previous_text=last_beat_text,
+        )
+        if fallback_retry.passed:
+            checkpoint.setdefault("writer_guard_fallbacks", []).append({
+                "beat_index": idx,
+                "reason": "writer_retry_failed",
+                "source_issues": retry_evidence.get("issues") or [],
+                "fallback_preview": preview_text(fallback, 300),
+            })
+            log_agent_detail(
+                novel_id,
+                "WriterAgent",
+                f"节拍 {idx + 1} 结构守卫重写后仍越界，使用保守节拍兜底",
+                node="writer_structure_guard_fallback",
+                task="write",
+                level="warning",
+                metadata=checkpoint["writer_guard_fallbacks"][-1],
+            )
+            return fallback, f"<!--BEAT:{idx}-->\n{fallback}\n<!--/BEAT:{idx}-->"
+
         log_agent_detail(
             novel_id,
             "WriterAgent",
@@ -1034,6 +1062,28 @@ class WriterAgent:
         setattr(error, "writer_guard_failures", list(checkpoint.get("writer_guard_failures") or []))
         setattr(error, "failed_phase", Phase.DRAFTING.value)
         raise error
+
+    @classmethod
+    def _build_conservative_guard_fallback(cls, beat: BeatPlan, *, is_last: bool) -> str:
+        clauses = [part.strip() for part in re.split(r"[；;。！？!?]", beat.summary or "") if part.strip()]
+        if not clauses:
+            clauses = ["当前节拍围绕既定目标推进"]
+        lead = clauses[0]
+        choice_terms = ("选择", "必须", "决定", "被迫", "代价", "隐忍", "压下")
+        conflict_terms = ("冲突", "阻力", "克扣", "嘲讽", "追", "逼", "杀", "异常", "危险", "敌")
+        choice = next((clause for clause in clauses if any(term in clause for term in choice_terms)), "")
+        conflict = next((clause for clause in clauses if any(term in clause for term in conflict_terms)), "")
+        ending = clauses[-1]
+        parts = [lead]
+        if conflict and conflict not in parts:
+            parts.append(conflict)
+        if choice and choice not in parts:
+            parts.append(choice)
+        if ending and ending not in parts:
+            parts.append(ending)
+        if is_last:
+            parts.append("已有线索和风险在此处收束，新的疑问压到下一步选择上。")
+        return "\n\n".join(part.rstrip("。！？!?") + "。" for part in parts if part.strip())
 
     def _self_check_beat(self, inner: str, beat: BeatPlan, context: ChapterContext, beat_idx: int) -> BeatSelfCheck:
         beat_context = self._beat_context(context, beat_idx)
@@ -1289,10 +1339,14 @@ class WriterAgent:
         return (
             "### 写作方向\n"
             "- **读者读感**:正文优先清楚、顺滑、有画面,让读者能跟住人物目标、阻力和情绪推进。\n"
+            "- **节拍读感骨架**:每个节拍都呈现当场目标、可见阻力、角色策略/态度变化和具体停点,"
+            "让读者知道这一段完成了什么、局势如何变化。\n"
             "- **自然中文表达**:前世、现代或术语概念都转写成贴合角色处境的中文说法,让表达像角色会想到或说出口的话。\n"
             "- **显示不说**:用动作、对话、物件、身体反应、环境反衬承载信息,让读者自己读出人物情绪和认知变化。\n"
             "- **人物态度转折**:角色从敌对到放行、从冷淡到帮助、从拒绝到合作时,"
             "按触发点 -> 犹豫/识别 -> 选择代价来呈现,让转向来自场景压力和人物判断。\n"
+            "- **对话信息释放**:关键事实先经过试探、保留、误判或代价,再让角色说出口或用行动承认,"
+            "让人际关系在信息交换里自然升温或紧绷。\n"
             "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或吐槽时,"
             "默认写得克制、具体、生活化。比喻服务画面和情绪,抽象玄幻概念落到人物能触到、看见、承受的后果。\n"
             "- **奇遇/异象写法**:选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
@@ -1303,6 +1357,7 @@ class WriterAgent:
             "- **视点一致**:全章保持设定视点(默认紧贴主角),通过主角可感知的信息组织场景。\n"
             "- **开场多样性**:用动作、对话、具象物件或反常细节切入,让第一段立刻形成当下事件。\n"
             f"{hook_clause}"
+            "- **线索兑现**:章末或关键停点优先用既有线索、当场后果、下一步疑问或风险余波形成牵引。\n"
             "- **字数**:按用户消息中的当前节拍目标字数写作,允许 ±20%。\n"
             "- **伏笔**:pending_foreshadowings 中标注 role_in_chapter=embed 的条目,"
             "请自然嵌入文本,让它像场景的一部分。\n"

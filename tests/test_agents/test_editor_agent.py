@@ -16,6 +16,14 @@ def clear_log_buffers():
     LogService._listeners.clear()
 
 
+def test_clean_isolated_punctuation_paragraphs():
+    text = "林照撞进泥地。\n\n。\n\n他撑着石壁起身。\n\n！"
+
+    cleaned = EditorAgent._clean_isolated_punctuation_paragraphs(text)
+
+    assert cleaned == "林照撞进泥地。\n\n他撑着石壁起身。"
+
+
 @pytest.mark.asyncio
 async def test_polish_low_score_beats(async_session):
     director = NovelDirector(session=async_session)
@@ -198,12 +206,103 @@ async def test_rewrite_beat_prompt_forbids_plan_external_additions(async_session
 
     prompt = mock_client.acomplete.call_args.args[0][0].content
     assert "保留叙事事实" in prompt
+    assert "局部修补模式" in prompt
+    assert "原事件集合" in prompt
+    assert "信息释放顺序" in prompt
     assert "使用已有悬念" in prompt
+    assert "已有物件、风险、情绪余波" in prompt
     assert "有限留白" in prompt
-    assert "不发明新事件" in prompt
     assert "计划和原段已经给出的事实" in prompt
-    assert "需要新线索时写入后续建议" in prompt
     assert "正文只升级已有事实" in prompt
+    assert "黑影、追兵、身份背景、额外线索" in prompt
+    assert "只吸收其读感目标" in prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_bounds_risky_hook_suggestions(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把残信按在伤口旁，指节迟迟没有松开。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "林照把残信收入怀中，只能绕路。",
+            {"hook_strength": 62},
+            [
+                {
+                    "dim": "hook_strength",
+                    "problem": "章末钩子偏弱",
+                    "suggestion": "加入新的反转，例如：禁地深处亮起一盏灯，有人正朝这边走来。",
+                }
+            ],
+            [],
+            {
+                "style_profile": {},
+                "chapter_plan": {
+                    "summary": "林照带伤藏好残信并决定绕路",
+                    "beats": [{"summary": "林照带伤藏好残信并决定绕路"}],
+                },
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "加入新的反转" in prompt
+    assert "只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔" in prompt
+    assert "当场后果、人物迟疑、身体反应、未完成动作和已知风险逼近" in prompt
+
+
+@pytest.mark.asyncio
+async def test_polish_uses_final_polish_issues_for_targeted_repair(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_final_polish",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "chapter_number": 1,
+                    "title": "Test",
+                    "target_word_count": 1000,
+                    "beats": [{"summary": "林照展开残信", "target_mood": "tense"}],
+                }
+            },
+            "beat_scores": [{"beat_index": 0, "scores": {"hook_strength": 80}}],
+            "final_polish_issues": {
+                "source": "final_review",
+                "beat_issues": [
+                    {
+                        "beat_index": 0,
+                        "issues": [
+                            {
+                                "dim": "hook_strength",
+                                "problem": "章末没有兑现残信线索",
+                                "suggestion": "用残信字迹和林照的身体反应强化停点",
+                            }
+                        ],
+                    }
+                ],
+            },
+        },
+        volume_id="v_final",
+        chapter_id="c_final_polish",
+    )
+    await ChapterRepository(async_session).create("c_final_polish", "v_final", 1, "Final Polish")
+    await ChapterRepository(async_session).update_text("c_final_polish", raw_draft="林照展开残信，慢慢收进袖中。")
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照展开残信，指腹停在焦黑字迹上，呼吸慢了半拍。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish("novel_edit_final_polish", "c_final_polish")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "章末没有兑现残信线索" in prompt
+    assert "用残信字迹和林照的身体反应强化停点" in prompt
+
+    state = await director.resume("novel_edit_final_polish")
+    assert "final_polish_issues" not in state.checkpoint_data
 
 
 @pytest.mark.asyncio
@@ -255,6 +354,73 @@ async def test_polish_rolls_back_when_editor_guard_detects_plan_external_additio
     assert ch.polished_text == "林照藏起玉佩。"
     state = await director.resume("novel_edit_guard")
     assert state.checkpoint_data["editor_guard_warnings"][0]["issues"] == ["新增计划外黑影台词"]
+
+
+@pytest.mark.asyncio
+async def test_editor_guard_retry_pass_records_resolved_not_warning(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_guard_retry_pass",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "chapter_number": 1,
+                    "title": "Test",
+                    "target_word_count": 1000,
+                    "beats": [{"summary": "林照藏起玉佩", "target_mood": "tense"}],
+                }
+            },
+            "beat_scores": [{"beat_index": 0, "scores": {"humanity": 60}}],
+        },
+        volume_id="v_guard",
+        chapter_id="c_guard_retry_pass",
+    )
+    await ChapterRepository(async_session).create("c_guard_retry_pass", "v_guard", 1, "Test")
+    await ChapterRepository(async_session).update_text("c_guard_retry_pass", raw_draft="林照藏起玉佩。")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_editor_beat(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=True,
+                    premature_future_beat=False,
+                    introduced_plan_external_fact=True,
+                    changed_event_order=False,
+                    issues=["新增计划外黑影台词"],
+                    suggested_rewrite_focus="删除计划外台词",
+                )
+            return ChapterStructureGuardResult(
+                passed=True,
+                completed_current_beat=True,
+                premature_future_beat=False,
+                introduced_plan_external_fact=False,
+                changed_event_order=False,
+                issues=[],
+                suggested_rewrite_focus="",
+            )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="林照藏起玉佩。黑影说：你逃不掉。"),
+        LLMResponse(text="林照藏起玉佩，指腹在裂纹上停了半息。"),
+    ]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session, structure_guard=FakeGuard())
+        await agent.polish("novel_edit_guard_retry_pass", "c_guard_retry_pass")
+
+    ch = await ChapterRepository(async_session).get_by_id("c_guard_retry_pass")
+    assert ch.polished_text == "林照藏起玉佩，指腹在裂纹上停了半息。"
+    state = await director.resume("novel_edit_guard_retry_pass")
+    assert "editor_guard_warnings" not in state.checkpoint_data
+    assert state.checkpoint_data["editor_guard_resolved"][0]["issues"] == ["新增计划外黑影台词"]
 
 
 @pytest.mark.asyncio
@@ -368,4 +534,5 @@ async def test_polish_retries_once_with_guard_focus_before_rollback(async_sessio
     assert ch.polished_text == "林照把玉佩压进袖中，指腹停在裂纹上，慢慢松开呼吸。"
     assert mock_client.acomplete.await_count == 2
     state = await director.resume("novel_edit_guard_retry")
-    assert state.checkpoint_data["editor_guard_warnings"][0]["issues"] == ["新增计划外黑影台词"]
+    assert "editor_guard_warnings" not in state.checkpoint_data
+    assert state.checkpoint_data["editor_guard_resolved"][0]["issues"] == ["新增计划外黑影台词"]

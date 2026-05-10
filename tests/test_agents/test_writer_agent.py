@@ -27,6 +27,14 @@ def test_writing_rules_require_motivated_character_turns(async_session):
     assert "触发点" in rules
     assert "犹豫/识别" in rules
     assert "选择代价" in rules
+    assert "当场目标" in rules
+    assert "可见阻力" in rules
+    assert "策略/态度变化" in rules
+    assert "具体停点" in rules
+    assert "试探、保留、误判或代价" in rules
+    assert "既有线索" in rules
+    assert "当场后果" in rules
+    assert "下一步疑问或风险余波" in rules
     assert "角色处境" in rules
     assert "禁用词表" not in rules
     assert "写作硬约束" not in rules
@@ -245,6 +253,87 @@ async def test_write_rewrites_once_when_structure_guard_fails(async_session):
     assert state.checkpoint_data["writer_guard_failures"][0]["beat_index"] == 0
     ch = await ChapterRepository(async_session).get_by_id("ch_guard")
     assert "林照发现玉佩，将它藏入袖中" in ch.raw_draft
+
+
+@pytest.mark.asyncio
+async def test_write_uses_conservative_fallback_when_guard_retry_fails(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=800,
+        beats=[
+            BeatPlan(summary="林照被外门同门克扣口粮后隐忍，将注意力放回残卷运转异常。", target_mood="压抑"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current=""),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    await director.save_checkpoint(
+        "novel_guard_fallback",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_guard",
+        chapter_id="ch_guard_fallback",
+    )
+    await ChapterRepository(async_session).create("ch_guard_fallback", "vol_guard", 1, "Test")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_writer_beat(self, **kwargs):
+            self.calls += 1
+            if self.calls <= 2:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=True,
+                    introduced_plan_external_fact=True,
+                    issues=["新增计划外人物张横"],
+                    suggested_rewrite_focus="删除计划外人物，回到同门群体压力。",
+                )
+            assert "张横" not in kwargs["generated_text"]
+            assert "外门同门" in kwargs["generated_text"]
+            return ChapterStructureGuardResult(passed=True)
+
+    guard = FakeGuard()
+    agent = WriterAgent(async_session, structure_guard=guard)
+    agent._generate_beat = AsyncMock(return_value="张横拦住林照，执法长老也站在门外。")
+    agent._rewrite_angle = AsyncMock(return_value="张横继续挑衅林照，执法长老提起林家叛宗案。")
+    agent._generate_relay = AsyncMock(return_value=type(
+        "Relay",
+        (),
+        {
+            "scene_state": "state",
+            "emotional_tone": "tense",
+            "new_info_revealed": "",
+            "open_threads": "",
+            "next_beat_hook": "",
+            "model_dump": lambda self: {
+                "scene_state": self.scene_state,
+                "emotional_tone": self.emotional_tone,
+                "new_info_revealed": self.new_info_revealed,
+                "open_threads": self.open_threads,
+                "next_beat_hook": self.next_beat_hook,
+            },
+        },
+    )())
+
+    await agent.write("novel_guard_fallback", context, "ch_guard_fallback")
+
+    ch = await ChapterRepository(async_session).get_by_id("ch_guard_fallback")
+    assert "外门同门" in ch.raw_draft
+    assert "残卷运转异常" in ch.raw_draft
+    assert "张横" not in ch.raw_draft
+    state = await director.resume("novel_guard_fallback")
+    assert state.checkpoint_data["writer_guard_failures"][-1]["mode"] == "writer_retry"
+    assert state.checkpoint_data["writer_guard_fallbacks"][0]["beat_index"] == 0
 
 
 @pytest.mark.asyncio

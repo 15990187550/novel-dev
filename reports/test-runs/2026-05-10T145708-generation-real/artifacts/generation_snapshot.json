@@ -1,0 +1,44 @@
+{
+  "run_id": "2026-05-10T145708-generation-real",
+  "novel_id": "codex-8aea",
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "checkpoint": {
+    "novel_title": "Codex 最小生成验收",
+    "synopsis_data": {
+      "title": "Codex 最小生成验收",
+      "logline": "",
+      "core_conflict": "",
+      "themes": [],
+      "character_arcs": [],
+      "milestones": [],
+      "estimated_volumes": 1,
+      "estimated_total_chapters": 10,
+      "estimated_total_words": 30000
+    },
+    "synopsis_doc_id": null,
+    "story_contract": {
+      "protagonist_goal": "",
+      "current_stage_goal": "",
+      "first_chapter_goal": "",
+      "core_conflict": "",
+      "key_clues": [],
+      "antagonistic_pressure": "",
+      "must_carry_forward": [],
+      "source_status": {
+        "setting_review_batch_status": null,
+        "setting_change_count": 0
+      }
+    },
+    "cross_stage_quality": {
+      "passed": true,
+      "warnings": [],
+      "blocking_issues": [],
+      "contract_fields_present": []
+    },
+    "current_phase": "brainstorming",
+    "current_volume_id": null,
+    "current_chapter_id": null
+  },
+  "chapters": []
+}

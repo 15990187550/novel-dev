@@ -7,7 +7,7 @@ from novel_dev.agents.fast_review_agent import FastReviewAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
-from novel_dev.schemas.review import DimensionScore, ScoreResult
+from novel_dev.schemas.review import DimensionIssue, DimensionScore, ScoreResult
 
 
 @pytest.mark.asyncio
@@ -292,6 +292,78 @@ async def test_fast_review_records_final_review_score_from_polished_text(async_s
     assert chapter.draft_review_score == 61
     assert chapter.final_review_score == 82
     assert chapter.final_review_feedback["summary_feedback"] == "成稿明显改善"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_returns_to_editing_for_low_final_score_before_edit_limit(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_final_polish",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 1,
+            "chapter_context": {
+                "chapter_plan": {
+                    "target_word_count": 4,
+                    "beats": [{"summary": "林照展开残信", "target_mood": "tense"}],
+                },
+                "writing_cards": [
+                    {
+                        "beat_index": 0,
+                        "required_payoffs": ["林照读出残信上的禁字"],
+                        "ending_hook": "残信上的禁字让林照意识到危险逼近",
+                    }
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_final_polish",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_final_polish", "v1", 1, "Final Polish")
+    await repo.update_text("c_final_polish", raw_draft="甲乙丙。", polished_text="甲乙丙。")
+
+    final_score = ScoreResult(
+        overall=72,
+        dimensions=[DimensionScore(name="hook_strength", score=72, comment="章末钩子偏弱")],
+        summary_feedback="章末钩子偏弱，残信线索没有形成读者牵引。",
+        per_dim_issues=[
+            DimensionIssue(
+                dim="hook_strength",
+                beat_idx=0,
+                problem="残信出现后没有当场后果和风险余波。",
+                suggestion="用残信字迹、林照身体反应和危险余波形成停点。",
+            )
+        ],
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_final_polish", "c_final_polish")
+
+    chapter = await repo.get_by_id("c_final_polish")
+    assert chapter.quality_status == "warn"
+    assert chapter.final_review_score == 72
+
+    state = await director.resume("novel_fr_final_polish")
+    assert state.current_phase == Phase.EDITING.value
+    final_polish = state.checkpoint_data["final_polish_issues"]
+    assert final_polish["source"] == "final_review"
+    assert final_polish["beat_issues"][0]["beat_index"] == 0
+    assert "残信出现后没有当场后果" in final_polish["beat_issues"][0]["issues"][0]["problem"]
+    assert any(item["code"] == "required_payoff" for item in final_polish["quality_gate_warnings"])
 
 
 @pytest.mark.asyncio

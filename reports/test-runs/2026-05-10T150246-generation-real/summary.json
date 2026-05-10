@@ -1,0 +1,66 @@
+{
+  "run_id": "2026-05-10T150246-generation-real",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 658.7474122080021,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-contract",
+    "acceptance_scope": "real-contract",
+    "novel_id": "codex-5f79",
+    "setting_session_id": "sgs_725fe9ed874145fa917acbdf3b21b5af",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "3667dd1cf0df4c17b66c2c2f4eb5ba3d",
+    "pending_id": "pe_49def64e",
+    "brainstorm_original_estimated_volumes": "4",
+    "brainstorm_original_estimated_total_chapters": "120",
+    "brainstorm_shrunk_estimated_total_chapters": "1",
+    "volume_id": "v1",
+    "chapter_id": "acceptance-codex-5f79-ch1",
+    "chapter_plan_source": "current_chapter_plan",
+    "chapter_target_word_count": "1000",
+    "chapter_auto_run_job_id": "job_1acb78c0693b",
+    "completed_chapter_ids": "acceptance-codex-5f79-ch1",
+    "chapter_job_stopped_reason": "volume_completed",
+    "chapter_text_status": "polished_text",
+    "chapter_text_length": "1336",
+    "quality_status": "warn",
+    "quality_reasons": "blocking_items,status,summary,warning_items",
+    "archived_chapter_count": "1",
+    "exported_path": "/Users/linlin/NovelDevData/novels/codex-5f79/exports/novel.md",
+    "generation_snapshot_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/2026-05-10T150246-generation-real/artifacts/generation_snapshot.json",
+    "quality_summary_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/2026-05-10T150246-generation-real/quality-summary/summary.json",
+    "quality_summary_md": "/Users/linlin/Desktop/novel-dev/reports/test-runs/2026-05-10T150246-generation-real/quality-summary/summary.md",
+    "quality_summary_status": "failed",
+    "quality_summary_run_id": "2026-05-10T150246-generation-real-quality-summary"
+  },
+  "details": [],
+  "issues": [
+    {
+      "id": "SYNOPSIS-QUALITY-001",
+      "type": "GENERATION_QUALITY",
+      "severity": "high",
+      "stage": "brainstorm",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "总纲质量门禁未通过。",
+      "evidence": [
+        "passed=False",
+        "structure_score=60",
+        "marketability_score=85",
+        "conflict_score=85",
+        "character_arc_score=85",
+        "writability_score=85",
+        "warning_issues[0]=总纲里程碑不足 4 个，长线节奏容易松散。"
+      ],
+      "reproduce": "novel-dev-testing quality-summary --input-json <snapshot.json>"
+    }
+  ]
+}

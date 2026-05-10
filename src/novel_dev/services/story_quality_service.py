@@ -102,9 +102,11 @@ class StoryQualityService:
             warnings.append("主要人物弧光转折不足，正文容易缺少人物选择。")
             suggestions.append("为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。")
 
-        structure_score = 85 if len(synopsis.milestones) >= 4 else 60
+        structural_turn_count = cls._count_structural_turns(synopsis)
+        structure_score = 85 if structural_turn_count >= 4 else 60
         if structure_score < 75:
-            warnings.append("总纲里程碑不足 4 个，长线节奏容易松散。")
+            warnings.append(f"总纲可识别结构转折不足 4 个，当前识别到 {structural_turn_count} 个。")
+            suggestions.append("补充会改变主角处境、关系、目标、风险等级或关键信息掌握状态的转折。")
 
         marketability_score = 85
         if not synopsis.volume_outlines:
@@ -235,6 +237,30 @@ class StoryQualityService:
     def _is_abstract_conflict(cls, text: str) -> bool:
         cleaned = coerce_to_text(text)
         return any(item in cleaned for item in cls.ABSTRACT_CONFLICTS) and not re.search(r"vs|VS|对抗|争夺|阻止|追杀|逼迫", cleaned)
+
+    STRUCTURAL_TURN_PATTERNS: dict[str, tuple[str, ...]] = {
+        "loss_or_fall": ("覆灭", "失去", "沦为", "废", "重伤", "败亡", "被逐", "陷害"),
+        "alliance_or_betrayal": ("结盟", "联手", "联盟", "背叛", "破裂", "拔剑指向", "护他", "押上身份"),
+        "clue_or_reveal": ("发现", "得知", "确认", "揭开", "揭露", "真相", "证据", "血书", "线索", "浮出水面"),
+        "threat_escalation": ("刺杀", "围杀", "追捕", "追杀", "陷阱", "被迫逃", "逃入", "逃亡", "拿下"),
+        "power_shift": ("突破", "暴露实力", "实力暴涨", "获得", "功法", "禁器", "反噬", "失控"),
+        "identity_or_world_change": ("身世", "血脉", "宿主", "封印", "邪物", "宗门根基", "天穹", "崩塌"),
+        "choice_or_sacrifice": ("必须选择", "选择", "放弃", "代价", "以凡人之躯", "自残", "牺牲"),
+    }
+
+    @classmethod
+    def _count_structural_turns(cls, synopsis: SynopsisData) -> int:
+        matched_categories: set[str] = set()
+        for milestone in synopsis.milestones:
+            text = cls._stringify([milestone.act, milestone.summary, milestone.climax_event])
+            milestone_categories = {
+                category
+                for category, patterns in cls.STRUCTURAL_TURN_PATTERNS.items()
+                if any(pattern in text for pattern in patterns)
+            }
+            if milestone_categories:
+                matched_categories.update(milestone_categories)
+        return len(matched_categories)
 
     @staticmethod
     def _stringify(value: Any) -> str:

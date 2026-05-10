@@ -59,6 +59,9 @@ class EditorAgent:
 
         checkpoint = dict(state.checkpoint_data or {})
         checkpoint["edit_attempt_count"] = checkpoint.get("edit_attempt_count", 0) + 1
+        checkpoint.pop("editor_guard_warnings", None)
+        checkpoint.pop("editor_guard_resolved", None)
+        checkpoint.pop("chapter_structure_guard", None)
         log_agent_detail(
             novel_id,
             "EditorAgent",
@@ -105,6 +108,7 @@ class EditorAgent:
                 whole_chapter_issues.append(issue)
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
+        self._merge_final_polish_issues(checkpoint, issues_by_beat, whole_chapter_issues)
         continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
         whole_chapter_issues.extend(continuity_issues)
 
@@ -174,6 +178,7 @@ class EditorAgent:
                         chapter_context=chapter_context,
                     ),
                 )
+                polished = self._clean_isolated_punctuation_paragraphs(polished)
                 log_agent_detail(
                     novel_id,
                     "EditorAgent",
@@ -202,6 +207,7 @@ class EditorAgent:
                     },
                 )
                 polished = beat_text
+            polished = self._clean_isolated_punctuation_paragraphs(polished)
             polished_beats.append(polished)
             await flow_control.raise_if_cancelled(novel_id)
 
@@ -226,6 +232,7 @@ class EditorAgent:
             except Exception as exc:
                 log_service.add_log(novel_id, "EditorAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
+        checkpoint.pop("final_polish_issues", None)
 
         await self.director.save_checkpoint(
             novel_id,
@@ -238,6 +245,9 @@ class EditorAgent:
 
     async def polish_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> str:
         log_service.add_log(novel_id, "EditorAgent", f"开始独立精修章节: {chapter_id}")
+        checkpoint.pop("editor_guard_warnings", None)
+        checkpoint.pop("editor_guard_resolved", None)
+        checkpoint.pop("chapter_structure_guard", None)
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch:
             raise ValueError(f"Chapter not found: {chapter_id}")
@@ -270,6 +280,7 @@ class EditorAgent:
                 whole_chapter_issues.append(issue)
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
+        self._merge_final_polish_issues(checkpoint, issues_by_beat, whole_chapter_issues)
         continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
         whole_chapter_issues.extend(continuity_issues)
 
@@ -311,8 +322,10 @@ class EditorAgent:
                         chapter_context=chapter_context,
                     ),
                 )
+                polished = self._clean_isolated_punctuation_paragraphs(polished)
             else:
                 polished = beat_text
+            polished = self._clean_isolated_punctuation_paragraphs(polished)
             polished_beats.append(polished)
 
         polished_text = "\n\n".join(polished_beats)
@@ -323,6 +336,7 @@ class EditorAgent:
             except Exception as exc:
                 log_service.add_log(novel_id, "EditorAgent", f"独立精修章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
+        checkpoint.pop("final_polish_issues", None)
         return polished_text
 
     async def _guard_editor_beat(
@@ -350,7 +364,6 @@ class EditorAgent:
         evidence = result.evidence(beat_index=beat_index, mode="editor")
         evidence["source_chars"] = len(source_text)
         evidence["polished_chars"] = len(polished_text)
-        checkpoint.setdefault("editor_guard_warnings", []).append(evidence)
         checkpoint["chapter_structure_guard"] = evidence
         log_agent_detail(
             novel_id,
@@ -372,6 +385,7 @@ class EditorAgent:
                 polished_text=retry_text,
             )
             if retry_result.passed:
+                checkpoint.setdefault("editor_guard_resolved", []).append(evidence)
                 log_agent_detail(
                     novel_id,
                     "EditorAgent",
@@ -390,6 +404,7 @@ class EditorAgent:
             retry_evidence = retry_result.evidence(beat_index=beat_index, mode="editor_retry")
             retry_evidence["source_chars"] = len(source_text)
             retry_evidence["polished_chars"] = len(retry_text)
+            checkpoint.setdefault("editor_guard_warnings", []).append(evidence)
             checkpoint.setdefault("editor_guard_warnings", []).append(retry_evidence)
             log_agent_detail(
                 novel_id,
@@ -401,6 +416,8 @@ class EditorAgent:
                 level="warning",
                 metadata=retry_evidence,
             )
+            return source_text
+        checkpoint.setdefault("editor_guard_warnings", []).append(evidence)
         return source_text
 
     async def _retry_rewrite_beat_after_guard(
@@ -417,7 +434,7 @@ class EditorAgent:
         guard_issue = {
             "dim": "consistency",
             "problem": "上一版润色引入了计划外事实或改变了节拍边界：" + "；".join(str(item) for item in issues[:4]),
-            "suggestion": f"{focus}；正文只使用原文、章节计划和已给事实，保留句子顺滑、动作清晰和情绪层次。",
+            "suggestion": f"{focus}；回到当前节拍已有事实，用动作、停顿、视线或身体反应增强读感。",
         }
         return await self._rewrite_beat(
             source_text,
@@ -438,9 +455,7 @@ class EditorAgent:
         low_dims = [k for k, v in scores.items() if v < 70]
         issue_lines = []
         for it in issues:
-            issue_lines.append(
-                f"- [{it.get('dim')}] 问题: {it.get('problem')}\n  建议: {it.get('suggestion')}"
-            )
+            issue_lines.append(self._format_issue_for_prompt(it))
         whole_lines = []
         for it in whole_chapter_issues[:3]:
             whole_lines.append(
@@ -461,21 +476,26 @@ class EditorAgent:
 
         prompt_parts = [
             "你是一位小说编辑。请在保留叙事事实和原对话意图的前提下,针对以下问题定点改写本段。"
-            "只返回改写后的正文,不要添加任何解释、标签或编号。\n",
+            "只返回改写后的正文，以正文形式呈现。\n",
             "## 改写方向\n"
-            "1. 增强读感:让句子更顺,让动作、对话和物件承担信息,让读者能自然跟住情绪和因果。\n"
-            "2. 自然中文表达:英文、拼音、网络缩写和 UI 术语原文转写为贴合角色处境的中文说法。\n"
-            "3. 情绪呈现:把直述心理改成动作、对话潜台词、身体反应或环境反衬,让读者自己感到人物变化。\n"
-            "4. 低 AI 味修整:处理比喻过密、抽象玄幻词连环复读、感官平均用力、奇观堆叠、模板化入体/传承演出。\n"
-            "5. 异象/奇遇段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
-            "6. 现代吐槽:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
-            "7. 字数节奏:保持与原段相近的字数(±20%),优先补顺断句、压缩重复解释、保留有效冲突。\n",
+            "1. 局部修补模式:优先修改与问题直接相关的句群,保持原事件集合、人物集合、地点集合和信息释放顺序。\n"
+            "2. 读感推进:让当场目标、可见阻力、角色策略/态度变化和具体停点更清楚。\n"
+            "3. 对话层次:关键信息通过试探、保留、误判或代价逐步浮出,让角色关系在说话方式里变化。\n"
+            "4. 章末牵引:使用已有物件、风险、情绪余波和已埋伏笔强化停点,让读者感到当场后果和下一步疑问。\n"
+            "   写法顺序为:先点住本段已经出现的具体物/伤/话/选择,再写人物必须承受的代价或迟疑,最后落在一个未完成动作或已知风险的逼近感。\n"
+            "5. 自然中文表达:英文、拼音、网络缩写和 UI 术语原文转写为贴合角色处境的中文说法。\n"
+            "6. 情绪呈现:把直述心理改成动作、对话潜台词、身体反应或环境反衬,让读者自己感到人物变化。\n"
+            "7. 低 AI 味修整:处理比喻过密、抽象玄幻词连环复读、感官平均用力、奇观堆叠、模板化入体/传承演出。\n"
+            "8. 异象/奇遇段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
+            "9. 现代吐槽:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
+            "10. 字数节奏:保持与原段相近的字数(±20%),优先补顺断句、压缩重复解释、保留有效冲突。\n",
             "## 事实边界\n"
             "1. 使用计划和原段已经给出的事实强化表达,保留事件先后顺序和人物已完成动作。\n"
             "2. 使用已有悬念增强章末钩子:放大当前风险、未完成选择、情绪余波或已埋伏笔。\n"
-            "3. 有限留白:当计划内信息不足以制造新反转时,用停顿、视线、动作未完成或既有风险的措辞强化,不发明新事件。\n"
-            "4. 正文只升级已有事实:新线索、新证据、新物件、新威胁、新动机和额外台词交给章节计划或后续节拍,"
-            "需要新线索时写入后续建议,本段用已给目标、阻力、选择和代价增强读感。\n",
+            "3. 有限留白:当计划内信息不足以制造新反转时,用停顿、视线、动作未完成或既有风险的措辞强化。\n"
+            "4. 正文只升级已有事实:新线索、新证据、新物件、新威胁、新动机、黑影、追兵、身份背景、额外线索和额外台词"
+            "交给章节计划或后续节拍;本段用已给目标、阻力、选择和代价增强读感。\n",
+            "5. 若问题建议里出现新增反转、陌生人物、额外物件或后续危险示例,请只吸收其读感目标,并改用原文/计划已经出现的素材完成同等效果。\n",
             style_block,
             plan_block,
         ]
@@ -492,6 +512,37 @@ class EditorAgent:
         client = llm_factory.get("EditorAgent", task="polish_beat")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
         return response.text.strip()
+
+    @classmethod
+    def _format_issue_for_prompt(cls, issue: dict) -> str:
+        dim = issue.get("dim")
+        problem = issue.get("problem")
+        suggestion = cls._bounded_suggestion_for_issue(issue)
+        return f"- [{dim}] 问题: {problem}\n  建议: {suggestion}"
+
+    @staticmethod
+    def _bounded_suggestion_for_issue(issue: dict) -> str:
+        suggestion = str(issue.get("suggestion") or "").strip()
+        dim = str(issue.get("dim") or "")
+        risky_markers = (
+            "新反转", "新的反转", "加入新", "新增", "黑影", "追兵", "有人正朝",
+            "密信被", "信纸在融化", "禁地深处亮起", "额外", "陌生人", "新人物",
+            "新线索", "新证据", "新物件", "新威胁", "例如：", "比如：",
+        )
+        if dim == "hook_strength" or any(marker in suggestion for marker in risky_markers):
+            base = suggestion
+            if base:
+                base += "。"
+            return (
+                f"{base}执行时只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔; "
+                "通过当场后果、人物迟疑、身体反应、未完成动作和已知风险逼近来强化钩子。"
+            )
+        if dim in {"editing_boundary", "consistency", "quality_gate", "required_payoff"}:
+            base = suggestion or "回到当前节拍已有事实完成修补。"
+            return (
+                f"{base} 改动范围收束在表达、节奏和读者感知,事件、人物、物件、线索和台词沿用已有材料。"
+            )
+        return suggestion
 
     @staticmethod
     def _continuity_rewrite_issues(checkpoint: dict) -> tuple[list[dict], bool]:
@@ -511,7 +562,7 @@ class EditorAgent:
             issues.append({
                 "dim": dim,
                 "problem": item.get("problem") or "正文与长期设定存在连续性冲突。",
-                "suggestion": item.get("suggestion") or "按长期设定重写冲突段落，不新增覆盖旧设定的事实。",
+                "suggestion": item.get("suggestion") or "按长期设定重写冲突段落，沿用已有事实并恢复设定一致性。",
             })
         if not issues and plan.get("summary"):
             issues.append({
@@ -520,3 +571,46 @@ class EditorAgent:
                 "suggestion": "按长期设定修复正文中的硬冲突。",
             })
         return issues, bool(plan.get("rewrite_all") and issues)
+
+    @staticmethod
+    def _merge_final_polish_issues(
+        checkpoint: dict,
+        issues_by_beat: dict[int, list],
+        whole_chapter_issues: list,
+    ) -> None:
+        plan = checkpoint.get("final_polish_issues")
+        if not isinstance(plan, dict):
+            return
+        for item in plan.get("beat_issues") or []:
+            if not isinstance(item, dict):
+                continue
+            beat_idx = item.get("beat_index")
+            if not isinstance(beat_idx, int):
+                continue
+            issues = [issue for issue in item.get("issues") or [] if isinstance(issue, dict)]
+            if issues:
+                issues_by_beat.setdefault(beat_idx, []).extend(issues)
+        for issue in plan.get("global_issues") or []:
+            if isinstance(issue, dict):
+                whole_chapter_issues.append(issue)
+        for warning in plan.get("quality_gate_warnings") or []:
+            if not isinstance(warning, dict):
+                continue
+            detail = warning.get("detail") if isinstance(warning.get("detail"), dict) else {}
+            missing = detail.get("missing") if isinstance(detail.get("missing"), list) else []
+            whole_chapter_issues.append({
+                "dim": warning.get("code") or "quality_gate",
+                "problem": warning.get("message") or "成稿质量门禁仍有告警。",
+                "suggestion": "围绕当前节拍已有事实补足读者需要看见的兑现、余波和停点。"
+                + (f" 重点兑现: {'；'.join(str(item) for item in missing[:3])}" if missing else ""),
+            })
+
+    @staticmethod
+    def _clean_isolated_punctuation_paragraphs(text: str) -> str:
+        paragraphs = text.split("\n\n")
+        cleaned = [
+            paragraph
+            for paragraph in paragraphs
+            if not re.fullmatch(r"\s*[。！？!?.,，、；;：:]+\s*", paragraph)
+        ]
+        return "\n\n".join(cleaned).strip()

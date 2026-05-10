@@ -43,6 +43,114 @@ def test_synopsis_quality_blocks_abstract_conflict_and_missing_volume_promise():
     assert any("具体对抗" in issue for issue in report.blocking_issues)
 
 
+def test_synopsis_quality_accepts_three_milestones_with_four_structural_turns():
+    synopsis = SynopsisData(
+        title="青云烬",
+        logline="林照为查明家族覆灭真相，在青云宗内鬼追杀下争夺父亲留下的禁术证据。",
+        core_conflict="林照 vs 渗透青云宗高层的神秘结社，为争夺家族血书与禁术真相生死对抗。",
+        themes=["复仇", "信任", "代价"],
+        character_arcs=[
+            CharacterArc(
+                name="林照",
+                arc_summary="从隐忍求生到主动揭开宗门阴谋。",
+                key_turning_points=["家族覆灭后隐忍", "与沈青衣结盟", "被迫暴露实力", "放弃邪物血脉"],
+            ),
+            CharacterArc(
+                name="沈青衣",
+                arc_summary="从独自查案到押上身份保护林照。",
+                key_turning_points=["暗中查旧案", "与林照互换线索", "宗门大比护他", "共同离开废墟"],
+            ),
+        ],
+        milestones=[
+            PlotMilestone(
+                act="第一幕·灰烬重生",
+                summary="家族覆灭后，林照失去修为沦为外门废柴；他与沈青衣结盟追查线索，并在第一波刺杀中获得关键证据。",
+                climax_event="林照在祖宅密室发现父亲血书，确认青云宗长老涉案，又触发陷阱被黑衣人围杀，被迫逃入禁地。",
+            ),
+            PlotMilestone(
+                act="第二幕·暗流涌动",
+                summary="林照在禁地获得残缺上古功法，实力暴涨但反噬埋下隐患；宗门大比中他被迫暴露实力，引发高层追捕。",
+                climax_event="上古功法失控反噬，沈青衣当众护他，谢渊拔剑指向林照，临时联盟破裂。",
+            ),
+            PlotMilestone(
+                act="第三幕·灰烬审判",
+                summary="幕后结社浮出水面，林照得知身世与千年前封印邪物有关，必须在接受血脉力量和以凡人之躯反抗之间选择。",
+                climax_event="林照闯入祖师堂揭开结社阴谋，放弃融合邪物血脉，以父亲禁器击碎阵眼，青云宗根基崩塌。",
+            ),
+        ],
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+        volume_outlines=[
+            {
+                "volume_number": 1,
+                "title": "灰烬",
+                "summary": "林照在青云宗内追查家族覆灭真相。",
+                "narrative_role": "首卷",
+                "main_goal": "拿到第一部关键证据",
+                "main_conflict": "林照 vs 青云宗内鬼",
+                "start_state": "失去修为",
+                "end_state": "获得证据",
+                "climax": "祖师堂揭露阴谋",
+                "hook_to_next": "天穹裂痕出现",
+                "target_chapter_range": "1-1",
+            }
+        ],
+    )
+
+    report = StoryQualityService.evaluate_synopsis(synopsis)
+
+    assert report.structure_score == 85
+    assert report.passed is True
+    assert not any("里程碑不足" in issue or "结构转折不足" in issue for issue in report.warning_issues)
+
+
+def test_synopsis_quality_blocks_when_structural_turns_are_not_recognizable():
+    synopsis = SynopsisData(
+        title="天玄纪",
+        logline="陆照想在宗门里修炼成长，但旧敌阻止他进入内门。",
+        core_conflict="陆照 vs 旧敌，为争夺内门资格持续对抗。",
+        themes=["成长"],
+        character_arcs=[
+            CharacterArc(
+                name="陆照",
+                arc_summary="从外门弟子成长为内门弟子。",
+                key_turning_points=["入门", "修炼", "成长"],
+            )
+        ],
+        milestones=[
+            PlotMilestone(act="第一幕", summary="陆照开始修炼，认识宗门环境。", climax_event="陆照完成一次修炼。"),
+            PlotMilestone(act="第二幕", summary="陆照继续修炼，实力逐步提高。", climax_event="陆照参加普通比试。"),
+            PlotMilestone(act="第三幕", summary="陆照继续成长，准备进入内门。", climax_event="陆照获得新的修炼机会。"),
+        ],
+        estimated_volumes=1,
+        estimated_total_chapters=3,
+        estimated_total_words=9000,
+        volume_outlines=[
+            {
+                "volume_number": 1,
+                "title": "入门",
+                "summary": "陆照在宗门修炼成长。",
+                "narrative_role": "首卷",
+                "main_goal": "进入内门",
+                "main_conflict": "陆照 vs 旧敌",
+                "start_state": "外门弟子",
+                "end_state": "内门弟子",
+                "climax": "比试",
+                "hook_to_next": "新的修炼机会",
+                "target_chapter_range": "1-3",
+            }
+        ],
+    )
+
+    report = StoryQualityService.evaluate_synopsis(synopsis)
+
+    assert report.passed is False
+    assert report.structure_score == 60
+    assert any("结构转折不足" in issue for issue in report.warning_issues)
+    assert any("改变主角处境" in suggestion for suggestion in report.repair_suggestions)
+
+
 def test_chapter_writability_requires_conflict_choice_and_hook():
     chapter = VolumeBeat(
         chapter_id="ch_1",

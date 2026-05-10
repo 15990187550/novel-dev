@@ -410,6 +410,38 @@ class FastReviewAgent:
                     volume_id=state.current_volume_id,
                     chapter_id=state.current_chapter_id,
                 )
+            elif self._should_return_to_editing_for_final_polish(
+                gate=gate,
+                final_review_score=final_score,
+                checkpoint=checkpoint,
+                edit_attempts=edit_attempts,
+            ):
+                checkpoint["final_polish_issues"] = self._build_final_polish_issues(
+                    final_feedback=final_feedback,
+                    gate_data=gate.model_dump(),
+                    checkpoint=checkpoint,
+                )
+                log_agent_detail(
+                    novel_id,
+                    "FastReviewAgent",
+                    "成稿复评仍有读感问题，回到 editing 定点精修",
+                    node="fast_review_final_polish",
+                    task="review",
+                    level="warning",
+                    metadata={
+                        "final_review_score": final_score,
+                        "edit_attempts": edit_attempts,
+                        "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                        "final_polish_issues": checkpoint["final_polish_issues"],
+                    },
+                )
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.EDITING,
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
             elif not passed:
                 report.notes.append(
                     f"edit_attempts={edit_attempts} 已达上限 {MAX_EDIT_ATTEMPTS},跳过精修轮转"
@@ -503,6 +535,72 @@ class FastReviewAgent:
             seen.add(item)
             result.append(item)
         return result
+
+    @staticmethod
+    def _should_return_to_editing_for_final_polish(
+        *,
+        gate,
+        final_review_score: int | None,
+        checkpoint: dict,
+        edit_attempts: int,
+    ) -> bool:
+        if gate.status == QUALITY_BLOCK or edit_attempts >= MAX_EDIT_ATTEMPTS:
+            return False
+        warning_codes = {
+            str(item.get("code"))
+            for item in gate.warning_items
+            if isinstance(item, dict) and item.get("code")
+        }
+        if isinstance(final_review_score, (int, float)) and final_review_score < 75:
+            return True
+        if "required_payoff" in warning_codes:
+            return True
+        editor_warnings = checkpoint.get("editor_guard_warnings")
+        return isinstance(editor_warnings, list) and bool(editor_warnings)
+
+    @staticmethod
+    def _build_final_polish_issues(
+        *,
+        final_feedback: dict,
+        gate_data: dict,
+        checkpoint: dict,
+    ) -> dict:
+        beat_issues: dict[int, list[dict]] = {}
+        global_issues: list[dict] = []
+        for issue in final_feedback.get("per_dim_issues") or []:
+            if not isinstance(issue, dict):
+                continue
+            beat_idx = issue.get("beat_idx")
+            if isinstance(beat_idx, int):
+                beat_issues.setdefault(beat_idx, []).append(issue)
+            else:
+                global_issues.append(issue)
+
+        for warning in checkpoint.get("editor_guard_warnings") or []:
+            if not isinstance(warning, dict):
+                continue
+            beat_idx = warning.get("beat_index")
+            issue = {
+                "dim": "editing_boundary",
+                "problem": "上一轮润色触发结构守卫：" + "；".join(str(item) for item in (warning.get("issues") or [])[:4]),
+                "suggestion": warning.get("suggested_rewrite_focus") or "回到当前节拍已有事实，用动作、停顿、视线或身体反应增强读感。",
+                "source_stage": "editing",
+            }
+            if isinstance(beat_idx, int):
+                beat_issues.setdefault(beat_idx, []).append(issue)
+            else:
+                global_issues.append(issue)
+
+        return {
+            "source": "final_review",
+            "summary_feedback": final_feedback.get("summary_feedback"),
+            "beat_issues": [
+                {"beat_index": beat_idx, "issues": issues}
+                for beat_idx, issues in sorted(beat_issues.items())
+            ],
+            "global_issues": global_issues,
+            "quality_gate_warnings": gate_data.get("warning_items") or [],
+        }
 
     async def review_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> FastReviewReport:
         log_service.add_log(novel_id, "FastReviewAgent", f"开始独立快速评审: {chapter_id}")
