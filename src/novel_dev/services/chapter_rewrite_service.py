@@ -16,6 +16,7 @@ from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.schemas.context import ChapterPlan
 from novel_dev.services.archive_service import ArchiveService
+from novel_dev.services.continuity_audit_service import ContinuityAuditService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import log_service
@@ -167,6 +168,20 @@ class ChapterRewriteService:
                     await self.flow_control.raise_if_cancelled(novel_id)
                     report = await FastReviewAgent(self.session).review_standalone(novel_id, chapter_id, checkpoint)
                     checkpoint["fast_review_feedback"] = report.model_dump()
+                    quality_gate = checkpoint.get("quality_gate") if isinstance(checkpoint.get("quality_gate"), dict) else {}
+                    if quality_gate.get("status") == QUALITY_BLOCK:
+                        if self._can_retry_continuity_block(checkpoint, attempt):
+                            checkpoint["continuity_rewrite_plan"] = ContinuityAuditService.build_rewrite_plan(
+                                checkpoint.get("continuity_audit") or {}
+                            )
+                            log_service.add_log(
+                                novel_id,
+                                "ChapterRewriteService",
+                                f"连续性审计阻断，进入第 {attempt + 2} 次定向精修",
+                                level="warning",
+                            )
+                            continue
+                        raise RuntimeError("Chapter quality gate blocked librarian ingestion")
                     if all([
                         report.word_count_ok,
                         report.consistency_fixed,
@@ -174,9 +189,8 @@ class ChapterRewriteService:
                         report.beat_cohesion_ok,
                         getattr(report, "language_style_ok", True),
                     ]):
+                        checkpoint.pop("continuity_rewrite_plan", None)
                         break
-                    if (checkpoint.get("quality_gate") or {}).get("status") == QUALITY_BLOCK:
-                        raise RuntimeError("Chapter quality gate blocked librarian ingestion")
                 checkpoint.pop("edit_attempt_count", None)
                 completed_stages.append(REWRITE_STAGE_EDIT_FAST_REVIEW)
                 await self._record_progress(job_id, job_repo, novel_id, chapter_id, completed_stages, checkpoint)
@@ -238,6 +252,16 @@ class ChapterRewriteService:
     @staticmethod
     def _should_run(stage: str, start_index: int) -> bool:
         return REWRITE_STAGES.index(stage) >= start_index
+
+    @staticmethod
+    def _can_retry_continuity_block(checkpoint: dict, attempt: int) -> bool:
+        audit = checkpoint.get("continuity_audit") if isinstance(checkpoint.get("continuity_audit"), dict) else {}
+        if audit.get("status") != QUALITY_BLOCK:
+            return False
+        items = audit.get("blocking_items")
+        if not isinstance(items, list) or not items:
+            return False
+        return attempt < MAX_EDIT_ATTEMPTS
 
     async def _record_progress(
         self,

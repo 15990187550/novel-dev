@@ -105,6 +105,8 @@ class EditorAgent:
                 whole_chapter_issues.append(issue)
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
+        continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
+        whole_chapter_issues.extend(continuity_issues)
 
         last_idx = len(beats) - 1
         polished_beats = []
@@ -127,7 +129,7 @@ class EditorAgent:
                     "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
                 }]
 
-            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
+            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last or force_continuity_rewrite
             if needs_rewrite:
                 log_agent_detail(
                     novel_id,
@@ -268,6 +270,8 @@ class EditorAgent:
                 whole_chapter_issues.append(issue)
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
+        continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
+        whole_chapter_issues.extend(continuity_issues)
 
         last_idx = len(beats) - 1
         polished_beats = []
@@ -287,7 +291,7 @@ class EditorAgent:
                     "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
                     "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
                 }]
-            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last
+            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last or force_continuity_rewrite
             if needs_rewrite:
                 polished = await self._rewrite_beat(
                     beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
@@ -488,3 +492,31 @@ class EditorAgent:
         client = llm_factory.get("EditorAgent", task="polish_beat")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
         return response.text.strip()
+
+    @staticmethod
+    def _continuity_rewrite_issues(checkpoint: dict) -> tuple[list[dict], bool]:
+        plan = checkpoint.get("continuity_rewrite_plan")
+        if not isinstance(plan, dict):
+            return [], False
+        raw_issues = plan.get("global_issues") or []
+        if not isinstance(raw_issues, list):
+            raw_issues = []
+        issues = []
+        for item in raw_issues:
+            if not isinstance(item, dict):
+                continue
+            dim = item.get("dim") or "continuity"
+            if dim == "continuity":
+                dim = "连续性"
+            issues.append({
+                "dim": dim,
+                "problem": item.get("problem") or "正文与长期设定存在连续性冲突。",
+                "suggestion": item.get("suggestion") or "按长期设定重写冲突段落，不新增覆盖旧设定的事实。",
+            })
+        if not issues and plan.get("summary"):
+            issues.append({
+                "dim": "continuity",
+                "problem": str(plan.get("summary")),
+                "suggestion": "按长期设定修复正文中的硬冲突。",
+            })
+        return issues, bool(plan.get("rewrite_all") and issues)
