@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.schemas.similar_document import SimilarDocument
-from novel_dev.db.models import Entity, EntityVersion, Foreshadowing, NovelState
+from novel_dev.db.models import Entity, EntityRelationship, EntityVersion, Foreshadowing, NovelState
 from novel_dev.services.log_service import LogService
 
 
@@ -182,6 +182,93 @@ async def test_assemble_formats_structured_entity_memory(async_session, mock_llm
     assert "青云宗外门弟子" in entity.current_state
     assert "黑水城" in entity.current_state
     assert "血煞盟与旧案有关" in entity.current_state
+
+
+@pytest.mark.asyncio
+async def test_assemble_includes_recent_active_entity_even_when_plan_omits_key_entities(async_session, mock_llm_factory):
+    state = NovelState(
+        novel_id="n_recent_context",
+        current_phase="context_preparation",
+        current_volume_id="v1",
+        current_chapter_id="ch_12",
+        checkpoint_data={
+            "current_chapter_plan": {
+                "chapter_id": "ch_12",
+                "chapter_number": 12,
+                "title": "旧债回声",
+                "target_word_count": 3000,
+                "beats": [{"summary": "陆照回到黑水城，听见有人提起旧债", "target_mood": "压抑", "key_entities": []}],
+            },
+            "current_volume_plan": {
+                "chapters": [
+                    {"chapter_id": "ch_10", "chapter_number": 10, "title": "十"},
+                    {"chapter_id": "ch_11", "chapter_number": 11, "title": "十一"},
+                    {"chapter_id": "ch_12", "chapter_number": 12, "title": "十二"},
+                ],
+            },
+        },
+    )
+    async_session.add(state)
+    async_session.add(Entity(id="ent_sqh_recent", name="苏清寒", type="character", novel_id="n_recent_context"))
+    async_session.add(EntityVersion(
+        entity_id="ent_sqh_recent",
+        version=1,
+        chapter_id="ch_11",
+        state={
+            "canonical_profile": {"identity_role": "黑水城旧案证人"},
+            "current_state": {"condition": "重伤失踪"},
+        },
+    ))
+    await async_session.flush()
+
+    context = await ContextAgent(async_session).assemble("n_recent_context", "ch_12")
+
+    assert [entity.name for entity in context.active_entities] == ["苏清寒"]
+    assert "重伤失踪" in context.active_entities[0].current_state
+    assert any("苏清寒" in item for item in context.guardrails)
+
+
+@pytest.mark.asyncio
+async def test_assemble_includes_relationship_neighbors_for_planned_entities(async_session, mock_llm_factory):
+    state = NovelState(
+        novel_id="n_neighbor_context",
+        current_phase="context_preparation",
+        checkpoint_data={
+            "current_chapter_plan": {
+                "chapter_number": 6,
+                "title": "同盟裂痕",
+                "target_word_count": 3000,
+                "beats": [{"summary": "陆照怀疑盟约被人动过手脚", "target_mood": "紧张", "key_entities": ["陆照"]}],
+            },
+        },
+    )
+    async_session.add(state)
+    async_session.add(Entity(id="ent_lz_neighbor", name="陆照", type="character", novel_id="n_neighbor_context"))
+    async_session.add(Entity(id="ent_sqh_neighbor", name="苏清寒", type="character", novel_id="n_neighbor_context"))
+    async_session.add(EntityVersion(
+        entity_id="ent_lz_neighbor",
+        version=1,
+        state={"current_state": {"condition": "正在追查盟约"}},
+    ))
+    async_session.add(EntityVersion(
+        entity_id="ent_sqh_neighbor",
+        version=1,
+        state={"current_state": {"condition": "盟友，但刚刚失联"}},
+    ))
+    async_session.add(EntityRelationship(
+        novel_id="n_neighbor_context",
+        source_id="ent_lz_neighbor",
+        target_id="ent_sqh_neighbor",
+        relation_type="ally",
+        is_active=True,
+    ))
+    await async_session.flush()
+
+    context = await ContextAgent(async_session).assemble("n_neighbor_context", "ch_6")
+
+    assert [entity.name for entity in context.active_entities] == ["陆照", "苏清寒"]
+    assert "盟友，但刚刚失联" in context.active_entities[1].current_state
+    assert any("苏清寒" in item for item in context.guardrails)
 
 
 @pytest.mark.asyncio

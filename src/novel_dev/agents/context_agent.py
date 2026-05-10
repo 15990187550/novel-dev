@@ -3,8 +3,10 @@ import logging
 from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import or_, select
 
 from novel_dev.agents._llm_helpers import call_and_parse_model, orchestrated_call_and_parse_model
+from novel_dev.db.models import Entity as DbEntity, EntityRelationship, EntityVersion
 from novel_dev.llm import llm_factory
 from novel_dev.llm.context_tools import build_mcp_context_tools
 from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
@@ -128,7 +130,7 @@ class ContextAgent:
             },
         )
 
-        key_entity_names = self._extract_key_entities_from_plan(chapter_plan)
+        key_entity_names = await self._expand_context_entity_names(novel_id, chapter_plan, checkpoint)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
         log_service.add_log(
             novel_id,
@@ -444,10 +446,126 @@ class ContextAgent:
             names.update(beat.key_entities)
         return list(names)
 
-    async def _load_active_entities(self, names: List[str], novel_id: str) -> List[EntityState]:
+    async def _expand_context_entity_names(
+        self,
+        novel_id: str,
+        chapter_plan: ChapterPlan,
+        checkpoint: dict,
+    ) -> List[str]:
+        planned_names = self._extract_key_entities_from_plan(chapter_plan)
+        recent_names = await self._load_recent_entity_names(chapter_plan, checkpoint, novel_id)
+        seed_names = self._unique_names([*planned_names, *recent_names])
+        seed_entities = await self._load_entities_by_names(seed_names, novel_id)
+        neighbor_names = await self._load_relationship_neighbor_names(seed_entities, novel_id)
+        return self._unique_names([*seed_names, *neighbor_names])
+
+    @staticmethod
+    def _unique_names(names: List[str]) -> List[str]:
+        seen = set()
+        result = []
+        for name in names:
+            normalized = str(name or "").strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            result.append(normalized)
+        return result
+
+    async def _load_entities_by_names(self, names: List[str], novel_id: str) -> List[DbEntity]:
         if not names:
             return []
         entities = await self.entity_repo.find_by_names(names, novel_id=novel_id)
+        by_name = {entity.name: entity for entity in entities}
+        return [by_name[name] for name in names if name in by_name]
+
+    async def _load_recent_entity_names(
+        self,
+        chapter_plan: ChapterPlan,
+        checkpoint: dict,
+        novel_id: str,
+        *,
+        previous_chapter_limit: int = 3,
+        entity_limit: int = 6,
+    ) -> List[str]:
+        previous_chapter_ids = self._previous_chapter_ids(chapter_plan, checkpoint, limit=previous_chapter_limit)
+        if not previous_chapter_ids:
+            return []
+        result = await self.session.execute(
+            select(DbEntity)
+            .join(EntityVersion, EntityVersion.entity_id == DbEntity.id)
+            .where(
+                DbEntity.novel_id == novel_id,
+                DbEntity.archived_at.is_(None),
+                EntityVersion.chapter_id.in_(previous_chapter_ids),
+            )
+            .order_by(EntityVersion.created_at.desc(), DbEntity.updated_at.desc())
+            .limit(entity_limit)
+        )
+        return self._unique_names([entity.name for entity in result.scalars().all()])
+
+    @staticmethod
+    def _previous_chapter_ids(chapter_plan: ChapterPlan, checkpoint: dict, *, limit: int) -> List[str]:
+        volume_plan = checkpoint.get("current_volume_plan") if isinstance(checkpoint, dict) else None
+        chapters = volume_plan.get("chapters") if isinstance(volume_plan, dict) else []
+        current_number = chapter_plan.chapter_number
+        previous = [
+            chapter
+            for chapter in chapters
+            if isinstance(chapter, dict)
+            and isinstance(chapter.get("chapter_number"), int)
+            and chapter.get("chapter_number") < current_number
+            and chapter.get("chapter_id")
+        ]
+        previous.sort(key=lambda item: item["chapter_number"], reverse=True)
+        return [str(chapter["chapter_id"]) for chapter in previous[:limit]]
+
+    async def _load_relationship_neighbor_names(
+        self,
+        seed_entities: List[DbEntity],
+        novel_id: str,
+        *,
+        limit: int = 6,
+    ) -> List[str]:
+        seed_ids = [entity.id for entity in seed_entities]
+        if not seed_ids:
+            return []
+        result = await self.session.execute(
+            select(EntityRelationship)
+            .where(
+                EntityRelationship.novel_id == novel_id,
+                EntityRelationship.is_active == True,
+                or_(
+                    EntityRelationship.source_id.in_(seed_ids),
+                    EntityRelationship.target_id.in_(seed_ids),
+                ),
+            )
+            .order_by(EntityRelationship.id.desc())
+            .limit(limit)
+        )
+        neighbor_ids = []
+        seed_id_set = set(seed_ids)
+        for relationship in result.scalars().all():
+            if relationship.source_id in seed_id_set and relationship.target_id not in seed_id_set:
+                neighbor_ids.append(relationship.target_id)
+            elif relationship.target_id in seed_id_set and relationship.source_id not in seed_id_set:
+                neighbor_ids.append(relationship.source_id)
+        if not neighbor_ids:
+            return []
+        entities_result = await self.session.execute(
+            select(DbEntity)
+            .where(
+                DbEntity.novel_id == novel_id,
+                DbEntity.archived_at.is_(None),
+                DbEntity.id.in_(neighbor_ids),
+            )
+        )
+        by_id = {entity.id: entity for entity in entities_result.scalars().all()}
+        return self._unique_names([by_id[entity_id].name for entity_id in neighbor_ids if entity_id in by_id])
+
+    async def _load_active_entities(self, names: List[str], novel_id: str) -> List[EntityState]:
+        if not names:
+            return []
+        entities = await self._load_entities_by_names(names, novel_id)
         result = []
         for entity in entities:
             latest = await self.version_repo.get_latest(entity.id)
