@@ -9,12 +9,14 @@ class MarkdownSync:
     def __init__(self, base_dir: str | None = None, storage_paths: StoragePaths | None = None):
         if base_dir is None and storage_paths is None:
             raise ValueError("MarkdownSync requires base_dir or storage_paths")
+        if base_dir is not None and storage_paths is not None:
+            raise ValueError("MarkdownSync accepts either base_dir or storage_paths, not both")
         self.base_dir = base_dir
         self.storage_paths = storage_paths
 
     def _chapter_path(self, novel_id: str, volume_id: str, chapter_id: str) -> str:
         if self.storage_paths is not None:
-            return self._display_path(self.storage_paths.archive_chapter_path(novel_id, volume_id, chapter_id))
+            return str(self.storage_paths.archive_chapter_path(novel_id, volume_id, chapter_id))
 
         dir_path = os.path.join(self.base_dir, novel_id, volume_id)
         os.makedirs(dir_path, exist_ok=True)
@@ -27,9 +29,7 @@ class MarkdownSync:
 
     def _volume_path(self, novel_id: str, volume_id: str, filename: str) -> str:
         if self.storage_paths is not None:
-            return self._display_path(
-                self.storage_paths.export_volume_path(novel_id, volume_id, self._file_format(filename))
-            )
+            return str(self.storage_paths.export_volume_path(novel_id, volume_id, self._file_format(filename)))
 
         dir_path = os.path.join(self.base_dir, novel_id, volume_id)
         os.makedirs(dir_path, exist_ok=True)
@@ -37,7 +37,7 @@ class MarkdownSync:
 
     def _novel_path(self, novel_id: str, filename: str) -> str:
         if self.storage_paths is not None:
-            return self._display_path(self.storage_paths.export_novel_path(novel_id, self._file_format(filename)))
+            return str(self.storage_paths.export_novel_path(novel_id, self._file_format(filename)))
 
         dir_path = os.path.join(self.base_dir, novel_id)
         os.makedirs(dir_path, exist_ok=True)
@@ -60,13 +60,7 @@ class MarkdownSync:
 
     def _file_format(self, filename: str) -> str:
         suffix = Path(filename).suffix
-        return suffix[1:] if suffix else filename
-
-    def _display_path(self, path: Path) -> str:
-        path_str = str(path)
-        if path_str.startswith("/private/var/"):
-            return path_str[len("/private") :]
-        return path_str
+        return suffix[1:] if suffix else "md"
 
     async def read_chapter(self, novel_id: str, volume_id: str, chapter_id: str) -> str:
         path = self._chapter_path(novel_id, volume_id, chapter_id)

@@ -35,11 +35,12 @@ async def test_write_volume_and_novel():
 @pytest.mark.asyncio
 async def test_write_chapter_uses_external_archive_layout():
     with tempfile.TemporaryDirectory() as tmpdir:
-        sync = MarkdownSync(storage_paths=StoragePaths(tmpdir))
+        storage_paths = StoragePaths(tmpdir)
+        sync = MarkdownSync(storage_paths=storage_paths)
 
         path = await sync.write_chapter("novel_1", "vol_1", "ch_1", "Chapter 1 text")
 
-        assert path == os.path.join(tmpdir, "novels", "novel_1", "archive", "vol_1", "ch_1.md")
+        assert path == str(storage_paths.archive_chapter_path("novel_1", "vol_1", "ch_1"))
         with open(path, "r", encoding="utf-8") as f:
             assert f.read() == "Chapter 1 text"
         assert await sync.read_chapter("novel_1", "vol_1", "ch_1") == "Chapter 1 text"
@@ -48,10 +49,29 @@ async def test_write_chapter_uses_external_archive_layout():
 @pytest.mark.asyncio
 async def test_write_exports_use_external_exports_layout():
     with tempfile.TemporaryDirectory() as tmpdir:
-        sync = MarkdownSync(storage_paths=StoragePaths(tmpdir))
+        storage_paths = StoragePaths(tmpdir)
+        sync = MarkdownSync(storage_paths=storage_paths)
 
         volume_path = await sync.write_volume("novel_1", "vol_1", "volume.md", "# Vol")
         novel_path = await sync.write_novel("novel_1", "novel.txt", "# Novel")
 
-        assert volume_path == os.path.join(tmpdir, "novels", "novel_1", "exports", "vol_1", "volume.md")
-        assert novel_path == os.path.join(tmpdir, "novels", "novel_1", "exports", "novel.txt")
+        assert volume_path == str(storage_paths.export_volume_path("novel_1", "vol_1", "md"))
+        assert novel_path == str(storage_paths.export_novel_path("novel_1", "txt"))
+
+
+@pytest.mark.asyncio
+async def test_suffixless_volume_export_defaults_to_markdown():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage_paths = StoragePaths(tmpdir)
+        sync = MarkdownSync(storage_paths=storage_paths)
+
+        path = await sync.write_volume("n", "v", "volume", "x")
+
+        assert path == str(storage_paths.export_volume_path("n", "v", "md"))
+        assert path.endswith(os.path.join("novels", "n", "exports", "v", "volume.md"))
+
+
+def test_constructor_rejects_base_dir_and_storage_paths():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with pytest.raises(ValueError, match="either base_dir or storage_paths"):
+            MarkdownSync(base_dir=tmpdir, storage_paths=StoragePaths(tmpdir))
