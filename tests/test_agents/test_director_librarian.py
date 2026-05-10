@@ -25,7 +25,7 @@ async def test_director_librarian_to_completed(async_session, tmp_path, monkeypa
         volume_id="v1",
         chapter_id="c1",
     )
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_dir")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
     with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, return_value=ExtractionResult()):
@@ -93,7 +93,7 @@ async def test_director_librarian_both_extractions_fail(async_session):
         volume_id="v1",
         chapter_id="c1",
     )
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_fail")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
     with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, side_effect=Exception("LLM down")):
@@ -123,7 +123,7 @@ async def test_director_librarian_fallback_success(async_session, tmp_path, monk
         volume_id="v1",
         chapter_id="c1",
     )
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_fallback")
     await ChapterRepository(async_session).update_text("c1", polished_text="abc")
 
     with patch("novel_dev.agents.librarian.call_and_parse_model", new_callable=AsyncMock, side_effect=Exception("LLM down")):

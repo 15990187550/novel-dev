@@ -293,7 +293,7 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
             volume_id=volume_id,
             chapter_id=chapter_1_id,
         )
-        await ChapterRepository(async_session).create(chapter_1_id, volume_id, 1, "第一章")
+        await ChapterRepository(async_session).create(chapter_1_id, volume_id, 1, "第一章", novel_id=novel_id)
         await ChapterRepository(async_session).update_text(chapter_1_id, polished_text="第一章内容")
         await async_session.commit()
 
@@ -338,7 +338,7 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
                 volume_id=volume_id,
                 chapter_id=chapter_2_id,
             )
-            await ChapterRepository(async_session).create(chapter_2_id, volume_id, 2, "第二章")
+            await ChapterRepository(async_session).create(chapter_2_id, volume_id, 2, "第二章", novel_id=novel_id)
             await ChapterRepository(async_session).update_text(chapter_2_id, raw_draft="突破内容")
             await async_session.commit()
 

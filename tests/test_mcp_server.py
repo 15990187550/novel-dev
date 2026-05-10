@@ -760,7 +760,7 @@ async def test_mcp_run_librarian(tmp_path, monkeypatch):
             volume_id=volume_id,
             chapter_id=chapter_id,
         )
-        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Lib")
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Lib", novel_id=novel_id)
         await ChapterRepository(session).update_text(chapter_id, polished_text="abc")
         await session.commit()
 
