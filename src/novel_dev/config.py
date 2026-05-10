@@ -1,5 +1,6 @@
 from typing import Optional
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="")
 
     database_url: str = "postgresql+asyncpg://localhost/novel_dev"
+    data_dir: str = Field("~/NovelDevData", validation_alias="NOVEL_DEV_DATA_DIR")
     markdown_output_dir: str = "./novel_output"
     llm_config_path: str = "./llm_config.yaml"
     llm_user_agent: str = "novel-dev/1.0"
