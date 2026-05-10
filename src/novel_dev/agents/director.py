@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.db.models import NovelState
 from novel_dev.agents._log_helpers import log_agent_detail
+from novel_dev.config import settings
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.volume_plan_guard_service import ensure_volume_plan_accepted
 
@@ -217,7 +218,6 @@ class NovelDirector:
     async def _run_librarian(self, state: NovelState) -> NovelState:
         from novel_dev.agents.librarian import LibrarianAgent
         from novel_dev.services.archive_service import ArchiveService
-        from novel_dev.config import Settings
         from novel_dev.repositories.chapter_repo import ChapterRepository
 
         chapter_id = state.current_chapter_id
@@ -268,7 +268,6 @@ class NovelDirector:
         await agent.persist(extraction, chapter_id, state.novel_id)
         await ChapterRepository(self.session).mark_world_state_ingested(chapter_id, True)
 
-        settings = Settings()
         archive_svc = ArchiveService(self.session, settings.data_dir)
         await archive_svc.archive(state.novel_id, chapter_id)
         log_agent_detail(

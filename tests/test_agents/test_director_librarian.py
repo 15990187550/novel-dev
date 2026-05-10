@@ -9,7 +9,8 @@ from novel_dev.schemas.librarian import ExtractionResult
 
 
 @pytest.mark.asyncio
-async def test_director_librarian_to_completed(async_session):
+async def test_director_librarian_to_completed(async_session, tmp_path, monkeypatch):
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(tmp_path))
     director = NovelDirector(session=async_session)
     plans = [
         ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump(),
@@ -33,6 +34,14 @@ async def test_director_librarian_to_completed(async_session):
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value
     ch = await ChapterRepository(async_session).get_by_id("c1")
     assert ch.status == "archived"
+    assert (
+        tmp_path.resolve()
+        / "novels"
+        / "n_dir"
+        / "archive"
+        / "v1"
+        / "c1.md"
+    ).exists()
 
 
 @pytest.mark.asyncio
@@ -98,7 +107,8 @@ async def test_director_librarian_both_extractions_fail(async_session):
 
 
 @pytest.mark.asyncio
-async def test_director_librarian_fallback_success(async_session):
+async def test_director_librarian_fallback_success(async_session, tmp_path, monkeypatch):
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(tmp_path))
     director = NovelDirector(session=async_session)
     plans = [
         ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump(),
@@ -122,3 +132,11 @@ async def test_director_librarian_fallback_success(async_session):
     assert state.current_phase == Phase.CONTEXT_PREPARATION.value
     ch = await ChapterRepository(async_session).get_by_id("c1")
     assert ch.status == "archived"
+    assert (
+        tmp_path.resolve()
+        / "novels"
+        / "n_fallback"
+        / "archive"
+        / "v1"
+        / "c1.md"
+    ).exists()

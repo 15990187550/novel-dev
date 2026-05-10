@@ -14,7 +14,7 @@ app.include_router(router)
 
 
 @pytest.mark.asyncio
-async def test_post_librarian_success(async_session, tmp_path):
+async def test_post_librarian_success(async_session, tmp_path, monkeypatch):
     async def override():
         yield async_session
 
@@ -31,14 +31,13 @@ async def test_post_librarian_success(async_session, tmp_path):
             volume_id="v1",
             chapter_id="c1",
         )
-        await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+        await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_api_lib")
         await ChapterRepository(async_session).update_text("c1", polished_text="abc")
         await async_session.commit()
 
-        mock_settings = type("MockSettings", (), {"data_dir": str(tmp_path)})()
+        monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(tmp_path))
         with (
             patch("novel_dev.agents.librarian.LibrarianAgent._call_llm", new_callable=AsyncMock, return_value='{}'),
-            patch("novel_dev.config.Settings", return_value=mock_settings),
         ):
             async with AsyncClient(transport=transport, base_url="http://test") as client:
                 response = await client.post("/api/novels/n_api_lib/librarian")
@@ -61,7 +60,7 @@ async def test_post_export_success(async_session):
     try:
         director = NovelDirector(session=async_session)
         await director.save_checkpoint("n_api_exp", phase=Phase.COMPLETED, checkpoint_data={})
-        await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1")
+        await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_api_exp")
         await ChapterRepository(async_session).update_text("c1", polished_text="abc")
         await async_session.commit()
 
@@ -80,6 +79,7 @@ async def test_post_export_success(async_session):
             assert Path(response.json()["exported_path"]).is_relative_to(
                 Path(tmpdir).resolve() / "novels" / "n_api_exp" / "exports"
             )
+            assert "abc" in Path(response.json()["exported_path"]).read_text(encoding="utf-8")
     finally:
         app.dependency_overrides.clear()
 

@@ -26,7 +26,7 @@ from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan, SynopsisData
 from novel_dev.services.export_service import ExportService
 import uuid as uuid_mod
-from novel_dev.config import Settings
+from novel_dev.config import settings
 from novel_dev.mcp_server.registry import MCPToolRegistry
 from novel_dev.services.entity_context_sanitizer import sanitize_entity_state_for_context
 
@@ -558,7 +558,6 @@ async def run_librarian(novel_id: str) -> dict:
 
 @mcp.tool()
 async def export_novel(novel_id: str, format: str = "md") -> dict:
-    settings = Settings()
     async with async_session_maker() as session:
         svc = ExportService(session, settings.data_dir)
         try:

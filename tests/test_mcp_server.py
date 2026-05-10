@@ -734,7 +734,7 @@ async def test_mcp_get_volume_plan(mock_llm_factory):
 
 
 @pytest.mark.asyncio
-async def test_mcp_run_librarian():
+async def test_mcp_run_librarian(tmp_path, monkeypatch):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.agents.director import NovelDirector, Phase
@@ -746,6 +746,7 @@ async def test_mcp_run_librarian():
     novel_id = f"n_mcp_lib_{suffix}"
     chapter_id = f"c_{suffix}"
     volume_id = f"v_{suffix}"
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(tmp_path))
 
     async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session_local() as session:
@@ -769,7 +770,7 @@ async def test_mcp_run_librarian():
 
 
 @pytest.mark.asyncio
-async def test_mcp_export_novel():
+async def test_mcp_export_novel(tmp_path, monkeypatch):
     from novel_dev.db.engine import engine
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
     from novel_dev.repositories.chapter_repo import ChapterRepository
@@ -778,10 +779,11 @@ async def test_mcp_export_novel():
     novel_id = f"n_mcp_exp_{suffix}"
     chapter_id = f"c_{suffix}"
     volume_id = f"v_{suffix}"
+    monkeypatch.setattr("novel_dev.mcp_server.server.settings.data_dir", str(tmp_path))
 
     async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session_local() as session:
-        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Exp")
+        await ChapterRepository(session).create(chapter_id, volume_id, 1, "MCP Exp", novel_id=novel_id)
         await ChapterRepository(session).update_text(chapter_id, polished_text="export me")
         await ChapterRepository(session).update_status(chapter_id, "archived")
         await session.commit()
@@ -789,6 +791,7 @@ async def test_mcp_export_novel():
     result = await mcp._tool_manager._tools["export_novel"].fn(novel_id, "md")
     assert "exported_path" in result
     assert result["format"] == "md"
+    assert "export me" in (tmp_path / "novels" / novel_id / "exports" / "novel.md").read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio
