@@ -40,3 +40,25 @@ def test_storage_paths_expand_user(monkeypatch, tmp_path):
     paths = StoragePaths("~/NovelDevData")
 
     assert paths.data_dir == (fake_home / "NovelDevData").resolve()
+
+
+@pytest.mark.parametrize(
+    ("method_name", "subdir"),
+    [
+        ("archive_dir", "archive"),
+        ("exports_dir", "exports"),
+        ("uploads_dir", "uploads"),
+        ("snapshots_dir", "snapshots"),
+    ],
+)
+def test_storage_paths_reject_symlinked_novel_subdir_escape(tmp_path, method_name, subdir):
+    novel_root = tmp_path / "novels" / "novel_1"
+    novel_root.mkdir(parents=True)
+    outside_root = tmp_path.parent / f"outside_{subdir}"
+    outside_root.mkdir()
+    (novel_root / subdir).symlink_to(outside_root, target_is_directory=True)
+
+    paths = StoragePaths(tmp_path)
+
+    with pytest.raises(ValueError, match="escapes data root"):
+        getattr(paths, method_name)("novel_1")

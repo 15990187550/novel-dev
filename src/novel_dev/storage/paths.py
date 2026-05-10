@@ -19,7 +19,7 @@ class StoragePaths:
         return self._within_root("novels", self._safe_identifier(novel_id))
 
     def archive_dir(self, novel_id: str) -> Path:
-        return self.novel_dir(novel_id) / "archive"
+        return self._ensure_within_root(self.novel_dir(novel_id) / "archive")
 
     def archive_chapter_path(self, novel_id: str, volume_id: str, chapter_id: str) -> Path:
         return self._ensure_within_root(
@@ -29,7 +29,7 @@ class StoragePaths:
         )
 
     def exports_dir(self, novel_id: str) -> Path:
-        return self.novel_dir(novel_id) / "exports"
+        return self._ensure_within_root(self.novel_dir(novel_id) / "exports")
 
     def export_volume_path(self, novel_id: str, volume_id: str, file_format: str) -> Path:
         return self._ensure_within_root(
@@ -44,10 +44,10 @@ class StoragePaths:
         )
 
     def uploads_dir(self, novel_id: str) -> Path:
-        return self.novel_dir(novel_id) / "uploads"
+        return self._ensure_within_root(self.novel_dir(novel_id) / "uploads")
 
     def snapshots_dir(self, novel_id: str) -> Path:
-        return self.novel_dir(novel_id) / "snapshots"
+        return self._ensure_within_root(self.novel_dir(novel_id) / "snapshots")
 
     def _within_root(self, *parts: str) -> Path:
         return self._ensure_within_root(self.data_dir.joinpath(*parts))
