@@ -25,6 +25,7 @@ class ContinuityAuditService:
 
     DEAD_MARKERS = ("已死亡", "死亡", "身亡", "阵亡", "尸身", "尸体")
     LIVING_ACTION_MARKERS = ("醒来", "开口", "说出", "走来", "站起", "活着", "出手")
+    IDENTITY_DRIFT_MARKERS = ("魔门圣子", "魔教圣子", "血煞盟少主", "妖族少主")
 
     @classmethod
     def audit_chapter(cls, polished_text: str, chapter_context: dict[str, Any]) -> ContinuityAuditResult:
@@ -42,6 +43,14 @@ class ContinuityAuditService:
                     "code": "dead_entity_acted",
                     "message": f"{name} 当前状态为死亡/尸身，但成稿写成了可行动角色。",
                     "detail": {"entity": name, "current_state": state[:240]},
+                })
+            identity_role = cls._canonical_identity_role(entity)
+            drift_marker = cls._identity_drift_marker(text, name, identity_role)
+            if drift_marker:
+                blocking.append({
+                    "code": "canonical_identity_drift",
+                    "message": f"{name} 的固定身份是「{identity_role}」，但成稿写成「{drift_marker}」。",
+                    "detail": {"entity": name, "canonical_identity_role": identity_role, "matched_text": drift_marker},
                 })
 
         story_contract = chapter_context.get("story_contract") or {}
@@ -81,6 +90,29 @@ class ContinuityAuditService:
     @classmethod
     def _looks_dead(cls, state: str) -> bool:
         return any(marker in state for marker in cls.DEAD_MARKERS)
+
+    @staticmethod
+    def _canonical_identity_role(entity: dict[str, Any]) -> str:
+        memory = entity.get("memory_snapshot") if isinstance(entity.get("memory_snapshot"), dict) else {}
+        canonical = memory.get("canonical_profile") if isinstance(memory.get("canonical_profile"), dict) else {}
+        return str(canonical.get("identity_role") or "").strip()
+
+    @classmethod
+    def _identity_drift_marker(cls, text: str, name: str, identity_role: str) -> str:
+        if not identity_role:
+            return ""
+        if any(marker in identity_role for marker in cls.IDENTITY_DRIFT_MARKERS):
+            return ""
+        start = 0
+        while True:
+            index = text.find(name, start)
+            if index < 0:
+                return ""
+            window = text[index:index + 80]
+            for marker in cls.IDENTITY_DRIFT_MARKERS:
+                if marker in window and marker not in identity_role:
+                    return marker
+            start = index + len(name)
 
     @classmethod
     def _has_living_action_near_name(cls, text: str, name: str) -> bool:

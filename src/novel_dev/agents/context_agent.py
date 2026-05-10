@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -451,8 +451,9 @@ class ContextAgent:
         result = []
         for entity in entities:
             latest = await self.version_repo.get_latest(entity.id)
-            state_str = str(latest.state)[:300] if latest else ""
             state_data = latest.state if latest else {}
+            memory_snapshot = self._build_entity_memory_snapshot(state_data if isinstance(state_data, dict) else {})
+            state_str = self._format_entity_memory(memory_snapshot, state_data)
             result.append(
                 EntityState(
                     entity_id=entity.id,
@@ -460,9 +461,60 @@ class ContextAgent:
                     type=entity.type,
                     current_state=state_str,
                     aliases=state_data.get("aliases", []) if isinstance(state_data, dict) else [],
+                    memory_snapshot=memory_snapshot,
                 )
             )
         return result
+
+    @classmethod
+    def _build_entity_memory_snapshot(cls, state_data: dict[str, Any]) -> dict[str, Any]:
+        canonical = state_data.get("canonical_profile") if isinstance(state_data.get("canonical_profile"), dict) else {}
+        current = state_data.get("current_state") if isinstance(state_data.get("current_state"), dict) else {}
+        observations = state_data.get("observations") if isinstance(state_data.get("observations"), dict) else {}
+        return {
+            "canonical_profile": dict(canonical),
+            "current_state": dict(current),
+            "recent_observations": cls._recent_observations(observations),
+        }
+
+    @staticmethod
+    def _recent_observations(observations: dict[str, Any], limit: int = 3) -> list[dict[str, str]]:
+        items = []
+        for chapter_id, values in observations.items():
+            if isinstance(values, list):
+                text = "；".join(str(value) for value in values if str(value).strip())
+            else:
+                text = str(values)
+            if text.strip():
+                items.append({"chapter_id": str(chapter_id), "text": text})
+        return items[-limit:]
+
+    @classmethod
+    def _format_entity_memory(cls, memory_snapshot: dict[str, Any], raw_state: Any) -> str:
+        parts = []
+        canonical = memory_snapshot.get("canonical_profile") or {}
+        current = memory_snapshot.get("current_state") or {}
+        observations = memory_snapshot.get("recent_observations") or []
+
+        if canonical:
+            parts.append("固定档案: " + cls._format_kv(canonical))
+        if current:
+            parts.append("当前状态: " + cls._format_kv(current))
+        if observations:
+            observation_text = "；".join(
+                f"{item.get('chapter_id')}: {item.get('text')}"
+                for item in observations
+                if item.get("text")
+            )
+            if observation_text:
+                parts.append("近期观察: " + observation_text)
+        if parts:
+            return "\n".join(parts)[:800]
+        return str(raw_state)[:300] if raw_state else ""
+
+    @staticmethod
+    def _format_kv(data: dict[str, Any]) -> str:
+        return "；".join(f"{key}={value}" for key, value in data.items() if value not in (None, "", [], {}))
 
     @staticmethod
     def _join_names(values: List[str], limit: int = 6) -> str:

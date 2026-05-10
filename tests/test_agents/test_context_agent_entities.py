@@ -138,6 +138,53 @@ async def test_assemble_carries_story_contract_from_checkpoint(async_session, mo
 
 
 @pytest.mark.asyncio
+async def test_assemble_formats_structured_entity_memory(async_session, mock_llm_factory):
+    state = NovelState(
+        novel_id="n_entity_memory",
+        current_phase="context_preparation",
+        checkpoint_data={
+            "current_chapter_plan": {
+                "chapter_number": 8,
+                "title": "旧案再起",
+                "target_word_count": 3000,
+                "beats": [{"summary": "林照握着父亲玉佩追查旧案", "target_mood": "压抑", "key_entities": ["林照"]}],
+            },
+        },
+    )
+    async_session.add(state)
+    async_session.add(Entity(id="ent_linzhao_memory", name="林照", type="character", novel_id="n_entity_memory"))
+    async_session.add(EntityVersion(
+        entity_id="ent_linzhao_memory",
+        version=1,
+        state={
+            "canonical_profile": {
+                "identity_role": "青云宗外门弟子",
+                "long_term_goal": "查清灭门真相",
+            },
+            "current_state": {
+                "location": "黑水城",
+                "possessions": ["父亲玉佩"],
+            },
+            "observations": {
+                "ch_2": ["在祠堂发现父亲玉佩裂纹"],
+                "ch_7": ["得知血煞盟与旧案有关"],
+            },
+        },
+    ))
+    await async_session.flush()
+
+    context = await ContextAgent(async_session).assemble("n_entity_memory", "ch_entity_memory")
+    entity = context.active_entities[0]
+
+    assert entity.memory_snapshot["canonical_profile"]["identity_role"] == "青云宗外门弟子"
+    assert entity.memory_snapshot["current_state"]["location"] == "黑水城"
+    assert "固定档案" in entity.current_state
+    assert "青云宗外门弟子" in entity.current_state
+    assert "黑水城" in entity.current_state
+    assert "血煞盟与旧案有关" in entity.current_state
+
+
+@pytest.mark.asyncio
 async def test_assemble_logs_specific_context_sources(async_session, mock_llm_factory):
     state = NovelState(
         novel_id="n_ctx_log", current_phase="context_preparation",

@@ -67,6 +67,7 @@ class EntityState(BaseModel):
     type: str
     current_state: str
     aliases: List[str] = Field(default_factory=list)
+    memory_snapshot: dict = Field(default_factory=dict)
 
     @field_validator("aliases", mode="before")
     @classmethod
