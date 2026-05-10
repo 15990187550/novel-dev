@@ -33,6 +33,7 @@ from novel_dev.services.entity_service import EntityService
 from novel_dev.services.entity_state_policy import EntityStatePolicy
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.world_state_diff_guard_service import WorldStateDiffGuardService
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
 
@@ -341,6 +342,19 @@ class LibrarianAgent:
         foreshadowing_repo = ForeshadowingRepository(self.session)
         relationship_repo = RelationshipRepository(self.session)
         entity_repo = EntityRepository(self.session)
+        world_state_diff = await WorldStateDiffGuardService(self.session).analyze(extraction, novel_id)
+        log_agent_detail(
+            novel_id,
+            "LibrarianAgent",
+            f"世界状态 diff 审核: {world_state_diff.status}",
+            node="librarian_world_state_diff",
+            task="persist",
+            status="failed" if world_state_diff.status == "confirm_required" else "succeeded",
+            level="warning" if world_state_diff.status != "safe" else "info",
+            metadata=world_state_diff.model_dump(),
+        )
+        if world_state_diff.status == "confirm_required":
+            raise RuntimeError("World state diff requires confirmation before librarian persistence")
 
         # Track name -> entity_id for relationship resolution
         name_to_id: dict[str, str] = {}
@@ -363,6 +377,7 @@ class LibrarianAgent:
             },
             "policy_events": [],
             "policy_event_count": 0,
+            "world_state_diff": world_state_diff.model_dump(),
             "skipped": [],
             "failed": [],
         }
