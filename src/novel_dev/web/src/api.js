@@ -145,6 +145,16 @@ export const getGenerationJob = (id, jobId) =>
   api.get(`/novels/${id}/generation_jobs/${jobId}`).then(r => r.data)
 export const getChapterRewriteJobs = (id) =>
   api.get(`/novels/${id}/chapters/rewrite_jobs`).then(r => r.data)
+export const getWorldStateReviews = (id, status = '') => {
+  if (status) {
+    return api.get(`/novels/${id}/world_state_reviews`, { params: { status } }).then(r => r.data)
+  }
+  return api.get(`/novels/${id}/world_state_reviews`).then(r => r.data)
+}
+export const resolveWorldStateReview = (id, reviewId, payload) =>
+  api.post(`/novels/${id}/world_state_reviews/${reviewId}/resolve`, payload).then(r => r.data)
+export const runGlobalConsistencyAudit = (id) =>
+  api.post(`/novels/${id}/global_consistency_audit`).then(r => r.data)
 export const stopCurrentFlow = (id) => api.post(`/novels/${id}/flow/stop`).then(r => r.data)
 export const getLogs = (id) => api.get(`/novels/${id}/logs`).then(r => r.data)
 export const clearLogs = (id) => api.delete(`/novels/${id}/logs`).then(r => r.data)

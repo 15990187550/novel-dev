@@ -28,6 +28,7 @@ vi.mock('@/api.js', () => ({
   updateEntityClassification: vi.fn(),
   deleteEntity: vi.fn(),
   getTimelines: vi.fn(),
+  getSpacelines: vi.fn(),
   getForeshadowings: vi.fn(),
   getPendingDocs: vi.fn(),
   getDocuments: vi.fn(),
@@ -60,6 +61,9 @@ vi.mock('@/api.js', () => ({
   stopCurrentFlow: vi.fn(),
   getGenerationJob: vi.fn(),
   getChapterRewriteJobs: vi.fn(),
+  getWorldStateReviews: vi.fn(),
+  resolveWorldStateReview: vi.fn(),
+  runGlobalConsistencyAudit: vi.fn(),
 }))
 
 describe('novel store dashboard loading', () => {
@@ -210,6 +214,48 @@ describe('novel store dashboard loading', () => {
     expect(api.getChapterRewriteJobs).toHaveBeenCalledWith('novel-1')
     expect(store.chapterRewriteJobs['ch-1'].job_id).toBe('job-failed-rewrite')
     expect(store.chapterRewriteJobs['ch-1'].status).toBe('failed')
+  })
+
+  it('loads and resolves pending world state reviews', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.getWorldStateReviews).mockResolvedValue({
+      items: [{ id: 'review-1', status: 'pending', chapter_id: 'ch-1' }],
+    })
+    vi.mocked(api.resolveWorldStateReview).mockResolvedValue({
+      id: 'review-1',
+      status: 'approved',
+      chapter_id: 'ch-1',
+    })
+    vi.mocked(api.getEntities).mockResolvedValue({ items: [] })
+    vi.mocked(api.getEntityRelationships).mockResolvedValue({ items: [] })
+    vi.mocked(api.getTimelines).mockResolvedValue({ items: [] })
+    vi.mocked(api.getSpacelines).mockResolvedValue({ items: [] })
+    vi.mocked(api.getForeshadowings).mockResolvedValue({ items: [] })
+
+    await store.fetchWorldStateReviews('pending')
+    const result = await store.resolveWorldStateReview('review-1', { action: 'approve' })
+
+    expect(api.getWorldStateReviews).toHaveBeenCalledWith('novel-1', 'pending')
+    expect(api.resolveWorldStateReview).toHaveBeenCalledWith('novel-1', 'review-1', { action: 'approve' })
+    expect(result.status).toBe('approved')
+    expect(store.worldStateReviews).toEqual([{ id: 'review-1', status: 'approved', chapter_id: 'ch-1' }])
+    expect(api.getEntities).toHaveBeenCalledWith('novel-1', {})
+  })
+
+  it('stores manual global consistency audit result', async () => {
+    const store = useNovelStore()
+    store.novelId = 'novel-1'
+    vi.mocked(api.runGlobalConsistencyAudit).mockResolvedValue({
+      status: 'confirm_required',
+      issues: [{ code: 'relationship_conflict' }],
+      warnings: [],
+    })
+
+    const result = await store.runGlobalConsistencyAudit()
+
+    expect(api.runGlobalConsistencyAudit).toHaveBeenCalledWith('novel-1')
+    expect(store.globalConsistencyAudit).toEqual(result)
   })
 
   it('uses explicit novel title instead of synopsis title for display', () => {

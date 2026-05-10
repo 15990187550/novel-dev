@@ -25,6 +25,7 @@ from novel_dev.db.models import (
     SettingReviewChange,
     Spaceline,
     Timeline,
+    WorldStateReview,
 )
 from novel_dev.storage.paths import StoragePaths
 
@@ -85,6 +86,7 @@ class NovelDeletionService:
         await self.session.execute(
             delete(PendingExtraction).where(PendingExtraction.novel_id == novel_id)
         )
+        await self.session.execute(delete(WorldStateReview).where(WorldStateReview.novel_id == novel_id))
         await self.session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
         await self.session.execute(delete(Entity).where(Entity.novel_id == novel_id))
         await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))

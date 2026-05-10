@@ -13,8 +13,10 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
+from novel_dev.services.global_consistency_audit_service import GlobalConsistencyAuditResult, GlobalConsistencyAuditService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.volume_plan_guard_service import evaluate_volume_plan_readiness
+from novel_dev.services.world_state_review_service import WorldStateReviewRequiredError
 
 
 STOP_REASONS = {
@@ -23,6 +25,8 @@ STOP_REASONS = {
     "novel_completed",
     "flow_cancelled",
     "quality_blocked",
+    "waiting_world_state_review",
+    "global_consistency_review_required",
     "volume_plan_not_ready",
     "failed",
 }
@@ -132,6 +136,10 @@ class ChapterGenerationService:
                 archived_id = await self._run_current_chapter(novel_id)
                 completed.append(archived_id)
                 await self.session.commit()
+                audit_result = await self._maybe_run_periodic_global_consistency_audit(novel_id, len(completed))
+                if audit_result and audit_result.status == "confirm_required":
+                    stopped_reason = "global_consistency_review_required"
+                    break
 
                 state = await self.director.resume(novel_id)
                 if state.current_phase == Phase.VOLUME_PLANNING.value:
@@ -160,6 +168,20 @@ class ChapterGenerationService:
                 completed_chapters=completed,
                 stopped_reason="quality_blocked",
                 failed_phase=state.current_phase if state else None,
+                failed_chapter_id=exc.chapter_id,
+                error=str(exc),
+            )
+            await self._release_lock(novel_id, token, result)
+            return result
+        except WorldStateReviewRequiredError as exc:
+            state = await self.director.resume(novel_id)
+            result = AutoRunChaptersResult(
+                novel_id=novel_id,
+                current_phase=state.current_phase if state else Phase.LIBRARIAN.value,
+                current_chapter_id=state.current_chapter_id if state else exc.chapter_id,
+                completed_chapters=completed,
+                stopped_reason="waiting_world_state_review",
+                failed_phase=Phase.LIBRARIAN.value,
                 failed_chapter_id=exc.chapter_id,
                 error=str(exc),
             )
@@ -323,6 +345,30 @@ class ChapterGenerationService:
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         if chapter and getattr(chapter, "quality_status", "unchecked") == "block":
             raise QualityGateBlockedError(chapter_id, chapter.quality_reasons)
+
+    async def _maybe_run_periodic_global_consistency_audit(
+        self,
+        novel_id: str,
+        completed_count: int,
+    ) -> GlobalConsistencyAuditResult | None:
+        state = await self.director.resume(novel_id)
+        if not state:
+            return None
+        checkpoint = dict(state.checkpoint_data or {})
+        interval = int(checkpoint.get("global_audit_interval_chapters") or 20)
+        if interval <= 0 or completed_count <= 0 or completed_count % interval != 0:
+            return None
+        result = await GlobalConsistencyAuditService(self.session).run(novel_id)
+        checkpoint["global_consistency_audit"] = result.model_dump()
+        await self.director.save_checkpoint(
+            novel_id,
+            Phase(state.current_phase),
+            checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
+        await self.session.commit()
+        return result
 
     async def _sync_current_chapter_checkpoint(self, state):
         checkpoint = dict(state.checkpoint_data or {})

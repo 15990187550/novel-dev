@@ -37,6 +37,9 @@ import {
   rewriteChapter,
   getGenerationJob,
   getChapterRewriteJobs,
+  getWorldStateReviews,
+  resolveWorldStateReview,
+  runGlobalConsistencyAudit,
   getSynopsis,
   getBrainstormWorkspace,
   getVolumePlan,
@@ -319,6 +322,20 @@ describe('outline workbench api', () => {
     await expect(getChapterRewriteJobs('novel-1')).resolves.toEqual({ ok: true })
 
     expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/chapters/rewrite_jobs')
+  })
+
+  it('requests and resolves world state reviews', async () => {
+    await expect(getWorldStateReviews('novel-1')).resolves.toEqual({ ok: true })
+    await expect(resolveWorldStateReview('novel-1', 'review-1', { action: 'approve' })).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novels/novel-1/world_state_reviews')
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/world_state_reviews/review-1/resolve', { action: 'approve' })
+  })
+
+  it('runs global consistency audit', async () => {
+    await expect(runGlobalConsistencyAudit('novel-1')).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels/novel-1/global_consistency_audit')
   })
 
   it('clears persisted logs for the current novel', async () => {

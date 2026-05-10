@@ -34,6 +34,7 @@ from novel_dev.services.entity_state_policy import EntityStatePolicy
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.world_state_diff_guard_service import WorldStateDiffGuardService
+from novel_dev.services.world_state_review_service import WorldStateReviewRequiredError, WorldStateReviewService
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
 
@@ -314,7 +315,14 @@ class LibrarianAgent:
         )
 
     @logged_agent_step("LibrarianAgent", "持久化世界状态", node="librarian_persist", task="persist")
-    async def persist(self, extraction: ExtractionResult, chapter_id: str, novel_id: str) -> None:
+    async def persist(
+        self,
+        extraction: ExtractionResult,
+        chapter_id: str,
+        novel_id: str,
+        *,
+        skip_world_state_review: bool = False,
+    ) -> None:
         log_agent_detail(
             novel_id,
             "LibrarianAgent",
@@ -353,8 +361,15 @@ class LibrarianAgent:
             level="warning" if world_state_diff.status != "safe" else "info",
             metadata=world_state_diff.model_dump(),
         )
-        if world_state_diff.status == "confirm_required":
-            raise RuntimeError("World state diff requires confirmation before librarian persistence")
+        if world_state_diff.status == "confirm_required" and not skip_world_state_review:
+            review = await WorldStateReviewService(self.session).create_pending_review(
+                novel_id,
+                chapter_id,
+                extraction,
+                world_state_diff.model_dump(),
+            )
+            await self.session.flush()
+            raise WorldStateReviewRequiredError(review.id, chapter_id)
 
         # Track name -> entity_id for relationship resolution
         name_to_id: dict[str, str] = {}

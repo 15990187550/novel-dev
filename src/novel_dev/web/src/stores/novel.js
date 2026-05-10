@@ -426,6 +426,9 @@ export const useNovelStore = defineStore('novel', {
     autoRunLastResult: null,
     chapterRewriteJobs: {},
     chapterRewriteLastResults: {},
+    worldStateReviews: [],
+    worldStateReviewRequestToken: 0,
+    globalConsistencyAudit: null,
     stoppingFlow: false,
     dashboardPanels: createDashboardPanels(),
     dashboardLastUpdated: '',
@@ -530,6 +533,9 @@ export const useNovelStore = defineStore('novel', {
       this.autoRunLastResult = null
       this.chapterRewriteJobs = {}
       this.chapterRewriteLastResults = {}
+      this.worldStateReviews = []
+      this.worldStateReviewRequestToken += 1
+      this.globalConsistencyAudit = null
       this.stoppingFlow = false
       this.resetDashboardSupplemental()
     },
@@ -661,6 +667,9 @@ export const useNovelStore = defineStore('novel', {
           const detail = error?.response?.data?.detail
           if (detail && typeof detail === 'object') {
             this.autoRunLastResult = detail
+            if (detail.stopped_reason === 'waiting_world_state_review') {
+              await this.fetchWorldStateReviews('pending').catch(() => null)
+            }
             await this.loadNovel(this.novelId)
           }
         }
@@ -728,6 +737,44 @@ export const useNovelStore = defineStore('novel', {
         ])
       }
       return job
+    },
+
+    async fetchWorldStateReviews(status = '') {
+      if (!this.novelId) {
+        this.worldStateReviews = []
+        return []
+      }
+      const requestedNovelId = this.novelId
+      const requestToken = this.worldStateReviewRequestToken + 1
+      this.worldStateReviewRequestToken = requestToken
+      const payload = await api.getWorldStateReviews(requestedNovelId, status)
+      if (requestedNovelId !== this.novelId || requestToken !== this.worldStateReviewRequestToken) {
+        return this.worldStateReviews
+      }
+      this.worldStateReviews = payload?.items || []
+      return this.worldStateReviews
+    },
+
+    async resolveWorldStateReview(reviewId, payload) {
+      if (!this.novelId || !reviewId) return null
+      const review = await api.resolveWorldStateReview(this.novelId, reviewId, payload)
+      this.worldStateReviews = this.worldStateReviews.map((item) =>
+        item.id === review.id ? review : item
+      )
+      await Promise.all([
+        this.fetchEntities().catch(() => null),
+        this.fetchTimelines().catch(() => null),
+        this.fetchSpacelines().catch(() => null),
+        this.fetchForeshadowings().catch(() => null),
+      ])
+      return review
+    },
+
+    async runGlobalConsistencyAudit() {
+      if (!this.novelId) return null
+      const result = await api.runGlobalConsistencyAudit(this.novelId)
+      this.globalConsistencyAudit = result
+      return result
     },
 
     async stopCurrentFlow() {

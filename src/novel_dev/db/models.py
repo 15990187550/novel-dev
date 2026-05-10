@@ -218,6 +218,25 @@ class GenerationJob(Base):
     updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class WorldStateReview(Base):
+    __tablename__ = "world_state_reviews"
+    __table_args__ = (
+        Index("ix_world_state_reviews_novel_status", "novel_id", "status"),
+        Index("ix_world_state_reviews_chapter", "chapter_id"),
+    )
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    novel_id: Mapped[str] = mapped_column(Text, nullable=False)
+    chapter_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    extraction_payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    diff_result: Mapped[dict] = mapped_column(JSON, nullable=False)
+    decision: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class AgentLog(Base):
     __tablename__ = "agent_logs"
     __table_args__ = (

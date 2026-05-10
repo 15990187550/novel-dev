@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import datetime
 from typing import Any, Optional
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete, func, select, text
@@ -79,6 +79,8 @@ from novel_dev.schemas.setting_workbench import (
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.setting_consolidation_service import SettingConsolidationService
 from novel_dev.services.setting_workbench_service import SettingWorkbenchService
+from novel_dev.services.global_consistency_audit_service import GlobalConsistencyAuditService
+from novel_dev.services.world_state_review_service import WorldStateReviewService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
 import re
@@ -107,8 +109,28 @@ class CreateNovelRequest(BaseModel):
     title: str
 
 
+class WorldStateReviewResolveRequest(BaseModel):
+    action: str
+    edited_extraction: dict | None = None
+
+
 def _isoformat(value):
     return value.isoformat() if value else None
+
+
+def _world_state_review_response(item) -> dict[str, Any]:
+    return {
+        "id": item.id,
+        "novel_id": item.novel_id,
+        "chapter_id": item.chapter_id,
+        "status": item.status,
+        "extraction_payload": item.extraction_payload or {},
+        "diff_result": item.diff_result or {},
+        "decision": item.decision,
+        "error_message": item.error_message,
+        "created_at": _isoformat(item.created_at),
+        "updated_at": _isoformat(item.updated_at),
+    }
 
 
 def _serialize_setting_generation_session(item) -> dict[str, Any]:
@@ -2064,6 +2086,45 @@ async def rewrite_chapter(
     await session.commit()
     schedule_generation_job(job.id)
     return _generation_job_response(job)
+
+
+@router.get("/api/novels/{novel_id}/world_state_reviews")
+async def list_world_state_reviews(
+    novel_id: str,
+    status_filter: str | None = Query(default=None, alias="status"),
+    session: AsyncSession = Depends(get_session),
+):
+    reviews = await WorldStateReviewService(session).list_reviews(novel_id, status=status_filter)
+    return {"items": [_world_state_review_response(item) for item in reviews]}
+
+
+@router.post("/api/novels/{novel_id}/world_state_reviews/{review_id}/resolve")
+async def resolve_world_state_review(
+    novel_id: str,
+    review_id: str,
+    req: WorldStateReviewResolveRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    service = WorldStateReviewService(session)
+    existing = await service.get_review(review_id)
+    if not existing or existing.novel_id != novel_id:
+        raise HTTPException(status_code=404, detail="World state review not found")
+    try:
+        review = await service.resolve_review(
+            review_id,
+            action=req.action,
+            edited_extraction=req.edited_extraction,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await session.commit()
+    return _world_state_review_response(review)
+
+
+@router.post("/api/novels/{novel_id}/global_consistency_audit")
+async def run_global_consistency_audit(novel_id: str, session: AsyncSession = Depends(get_session)):
+    result = await GlobalConsistencyAuditService(session).run(novel_id)
+    return result.model_dump()
 
 
 async def _build_chapter_rewrite_resume_payload(
