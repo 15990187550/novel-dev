@@ -1279,6 +1279,92 @@ async def test_generate_review_batch_generates_suggested_batches_individually(as
     ]
 
 
+async def test_generate_review_batch_fills_source_docs_before_section_validation(async_session, monkeypatch):
+    service = SettingWorkbenchService(async_session)
+    for domain in ("阳神", "完美世界", "吞噬星空"):
+        await service.doc_repo.create(
+            f"doc_section_source_{domain}",
+            "novel-ai-section-source-fill",
+            "domain_setting",
+            f"{domain} / 修炼体系",
+            f"{domain} 修炼境界资料。",
+        )
+    session = await service.create_generation_session(
+        novel_id="novel-ai-section-source-fill",
+        title="外部宇宙规划",
+        initial_idea="规划外部宇宙联动。",
+        target_categories=["世界观"],
+    )
+    await service.repo.add_message(
+        session_id=session.id,
+        role="assistant",
+        content=(
+            "**建议生成批次：**\n"
+            "- 批次1：18卷整体结构规划（含真实界+外部宇宙穿插叙事）\n"
+            "- 批次2：外部宇宙统一对标体系（含阳神、完美世界、吞噬星空等境界映射）\n"
+            "- 批次3：跨作品联动剧情框架与关键节点设计\n"
+        ),
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+
+    async def fake_call_and_parse_model(
+        agent_name,
+        task,
+        prompt,
+        model_cls,
+        *,
+        config_agent_name=None,
+        novel_id="",
+        max_retries=3,
+    ):
+        from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+        if "批次1：18卷整体结构规划" in prompt:
+            title = "18卷整体结构规划"
+            content = "阳神、完美世界、吞噬星空作为外部宇宙参与跨作品联动，并纳入境界对标。"
+        elif "批次2：外部宇宙统一对标体系" in prompt:
+            title = "外部宇宙统一对标体系"
+            content = "阳神、完美世界、吞噬星空的境界映射作为待审核对标体系。"
+        else:
+            title = "跨作品联动剧情框架与关键节点设计"
+            content = "阳神、完美世界、吞噬星空在后期形成跨作品联动节点。"
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": title,
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "plot",
+                            "title": title,
+                            "content": content,
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.call_and_parse_model",
+        fake_call_and_parse_model,
+    )
+
+    batch = await service.generate_review_batch(
+        novel_id="novel-ai-section-source-fill",
+        session_id=session.id,
+    )
+
+    changes = await service.repo.list_review_changes(batch.id)
+    assert len(changes) == 3
+    for change in changes:
+        assert set(change.after_snapshot["source_doc_ids"]) == {
+            "doc_section_source_阳神",
+            "doc_section_source_完美世界",
+            "doc_section_source_吞噬星空",
+        }
+
+
 async def test_generate_review_batch_blocks_external_mapping_without_source_coverage(async_session, monkeypatch):
     service = SettingWorkbenchService(async_session)
     session = await service.create_generation_session(
@@ -1383,6 +1469,34 @@ async def test_source_coverage_does_not_match_other_domain_docs_by_incidental_co
     assert matched["遮天"] == ["doc_zhetian_realm_clean"]
 
 
+async def test_generation_document_full_tool_is_bound_to_current_novel(async_session):
+    service = SettingWorkbenchService(async_session)
+    await service.doc_repo.create(
+        "doc_bound_realm",
+        "novel-ai-bound-doc-tool",
+        "domain_setting",
+        "完美世界 / 修炼体系",
+        "搬血、洞天、化灵、铭纹、列阵。",
+    )
+
+    tools = service._build_generation_tools(
+        novel_id="novel-ai-bound-doc-tool",
+        current_setting_context={},
+        orchestration_config=OrchestratedTaskConfig(
+            tool_allowlist=["get_novel_document_full"],
+            max_tool_result_chars=4000,
+        ),
+    )
+
+    result = await tools[0].handler({
+        "novel_id": "wrong-novel-id",
+        "doc_id": "doc_bound_realm",
+    })
+
+    assert result["id"] == "doc_bound_realm"
+    assert result["content"] == "搬血、洞天、化灵、铭纹、列阵。"
+
+
 async def test_validate_batch_draft_rejects_non_monotonic_external_realm_mapping(async_session):
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
@@ -1413,6 +1527,67 @@ async def test_validate_batch_draft_rejects_non_monotonic_external_realm_mapping
         SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
+async def test_validate_batch_draft_allows_multi_world_realm_mapping_table(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "多作品境界对标",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "power_system",
+                        "title": "外部宇宙统一对标体系",
+                        "source_doc_ids": ["doc_yangshen_realm", "doc_perfect_realm"],
+                        "content": (
+                            "| 原体系境界 | 对标一世之尊 |\n"
+                            "|----------|-------------|\n"
+                            "| 造物主/阳神 | 传说~造化 |\n"
+                            "| 彼岸（阳神世界） | 彼岸 |\n"
+                            "| 搬血/洞天/化灵/铭纹/列阵 | 开窍~外景初期 |\n"
+                            "| 尊者/神火/真一/圣祭/天神 | 外景~法身 |\n"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_batch_draft_still_rejects_same_world_realm_mapping_regression(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "同作品境界倒退",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "power_system",
+                        "title": "完美世界境界对标",
+                        "source_doc_ids": ["doc_perfect_realm"],
+                        "content": (
+                            "| 完美世界境界 | 对标一世之尊 |\n"
+                            "|----------|-------------|\n"
+                            "| 尊者/神火/真一 | 法身 |\n"
+                            "| 圣祭/天神 | 外景 |\n"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Realm mapping order regression.*圣祭/天神"):
+        SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
 async def test_validate_batch_draft_rejects_cross_world_protagonist_contamination(async_session):
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
@@ -1436,6 +1611,59 @@ async def test_validate_batch_draft_rejects_cross_world_protagonist_contaminatio
 
     with pytest.raises(ValueError, match="Canonical world/protagonist mismatch.*灭运图录.*纪宁"):
         SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_batch_draft_allows_cross_work_protagonist_co_presence(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "跨作品联动",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "plot",
+                        "title": "跨作品联动剧情框架",
+                        "source_doc_ids": ["doc_cross_work_plot"],
+                        "content": "一世之尊体系作为真实界主线，后期与石昊等外部宇宙强者形成跨作品联动节点。",
+                    },
+                }
+            ],
+        }
+    )
+
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_batch_draft_allows_yishi_system_with_external_protagonist_list(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "跨作品联动原则",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "plot",
+                        "title": "跨作品联动设计原则",
+                        "source_doc_ids": ["doc_cross_work_plot"],
+                        "content": (
+                            "【跨作品联动设计原则】\n"
+                            "1. 一世之尊体系碾压优势：主角保有体系优势，"
+                            "但尊重石昊、罗峰、叶凡等土著主角的原著成长轨迹。\n"
+                            "2. 终局阶段，各世界至强者以投影形式参与共同威胁。"
+                        ),
+                    },
+                }
+            ],
+        }
+    )
+
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
 async def test_validate_draft_source_evidence_requires_docs_to_cover_mentioned_domains(async_session):
@@ -1473,6 +1701,118 @@ async def test_validate_draft_source_evidence_requires_docs_to_cover_mentioned_d
 
     with pytest.raises(ValueError, match="Source evidence mismatch.*仙逆"):
         await service._validate_draft_source_evidence("novel-ai-evidence", draft)
+
+
+async def test_fill_missing_source_doc_ids_from_coverage_for_external_setting(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    service = SettingWorkbenchService(async_session)
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "外部宇宙设定",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "plot",
+                        "title": "跨作品联动剧情框架",
+                        "content": "阳神与遮天作为外部宇宙参与跨作品联动，并纳入境界对标。",
+                    },
+                }
+            ],
+        }
+    )
+
+    service._fill_missing_source_doc_ids_from_coverage(
+        draft,
+        {
+            "required": True,
+            "domains": [
+                {"name": "阳神", "matched_doc_ids": ["doc_yangshen_realm", "doc_yangshen_world"]},
+                {"name": "遮天", "matched_doc_ids": ["doc_zhetian_realm"]},
+                {"name": "仙逆", "matched_doc_ids": ["doc_xianni_realm"]},
+            ],
+        },
+    )
+
+    assert set(draft.changes[0].after_snapshot["source_doc_ids"]) == {
+        "doc_yangshen_realm",
+        "doc_yangshen_world",
+        "doc_zhetian_realm",
+    }
+
+
+async def test_fill_missing_source_doc_ids_uses_all_coverage_for_generic_cross_work_card(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    service = SettingWorkbenchService(async_session)
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "外部宇宙设定",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "plot",
+                        "title": "18卷整体结构规划",
+                        "content": "真实界与外部宇宙双轨推进，后期进入跨作品联动和境界对标阶段。",
+                    },
+                }
+            ],
+        }
+    )
+
+    service._fill_missing_source_doc_ids_from_coverage(
+        draft,
+        {
+            "required": True,
+            "domains": [
+                {"name": "阳神", "matched_doc_ids": ["doc_yangshen_realm"]},
+                {"name": "遮天", "matched_doc_ids": ["doc_zhetian_realm"]},
+            ],
+        },
+    )
+
+    assert set(draft.changes[0].after_snapshot["source_doc_ids"]) == {
+        "doc_yangshen_realm",
+        "doc_zhetian_realm",
+    }
+
+
+async def test_fill_missing_source_doc_ids_falls_back_when_domain_key_does_not_match(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    service = SettingWorkbenchService(async_session)
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "外部宇宙设定",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "power_system",
+                        "title": "外部宇宙统一对标体系",
+                        "content": "吞噬星空境界映射需要纳入跨作品联动的境界对标。",
+                    },
+                }
+            ],
+        }
+    )
+
+    service._fill_missing_source_doc_ids_from_coverage(
+        draft,
+        {
+            "required": True,
+            "domains": [
+                {"name": "吞噬星空 / 修炼体系", "matched_doc_ids": ["doc_tunshi_realm"]},
+            ],
+        },
+    )
+
+    assert draft.changes[0].after_snapshot["source_doc_ids"] == ["doc_tunshi_realm"]
 
 
 async def test_generate_review_batch_emits_progress_logs(async_session, monkeypatch):
@@ -2436,7 +2776,7 @@ async def test_llm_config_sets_setting_workbench_service_generation_budget():
         "search_domain_documents",
         "get_novel_document_full",
     ]
-    assert setting_workbench["orchestration"]["max_tool_calls"] == 8
+    assert setting_workbench["orchestration"]["max_tool_calls"] == 20
     assert setting_workbench["orchestration"]["max_tool_result_chars"] == 6000
     assert setting_workbench["orchestration"]["enable_subtasks"] is True
     assert setting_workbench["orchestration"]["repairer_subtask"] == "schema_repair"

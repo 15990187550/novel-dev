@@ -22,6 +22,33 @@ class SettingBatchChangeDraft(BaseModel):
     after_snapshot: Optional[dict[str, Any]] = None
     conflict_hints: list[dict[str, Any]] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_conflict_hints(cls, value: Any):
+        if not isinstance(value, dict):
+            return value
+        conflict_hints = value.get("conflict_hints")
+        if conflict_hints is None:
+            return value
+        if isinstance(conflict_hints, str):
+            conflict_hints = [conflict_hints]
+        if not isinstance(conflict_hints, list):
+            return value
+        normalized = []
+        changed = False
+        for hint in conflict_hints:
+            if isinstance(hint, dict):
+                normalized.append(hint)
+                continue
+            if isinstance(hint, str) and hint.strip():
+                normalized.append({"type": "llm_note", "message": hint.strip()})
+                changed = True
+                continue
+            normalized.append(hint)
+        if not changed:
+            return value
+        return {**value, "conflict_hints": normalized}
+
     @model_validator(mode="after")
     def validate_review_change_shape(self):
         if self.operation in {"update", "delete"} and not self.target_id:
@@ -60,13 +87,78 @@ class SettingBatchDraft(BaseModel):
         text = changes.strip()
         if not text:
             return value
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            return value
+        parsed = _parse_json_array_from_text(text)
         if not isinstance(parsed, list):
             return value
         return {**value, "changes": parsed}
+
+
+def _parse_json_array_from_text(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    start = text.find("[")
+    if start < 0:
+        return None
+    decoder = json.JSONDecoder()
+    try:
+        parsed, _ = decoder.raw_decode(text[start:])
+    except json.JSONDecodeError:
+        try:
+            parsed, _ = decoder.raw_decode(_escape_raw_control_chars_in_json_strings(text[start:]))
+        except json.JSONDecodeError:
+            return None
+    return parsed
+
+
+def _escape_raw_control_chars_in_json_strings(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            if in_string and ch == "\n":
+                if result and result[-1] == "\\":
+                    result.pop()
+                result.append("\\n")
+                escape_next = False
+                continue
+            if in_string and ch == "\r":
+                if result and result[-1] == "\\":
+                    result.pop()
+                result.append("\\r")
+                escape_next = False
+                continue
+            if in_string and ch == "\t":
+                if result and result[-1] == "\\":
+                    result.pop()
+                result.append("\\t")
+                escape_next = False
+                continue
+            result.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            result.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            result.append(ch)
+            in_string = not in_string
+            continue
+        if in_string and ch == "\n":
+            result.append("\\n")
+            continue
+        if in_string and ch == "\r":
+            result.append("\\r")
+            continue
+        if in_string and ch == "\t":
+            result.append("\\t")
+            continue
+        result.append(ch)
+    return "".join(result)
 
 
 class SettingWorkbenchAgent:
@@ -131,7 +223,7 @@ class SettingWorkbenchAgent:
                 "如果 current_setting_context.source_coverage 已提供 matched_doc_ids，优先用这些 doc_id 调用 get_novel_document_full 获取来源正文；不要重复用 search_domain_documents 搜索同一批已覆盖资料。",
                 "涉及外部作品、原著境界体系、跨作品联动、人物归属或世界观对标时，必须先调用 search_domain_documents 按作品名和主题检索资料；需要全文时再调用 get_novel_document_full。",
                 "外部作品设定卡的 after_snapshot 必须写入 source_doc_ids，列出支撑该设定的文档 ID；没有足够来源时不要硬生成结论。",
-                "同一世界的境界对标必须保持阶梯单调，低境界不能映射到高于后续高境界的层级；人物和主角归属必须以来源资料为准。",
+                "境界对标请按来源作品分组或提供来源作品列，每组从低到高排列，并让人物、主角归属与来源资料保持一致。",
                 "如需修改或删除已有设定/实体/关系，必须使用上下文中的真实 ID 作为 target_id。",
                 "每个批次必须包含至少 1 个 changes，change target_type 只能是 setting_card、entity、relationship。",
                 "operation 只能是 create、update、delete。",
@@ -144,6 +236,8 @@ class SettingWorkbenchAgent:
                 "relationship create 必须提供 after_snapshot.source_id、target_id、relation_type。",
                 "relationship create 的 source_id/target_id 必须引用已存在实体 ID，或同一批次中 entity create 的 after_snapshot.id。",
                 "如果无法确定实体 ID，不要生成 relationship change；只在实体 state 或设定 content 中描述关系，留待后续优化。",
+                "conflict_hints 每项使用对象，例如 {\"type\":\"source_gap\",\"message\":\"待确认内容\"}。",
+                "跨作品人物请采用原世界+人物的清晰组合，例如“完美世界石昊、吞噬星空罗峰”，用于表达联动对象和来源归属。",
                 *required_section_lines,
                 f"会话标题：{title}",
                 f"目标分类：{', '.join(target_categories) if target_categories else '默认全量'}",

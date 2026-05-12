@@ -89,6 +89,28 @@ def test_generation_prompt_prefers_existing_source_coverage_doc_ids():
     assert "优先用这些 doc_id 调用 get_novel_document_full" in prompt
 
 
+def test_generation_prompt_guides_realm_mapping_by_source_world_groups():
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="外部宇宙统一对标",
+        target_categories=["setting"],
+        messages=[{"role": "user", "content": "生成阳神、完美世界对标一世之尊境界映射。"}],
+    )
+
+    assert "按来源作品分组" in prompt
+    assert "每组从低到高排列" in prompt
+
+
+def test_generation_prompt_guides_conflict_hints_and_cross_work_people_shape():
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="跨作品联动",
+        target_categories=["plot"],
+        messages=[{"role": "user", "content": "生成跨作品联动剧情框架。"}],
+    )
+
+    assert "conflict_hints 每项使用对象" in prompt
+    assert "原世界+人物" in prompt
+
+
 def test_setting_batch_draft_rejects_empty_changes():
     with pytest.raises(ValidationError):
         SettingBatchDraft.model_validate({"summary": "没有变更", "changes": []})

@@ -94,6 +94,43 @@ class SettingWorkbenchService:
         "造化": 5,
         "彼岸": 6,
     }
+    DOMAIN_REALM_KEYWORDS = {
+        "仙逆": (
+            "凝气", "筑基", "结丹", "元婴", "化神", "婴变", "问鼎", "阴虚",
+            "阳实", "窥涅", "净涅", "碎涅", "天人",
+        ),
+        "遮天": (
+            "轮海", "道宫", "四极", "化龙", "仙台", "圣人", "圣王", "大圣",
+            "准帝", "大帝", "古皇", "红尘仙",
+        ),
+        "灭运图录": (
+            "出窍", "引气", "神魂", "金丹", "元神", "道基", "合道", "金仙",
+        ),
+        "阳神": (
+            "鬼仙", "雷劫", "造物主", "阳神", "人仙", "粉碎真空",
+        ),
+        "完美世界": (
+            "搬血", "洞天", "化灵", "铭纹", "列阵", "尊者", "神火", "真一",
+            "圣祭", "天神", "虚道", "斩我", "遁一", "至尊", "真仙", "仙王",
+            "准仙帝", "仙帝",
+        ),
+        "吞噬星空": (
+            "行星级", "恒星级", "宇宙级", "域主", "界主", "不朽", "宇宙尊者",
+            "宇宙之主", "真神", "虚空真神", "永恒真神", "混沌主宰", "神王",
+        ),
+        "莽荒纪": (
+            "后天", "先天", "紫府", "万象", "返虚", "天仙", "真仙", "祖仙",
+            "世界境", "道君", "永恒帝君", "混沌宇宙掌控者",
+        ),
+        "凡人修仙传": (
+            "炼气", "筑基", "结丹", "元婴", "化神", "炼虚", "合体", "大乘",
+            "真仙", "金仙", "太乙", "大罗", "道祖",
+        ),
+        "星辰变": (
+            "洞虚", "空冥", "渡劫", "大成", "玄仙", "仙帝", "神人", "天神",
+            "神王", "天尊",
+        ),
+    }
 
     def __init__(self, session: AsyncSession):
         self.session = session
@@ -283,6 +320,7 @@ class SettingWorkbenchService:
                         message_items=generation_message_items,
                         current_setting_context=current_setting_context,
                         prompt_context=prompt_context,
+                        source_coverage=source_coverage,
                         required_sections=required_sections,
                         orchestration_config=orchestration_config,
                         common_metadata=common_metadata,
@@ -310,6 +348,7 @@ class SettingWorkbenchService:
             )
 
             self._repair_same_batch_entity_create_ids(draft)
+            self._fill_missing_source_doc_ids_from_coverage(draft, source_coverage)
             self._validate_batch_draft(draft, required_sections=required_sections)
             initial_setting_quality_report = self._evaluate_generated_setting_quality(draft)
             draft = self._complete_generated_setting_draft(
@@ -320,6 +359,7 @@ class SettingWorkbenchService:
                 current_setting_context=current_setting_context,
                 allow_completion=not bool(required_sections),
             )
+            self._fill_missing_source_doc_ids_from_coverage(draft, source_coverage)
             setting_quality_report = self._evaluate_generated_setting_quality(draft)
             await self._validate_draft_source_evidence(novel_id, draft)
             log_service.add_log(
@@ -669,11 +709,47 @@ class SettingWorkbenchService:
                 max_return_chars=orchestration_config.max_tool_result_chars,
             ))
 
+        if "get_novel_document_full" in orchestration_config.tool_allowlist:
+            async def get_bound_novel_document_full(args: dict[str, Any]) -> dict[str, Any]:
+                doc_id = str(args.get("doc_id") or "").strip()
+                if not doc_id:
+                    return {"error": "doc_id is required"}
+                doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
+                if doc is None:
+                    return {"error": f"Document not found in current novel: {doc_id}"}
+                return {
+                    "id": doc.id,
+                    "title": doc.title,
+                    "content": doc.content,
+                    "doc_type": doc.doc_type,
+                }
+
+            tools.append(LLMToolSpec(
+                name="get_novel_document_full",
+                description="Read a full source document by doc_id from the current setting workbench novel.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "novel_id": {"type": "string"},
+                        "doc_id": {"type": "string"},
+                    },
+                    "required": ["doc_id"],
+                },
+                handler=get_bound_novel_document_full,
+                read_only=True,
+                timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
+                max_return_chars=orchestration_config.max_tool_result_chars,
+            ))
+
         from novel_dev.mcp_server.server import internal_mcp_registry
 
         tools.extend(build_mcp_context_tools(
             internal_mcp_registry,
-            allowlist=orchestration_config.tool_allowlist,
+            allowlist=[
+                name
+                for name in orchestration_config.tool_allowlist
+                if name != "get_novel_document_full"
+            ],
             max_return_chars=orchestration_config.max_tool_result_chars,
             timeout_seconds=orchestration_config.tool_timeout_seconds or 5.0,
         ))
@@ -687,6 +763,7 @@ class SettingWorkbenchService:
         message_items: list[dict[str, Any]],
         current_setting_context: dict[str, Any],
         prompt_context: dict[str, Any],
+        source_coverage: dict[str, Any],
         required_sections: list[dict[str, str]],
         orchestration_config: OrchestratedTaskConfig | None,
         common_metadata: dict[str, Any],
@@ -705,6 +782,7 @@ class SettingWorkbenchService:
                 novel_id=novel_id,
                 prompt=prompt,
                 current_setting_context=current_setting_context,
+                source_coverage=source_coverage,
                 orchestration_config=orchestration_config,
                 required_sections=required_sections,
                 common_metadata=common_metadata,
@@ -741,6 +819,7 @@ class SettingWorkbenchService:
                 novel_id=novel_id,
                 prompt=section_prompt,
                 current_setting_context=current_setting_context,
+                source_coverage=source_coverage,
                 orchestration_config=orchestration_config,
                 required_sections=[section],
                 common_metadata={
@@ -776,6 +855,7 @@ class SettingWorkbenchService:
         novel_id: str,
         prompt: str,
         current_setting_context: dict[str, Any],
+        source_coverage: dict[str, Any],
         orchestration_config: OrchestratedTaskConfig | None,
         required_sections: list[dict[str, str]],
         common_metadata: dict[str, Any],
@@ -786,6 +866,7 @@ class SettingWorkbenchService:
             current_setting_context=current_setting_context,
             orchestration_config=orchestration_config,
         )
+        self._fill_missing_source_doc_ids_from_coverage(draft, source_coverage)
         missing_sections = self._missing_required_sections(draft, required_sections)
         if not missing_sections:
             return draft
@@ -804,12 +885,14 @@ class SettingWorkbenchService:
                 "draft": self._draft_stats(draft),
             },
         )
-        return await self._call_generation_model(
+        repaired_draft = await self._call_generation_model(
             novel_id=novel_id,
             prompt=self._build_missing_required_sections_prompt(prompt, missing_sections),
             current_setting_context=current_setting_context,
             orchestration_config=orchestration_config,
         )
+        self._fill_missing_source_doc_ids_from_coverage(repaired_draft, source_coverage)
+        return repaired_draft
 
     @staticmethod
     def _merge_generation_drafts(drafts: list[SettingBatchDraft]) -> SettingBatchDraft:
@@ -1662,6 +1745,60 @@ class SettingWorkbenchService:
                 f"Draft change {index} source evidence required for external/cross-work setting content"
             )
 
+    def _fill_missing_source_doc_ids_from_coverage(
+        self,
+        draft: SettingBatchDraft,
+        source_coverage: dict[str, Any],
+    ) -> None:
+        if not source_coverage.get("required"):
+            return
+        matched_by_domain = {
+            str(item.get("name")): [
+                str(doc_id).strip()
+                for doc_id in item.get("matched_doc_ids") or []
+                if str(doc_id).strip()
+            ]
+            for item in source_coverage.get("domains") or []
+            if isinstance(item, dict)
+        }
+        if not matched_by_domain:
+            return
+        all_matched_doc_ids = [
+            doc_id
+            for doc_ids in matched_by_domain.values()
+            for doc_id in doc_ids
+        ]
+        for item in draft.changes:
+            if item.target_type != "setting_card" or item.operation not in {"create", "update"}:
+                continue
+            snapshot = item.after_snapshot or {}
+            if self._source_doc_ids(snapshot):
+                continue
+            text = "\n".join(
+                str(snapshot.get(key) or "")
+                for key in ("title", "content", "description")
+            )
+            if not text.strip():
+                continue
+            mentions_domain = any(domain in text for domain in self.KNOWN_EXTERNAL_DOMAINS)
+            source_critical = any(marker in text for marker in self.SOURCE_CRITICAL_MARKERS)
+            if not source_critical:
+                continue
+            source_doc_ids: list[str] = []
+            for domain in self.KNOWN_EXTERNAL_DOMAINS:
+                if domain not in text:
+                    continue
+                for doc_id in matched_by_domain.get(domain) or []:
+                    if doc_id not in source_doc_ids:
+                        source_doc_ids.append(doc_id)
+            if not source_doc_ids:
+                for doc_id in all_matched_doc_ids:
+                    if doc_id not in source_doc_ids:
+                        source_doc_ids.append(doc_id)
+            if source_doc_ids:
+                snapshot["source_doc_ids"] = source_doc_ids
+                item.after_snapshot = snapshot
+
     @staticmethod
     def _source_doc_ids(snapshot: dict[str, Any]) -> list[str]:
         source_doc_ids = snapshot.get("source_doc_ids") or snapshot.get("evidence_doc_ids") or []
@@ -1681,16 +1818,55 @@ class SettingWorkbenchService:
             mentioned_worlds = [world for world in self.CANONICAL_WORLD_PROTAGONISTS if world in segment]
             if not mentioned_worlds:
                 continue
+            if self._is_cross_work_co_presence_segment(segment):
+                continue
             for protagonist, home_world in protagonist_home.items():
                 if protagonist not in segment:
                     continue
                 for world in mentioned_worlds:
                     if world == home_world or home_world in segment:
                         continue
-                    raise ValueError(
-                        f"Draft change {index} Canonical world/protagonist mismatch: "
-                        f"{world} segment mentions {protagonist}, whose canonical world is {home_world}"
-                    )
+                    if self._is_explicit_wrong_world_protagonist_assignment(
+                        segment,
+                        world=world,
+                        protagonist=protagonist,
+                    ):
+                        raise ValueError(
+                            f"Draft change {index} Canonical world/protagonist mismatch: "
+                            f"{world} segment mentions {protagonist}, whose canonical world is {home_world}"
+                        )
+
+    @staticmethod
+    def _is_cross_work_co_presence_segment(segment: str) -> bool:
+        return any(
+            marker in segment
+            for marker in (
+                "跨作品",
+                "联动",
+                "外部宇宙",
+                "跨界",
+                "对标",
+                "映射",
+                "节点",
+            )
+        )
+
+    @staticmethod
+    def _is_explicit_wrong_world_protagonist_assignment(
+        segment: str,
+        *,
+        world: str,
+        protagonist: str,
+    ) -> bool:
+        escaped_world = re.escape(world)
+        escaped_protagonist = re.escape(protagonist)
+        assignment_patterns = (
+            rf"^{escaped_world}(?:世界)?\s*[：:]\s*.*{escaped_protagonist}",
+            rf"^[\-*·\d.\s]*{escaped_world}(?:世界)?\s*[：:]\s*.*{escaped_protagonist}",
+            rf"{escaped_world}(?:世界)?(?:主角|主人公|核心人物|关键人物)\s*(?:为|是|：|:)?\s*{escaped_protagonist}",
+            rf"{escaped_protagonist}\s*(?:是|为|作为)\s*{escaped_world}(?:世界)?(?:主角|主人公|核心人物|关键人物)",
+        )
+        return any(re.search(pattern, segment) for pattern in assignment_patterns)
 
     def _validate_realm_mapping_order(self, text: str, *, index: int) -> None:
         rows = self._extract_yishi_mapping_rows(text)
@@ -1698,17 +1874,25 @@ class SettingWorkbenchService:
             return
         previous_rank = None
         previous_source = ""
+        previous_domain = None
         for source_realm, target_mapping in rows:
             rank = self._yishi_mapping_rank(target_mapping)
             if rank is None:
                 continue
-            if previous_rank is not None and rank < previous_rank:
+            source_domain = self._infer_mapping_source_domain(source_realm)
+            same_domain = (
+                source_domain == previous_domain
+                if source_domain and previous_domain
+                else source_domain is None and previous_domain is None
+            )
+            if previous_rank is not None and same_domain and rank < previous_rank:
                 raise ValueError(
                     f"Draft change {index} Realm mapping order regression: "
                     f"{source_realm} maps to {target_mapping}, below previous row {previous_source}"
                 )
             previous_rank = rank
             previous_source = source_realm
+            previous_domain = source_domain
 
     @staticmethod
     def _extract_yishi_mapping_rows(text: str) -> list[tuple[str, str]]:
@@ -1749,6 +1933,28 @@ class SettingWorkbenchService:
         if not ranks:
             return None
         return max(ranks)
+
+    @classmethod
+    def _infer_mapping_source_domain(cls, source_realm: str) -> str | None:
+        text = source_realm.strip()
+        for domain in cls.KNOWN_EXTERNAL_DOMAINS:
+            if domain in text:
+                return domain
+            if f"{domain}世界" in text:
+                return domain
+        scores = [
+            (domain, sum(1 for keyword in keywords if keyword in text))
+            for domain, keywords in cls.DOMAIN_REALM_KEYWORDS.items()
+        ]
+        scored_matches = [(domain, score) for domain, score in scores if score > 0]
+        if len(scored_matches) == 1:
+            return scored_matches[0][0]
+        if scored_matches:
+            top_score = max(score for _, score in scored_matches)
+            top_domains = [domain for domain, score in scored_matches if score == top_score]
+            if len(top_domains) == 1:
+                return top_domains[0]
+        return None
 
     @classmethod
     def _missing_required_sections(

@@ -189,6 +189,75 @@ def test_setting_batch_draft_parses_stringified_changes_array_from_structured_pa
     assert result.changes[0].after_snapshot["doc_type"] == "worldview"
 
 
+def test_setting_batch_draft_parses_stringified_changes_array_with_trailing_fragment():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成全量设定",
+        "changes": (
+            '[{"target_type": "setting_card", "operation": "create", '
+            '"after_snapshot": {"doc_type": "worldview", "title": "世界观", "content": "灵潮复苏。"}, '
+            '"source_ref": "全量设定"}]}'
+        ),
+    })
+
+    assert len(result.changes) == 1
+    assert result.changes[0].after_snapshot["title"] == "世界观"
+
+
+def test_setting_batch_draft_parses_stringified_changes_array_with_raw_content_newlines():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成外部宇宙设定",
+        "changes": (
+            '[{"target_type": "setting_card", "operation": "create", '
+            '"after_snapshot": {"doc_type": "plot", "title": "18卷整体结构规划", "content": "## 18卷整体结构规划\n\n'
+            '### 核心叙事模式\n- 真实界与外部宇宙穿插推进。"}, '
+            '"source_ref": "批次1"}]}'
+        ),
+    })
+
+    assert len(result.changes) == 1
+    assert "核心叙事模式" in result.changes[0].after_snapshot["content"]
+
+
+def test_setting_batch_draft_parses_stringified_changes_array_with_line_continuation():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成外部宇宙设定",
+        "changes": (
+            '[{"target_type": "setting_card", "operation": "create", '
+            '"after_snapshot": {"doc_type": "plot", "title": "跨作品联动", "content": "第一阶段\\\n'
+            '第二阶段"}, "source_ref": "批次3"}]'
+        ),
+    })
+
+    assert len(result.changes) == 1
+    assert "第二阶段" in result.changes[0].after_snapshot["content"]
+
+
+def test_setting_batch_draft_coerces_string_conflict_hints_to_dicts():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成外部宇宙设定",
+        "changes": [
+            {
+                "target_type": "setting_card",
+                "operation": "create",
+                "after_snapshot": {
+                    "doc_type": "plot",
+                    "title": "跨作品联动",
+                    "content": "诛仙、盘龙对标关系待确认。",
+                },
+                "conflict_hints": [
+                    "诛仙、盘龙的世界对标关系待确认",
+                    {"type": "source_gap", "message": "外部宇宙进入时机待确认"},
+                ],
+            }
+        ],
+    })
+
+    assert result.changes[0].conflict_hints == [
+        {"type": "llm_note", "message": "诛仙、盘龙的世界对标关系待确认"},
+        {"type": "source_gap", "message": "外部宇宙进入时机待确认"},
+    ]
+
+
 def test_librarian_coerces_text_diff_summary_to_dict():
     result = ExtractionResult.model_validate({
         "character_updates": [{
