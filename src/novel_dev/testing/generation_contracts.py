@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Set as AbstractSet
+from collections.abc import Mapping, Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,10 +24,18 @@ class QualityGateSummary:
     reasons: str
 
 
+@dataclass(frozen=True, slots=True)
+class _ChapterTextAdapter:
+    raw_draft: Any
+    polished_text: Any
+
+
 def extract_chapter_plan(
-    response: dict[str, Any],
-    checkpoint: dict[str, Any],
+    response: dict[str, Any] | None,
+    checkpoint: dict[str, Any] | None,
 ) -> ChapterPlanExtraction | None:
+    response = response if isinstance(response, dict) else {}
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
     candidates = [
         ("current_chapter_plan", checkpoint.get("current_chapter_plan")),
         (
@@ -44,9 +52,11 @@ def extract_chapter_plan(
 
 
 def build_volume_plan_contract_evidence(
-    response: dict[str, Any],
-    checkpoint: dict[str, Any],
+    response: dict[str, Any] | None,
+    checkpoint: dict[str, Any] | None,
 ) -> list[str]:
+    response = response if isinstance(response, dict) else {}
+    checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
     current_volume_plan = checkpoint.get("current_volume_plan")
     evidence = [
         f"response_keys={_sorted_keys(response)}",
@@ -79,17 +89,67 @@ def build_volume_plan_contract_evidence(
 def detect_chapter_text(chapter: Any | None) -> ChapterTextStatus:
     if chapter is None:
         return ChapterTextStatus(field="none", length=0, has_text=False)
-    polished = _normalize_text(getattr(chapter, "polished_text", None))
+    polished = _normalize_text(_chapter_value(chapter, "polished_text"))
     if polished:
         return ChapterTextStatus(
             field="polished_text",
             length=len(polished),
             has_text=True,
         )
-    raw = _normalize_text(getattr(chapter, "raw_draft", None))
+    raw = _normalize_text(_chapter_value(chapter, "raw_draft"))
     if raw:
         return ChapterTextStatus(field="raw_draft", length=len(raw), has_text=True)
     return ChapterTextStatus(field="none", length=0, has_text=False)
+
+
+def summarize_chapter_counts(chapters: list[dict[str, Any]] | None) -> dict[str, int]:
+    chapter_items = chapters if isinstance(chapters, list) else []
+    counts = {
+        "planned": len(chapter_items),
+        "generated_text": 0,
+        "archived": 0,
+        "blocked": 0,
+        "pending": 0,
+    }
+    for chapter in chapter_items:
+        if not isinstance(chapter, dict):
+            continue
+        text_status = detect_chapter_text(
+            _ChapterTextAdapter(
+                raw_draft=chapter.get("raw_draft"),
+                polished_text=chapter.get("polished_text"),
+            )
+        )
+        if text_status.has_text:
+            counts["generated_text"] += 1
+
+        status = _normalize_status(chapter.get("status"))
+        quality_status = _normalize_status(chapter.get("quality_status"))
+        if status == "archived":
+            counts["archived"] += 1
+        if quality_status == "block":
+            counts["blocked"] += 1
+        if status == "pending":
+            counts["pending"] += 1
+    return counts
+
+
+def classify_export_result(
+    response: dict[str, Any] | None,
+    *,
+    archived_chapter_count: int,
+) -> str:
+    response = response if isinstance(response, dict) else {}
+    if "exported_path" in response:
+        exported_path = response.get("exported_path")
+        if _normalize_text(exported_path):
+            return "export_succeeded"
+        return "export_failed"
+    if "exported_path" not in response:
+        if archived_chapter_count <= 0:
+            return "no_archived_chapters"
+        return "export_not_requested"
+    return "export_failed"
 
 
 def summarize_quality_gate(chapter: Any | None) -> QualityGateSummary:
@@ -133,6 +193,18 @@ def _normalize_text(value: Any) -> str:
     if not isinstance(value, str):
         return ""
     return value.strip()
+
+
+def _chapter_value(chapter: Any, key: str) -> Any:
+    if isinstance(chapter, Mapping):
+        return chapter.get(key)
+    return getattr(chapter, key, None)
+
+
+def _normalize_status(value: Any) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower()
 
 
 def _has_text_material(value: Any) -> bool:

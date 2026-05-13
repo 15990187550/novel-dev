@@ -2,8 +2,10 @@ from types import SimpleNamespace
 
 from novel_dev.testing.generation_contracts import (
     build_volume_plan_contract_evidence,
+    classify_export_result,
     detect_chapter_text,
     extract_chapter_plan,
+    summarize_chapter_counts,
     summarize_quality_gate,
 )
 
@@ -106,6 +108,11 @@ def test_extract_chapter_plan_rejects_whitespace_only_text_material():
     assert extract_chapter_plan(response, checkpoint) is None
 
 
+def test_extract_chapter_plan_handles_non_dict_inputs():
+    assert extract_chapter_plan(None, None) is None
+    assert extract_chapter_plan("bad", ["bad"]) is None
+
+
 def test_build_volume_plan_contract_evidence_lists_keys_and_counts():
     response = {"volume_id": "vol-1"}
     checkpoint = {
@@ -120,6 +127,14 @@ def test_build_volume_plan_contract_evidence_lists_keys_and_counts():
     assert "current_chapter_plan_present=false" in evidence
     assert "current_volume_plan_keys=chapters,volume_id" in evidence
     assert "current_volume_plan_chapter_count=0" in evidence
+
+
+def test_build_volume_plan_contract_evidence_handles_non_dict_inputs():
+    evidence = build_volume_plan_contract_evidence(None, "bad")
+
+    assert "response_keys=none" in evidence
+    assert "checkpoint_keys=none" in evidence
+    assert "current_volume_plan_present=false" in evidence
 
 
 def test_detect_chapter_text_prefers_polished_text():
@@ -158,6 +173,59 @@ def test_detect_chapter_text_handles_missing_chapter():
     assert status.field == "none"
     assert status.length == 0
     assert status.has_text is False
+
+
+def test_detect_chapter_text_reads_dict_payloads():
+    status = detect_chapter_text({"raw_draft": "raw text", "polished_text": " polished text "})
+
+    assert status.field == "polished_text"
+    assert status.length == len("polished text")
+    assert status.has_text is True
+
+
+def test_summarize_chapter_counts_separates_generated_archived_blocked_pending():
+    chapters = [
+        {"chapter_id": "ch-1", "status": "archived", "polished_text": "正文", "quality_status": "pass"},
+        {"chapter_id": "ch-2", "status": "edited", "polished_text": "正文", "quality_status": "block"},
+        {"chapter_id": "ch-3", "status": "pending", "polished_text": "", "quality_status": "unchecked"},
+    ]
+
+    counts = summarize_chapter_counts(chapters)
+
+    assert counts == {
+        "planned": 3,
+        "generated_text": 2,
+        "archived": 1,
+        "blocked": 1,
+        "pending": 1,
+    }
+
+
+def test_summarize_chapter_counts_counts_non_dict_entries_as_planned_only():
+    counts = summarize_chapter_counts([{"status": "pending"}, "bad"])
+
+    assert counts["planned"] == 2
+    assert counts["pending"] == 1
+    assert counts["generated_text"] == 0
+
+
+def test_summarize_chapter_counts_handles_non_list_input_as_empty():
+    assert summarize_chapter_counts({"status": "pending"}) == {
+        "planned": 0,
+        "generated_text": 0,
+        "archived": 0,
+        "blocked": 0,
+        "pending": 0,
+    }
+
+
+def test_classify_export_result_distinguishes_missing_reasons():
+    assert classify_export_result({}, archived_chapter_count=0) == "no_archived_chapters"
+    assert classify_export_result({}, archived_chapter_count=2) == "export_not_requested"
+    assert classify_export_result({"exported_path": ""}, archived_chapter_count=2) == "export_failed"
+    assert classify_export_result({"exported_path": "/tmp/out.md"}, archived_chapter_count=2) == "export_succeeded"
+    assert classify_export_result({"exported_path": "/tmp/out.md"}, archived_chapter_count=0) == "export_succeeded"
+    assert classify_export_result(None, archived_chapter_count=0) == "no_archived_chapters"
 
 
 def test_summarize_quality_gate_returns_status_and_reasons():
