@@ -8,6 +8,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.review import DimensionIssue, DimensionScore, ScoreResult
+from novel_dev.services.quality_gate_service import QUALITY_UNCHECKED, QualityGateResult
 
 
 @pytest.mark.asyncio
@@ -49,15 +50,30 @@ async def test_fast_review_fail_ai_flavor(async_session):
     await director.save_checkpoint(
         "novel_fr_fail_flavor",
         phase=Phase.FAST_REVIEWING,
-        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 1000}}},
+        checkpoint_data={
+            "chapter_context": {"chapter_plan": {"target_word_count": 1000}},
+            "quality_gate": {"status": "block"},
+            "quality_issues": [{"code": "stale"}],
+            "quality_issue_summary": {"total": 1},
+            "repair_tasks": [{"task_id": "stale"}],
+            "continuity_audit": {"status": "block"},
+            "final_polish_issues": {"source": "previous_final_review"},
+        },
         volume_id="v1",
         chapter_id="c1",
     )
-    await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
-    await ChapterRepository(async_session).update_text(
+    repo = ChapterRepository(async_session)
+    await repo.create("c1", "v1", 1, "Test")
+    await repo.update_text(
         "c1",
         raw_draft="a very long raw draft with many characters",
         polished_text="short",
+    )
+    await repo.update_quality_gate(
+        "c1",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "stale"}]},
+        world_state_ingested=True,
     )
 
     mock_client = AsyncMock()
@@ -74,6 +90,13 @@ async def test_fast_review_fail_ai_flavor(async_session):
 
     state = await director.resume("novel_fr_fail_flavor")
     assert state.current_phase == Phase.EDITING.value
+    for key in ("quality_gate", "quality_issues", "quality_issue_summary", "repair_tasks", "continuity_audit"):
+        assert key not in state.checkpoint_data
+    assert state.checkpoint_data["final_polish_issues"] == {"source": "previous_final_review"}
+    chapter = await repo.get_by_id("c1")
+    assert chapter.quality_status == QUALITY_UNCHECKED
+    assert chapter.quality_reasons == {}
+    assert chapter.world_state_ingested is False
 
 
 @pytest.mark.asyncio
@@ -208,6 +231,54 @@ async def test_fast_review_parse_failure_falls_back_to_editing(async_session):
 
 
 @pytest.mark.asyncio
+async def test_fast_review_standalone_clears_stale_terminal_metadata_before_edit_limit(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_standalone_retry", "v1", 1, "Standalone Retry")
+    await repo.update_text(
+        "c_standalone_retry",
+        raw_draft="a very long raw draft with many characters",
+        polished_text="short",
+    )
+    await repo.update_quality_gate(
+        "c_standalone_retry",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "stale"}]},
+        world_state_ingested=True,
+    )
+    checkpoint = {
+        "edit_attempt_count": 0,
+        "chapter_context": {"chapter_plan": {"target_word_count": 1000}},
+        "quality_gate": {"status": "block"},
+        "quality_issues": [{"code": "stale"}],
+        "quality_issue_summary": {"total": 1},
+        "repair_tasks": [{"task_id": "stale"}],
+        "continuity_audit": {"status": "block"},
+        "final_polish_issues": {"source": "previous_final_review"},
+    }
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ):
+        agent = FastReviewAgent(async_session)
+        report = await agent.review_standalone("novel_fr_standalone_retry", "c_standalone_retry", checkpoint)
+
+    assert report.ai_flavor_reduced is False
+    for key in ("quality_gate", "quality_issues", "quality_issue_summary", "repair_tasks", "continuity_audit"):
+        assert key not in checkpoint
+    assert checkpoint["final_polish_issues"] == {"source": "previous_final_review"}
+    chapter = await repo.get_by_id("c_standalone_retry")
+    assert chapter.quality_status == QUALITY_UNCHECKED
+    assert chapter.quality_reasons == {}
+    assert chapter.world_state_ingested is False
+
+
+@pytest.mark.asyncio
 async def test_fast_review_blocks_severe_failure_at_edit_limit(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -248,6 +319,184 @@ async def test_fast_review_blocks_severe_failure_at_edit_limit(async_session):
     state = await director.resume("novel_fr_block")
     assert state.current_phase == Phase.FAST_REVIEWING.value
     assert state.checkpoint_data["quality_gate"]["status"] == "block"
+
+
+def test_store_quality_issues_keeps_empty_repair_tasks_for_manual_block():
+    checkpoint = {"repair_tasks": [{"task_id": "stale"}]}
+    gate = QualityGateResult(
+        status="block",
+        blocking_items=[
+            {
+                "code": "review_note",
+                "message": "严重矛盾：需要人工判断结构是否要重排",
+            }
+        ],
+        summary="人工阻断",
+    )
+
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_manual_block")
+
+    assert checkpoint["repair_tasks"] == []
+    assert checkpoint["quality_issue_summary"]["total"] == 1
+    assert checkpoint["quality_issue_summary"]["by_code"]["review_note"] == 1
+    assert checkpoint["quality_issues"][0]["repairability"] == "manual"
+
+
+def test_store_quality_issues_clears_stale_repair_tasks_for_non_block_gate():
+    checkpoint = {
+        "repair_tasks": [{"task_id": "stale"}],
+        "quality_issues": [{"code": "stale"}],
+        "quality_issue_summary": {"total": 99},
+    }
+    gate = QualityGateResult(
+        status="warn",
+        warning_items=[
+            {
+                "code": "ai_flavor",
+                "message": "AI 腔或模板化表达未充分降低",
+            }
+        ],
+        summary="可放行告警",
+    )
+
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_warn")
+
+    assert "repair_tasks" not in checkpoint
+    assert checkpoint["quality_issue_summary"]["total"] == 1
+    assert checkpoint["quality_issue_summary"]["by_code"]["ai_flavor"] == 1
+    assert checkpoint["quality_issues"][0]["code"] == "ai_flavor"
+
+
+def test_store_quality_issues_ignores_resolved_structure_guard_for_warn_gate():
+    guard = {
+        "beat_index": 1,
+        "issues": ["提前写入后续 beat 的核心事件"],
+        "suggested_rewrite_focus": "聚焦当前 beat",
+    }
+    checkpoint = {
+        "chapter_structure_guard": dict(guard),
+        "editor_guard_resolved": [dict(guard)],
+        "repair_tasks": [{"task_id": "stale"}],
+    }
+    gate = QualityGateResult(
+        status="warn",
+        warning_items=[
+            {
+                "code": "ai_flavor",
+                "message": "AI 腔或模板化表达未充分降低",
+            }
+        ],
+        summary="可放行告警",
+    )
+
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_warn_resolved_guard")
+
+    assert "repair_tasks" not in checkpoint
+    issue_codes = {issue["code"] for issue in checkpoint["quality_issues"]}
+    assert issue_codes == {"ai_flavor"}
+    assert "plan_boundary_violation" not in checkpoint["quality_issue_summary"]["by_code"]
+
+
+def test_store_quality_issues_manual_block_ignores_resolved_structure_guard():
+    guard = {
+        "beat_index": 1,
+        "issues": ["提前写入后续 beat 的核心事件"],
+        "suggested_rewrite_focus": "聚焦当前 beat",
+    }
+    checkpoint = {
+        "chapter_structure_guard": dict(guard),
+        "editor_guard_resolved": [dict(guard)],
+        "repair_tasks": [{"task_id": "stale"}],
+    }
+    gate = QualityGateResult(
+        status="block",
+        blocking_items=[
+            {
+                "code": "review_note",
+                "message": "严重矛盾：需要人工判断结构是否要重排",
+            }
+        ],
+        summary="人工阻断",
+    )
+
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_manual_block_resolved_guard")
+
+    assert checkpoint["repair_tasks"] == []
+    issue_codes = {issue["code"] for issue in checkpoint["quality_issues"]}
+    assert issue_codes == {"review_note"}
+    assert checkpoint["quality_issue_summary"]["by_code"]["review_note"] == 1
+
+
+def test_unresolved_structure_guard_promotes_gate_and_creates_repair_task():
+    checkpoint = {
+        "chapter_structure_guard": {
+            "beat_index": 1,
+            "issues": ["提前写入后续 beat 的核心事件"],
+            "suggested_rewrite_focus": "聚焦当前 beat",
+        },
+        "editor_guard_resolved": [],
+    }
+    gate = QualityGateResult(status="pass", summary="通过")
+
+    gate = FastReviewAgent._apply_structure_guard_to_gate(checkpoint, gate)
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_unresolved_guard")
+
+    assert gate.status == "block"
+    assert gate.blocking_items[0]["code"] == "plan_boundary_violation"
+    assert checkpoint["quality_issue_summary"]["by_code"]["plan_boundary_violation"] == 1
+    assert checkpoint["quality_issues"][0]["code"] == "plan_boundary_violation"
+    assert checkpoint["quality_issues"][0]["beat_index"] == 1
+    assert checkpoint["repair_tasks"][0]["issue_codes"] == ["plan_boundary_violation"]
+
+
+@pytest.mark.asyncio
+async def test_fast_review_stores_standard_issues_and_repair_tasks_for_block(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_standard_issues_block",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 2,
+            "chapter_structure_guard": {
+                "beat_index": 1,
+                "issues": ["提前写入后续 beat 的核心事件", "新增计划外事实"],
+                "suggested_rewrite_focus": "聚焦当前 beat 的既定行动",
+            },
+            "chapter_context": {"chapter_plan": {"target_word_count": 12}},
+        },
+        volume_id="v1",
+        chapter_id="c_standard_issues_block",
+    )
+    await ChapterRepository(async_session).create("c_standard_issues_block", "v1", 1, "Block")
+    await ChapterRepository(async_session).update_text(
+        "c_standard_issues_block",
+        raw_draft="甲乙丙丁戊己庚辛壬癸子丑",
+        polished_text="甲乙丙丁戊己庚辛壬癸子丑",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": False,
+            "beat_cohesion_ok": False,
+            "notes": ["主角状态异常", "节拍之间缺少承接"],
+        })(),
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_standard_issues_block", "c_standard_issues_block")
+
+    state = await director.resume("novel_fr_standard_issues_block")
+    assert state.current_phase == Phase.FAST_REVIEWING.value
+    checkpoint = state.checkpoint_data
+    issue_codes = {issue["code"] for issue in checkpoint["quality_issues"]}
+    assert {"consistency", "beat_cohesion", "plan_boundary_violation"} <= issue_codes
+    assert checkpoint["quality_issue_summary"]["total"] == len(checkpoint["quality_issues"])
+    assert checkpoint["quality_issue_summary"]["by_severity"]["block"] >= 3
+    assert checkpoint["quality_issue_summary"]["by_code"]["plan_boundary_violation"] == 1
+    assert checkpoint["repair_tasks"]
+    repair_codes = {code for task in checkpoint["repair_tasks"] for code in task["issue_codes"]}
+    assert {"consistency", "beat_cohesion", "plan_boundary_violation"} <= repair_codes
 
 
 @pytest.mark.asyncio
@@ -354,11 +603,15 @@ async def test_fast_review_returns_to_editing_for_low_final_score_before_edit_li
         await agent.review("novel_fr_final_polish", "c_final_polish")
 
     chapter = await repo.get_by_id("c_final_polish")
-    assert chapter.quality_status == "warn"
+    assert chapter.quality_status == QUALITY_UNCHECKED
+    assert chapter.quality_reasons == {}
+    assert chapter.world_state_ingested is False
     assert chapter.final_review_score == 72
 
     state = await director.resume("novel_fr_final_polish")
     assert state.current_phase == Phase.EDITING.value
+    for key in ("quality_gate", "quality_issues", "quality_issue_summary", "repair_tasks", "continuity_audit"):
+        assert key not in state.checkpoint_data
     final_polish = state.checkpoint_data["final_polish_issues"]
     assert final_polish["source"] == "final_review"
     assert final_polish["beat_issues"][0]["beat_index"] == 0
