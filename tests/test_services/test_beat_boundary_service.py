@@ -37,6 +37,8 @@ def test_build_cards_handles_string_beats():
 
 def test_build_cards_handles_non_list_beats_and_dedupes_allowed_materials():
     assert BeatBoundaryService.build_cards({"beats": {"summary": "not a list"}}) == []
+    assert BeatBoundaryService.build_cards(None) == []
+    assert BeatBoundaryService.build_cards(["not", "a", "dict"]) == []
 
     cards = BeatBoundaryService.build_cards(
         {
@@ -63,4 +65,29 @@ def test_build_cards_handles_non_list_beats_and_dedupes_allowed_materials():
         "老屋",
         "铜钥匙",
         "脚步声伏笔",
+    ]
+
+
+def test_build_cards_includes_real_plan_material_keys():
+    cards = BeatBoundaryService.build_cards(
+        {
+            "key_entities": ["旧信", {"name": "门外人"}],
+            "foreshadowings_to_embed": [{"summary": "脚步声伏笔"}, "窗缝冷风"],
+            "beats": [
+                {
+                    "summary": "发现旧信",
+                    "key_entities": [{"title": "旧信"}, {"content": "铜钥匙"}],
+                    "foreshadowings_to_embed": ["窗缝冷风", {"summary": "墨迹未干"}],
+                }
+            ],
+        }
+    )
+
+    assert cards[0].allowed_materials == [
+        "旧信",
+        "门外人",
+        "脚步声伏笔",
+        "窗缝冷风",
+        "铜钥匙",
+        "墨迹未干",
     ]

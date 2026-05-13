@@ -8,7 +8,15 @@ from novel_dev.schemas.quality import BeatBoundaryCard
 class BeatBoundaryService:
     """Build deterministic beat-scoped constraints from a chapter plan."""
 
-    _MATERIAL_KEYS = ("characters", "entities", "locations", "props", "foreshadowings")
+    _MATERIAL_KEYS = (
+        "characters",
+        "entities",
+        "key_entities",
+        "locations",
+        "props",
+        "foreshadowings",
+        "foreshadowings_to_embed",
+    )
     _FORBIDDEN_MATERIALS = [
         "不得执行后续 beat 的核心事件。",
         "不得添加章节计划外的角色、物件、证据、威胁实体或背景因果。",
@@ -22,6 +30,9 @@ class BeatBoundaryService:
 
     @classmethod
     def build_cards(cls, chapter_plan: dict[str, Any]) -> list[BeatBoundaryCard]:
+        if not isinstance(chapter_plan, dict):
+            return []
+
         beats = chapter_plan.get("beats")
         if not isinstance(beats, list):
             return []
