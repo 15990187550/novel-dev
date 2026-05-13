@@ -1,0 +1,15 @@
+{
+  "id": "repeated_beat",
+  "category": "structure",
+  "chapter_plan": {
+    "title": "雨夜旧信",
+    "beats": [
+      {"summary": "主角发现旧信"},
+      {"summary": "主角藏起旧信并试探来人"}
+    ]
+  },
+  "raw_text": "主角推门进屋，看见桌上的旧信。\n\n主角推门进屋，看见桌上的旧信。\n\n门外脚步停住。",
+  "expected_issue_codes": [
+    "beat_cohesion"
+  ]
+}

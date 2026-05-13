@@ -1,0 +1,14 @@
+{
+  "id": "text_integrity",
+  "category": "structure",
+  "chapter_plan": {
+    "title": "断句",
+    "beats": [
+      {"summary": "主角逃离"}
+    ]
+  },
+  "raw_text": "他撑着墙站起来，回头看向雨幕深处，还是。",
+  "expected_issue_codes": [
+    "text_integrity"
+  ]
+}
