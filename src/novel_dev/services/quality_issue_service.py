@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from novel_dev.schemas.quality import QualityIssue
+from novel_dev.schemas.quality import QualityIssue, QualitySource
 
 
 class QualityIssueService:
@@ -19,7 +19,10 @@ class QualityIssueService:
     }
 
     @classmethod
-    def from_dimension_issues(cls, raw_issues: list[Any]) -> list[QualityIssue]:
+    def from_dimension_issues(cls, raw_issues: list[Any] | None) -> list[QualityIssue]:
+        if raw_issues is None:
+            return []
+
         issues: list[QualityIssue] = []
         for raw_issue in raw_issues:
             if not isinstance(raw_issue, dict):
@@ -50,10 +53,16 @@ class QualityIssueService:
     @classmethod
     def from_structure_guard(
         cls,
-        evidence: dict[str, Any],
-        source: str = "structure_guard",
+        evidence: Any,
+        source: QualitySource = "structure_guard",
     ) -> list[QualityIssue]:
+        if not isinstance(evidence, dict):
+            return []
+
         issue_evidence = cls._structure_guard_evidence(evidence)
+        if not issue_evidence:
+            return []
+
         suggestion = (
             cls._clean_string(evidence.get("suggested_rewrite_focus"))
             or "回到当前 beat 边界内重写。"

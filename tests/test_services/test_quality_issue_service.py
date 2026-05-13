@@ -21,6 +21,10 @@ def test_from_dimension_issue_maps_readability_to_prose():
     assert issues[0].source == "critic"
 
 
+def test_from_dimension_issues_handles_none():
+    assert QualityIssueService.from_dimension_issues(None) == []
+
+
 def test_from_structure_guard_maps_boundary_violation():
     evidence = {
         "beat_index": 1,
@@ -36,6 +40,18 @@ def test_from_structure_guard_maps_boundary_violation():
     assert issues[0].severity == "block"
     assert issues[0].beat_index == 1
     assert "提前写入后续 beat 的核心事件" in issues[0].evidence
+
+
+def test_from_structure_guard_ignores_invalid_or_empty_evidence():
+    empty_inputs = [
+        None,
+        {},
+        {"issues": []},
+        {"issues": [" ", "\n\t"]},
+    ]
+
+    for evidence in empty_inputs:
+        assert QualityIssueService.from_structure_guard(evidence) == []
 
 
 def test_summarize_counts_by_category_code_and_repairability():
