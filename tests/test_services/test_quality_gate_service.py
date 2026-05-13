@@ -137,3 +137,61 @@ def test_evaluate_fast_review_warns_when_required_payoff_missing():
 
     assert gate.status == "warn"
     assert any(item["code"] == "required_payoff" for item in gate.warning_items)
+
+
+def test_quality_gate_converts_blocking_and_warning_items_to_standard_issues():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=False,
+        beat_cohesion_ok=False,
+        language_style_ok=True,
+        notes=["节拍之间重复拼接", "模板化表达未降低"],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=72,
+        polished_text="林照推门进屋。窗外雨声忽然停了。",
+        acceptance_scope="real-contract",
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert [issue.code for issue in issues] == ["beat_cohesion", "final_review_score", "ai_flavor"]
+    assert issues[0].category == "structure"
+    assert issues[0].severity == "block"
+    assert issues[0].repairability == "guided"
+    assert issues[1].category == "prose"
+    assert issues[1].severity == "warn"
+    assert issues[2].code == "ai_flavor"
+
+
+def test_quality_gate_converts_required_payoff_to_plot_issue():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照离开试炼林，夜色重新安静下来。",
+        required_payoffs=["林照搜查遗物发现密函"],
+        acceptance_scope="real-contract",
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert len(issues) == 1
+    assert issues[0].code == "required_payoff"
+    assert issues[0].category == "plot"
+    assert issues[0].repairability == "guided"
