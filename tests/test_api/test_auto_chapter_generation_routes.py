@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from unittest.mock import AsyncMock, patch
 
 from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.director import NovelDirector, Phase
@@ -15,8 +16,9 @@ from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, Loc
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat, VolumePlan
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
-from novel_dev.services.chapter_generation_service import ChapterGenerationService
+from novel_dev.services.chapter_generation_service import ChapterGenerationService, QualityGateBlockedError
 from novel_dev.services.chapter_generation_service import AutoRunChaptersResult, AutoRunFailedError
+from novel_dev.services.chapter_run_trace_service import ChapterRunTraceService
 from novel_dev.services.generation_job_service import CHAPTER_REWRITE_JOB
 
 
@@ -1438,6 +1440,166 @@ async def test_auto_run_returns_flow_cancelled_when_stopped_during_run(async_ses
 
     state = await director.resume("n_auto_stop")
     assert "auto_run_lock" not in state.checkpoint_data
+
+
+@pytest.mark.asyncio
+async def test_auto_run_records_trace_for_quality_block(async_session):
+    plan = build_test_volume("vol_quality_block", "ch_quality_block")
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_quality_block",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "edit_attempt_count": 2,
+            "chapter_context": {"chapter_plan": {"target_word_count": 12}},
+        },
+        volume_id="vol_quality_block",
+        chapter_id="ch_quality_block_1",
+    )
+    await ChapterRepository(async_session).ensure_from_plan(
+        "n_auto_quality_block",
+        "vol_quality_block",
+        plan.chapters[0],
+    )
+    await ChapterRepository(async_session).update_text(
+        "ch_quality_block_1",
+        raw_draft="甲乙丙丁戊己庚辛壬癸子丑",
+        polished_text="甲乙丙丁戊己庚辛壬癸子丑",
+    )
+    await async_session.commit()
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": False,
+            "beat_cohesion_ok": False,
+            "notes": ["节拍之间缺少承接"],
+        })(),
+    ):
+        result = await ChapterGenerationService(async_session).auto_run("n_auto_quality_block", max_chapters=1)
+
+    assert result.stopped_reason == "quality_blocked"
+
+    state = await director.resume("n_auto_quality_block")
+    checkpoint = state.checkpoint_data
+    trace = checkpoint["chapter_run_trace"]
+    assert trace["chapter_id"] == "ch_quality_block_1"
+    assert trace["terminal_status"] == "blocked"
+    assert trace["terminal_reason"] == "quality_blocked"
+    assert checkpoint["quality_issue_summary"]["by_code"]["beat_cohesion"] == 1
+    assert trace["issue_summary"]["by_code"]["beat_cohesion"] == 1
+    assert checkpoint["auto_run_last_result"]["stopped_reason"] == "quality_blocked"
+    assert "auto_run_lock" not in checkpoint
+
+
+@pytest.mark.asyncio
+async def test_auto_run_quality_block_trace_falls_back_to_quality_reasons(async_session, monkeypatch):
+    plan = build_test_volume("vol_quality_reason", "ch_quality_reason", count=1)
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_quality_reason",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "quality_issues": [{"malformed": True}],
+        },
+        volume_id="vol_quality_reason",
+        chapter_id="ch_quality_reason_1",
+    )
+    await ChapterRepository(async_session).ensure_from_plan(
+        "n_auto_quality_reason",
+        "vol_quality_reason",
+        plan.chapters[0],
+    )
+    await async_session.commit()
+
+    quality_reasons = {
+        "status": "block",
+        "blocking_items": [{"code": "beat_cohesion", "message": "节拍之间缺少连续承接"}],
+        "warning_items": [],
+        "summary": "存在阻断级质量问题。",
+    }
+
+    async def block_current_chapter(self, novel_id):
+        await self.chapter_repo.update_quality_gate(
+            "ch_quality_reason_1",
+            quality_status="block",
+            quality_reasons=quality_reasons,
+        )
+        raise QualityGateBlockedError("ch_quality_reason_1", quality_reasons)
+
+    monkeypatch.setattr(ChapterGenerationService, "_run_current_chapter", block_current_chapter)
+
+    await ChapterGenerationService(async_session).auto_run("n_auto_quality_reason", max_chapters=1)
+
+    state = await director.resume("n_auto_quality_reason")
+    trace = state.checkpoint_data["chapter_run_trace"]
+    assert trace["issue_summary"]["by_code"]["beat_cohesion"] == 1
+    assert state.checkpoint_data["quality_issue_summary"]["by_code"]["beat_cohesion"] == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_run_quality_block_preserves_existing_trace_history(async_session, monkeypatch):
+    plan = build_test_volume("vol_quality_trace", "ch_quality_trace", count=1)
+    existing_trace = ChapterRunTraceService.start_trace(
+        "n_auto_quality_trace",
+        "ch_quality_trace_1",
+        "previous-run",
+        Phase.DRAFTING.value,
+    )
+    ChapterRunTraceService.mark_phase(
+        existing_trace,
+        Phase.DRAFTING.value,
+        "succeeded",
+        output_summary={"draft_chars": 1200},
+    )
+    existing_trace.repair_attempts = 2
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_quality_trace",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "chapter_run_trace": existing_trace.model_dump(),
+            "quality_issues": [
+                {
+                    "code": "beat_cohesion",
+                    "category": "structure",
+                    "severity": "block",
+                    "scope": "beat",
+                    "repairability": "guided",
+                    "source": "quality_gate",
+                }
+            ],
+        },
+        volume_id="vol_quality_trace",
+        chapter_id="ch_quality_trace_1",
+    )
+    await ChapterRepository(async_session).ensure_from_plan(
+        "n_auto_quality_trace",
+        "vol_quality_trace",
+        plan.chapters[0],
+    )
+    await async_session.commit()
+
+    async def block_current_chapter(self, novel_id):
+        raise QualityGateBlockedError("ch_quality_trace_1", {"status": "block"})
+
+    monkeypatch.setattr(ChapterGenerationService, "_run_current_chapter", block_current_chapter)
+
+    await ChapterGenerationService(async_session).auto_run("n_auto_quality_trace", max_chapters=1)
+
+    state = await director.resume("n_auto_quality_trace")
+    trace = state.checkpoint_data["chapter_run_trace"]
+    assert trace["repair_attempts"] == 2
+    assert trace["phase_events"][0]["phase"] == Phase.DRAFTING.value
+    assert trace["phase_events"][0]["status"] == "succeeded"
+    assert trace["terminal_status"] == "blocked"
 
 
 @pytest.mark.asyncio
