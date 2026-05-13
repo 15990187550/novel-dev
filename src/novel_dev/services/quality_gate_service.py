@@ -43,6 +43,10 @@ class QualityGateService:
         "final_review_score": ("prose", "chapter", "guided"),
         "review_note": ("structure", "chapter", "manual"),
         "consistency": ("continuity", "chapter", "guided"),
+        "continuity_audit": ("continuity", "chapter", "guided"),
+        "dead_entity_acted": ("continuity", "chapter", "guided"),
+        "canonical_identity_drift": ("continuity", "chapter", "guided"),
+        "story_contract_terms_missing": ("continuity", "chapter", "guided"),
     }
 
     _QUALITY_ISSUE_SUGGESTIONS = {
@@ -55,6 +59,10 @@ class QualityGateService:
         "final_review_score": "针对低分维度重修章节，优先处理情节推进、人物动机和语言完成度。",
         "review_note": "人工核查评审备注，判断是否需要结构重排、补写或删除问题段落。",
         "consistency": "对照上下文、实体状态和时间线修复冲突，再同步相关世界状态。",
+        "continuity_audit": "对照连续性审计结果修正文中冲突，并同步实体、时间线或故事契约状态。",
+        "dead_entity_acted": "修复已死亡或离场实体的行动描写，改为回忆、传闻、替代角色或删除冲突动作。",
+        "canonical_identity_drift": "统一角色、地点或组织的标准身份称谓，避免别名与核心设定发生漂移。",
+        "story_contract_terms_missing": "补回故事契约要求的关键术语、承诺或限制条件，确保章节延续既定规则。",
     }
 
     @classmethod

@@ -1,5 +1,5 @@
 from novel_dev.schemas.review import FastReviewReport
-from novel_dev.services.quality_gate_service import QualityGateService
+from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
 
 
 def test_evaluate_fast_review_real_contract_downgrades_word_count_drift_to_warn():
@@ -195,3 +195,32 @@ def test_quality_gate_converts_required_payoff_to_plot_issue():
     assert issues[0].code == "required_payoff"
     assert issues[0].category == "plot"
     assert issues[0].repairability == "guided"
+
+
+def test_quality_gate_classifies_continuity_audit_codes_as_guided_continuity_issues():
+    gate = QualityGateResult(
+        status="block",
+        blocking_items=[
+            {"code": "continuity_audit", "message": "连续性审计发现阻断问题"},
+            {"code": "dead_entity_acted", "message": "已死亡角色继续行动"},
+        ],
+        warning_items=[
+            {"code": "canonical_identity_drift", "message": "角色标准身份发生漂移"},
+            {"code": "story_contract_terms_missing", "message": "故事契约术语缺失"},
+        ],
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert [issue.code for issue in issues] == [
+        "continuity_audit",
+        "dead_entity_acted",
+        "canonical_identity_drift",
+        "story_contract_terms_missing",
+    ]
+    assert [issue.severity for issue in issues] == ["block", "block", "warn", "warn"]
+    for issue in issues:
+        assert issue.category == "continuity"
+        assert issue.scope == "chapter"
+        assert issue.repairability == "guided"
+        assert issue.source == "quality_gate"
