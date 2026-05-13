@@ -87,6 +87,98 @@ def test_quality_summary_passes_clean_snapshot():
     assert report.issues == []
 
 
+def test_quality_summary_aggregates_standard_quality_issues():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-issues",
+            "checkpoint": {
+                "setting_quality_report": {"passed": True},
+                "synopsis_data": {"review_status": {"synopsis_quality_report": {"passed": True}}},
+                "current_volume_plan": {
+                    "review_status": {"writability_status": {"passed": True, "failed_chapter_numbers": []}}
+                },
+                "quality_issues": [
+                    {
+                        "code": "beat_cohesion",
+                        "category": "structure",
+                        "severity": "block",
+                        "scope": "beat",
+                        "repairability": "guided",
+                        "source": "quality_gate",
+                    },
+                    {
+                        "code": "ai_flavor",
+                        "category": "prose",
+                        "severity": "warn",
+                        "scope": "chapter",
+                        "repairability": "guided",
+                        "source": "quality_gate",
+                    },
+                    "bad item",
+                    {
+                        "code": "invalid_issue",
+                        "category": "not-a-category",
+                        "severity": "warn",
+                        "scope": "chapter",
+                        "repairability": "guided",
+                        "source": "testing",
+                    },
+                ],
+            },
+            "chapters": [{"chapter_id": "ch_1", "quality_status": "block", "final_review_score": 72}],
+        },
+        run_id="quality-issues",
+    )
+
+    assert report.artifacts["quality_issue_total"] == "2"
+    assert report.artifacts["quality_issue_by_category"] == "prose=1,structure=1"
+    assert report.artifacts["quality_issue_by_code"] == "ai_flavor=1,beat_cohesion=1"
+    assert report.artifacts["quality_issue_by_severity"] == "block=1,warn=1"
+    assert report.artifacts["quality_issue_by_repairability"] == "guided=2"
+
+
+def test_quality_summary_fails_on_blocking_standard_quality_issue_without_chapter_gate():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-standard-block",
+            "checkpoint": {
+                "quality_issues": [
+                    {
+                        "code": "beat_cohesion",
+                        "category": "structure",
+                        "severity": "block",
+                        "scope": "beat",
+                        "repairability": "guided",
+                        "evidence": ["节拍之间缺少承接"],
+                        "source": "quality_gate",
+                    }
+                ],
+            },
+            "chapters": [{"chapter_id": "ch_1", "quality_status": "pass", "final_review_score": 82}],
+        },
+        run_id="quality-standard-block",
+    )
+
+    assert report.status == "failed"
+    assert [issue.id for issue in report.issues] == ["STANDARD-QUALITY-ISSUE-001"]
+    assert "blocking_issue_count=1" in report.issues[0].evidence
+
+
+def test_quality_summary_tolerates_malformed_snapshot_shapes():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-malformed",
+            "checkpoint": ["bad"],
+            "chapters": {"chapter_id": "ch_1"},
+        },
+        run_id="quality-malformed",
+    )
+
+    assert report.status == "passed"
+    assert report.artifacts["chapter_count"] == "0"
+    assert "quality_issue_total" not in report.artifacts
+
+
 def test_quality_summary_records_passed_stage_quality_details():
     report = build_quality_summary_report(
         {

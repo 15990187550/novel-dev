@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any
 
 from novel_dev.schemas.outline import SynopsisData
+from novel_dev.schemas.quality import QualityIssue
+from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
 from novel_dev.testing.generation_runner import make_run_id, validate_run_id
@@ -17,9 +19,13 @@ def build_quality_summary_report(
     run_id: str | None = None,
     duration_seconds: float = 0.0,
 ) -> TestRunReport:
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
     resolved_run_id = validate_run_id(run_id) or make_run_id("quality-summary")
-    checkpoint = snapshot.get("checkpoint") or snapshot.get("checkpoint_data") or {}
-    chapters = snapshot.get("chapters") or []
+    checkpoint_value = snapshot.get("checkpoint") or snapshot.get("checkpoint_data") or {}
+    checkpoint = checkpoint_value if isinstance(checkpoint_value, dict) else {}
+    chapters_value = snapshot.get("chapters") or []
+    chapters = chapters_value if isinstance(chapters_value, list) else []
+    quality_issues = _quality_issues_from_checkpoint(checkpoint)
 
     report = TestRunReport(
         run_id=resolved_run_id,
@@ -33,6 +39,8 @@ def build_quality_summary_report(
             "chapter_count": str(len(chapters)),
         },
     )
+    _add_quality_issue_artifacts(report, quality_issues)
+    _add_standard_quality_issue(report, quality_issues)
 
     setting_quality = _quality_report_from_snapshot(snapshot, checkpoint)
     story_contract = checkpoint.get("story_contract")
@@ -88,6 +96,8 @@ def build_quality_summary_report(
         ))
 
     for chapter in chapters:
+        if not isinstance(chapter, dict):
+            continue
         _add_chapter_quality_detail(report, checkpoint, chapter)
         quality_status = str(chapter.get("quality_status") or "unchecked")
         final_score = chapter.get("final_review_score")
@@ -307,6 +317,57 @@ def _recommendations_from_quality(value: dict[str, Any] | None) -> list[str]:
                 elif item not in (None, "", [], {}):
                     result.append(str(item))
     return result[:16]
+
+
+def _add_quality_issue_artifacts(report: TestRunReport, issues: list[QualityIssue]) -> None:
+    if not issues:
+        return
+    summary = QualityIssueService.summarize(issues)
+    report.artifacts["quality_issue_total"] = str(summary["total"])
+    report.artifacts["quality_issue_by_category"] = _format_counter_artifact(summary["by_category"])
+    report.artifacts["quality_issue_by_code"] = _format_counter_artifact(summary["by_code"])
+    report.artifacts["quality_issue_by_severity"] = _format_counter_artifact(summary["by_severity"])
+    report.artifacts["quality_issue_by_repairability"] = _format_counter_artifact(summary["by_repairability"])
+
+
+def _add_standard_quality_issue(report: TestRunReport, issues: list[QualityIssue]) -> None:
+    blocking = [issue for issue in issues if issue.severity == "block"]
+    if not blocking:
+        return
+    report.add_issue(_issue(
+        "STANDARD-QUALITY-ISSUE-001",
+        "chapter_final_review",
+        "标准质量问题包含阻断项。",
+        [
+            f"quality_issue_total={len(issues)}",
+            f"blocking_issue_count={len(blocking)}",
+            *[
+                f"{issue.code}.{issue.scope}={';'.join(issue.evidence) if issue.evidence else issue.category}"
+                for issue in blocking[:8]
+            ],
+        ],
+    ))
+
+
+def _quality_issues_from_checkpoint(checkpoint: dict[str, Any]) -> list[QualityIssue]:
+    if not isinstance(checkpoint, dict):
+        return []
+    raw_issues = checkpoint.get("quality_issues")
+    if not isinstance(raw_issues, list):
+        return []
+    issues: list[QualityIssue] = []
+    for item in raw_issues:
+        if not isinstance(item, dict):
+            continue
+        try:
+            issues.append(QualityIssue.model_validate(item))
+        except Exception:
+            continue
+    return issues
+
+
+def _format_counter_artifact(values: dict[str, int]) -> str:
+    return ",".join(f"{key}={values[key]}" for key in sorted(values))
 
 
 def write_quality_summary_report(
