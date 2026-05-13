@@ -24,6 +24,7 @@ from novel_dev.repositories.foreshadowing_repo import ForeshadowingRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
+from novel_dev.services.beat_boundary_service import BeatBoundaryService
 from novel_dev.services.log_service import logged_agent_step, log_service
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,8 @@ class ContextAgent:
         volume_id: str | None,
         checkpoint: dict | None = None,
     ) -> ChapterContext:
-        checkpoint = dict(checkpoint or {})
+        caller_checkpoint = checkpoint if isinstance(checkpoint, dict) else None
+        checkpoint = caller_checkpoint if caller_checkpoint is not None else {}
         log_agent_detail(
             novel_id,
             "ContextAgent",
@@ -130,6 +132,7 @@ class ContextAgent:
             },
         )
 
+        chapter_plan = self._attach_beat_boundary_cards(chapter_plan)
         key_entity_names = await self._expand_context_entity_names(novel_id, chapter_plan, checkpoint)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
         log_service.add_log(
@@ -371,6 +374,8 @@ class ContextAgent:
             timeline_events,
         )
         object.__setattr__(context, "_context_debug_snapshot", context_debug_snapshot)
+        if caller_checkpoint is not None:
+            caller_checkpoint["chapter_context"] = context.model_dump()
 
         return context
 
@@ -439,6 +444,10 @@ class ContextAgent:
 
     def _build_writing_cards(self, chapter_plan: ChapterPlan):
         return StoryQualityService.build_writing_cards(chapter_plan)
+
+    def _attach_beat_boundary_cards(self, chapter_plan: ChapterPlan) -> ChapterPlan:
+        cards = BeatBoundaryService.build_cards(chapter_plan.model_dump())
+        return chapter_plan.model_copy(update={"beat_boundary_cards": cards})
 
     def _extract_key_entities_from_plan(self, chapter_plan: ChapterPlan) -> List[str]:
         names = set()
