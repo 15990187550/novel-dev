@@ -34,6 +34,79 @@ def test_clean_text_integrity_fragments_repairs_semantic_truncation():
     assert "他连站都站不起来。" in cleaned
 
 
+def test_editor_formats_cohesion_repair_task_prompt():
+    prompt = EditorAgent._build_repair_task_prompt(
+        "林照把残信收起。下一句忽然转到城门。",
+        {
+            "task_type": "cohesion",
+            "issue_codes": ["jump_cut", "missing_transition"],
+            "constraints": ["不能新增追兵", "保留残信"],
+            "success_criteria": ["补出动作过渡", "只使用本章计划已有事实"],
+        },
+        {
+            "chapter_plan": {
+                "title": "残信入袖",
+                "summary": "林照藏好残信后绕路离开。",
+                "beats": [{"summary": "林照收起残信并判断去向"}],
+            }
+        },
+    )
+
+    assert "cohesion" in prompt
+    assert "jump_cut" in prompt
+    assert "不能新增追兵" in prompt
+    assert "补出动作过渡" in prompt
+    assert "残信入袖" in prompt
+    assert "林照藏好残信后绕路离开" in prompt
+    assert "林照把残信收起" in prompt
+    assert "严禁新增章节计划外的人物、物件、线索、威胁、地点或事件" in prompt
+
+
+def test_editor_selects_repair_tasks_for_beat():
+    tasks = [
+        {"task_type": "chapter_cohesion", "beat_index": None, "issue_codes": ["chapter_gap"]},
+        {"task_type": "beat_1", "beat_index": 1, "issue_codes": ["beat_gap"]},
+        {"task_type": "beat_2", "beat_index": 2, "issue_codes": ["other_beat_gap"]},
+        {"beat_index": None, "issue_codes": ["missing_task_type"]},
+        {"task_type": "malformed_chapter"},
+        {"task_type": "empty_codes", "issue_codes": []},
+        "invalid",
+    ]
+
+    selected = EditorAgent._repair_tasks_for_beat(tasks, 1)
+
+    assert [task["task_type"] for task in selected] == ["chapter_cohesion", "beat_1"]
+
+
+def test_editor_repair_task_keys_distinguish_constraints_and_success_criteria():
+    base_task = {
+        "task_type": "cohesion",
+        "beat_index": 0,
+        "issue_codes": ["missing_transition"],
+        "constraints": ["保留残信"],
+        "success_criteria": ["补出袖口动作"],
+    }
+    alternate_task = {
+        "task_type": "cohesion",
+        "beat_index": 0,
+        "issue_codes": ["missing_transition"],
+        "constraints": ["不能新增追兵"],
+        "success_criteria": ["补出视线过渡"],
+    }
+    invalid_task = {"task_type": "malformed_chapter"}
+
+    base_key = EditorAgent._repair_task_key(base_task)
+    alternate_key = EditorAgent._repair_task_key(alternate_task)
+
+    assert base_key != alternate_key
+
+    outcomes = {
+        base_key: {"selected": 1, "changed": 1},
+        alternate_key: {"selected": 1, "changed": 0},
+    }
+    assert EditorAgent._unfinished_repair_tasks([base_task, alternate_task, invalid_task], outcomes) == [alternate_task]
+
+
 @pytest.mark.asyncio
 async def test_polish_low_score_beats(async_session):
     director = NovelDirector(session=async_session)
@@ -67,6 +140,251 @@ async def test_polish_low_score_beats(async_session):
 
     state = await director.resume("novel_edit")
     assert state.current_phase == Phase.FAST_REVIEWING.value
+
+
+@pytest.mark.asyncio
+async def test_polish_checkpoint_repair_task_forces_rewrite_and_records_history(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_repair_task",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "title": "残信入袖",
+                    "summary": "林照藏好残信后绕路离开。",
+                    "beats": [{"summary": "林照收起残信并判断去向"}],
+                }
+            },
+            "beat_scores": [{"beat_index": 0, "scores": {"humanity": 90, "readability": 88}}],
+            "repair_tasks": [
+                {
+                    "task_id": "repair-cohesion-1",
+                    "task_type": "cohesion",
+                    "chapter_id": "c_repair_task",
+                    "scope": "beat",
+                    "beat_index": 0,
+                    "issue_codes": ["missing_transition"],
+                    "allowed_materials": ["残信", "袖口", "城门"],
+                    "constraints": ["不能新增追兵"],
+                    "success_criteria": ["补出动作过渡"],
+                }
+            ],
+        },
+        volume_id="v_repair",
+        chapter_id="c_repair_task",
+    )
+    await ChapterRepository(async_session).create("c_repair_task", "v_repair", 1, "Repair Task")
+    await ChapterRepository(async_session).update_text(
+        "c_repair_task",
+        raw_draft="林照把残信收起。下一句忽然转到城门。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把残信收入袖中，确认纸角没有外露，才转向城门。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish("novel_edit_repair_task", "c_repair_task")
+
+    assert mock_client.acomplete.await_count == 1
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "质量修复任务" in prompt
+    assert "cohesion" in prompt
+    assert "repair-cohesion-1" in prompt
+    assert "c_repair_task" in prompt
+    assert "beat" in prompt
+    assert "missing_transition" in prompt
+    assert "残信" in prompt
+    assert "不能新增追兵" in prompt
+    assert "补出动作过渡" in prompt
+
+    chapter = await ChapterRepository(async_session).get_by_id("c_repair_task")
+    assert chapter.polished_text == "林照把残信收入袖中，确认纸角没有外露，才转向城门。"
+
+    state = await director.resume("novel_edit_repair_task")
+    assert state.checkpoint_data["repair_tasks"] == []
+    assert state.checkpoint_data["repair_history"] == [
+        {
+            "beat_index": 0,
+            "task_types": ["cohesion"],
+            "issue_codes": ["missing_transition"],
+            "task_ids": ["repair-cohesion-1"],
+            "task_keys": [repr(EditorAgent._repair_task_key({
+                "task_type": "cohesion",
+                "task_id": "repair-cohesion-1",
+                "chapter_id": "c_repair_task",
+                "scope": "beat",
+                "beat_index": 0,
+                "issue_codes": ["missing_transition"],
+                "allowed_materials": ["残信", "袖口", "城门"],
+                "constraints": ["不能新增追兵"],
+                "success_criteria": ["补出动作过渡"],
+            }))],
+            "completed": True,
+            "status": "completed",
+            "attempt": 1,
+            "source_preview": "林照把残信收起。下一句忽然转到城门。",
+            "polished_preview": "林照把残信收入袖中，确认纸角没有外露，才转向城门。",
+            "source_hash": EditorAgent._short_text_hash("林照把残信收起。下一句忽然转到城门。"),
+            "polished_hash": EditorAgent._short_text_hash("林照把残信收入袖中，确认纸角没有外露，才转向城门。"),
+            "source_chars": len("林照把残信收起。下一句忽然转到城门。"),
+            "polished_chars": len("林照把残信收入袖中，确认纸角没有外露，才转向城门。"),
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_polish_chapter_level_repair_task_rewrites_all_beats_and_records_history(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_chapter_repair_task",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "beat_scores": [
+                {"beat_index": 0, "scores": {"humanity": 90}},
+                {"beat_index": 1, "scores": {"humanity": 92}},
+            ],
+            "repair_tasks": [
+                {
+                    "task_type": "chapter_cohesion",
+                    "beat_index": None,
+                    "issue_codes": ["chapter_transition"],
+                    "success_criteria": ["每个节拍都补足承接"],
+                }
+            ],
+        },
+        volume_id="v_repair",
+        chapter_id="c_chapter_repair_task",
+    )
+    await ChapterRepository(async_session).create("c_chapter_repair_task", "v_repair", 1, "Chapter Repair")
+    await ChapterRepository(async_session).update_text(
+        "c_chapter_repair_task",
+        raw_draft="林照收好残信。\n\n他绕向城门。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="林照收好残信，先确认袖口压住纸角。"),
+        LLMResponse(text="他绕向城门时，仍记着残信上的焦黑字迹。"),
+    ]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish(
+            "novel_edit_chapter_repair_task",
+            "c_chapter_repair_task",
+        )
+
+    assert mock_client.acomplete.await_count == 2
+    state = await director.resume("novel_edit_chapter_repair_task")
+    assert state.checkpoint_data["repair_tasks"] == []
+    assert [entry["beat_index"] for entry in state.checkpoint_data["repair_history"]] == [0, 1]
+    assert all(
+        entry["task_types"] == ["chapter_cohesion"]
+        and entry["issue_codes"] == ["chapter_transition"]
+        for entry in state.checkpoint_data["repair_history"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_polish_repair_task_rollback_keeps_task_and_skips_success_history(async_session):
+    director = NovelDirector(session=async_session)
+    repair_task = {
+        "task_type": "cohesion",
+        "beat_index": 0,
+        "issue_codes": ["missing_transition"],
+        "success_criteria": ["补出动作过渡"],
+    }
+    await director.save_checkpoint(
+        "novel_edit_repair_task_rollback",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "beat_scores": [{"beat_index": 0, "scores": {"humanity": 90}}],
+            "repair_tasks": [repair_task],
+        },
+        volume_id="v_repair",
+        chapter_id="c_repair_task_rollback",
+    )
+    await ChapterRepository(async_session).create("c_repair_task_rollback", "v_repair", 1, "Repair Rollback")
+    await ChapterRepository(async_session).update_text(
+        "c_repair_task_rollback",
+        raw_draft="林照把残信收起。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把残信收入袖中，立刻听见追兵逼近。")
+
+    async def rollback_guard(**kwargs):
+        return kwargs["source_text"]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        agent._guard_editor_beat = AsyncMock(side_effect=rollback_guard)
+        await agent.polish("novel_edit_repair_task_rollback", "c_repair_task_rollback")
+
+    state = await director.resume("novel_edit_repair_task_rollback")
+    assert state.checkpoint_data["repair_tasks"] == [repair_task]
+    assert "repair_history" not in state.checkpoint_data
+
+
+@pytest.mark.asyncio
+async def test_polish_same_beat_multiple_repair_tasks_complete_together_when_changed(async_session):
+    director = NovelDirector(session=async_session)
+    repair_tasks = [
+        {
+            "task_type": "cohesion",
+            "beat_index": 0,
+            "issue_codes": ["missing_transition"],
+            "constraints": ["保留残信"],
+            "success_criteria": ["补出袖口动作"],
+        },
+        {
+            "task_type": "cohesion",
+            "beat_index": 0,
+            "issue_codes": ["missing_transition"],
+            "constraints": ["不能新增追兵"],
+            "success_criteria": ["补出视线过渡"],
+        },
+    ]
+    await director.save_checkpoint(
+        "novel_edit_ambiguous_repair_tasks",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "beat_scores": [{"beat_index": 0, "scores": {"humanity": 90}}],
+            "repair_tasks": repair_tasks,
+        },
+        volume_id="v_repair",
+        chapter_id="c_ambiguous_repair_tasks",
+    )
+    await ChapterRepository(async_session).create("c_ambiguous_repair_tasks", "v_repair", 1, "Ambiguous Repair")
+    await ChapterRepository(async_session).update_text(
+        "c_ambiguous_repair_tasks",
+        raw_draft="林照把残信收起。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把残信压进袖中，视线扫过城门。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish(
+            "novel_edit_ambiguous_repair_tasks",
+            "c_ambiguous_repair_tasks",
+        )
+
+    state = await director.resume("novel_edit_ambiguous_repair_tasks")
+    assert state.checkpoint_data["repair_tasks"] == []
+    assert len(state.checkpoint_data["repair_history"]) == 1
+    history = state.checkpoint_data["repair_history"][0]
+    assert history["completed"] is True
+    assert history["status"] == "completed"
+    assert history["task_keys"] == [repr(EditorAgent._repair_task_key(task)) for task in repair_tasks]
+    assert history["source_preview"] == "林照把残信收起。"
+    assert history["polished_preview"] == "林照把残信压进袖中，视线扫过城门。"
+    assert len(history["source_hash"]) == 12
+    assert len(history["polished_hash"]) == 12
 
 
 @pytest.mark.asyncio

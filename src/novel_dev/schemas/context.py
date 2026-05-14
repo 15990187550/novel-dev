@@ -3,6 +3,7 @@ from typing import Any, List, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
+from novel_dev.schemas.quality import BeatBoundaryCard
 from novel_dev.schemas.similar_document import SimilarDocument
 
 
@@ -54,11 +55,21 @@ class ChapterPlan(BaseModel):
     title: Optional[str] = None
     target_word_count: int
     beats: List[BeatPlan]
+    beat_boundary_cards: List[BeatBoundaryCard] = Field(default_factory=list)
 
     @field_validator("title", mode="before")
     @classmethod
     def _coerce_title(cls, value: Any) -> str:
         return coerce_to_text(value)
+
+    @field_validator("beat_boundary_cards", mode="before")
+    @classmethod
+    def _coerce_beat_boundary_cards(cls, value: Any) -> List[Any]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return []
 
 
 class EntityState(BaseModel):

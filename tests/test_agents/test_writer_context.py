@@ -5,6 +5,7 @@ from novel_dev.schemas.context import (
     EntityState, NarrativeRelay, ForeshadowingContext, BeatContext,
     BeatWritingCard,
 )
+from novel_dev.schemas.quality import BeatBoundaryCard
 
 
 def _make_context(**overrides):
@@ -207,6 +208,83 @@ class TestBuildContextMessage:
         assert len(result) < 5000
         assert "### 世界观约束" in result
 
+    def test_build_beat_boundary_prompt_supports_model_chapter_plan(self):
+        plan = ChapterPlan(
+            chapter_number=1,
+            title="Test",
+            target_word_count=2000,
+            beats=[BeatPlan(summary="开场", target_mood="压抑")],
+            beat_boundary_cards=[
+                BeatBoundaryCard(
+                    beat_index=0,
+                    must_cover=["确认旧信来自父亲"],
+                    allowed_materials=["秦风", "旧信", "玉佩发热"],
+                    forbidden_materials=["不得执行后续 beat 的核心事件。"],
+                    reveal_boundary="只释放旧信存在，不解释父亲去向。",
+                    ending_policy="停在门外脚步声。",
+                )
+            ],
+        )
+
+        prompt = WriterAgent._build_beat_boundary_prompt(plan, 0)
+
+        assert "当前节拍边界卡" in prompt
+        assert "确认旧信来自父亲" in prompt
+        assert "秦风、旧信、玉佩发热" in prompt
+        assert "不得执行后续 beat 的核心事件" in prompt
+        assert "只释放旧信存在" in prompt
+        assert "停在门外脚步声" in prompt
+        assert WriterAgent._build_beat_boundary_prompt(plan, 1) == ""
+
+    def test_build_beat_boundary_prompt_supports_dict_chapter_plan(self):
+        prompt = WriterAgent._build_beat_boundary_prompt(
+            {
+                "beat_boundary_cards": [
+                    {
+                        "beat_index": 1,
+                        "must_cover": ["藏起旧信"],
+                        "allowed_materials": ["旧信"],
+                        "forbidden_materials": ["不得改变信息释放顺序。"],
+                        "reveal_boundary": "不提前揭露来人身份。",
+                        "ending_policy": "停在搜屋要求。",
+                    }
+                ]
+            },
+            1,
+        )
+
+        assert "藏起旧信" in prompt
+        assert "不提前揭露来人身份" in prompt
+
+    def test_context_message_includes_beat_boundary_prompt(self):
+        beat = BeatPlan(summary="陆照潜入药库寻找救命丹药", target_mood="紧张")
+        ctx = _make_context(
+            chapter_plan=ChapterPlan(
+                chapter_number=1,
+                title="边界测试",
+                target_word_count=1600,
+                beats=[beat],
+                beat_boundary_cards=[
+                    BeatBoundaryCard(
+                        beat_index=0,
+                        must_cover=["陆照潜入药库寻找救命丹药"],
+                        allowed_materials=["陆照", "救命丹药"],
+                        forbidden_materials=["不得执行后续 beat 的核心事件。"],
+                        reveal_boundary="不得提前写执事进门。",
+                        ending_policy="在拿到丹药前的脚步声处收束。",
+                    )
+                ],
+            )
+        )
+
+        result = WriterAgent.__new__(WriterAgent)._build_context_message(
+            beat, ctx, [], "", 0, 1, False
+        )
+
+        assert "### 当前节拍边界卡" in result
+        assert "陆照潜入药库寻找救命丹药" in result
+        assert "不得提前写执事进门" in result
+
 
 class TestFallbackRetrieval:
     def test_matches_by_key_entities(self):
@@ -282,6 +360,32 @@ class TestSchemaCompatibility:
         roundtrip = ChapterContext(**context.model_dump())
         assert roundtrip.beat_contexts[0].entities[0].name == "秦风"
         assert roundtrip.pending_foreshadowings[0].id == "fs1"
+
+    def test_chapter_context_roundtrip_with_beat_boundary_cards(self):
+        beat = BeatPlan(summary="开场", target_mood="压抑")
+        context = _make_context(
+            chapter_plan=ChapterPlan(
+                chapter_number=1,
+                title="Test",
+                target_word_count=2000,
+                beats=[beat],
+                beat_boundary_cards=[
+                    {
+                        "beat_index": 0,
+                        "must_cover": ["开场"],
+                        "allowed_materials": ["秦风"],
+                        "forbidden_materials": ["不得提前写后续战斗"],
+                        "reveal_boundary": "只释放当前信息",
+                        "ending_policy": "停在选择前",
+                    }
+                ],
+            )
+        )
+
+        roundtrip = ChapterContext(**context.model_dump())
+
+        assert roundtrip.chapter_plan.beat_boundary_cards[0].beat_index == 0
+        assert roundtrip.chapter_plan.beat_boundary_cards[0].must_cover == ["开场"]
 
 
 class TestSelfCheck:

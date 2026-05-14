@@ -1,0 +1,15 @@
+{
+  "id": "weak_hook",
+  "category": "plot",
+  "chapter_plan": {
+    "title": "雨夜旧信",
+    "beats": [
+      {"summary": "主角发现旧信", "hook": "门外脚步停住"}
+    ]
+  },
+  "raw_text": "主角把旧信收好，决定明天再查。夜色安静下来。",
+  "expected_issue_codes": [
+    "required_payoff",
+    "hook_strength"
+  ]
+}

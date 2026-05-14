@@ -162,8 +162,8 @@ def test_default_llm_config_resolves_context_agent_orchestration():
         "get_novel_state",
         "get_chapter_draft_status",
     ]
-    assert cfg.max_tool_calls == 3
-    assert cfg.max_tool_result_chars == 1600
+    assert cfg.max_tool_calls == 20
+    assert cfg.max_tool_result_chars == 3200
     assert cfg.enable_subtasks is True
     assert cfg.validator_subtask == "location_context_quality"
     assert cfg.repairer_subtask == "schema_repair"

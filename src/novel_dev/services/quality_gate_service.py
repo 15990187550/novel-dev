@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import re
 from typing import Any
 
+from novel_dev.schemas.quality import QualityIssue
 from novel_dev.schemas.review import FastReviewReport
 
 
@@ -31,6 +32,38 @@ class QualityGateResult:
 
 class QualityGateService:
     """Classify chapter quality into pass/warn/block from structured checks."""
+
+    _QUALITY_ISSUE_CLASSIFICATIONS = {
+        "beat_cohesion": ("structure", "beat", "guided"),
+        "text_integrity": ("structure", "paragraph", "auto"),
+        "word_count_drift": ("prose", "chapter", "guided"),
+        "ai_flavor": ("prose", "chapter", "guided"),
+        "language_style": ("style", "chapter", "guided"),
+        "required_payoff": ("plot", "chapter", "guided"),
+        "final_review_score": ("prose", "chapter", "guided"),
+        "review_note": ("structure", "chapter", "manual"),
+        "consistency": ("continuity", "chapter", "guided"),
+        "continuity_audit": ("continuity", "chapter", "guided"),
+        "dead_entity_acted": ("continuity", "chapter", "guided"),
+        "canonical_identity_drift": ("continuity", "chapter", "guided"),
+        "story_contract_terms_missing": ("continuity", "chapter", "guided"),
+    }
+
+    _QUALITY_ISSUE_SUGGESTIONS = {
+        "beat_cohesion": "补写节拍间的因果承接，删除重复拼接句，并让动作、反应、转折按顺序推进。",
+        "text_integrity": "自动清理孤立标点或截断段落，补足未完成句读后重新检查正文结尾。",
+        "word_count_drift": "按章节目标压缩或扩写关键场景，优先调整描写密度而不是新增无关情节。",
+        "ai_flavor": "替换模板化总结句，增加具体动作、感官细节和角色独有表达。",
+        "language_style": "统一叙述语体，移除未授权外文、现代术语和破坏世界观的表达。",
+        "required_payoff": "回到章节计划补写缺失线索、钩子或回收点，确保读者能在正文中明确感知。",
+        "final_review_score": "针对低分维度重修章节，优先处理情节推进、人物动机和语言完成度。",
+        "review_note": "人工核查评审备注，判断是否需要结构重排、补写或删除问题段落。",
+        "consistency": "对照上下文、实体状态和时间线修复冲突，再同步相关世界状态。",
+        "continuity_audit": "对照连续性审计结果修正文中冲突，并同步实体、时间线或故事契约状态。",
+        "dead_entity_acted": "修复已死亡或离场实体的行动描写，改为回忆、传闻、替代角色或删除冲突动作。",
+        "canonical_identity_drift": "统一角色、地点或组织的标准身份称谓，避免别名与核心设定发生漂移。",
+        "story_contract_terms_missing": "补回故事契约要求的关键术语、承诺或限制条件，确保章节延续既定规则。",
+    }
 
     @classmethod
     def evaluate_fast_review(
@@ -112,6 +145,59 @@ class QualityGateService:
                 summary="存在可接受告警，允许归档但需要展示诊断。",
             )
         return QualityGateResult(status=QUALITY_PASS, summary="质量门禁通过。")
+
+    @classmethod
+    def to_quality_issues(cls, gate: QualityGateResult) -> list[QualityIssue]:
+        issues: list[QualityIssue] = []
+        for item in gate.blocking_items:
+            issues.append(cls._gate_item_to_quality_issue(item, QUALITY_BLOCK))
+        for item in gate.warning_items:
+            issues.append(cls._gate_item_to_quality_issue(item, QUALITY_WARN))
+        return issues
+
+    @classmethod
+    def _gate_item_to_quality_issue(cls, item: dict[str, Any], severity: str) -> QualityIssue:
+        code = str(item.get("code") or "unknown")
+        category, scope, repairability = cls._quality_issue_classification(code)
+        return QualityIssue(
+            code=code,
+            category=category,
+            severity=severity,
+            scope=scope,
+            repairability=repairability,
+            evidence=cls._quality_issue_evidence(item),
+            suggestion=cls._quality_issue_suggestion(code),
+            source="quality_gate",
+        )
+
+    @classmethod
+    def _quality_issue_classification(cls, code: str) -> tuple[str, str, str]:
+        return cls._QUALITY_ISSUE_CLASSIFICATIONS.get(code, ("process", "chapter", "manual"))
+
+    @staticmethod
+    def _quality_issue_evidence(item: dict[str, Any]) -> list[str]:
+        evidence: list[str] = []
+        message = item.get("message")
+        if message:
+            evidence.append(str(message))
+
+        detail = item.get("detail")
+        if isinstance(detail, dict):
+            for key, value in detail.items():
+                evidence.append(f"{key}={value}")
+        elif isinstance(detail, list):
+            for value in detail[:5]:
+                evidence.append(str(value))
+        elif detail not in (None, "", [], {}):
+            evidence.append(str(detail))
+
+        if not evidence:
+            evidence.append(f"quality gate item: {item.get('code', 'unknown')}")
+        return evidence
+
+    @classmethod
+    def _quality_issue_suggestion(cls, code: str) -> str:
+        return cls._QUALITY_ISSUE_SUGGESTIONS.get(code, "人工检查该质量门禁项，确认影响范围后制定修复方案。")
 
     @staticmethod
     def _word_count_severity(

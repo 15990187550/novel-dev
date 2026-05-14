@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List, Optional
+from typing import Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.schemas.context import ChapterContext, DraftMetadata, BeatPlan, BeatSelfCheck
@@ -696,6 +696,10 @@ class WriterAgent:
                 card_lines.append("- 章末处理方向: 收束本章当场冲突，让线索或结果落到纸面，再把新的危险或疑问留在最后一个完整句子里。")
             parts.append("### 当前节拍写作卡\n" + "\n".join(card_lines))
 
+        boundary_prompt = self._build_beat_boundary_prompt(context.chapter_plan, idx)
+        if boundary_prompt:
+            parts.append(boundary_prompt)
+
         plan_lines = [f"本章：{context.chapter_plan.title}（共{total}个节拍）"]
         for i, b in enumerate(context.chapter_plan.beats):
             marker = "→ " if i == idx else "  "
@@ -739,6 +743,67 @@ class WriterAgent:
         parts.append(f"### 当前节拍{position}\n{beat.model_dump_json()}")
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _build_beat_boundary_prompt(chapter_plan: Any, beat_index: int) -> str:
+        cards = WriterAgent._get_plan_value(chapter_plan, "beat_boundary_cards", [])
+        if not isinstance(cards, list):
+            return ""
+
+        card = None
+        for item in cards:
+            if WriterAgent._same_beat_index(WriterAgent._get_plan_value(item, "beat_index"), beat_index):
+                card = item
+                break
+        if card is None:
+            return ""
+
+        must_cover = WriterAgent._string_list(WriterAgent._get_plan_value(card, "must_cover", []))
+        allowed_materials = WriterAgent._string_list(WriterAgent._get_plan_value(card, "allowed_materials", []))
+        forbidden_materials = WriterAgent._string_list(WriterAgent._get_plan_value(card, "forbidden_materials", []))
+        reveal_boundary = str(WriterAgent._get_plan_value(card, "reveal_boundary", "") or "").strip()
+        ending_policy = str(WriterAgent._get_plan_value(card, "ending_policy", "") or "").strip()
+
+        lines = [
+            "### 当前节拍边界卡",
+            "- 字数/范围: 只写当前 beat 的最小完整推进；必须覆盖项写完即收束，不用后续 beat 扩写来凑字，也不要遗漏当前项。",
+        ]
+        if must_cover:
+            lines.append("- 必须覆盖: " + "；".join(must_cover[:6]))
+        if allowed_materials:
+            lines.append("- 必需实体/伏笔/材料: " + "、".join(allowed_materials[:10]))
+        if forbidden_materials:
+            lines.append("- 禁止越界: " + "；".join(forbidden_materials[:6]))
+        if reveal_boundary:
+            lines.append(f"- 信息释放边界: {reveal_boundary}")
+        if ending_policy:
+            lines.append(f"- 停点策略: {ending_policy}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _get_plan_value(source: Any, key: str, default: Any = None) -> Any:
+        if isinstance(source, dict):
+            return source.get(key, default)
+        return getattr(source, key, default)
+
+    @staticmethod
+    def _same_beat_index(value: Any, beat_index: int) -> bool:
+        try:
+            return int(value) == beat_index
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result = []
+        for item in value:
+            text = str(item or "").strip()
+            if text:
+                result.append(text)
+        return result
 
     @staticmethod
     def _beat_target_word_count(context: ChapterContext, total: int, beat: BeatPlan | None = None) -> int:

@@ -1,3 +1,4 @@
+import hashlib
 import re
 from typing import List, Optional, Tuple
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -82,6 +83,7 @@ class EditorAgent:
         per_dim_issues = checkpoint.get("per_dim_issues", [])
         critique = checkpoint.get("critique_feedback", {}) or {}
         chapter_context = checkpoint.get("chapter_context", {})
+        repair_tasks = checkpoint.get("repair_tasks") or []
         raw_draft = ch.raw_draft or ""
         beats, _ = split_beats(raw_draft)
 
@@ -114,6 +116,7 @@ class EditorAgent:
 
         last_idx = len(beats) - 1
         polished_beats = []
+        repair_task_outcomes: dict[tuple, dict[str, int]] = {}
         flow_control = FlowControlService(self.session)
         for idx, beat_text in enumerate(beats):
             await flow_control.raise_if_cancelled(novel_id)
@@ -121,7 +124,13 @@ class EditorAgent:
             scores = score_entry.get("scores", {})
             beat_level_issues = score_entry.get("issues", []) or []
             chapter_issues = issues_by_beat.get(idx, [])
-            all_issues = chapter_issues + beat_level_issues
+            beat_repair_tasks = self._repair_tasks_for_beat(repair_tasks, idx)
+            self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
+            all_issues = (
+                chapter_issues
+                + beat_level_issues
+                + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
+            )
 
             # 章末钩子弱时强制改最后一个 beat,并注入一条章末改写指引
             is_forced_last = force_last_beat_rewrite and idx == last_idx
@@ -208,6 +217,19 @@ class EditorAgent:
                 )
                 polished = beat_text
             polished = self._clean_text_integrity_fragments(polished)
+            if beat_repair_tasks and polished != beat_text:
+                completed = True
+                self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
+                checkpoint.setdefault("repair_history", []).append(
+                    self._build_repair_history_entry(
+                        idx,
+                        beat_repair_tasks,
+                        beat_text,
+                        polished,
+                        completed=completed,
+                        attempt=checkpoint.get("edit_attempt_count"),
+                    )
+                )
             polished_beats.append(polished)
             await flow_control.raise_if_cancelled(novel_id)
 
@@ -233,6 +255,7 @@ class EditorAgent:
                 log_service.add_log(novel_id, "EditorAgent", f"章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
         checkpoint.pop("final_polish_issues", None)
+        checkpoint["repair_tasks"] = self._unfinished_repair_tasks(repair_tasks, repair_task_outcomes)
 
         await self.director.save_checkpoint(
             novel_id,
@@ -256,6 +279,7 @@ class EditorAgent:
         per_dim_issues = checkpoint.get("per_dim_issues", [])
         critique = checkpoint.get("critique_feedback", {}) or {}
         chapter_context = checkpoint.get("chapter_context", {})
+        repair_tasks = checkpoint.get("repair_tasks") or []
         raw_draft = ch.raw_draft or ""
         beats, _ = split_beats(raw_draft)
 
@@ -286,6 +310,7 @@ class EditorAgent:
 
         last_idx = len(beats) - 1
         polished_beats = []
+        repair_task_outcomes: dict[tuple, dict[str, int]] = {}
         flow_control = FlowControlService(self.session)
         for idx, beat_text in enumerate(beats):
             await flow_control.raise_if_cancelled(novel_id)
@@ -293,7 +318,13 @@ class EditorAgent:
             scores = score_entry.get("scores", {})
             beat_level_issues = score_entry.get("issues", []) or []
             chapter_issues = issues_by_beat.get(idx, [])
-            all_issues = chapter_issues + beat_level_issues
+            beat_repair_tasks = self._repair_tasks_for_beat(repair_tasks, idx)
+            self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
+            all_issues = (
+                chapter_issues
+                + beat_level_issues
+                + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
+            )
             is_forced_last = force_last_beat_rewrite and idx == last_idx
             if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
                 all_issues = all_issues + [{
@@ -326,7 +357,21 @@ class EditorAgent:
             else:
                 polished = beat_text
             polished = self._clean_text_integrity_fragments(polished)
+            if beat_repair_tasks and polished != beat_text:
+                completed = True
+                self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
+                checkpoint.setdefault("repair_history", []).append(
+                    self._build_repair_history_entry(
+                        idx,
+                        beat_repair_tasks,
+                        beat_text,
+                        polished,
+                        completed=completed,
+                        attempt=checkpoint.get("edit_attempt_count"),
+                    )
+                )
             polished_beats.append(polished)
+            await flow_control.raise_if_cancelled(novel_id)
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
@@ -337,6 +382,7 @@ class EditorAgent:
                 log_service.add_log(novel_id, "EditorAgent", f"独立精修章节索引失败: {exc}", level="warning")
         await self.chapter_repo.update_status(chapter_id, "edited")
         checkpoint.pop("final_polish_issues", None)
+        checkpoint["repair_tasks"] = self._unfinished_repair_tasks(repair_tasks, repair_task_outcomes)
         return polished_text
 
     async def _guard_editor_beat(
@@ -519,6 +565,196 @@ class EditorAgent:
         problem = issue.get("problem")
         suggestion = cls._bounded_suggestion_for_issue(issue)
         return f"- [{dim}] 问题: {problem}\n  建议: {suggestion}"
+
+    @staticmethod
+    def _repair_tasks_for_beat(tasks: list[dict], beat_index: int) -> list[dict]:
+        if not isinstance(tasks, list):
+            return []
+        selected = []
+        for task in tasks:
+            if not EditorAgent._is_valid_repair_task(task):
+                continue
+            task_beat_index = task.get("beat_index")
+            if task_beat_index is None or task_beat_index == beat_index:
+                selected.append(task)
+        return selected
+
+    @staticmethod
+    def _is_valid_repair_task(task) -> bool:
+        if not isinstance(task, dict):
+            return False
+        task_type = str(task.get("task_type") or "").strip()
+        issue_codes = EditorAgent._repair_task_issue_codes(task)
+        return bool(task_type and issue_codes)
+
+    @staticmethod
+    def _repair_task_issue_codes(task: dict) -> list[str]:
+        raw_codes = task.get("issue_codes")
+        if isinstance(raw_codes, list):
+            return [str(code).strip() for code in raw_codes if str(code).strip()]
+        if raw_codes is None:
+            return []
+        code = str(raw_codes).strip()
+        return [code] if code else []
+
+    @staticmethod
+    def _repair_task_key(task: dict) -> tuple:
+        task_id = task.get("task_id")
+        if task_id:
+            return ("task_id", str(task_id))
+        return (
+            "task",
+            str(task.get("task_type") or ""),
+            task.get("beat_index"),
+            tuple(EditorAgent._repair_task_issue_codes(task)),
+            str(task.get("scope") or ""),
+            str(task.get("chapter_id") or ""),
+            tuple(EditorAgent._normalized_repair_field_items(task.get("constraints"))),
+            tuple(EditorAgent._normalized_repair_field_items(task.get("success_criteria"))),
+        )
+
+    @staticmethod
+    def _normalized_repair_field_items(value) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        text = str(value).strip()
+        return [text] if text else []
+
+    @classmethod
+    def _record_repair_tasks_selected(cls, outcomes: dict, tasks: list[dict]) -> None:
+        for task in tasks:
+            key = cls._repair_task_key(task)
+            entry = outcomes.setdefault(key, {"selected": 0, "changed": 0})
+            entry["selected"] += 1
+
+    @classmethod
+    def _record_repair_tasks_changed(cls, outcomes: dict, tasks: list[dict]) -> None:
+        for task in tasks:
+            key = cls._repair_task_key(task)
+            entry = outcomes.setdefault(key, {"selected": 0, "changed": 0})
+            entry["changed"] += 1
+
+    @classmethod
+    def _unfinished_repair_tasks(cls, tasks: list[dict], outcomes: dict) -> list:
+        if not isinstance(tasks, list):
+            return []
+        unfinished = []
+        for task in tasks:
+            if not cls._is_valid_repair_task(task):
+                continue
+            outcome = outcomes.get(cls._repair_task_key(task))
+            if not outcome or outcome["selected"] == 0 or outcome["changed"] < outcome["selected"]:
+                unfinished.append(task)
+        return unfinished
+
+    @staticmethod
+    def _build_repair_task_prompt(source_text: str, task: dict, chapter_context: dict) -> str:
+        import json
+
+        task_type = task.get("task_type") or "repair_task"
+        issue_codes = EditorAgent._stringify_repair_field(task.get("issue_codes"))
+        constraints = EditorAgent._stringify_repair_field(task.get("constraints"))
+        success_criteria = EditorAgent._stringify_repair_field(task.get("success_criteria"))
+
+        chapter_plan = {}
+        if isinstance(chapter_context, dict):
+            chapter_plan = chapter_context.get("chapter_plan") or {}
+        title = chapter_plan.get("title") if isinstance(chapter_plan, dict) else None
+        plan_text = json.dumps(chapter_plan, ensure_ascii=False, indent=2) if chapter_plan else ""
+
+        return "\n".join([
+            "你是一位小说编辑，请根据质量修复任务改写原文。",
+            f"任务类型: {task_type}",
+            f"问题码: {issue_codes or '无'}",
+            f"约束: {constraints or '无'}",
+            f"成功标准: {success_criteria or '无'}",
+            f"章节标题: {title or '未提供'}",
+            f"章节计划: {plan_text or '未提供'}",
+            "硬性约束: 严禁新增章节计划外的人物、物件、线索、威胁、地点或事件；只能用原文和章节计划已经给出的事实完成修复。",
+            f"原文:\n{source_text}",
+            "改写:",
+        ])
+
+    @staticmethod
+    def _stringify_repair_field(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, list):
+            return "；".join(str(item) for item in value)
+        return str(value)
+
+    @classmethod
+    def _repair_task_to_issue(cls, task: dict) -> dict:
+        task_type = task.get("task_type") or "repair_task"
+        issue_codes = cls._stringify_repair_field(task.get("issue_codes"))
+        constraints = cls._stringify_repair_field(task.get("constraints"))
+        success_criteria = cls._stringify_repair_field(task.get("success_criteria"))
+        schema_fields = []
+        for field in ("task_id", "chapter_id", "scope", "allowed_materials"):
+            value = cls._stringify_repair_field(task.get(field))
+            if value:
+                schema_fields.append(f"{field}：{value}")
+        description = (
+            task.get("problem")
+            or task.get("description")
+            or task.get("summary")
+            or task_type
+        )
+        problem_parts = [str(description)]
+        if issue_codes:
+            problem_parts.append(f"问题码：{issue_codes}")
+        if constraints:
+            problem_parts.append(f"约束：{constraints}")
+        if schema_fields:
+            problem_parts.extend(schema_fields)
+        return {
+            "dim": task_type,
+            "problem": "质量修复任务：" + "；".join(problem_parts),
+            "suggestion": success_criteria or "按质量修复任务完成定点修复。",
+        }
+
+    @classmethod
+    def _build_repair_history_entry(
+        cls,
+        beat_index: int,
+        tasks: list[dict],
+        source_text: str,
+        polished_text: str,
+        *,
+        completed: bool,
+        attempt: int | None = None,
+    ) -> dict:
+        task_types = [str(task.get("task_type") or "repair_task") for task in tasks]
+        issue_codes = []
+        task_ids = []
+        task_keys = []
+        for task in tasks:
+            issue_codes.extend(cls._repair_task_issue_codes(task))
+            if task.get("task_id"):
+                task_ids.append(str(task.get("task_id")))
+            task_keys.append(repr(cls._repair_task_key(task)))
+        return {
+            "beat_index": beat_index,
+            "task_types": task_types,
+            "issue_codes": issue_codes,
+            "task_ids": task_ids,
+            "task_keys": task_keys,
+            "completed": completed,
+            "status": "completed" if completed else "attempted",
+            "attempt": attempt,
+            "source_preview": preview_text(source_text, 120),
+            "polished_preview": preview_text(polished_text, 120),
+            "source_hash": cls._short_text_hash(source_text),
+            "polished_hash": cls._short_text_hash(polished_text),
+            "source_chars": len(source_text),
+            "polished_chars": len(polished_text),
+        }
+
+    @staticmethod
+    def _short_text_hash(text: str) -> str:
+        return hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:12]
 
     @staticmethod
     def _bounded_suggestion_for_issue(issue: dict) -> str:

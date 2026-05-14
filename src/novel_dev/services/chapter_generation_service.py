@@ -14,9 +14,13 @@ from novel_dev.schemas.context import ChapterContext
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.global_consistency_audit_service import GlobalConsistencyAuditResult, GlobalConsistencyAuditService
+from novel_dev.services.chapter_run_trace_service import ChapterRunTraceService
 from novel_dev.services.log_service import log_service
+from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
+from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.volume_plan_guard_service import evaluate_volume_plan_readiness
 from novel_dev.services.world_state_review_service import WorldStateReviewRequiredError
+from novel_dev.schemas.quality import ChapterRunTrace, QualityIssue
 
 
 STOP_REASONS = {
@@ -171,6 +175,26 @@ class ChapterGenerationService:
                 failed_chapter_id=exc.chapter_id,
                 error=str(exc),
             )
+            if state is not None:
+                checkpoint = dict(state.checkpoint_data or {})
+                quality_issues = self._quality_issues_for_block(checkpoint, exc.reasons)
+                checkpoint["quality_issue_summary"] = QualityIssueService.summarize(quality_issues)
+                trace = self._trace_from_checkpoint(checkpoint, novel_id, exc.chapter_id, token, state.current_phase)
+                ChapterRunTraceService.mark_blocked(
+                    trace,
+                    state.current_phase,
+                    quality_issues,
+                    reason="quality_blocked",
+                )
+                checkpoint["chapter_run_trace"] = trace.model_dump()
+                await self.director.save_checkpoint(
+                    novel_id,
+                    Phase(state.current_phase),
+                    checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
+                await self.session.commit()
             await self._release_lock(novel_id, token, result)
             return result
         except WorldStateReviewRequiredError as exc:
@@ -358,6 +382,83 @@ class ChapterGenerationService:
             checkpoint.get("final_polish_issues")
             and int(checkpoint.get("quality_gate_repair_attempt_count", 0) or 0) > 0
         )
+
+    @staticmethod
+    def _quality_issues_for_block(checkpoint: dict, quality_reasons: dict | None = None) -> list[QualityIssue]:
+        checkpoint_issues = ChapterGenerationService._quality_issues_from_checkpoint(checkpoint)
+        if checkpoint_issues:
+            return checkpoint_issues
+
+        gate_issues = ChapterGenerationService._quality_issues_from_gate_reasons(quality_reasons)
+        if gate_issues:
+            return gate_issues
+
+        return [
+            QualityIssue(
+                code="quality_blocked",
+                category="process",
+                severity="block",
+                scope="chapter",
+                repairability="manual",
+                evidence=["质量门禁阻断，但 checkpoint 中缺少可解析的标准质量问题。"],
+                suggestion="人工检查章节 quality_reasons、fast_review_feedback 和最近一次质量门禁输出。",
+                source="quality_gate",
+            )
+        ]
+
+    @staticmethod
+    def _quality_issues_from_checkpoint(checkpoint: dict) -> list[QualityIssue]:
+        raw_issues = checkpoint.get("quality_issues")
+        if not isinstance(raw_issues, list):
+            return []
+
+        issues: list[QualityIssue] = []
+        for raw_issue in raw_issues:
+            if not isinstance(raw_issue, dict):
+                continue
+            try:
+                issues.append(QualityIssue.model_validate(raw_issue))
+            except ValueError:
+                continue
+        return issues
+
+    @staticmethod
+    def _quality_issues_from_gate_reasons(quality_reasons: dict | None) -> list[QualityIssue]:
+        if not isinstance(quality_reasons, dict):
+            return []
+        gate = QualityGateResult(
+            status=str(quality_reasons.get("status") or "block"),
+            blocking_items=[
+                item for item in quality_reasons.get("blocking_items") or []
+                if isinstance(item, dict)
+            ],
+            warning_items=[
+                item for item in quality_reasons.get("warning_items") or []
+                if isinstance(item, dict)
+            ],
+            summary=str(quality_reasons.get("summary") or ""),
+        )
+        return QualityGateService.to_quality_issues(gate)
+
+    @staticmethod
+    def _trace_from_checkpoint(
+        checkpoint: dict,
+        novel_id: str,
+        chapter_id: str,
+        run_id: str,
+        phase: str,
+    ) -> ChapterRunTrace:
+        raw_trace = checkpoint.get("chapter_run_trace")
+        if isinstance(raw_trace, dict):
+            try:
+                trace = ChapterRunTrace.model_validate(raw_trace)
+                if trace.novel_id == novel_id and trace.chapter_id == chapter_id:
+                    trace.run_id = run_id
+                    trace.current_phase = phase
+                    return trace
+            except ValueError:
+                pass
+        return ChapterRunTraceService.start_trace(novel_id, chapter_id, run_id, phase)
 
     async def _maybe_run_periodic_global_consistency_audit(
         self,

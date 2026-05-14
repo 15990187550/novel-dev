@@ -1,5 +1,5 @@
 from novel_dev.schemas.review import FastReviewReport
-from novel_dev.services.quality_gate_service import QualityGateService
+from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
 
 
 def test_evaluate_fast_review_real_contract_downgrades_word_count_drift_to_warn():
@@ -160,3 +160,90 @@ def test_evaluate_fast_review_warns_when_required_payoff_missing():
 
     assert gate.status == "warn"
     assert any(item["code"] == "required_payoff" for item in gate.warning_items)
+
+
+def test_quality_gate_converts_blocking_and_warning_items_to_standard_issues():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=False,
+        beat_cohesion_ok=False,
+        language_style_ok=True,
+        notes=["节拍之间重复拼接", "模板化表达未降低"],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=72,
+        polished_text="林照推门进屋。窗外雨声忽然停了。",
+        acceptance_scope="real-contract",
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert [issue.code for issue in issues] == ["beat_cohesion", "final_review_score", "ai_flavor"]
+    assert issues[0].category == "structure"
+    assert issues[0].severity == "block"
+    assert issues[0].repairability == "guided"
+    assert issues[1].category == "prose"
+    assert issues[1].severity == "warn"
+    assert issues[2].code == "ai_flavor"
+
+
+def test_quality_gate_converts_required_payoff_to_plot_issue():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照离开试炼林，夜色重新安静下来。",
+        required_payoffs=["林照搜查遗物发现密函"],
+        acceptance_scope="real-contract",
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert len(issues) == 1
+    assert issues[0].code == "required_payoff"
+    assert issues[0].category == "plot"
+    assert issues[0].repairability == "guided"
+
+
+def test_quality_gate_classifies_continuity_audit_codes_as_guided_continuity_issues():
+    gate = QualityGateResult(
+        status="block",
+        blocking_items=[
+            {"code": "continuity_audit", "message": "连续性审计发现阻断问题"},
+            {"code": "dead_entity_acted", "message": "已死亡角色继续行动"},
+        ],
+        warning_items=[
+            {"code": "canonical_identity_drift", "message": "角色标准身份发生漂移"},
+            {"code": "story_contract_terms_missing", "message": "故事契约术语缺失"},
+        ],
+    )
+
+    issues = QualityGateService.to_quality_issues(gate)
+
+    assert [issue.code for issue in issues] == [
+        "continuity_audit",
+        "dead_entity_acted",
+        "canonical_identity_drift",
+        "story_contract_terms_missing",
+    ]
+    assert [issue.severity for issue in issues] == ["block", "block", "warn", "warn"]
+    for issue in issues:
+        assert issue.category == "continuity"
+        assert issue.scope == "chapter"
+        assert issue.repairability == "guided"
+        assert issue.source == "quality_gate"

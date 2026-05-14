@@ -12,7 +12,9 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
-from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QualityGateService
+from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QUALITY_UNCHECKED, QualityGateService
+from novel_dev.services.quality_issue_service import QualityIssueService
+from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
 
 logger = logging.getLogger(__name__)
@@ -381,7 +383,9 @@ class FastReviewAgent:
             )
             checkpoint["continuity_audit"] = continuity_audit.model_dump()
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
+            gate = self._apply_structure_guard_to_gate(checkpoint, gate)
             checkpoint["quality_gate"] = gate.model_dump()
+            self._store_quality_issues_and_repairs(checkpoint, gate, chapter_id)
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
                 quality_status=gate.status,
@@ -453,6 +457,7 @@ class FastReviewAgent:
                     gate_data=gate.model_dump(),
                     checkpoint=checkpoint,
                 )
+                await self._reset_quality_for_edit_retry(checkpoint, chapter_id)
                 log_agent_detail(
                     novel_id,
                     "FastReviewAgent",
@@ -521,6 +526,7 @@ class FastReviewAgent:
                     chapter_id=state.current_chapter_id,
                 )
         else:
+            await self._reset_quality_for_edit_retry(checkpoint, chapter_id)
             log_agent_detail(
                 novel_id,
                 "FastReviewAgent",
@@ -545,6 +551,76 @@ class FastReviewAgent:
                 chapter_id=state.current_chapter_id,
             )
         return report
+
+    @staticmethod
+    def _apply_structure_guard_to_gate(checkpoint: dict, gate):
+        evidence = FastReviewAgent._unresolved_structure_guard(checkpoint)
+        if evidence is None:
+            return gate
+
+        item = {
+            "code": "plan_boundary_violation",
+            "message": "章节结构守卫发现未解决的计划边界违规",
+            "detail": {
+                "beat_index": evidence.get("beat_index"),
+                "issues": evidence.get("issues") or [],
+                "suggested_rewrite_focus": evidence.get("suggested_rewrite_focus") or "",
+            },
+        }
+        if not any(existing == item for existing in gate.blocking_items):
+            gate.blocking_items.append(item)
+        gate.status = QUALITY_BLOCK
+        gate.summary = "存在阻断级质量问题，停止归档和世界状态入库。"
+        return gate
+
+    @staticmethod
+    def _clear_terminal_quality_metadata(checkpoint: dict) -> None:
+        for key in (
+            "quality_gate",
+            "quality_issues",
+            "quality_issue_summary",
+            "repair_tasks",
+            "continuity_audit",
+        ):
+            checkpoint.pop(key, None)
+
+    async def _reset_quality_for_edit_retry(self, checkpoint: dict, chapter_id: str) -> None:
+        self._clear_terminal_quality_metadata(checkpoint)
+        await self.chapter_repo.update_quality_gate(
+            chapter_id,
+            quality_status=QUALITY_UNCHECKED,
+            quality_reasons={},
+            world_state_ingested=False,
+        )
+
+    @staticmethod
+    def _store_quality_issues_and_repairs(checkpoint: dict, gate, chapter_id: str) -> None:
+        structure_guard = FastReviewAgent._unresolved_structure_guard(checkpoint)
+        quality_issues = QualityGateService.to_quality_issues(gate)
+        if structure_guard is not None:
+            quality_issues = [
+                issue for issue in quality_issues
+                if issue.code != "plan_boundary_violation" or issue.source != "quality_gate"
+            ]
+        quality_issues.extend(QualityIssueService.from_structure_guard(structure_guard, source="structure_guard"))
+        checkpoint["quality_issues"] = [issue.model_dump() for issue in quality_issues]
+        checkpoint["quality_issue_summary"] = QualityIssueService.summarize(quality_issues)
+
+        if gate.status == QUALITY_BLOCK:
+            repair_tasks = RepairPlanner.plan(chapter_id, quality_issues)
+            checkpoint["repair_tasks"] = [task.model_dump() for task in repair_tasks]
+        else:
+            checkpoint.pop("repair_tasks", None)
+
+    @staticmethod
+    def _unresolved_structure_guard(checkpoint: dict) -> dict | None:
+        evidence = checkpoint.get("chapter_structure_guard")
+        if not isinstance(evidence, dict):
+            return None
+        resolved_items = checkpoint.get("editor_guard_resolved")
+        if isinstance(resolved_items, list) and any(item == evidence for item in resolved_items):
+            return None
+        return evidence
 
     @staticmethod
     def _required_payoffs_from_context(chapter_context: dict) -> list[str]:
@@ -739,7 +815,9 @@ class FastReviewAgent:
             )
             checkpoint["continuity_audit"] = continuity_audit.model_dump()
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
+            gate = self._apply_structure_guard_to_gate(checkpoint, gate)
             checkpoint["quality_gate"] = gate.model_dump()
+            self._store_quality_issues_and_repairs(checkpoint, gate, chapter_id)
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
                 quality_status=gate.status,
@@ -750,4 +828,6 @@ class FastReviewAgent:
                 draft_review_feedback=ch.draft_review_feedback or ch.review_feedback,
                 world_state_ingested=False,
             )
+        else:
+            await self._reset_quality_for_edit_retry(checkpoint, chapter_id)
         return report

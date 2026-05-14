@@ -1,0 +1,14 @@
+{
+  "id": "ai_flavor",
+  "category": "prose",
+  "chapter_plan": {
+    "title": "雨夜旧信",
+    "beats": [
+      {"summary": "主角读到旧信"}
+    ]
+  },
+  "raw_text": "他不禁心头一震，仿佛这一切都在无声地告诉他，命运的齿轮已经缓缓转动。",
+  "expected_issue_codes": [
+    "ai_flavor"
+  ]
+}
