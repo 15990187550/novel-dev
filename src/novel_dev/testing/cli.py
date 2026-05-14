@@ -25,13 +25,26 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     generation.add_argument(
         "--acceptance-scope",
-        choices=("real-contract", "real-e2e-export"),
+        choices=("real-contract", "real-e2e-export", "real-longform-volume1"),
         default="real-contract",
     )
     generation.add_argument("--stage")
     generation.add_argument("--run-id")
     generation.add_argument("--report-root", default="reports/test-runs")
     generation.add_argument("--api-base-url", default="http://127.0.0.1:8000")
+    generation.add_argument("--resume-novel-id")
+    generation.add_argument("--resume-from-stage")
+    generation.add_argument(
+        "--resume-reset-current-chapter",
+        action="store_true",
+        help="When resuming chapter auto-run, clear only the current failed chapter before continuing.",
+    )
+    generation.add_argument("--source-dir")
+    generation.add_argument("--target-volumes", type=int, default=18)
+    generation.add_argument("--target-chapters", type=int, default=1200)
+    generation.add_argument("--target-word-count", type=int, default=2_000_000)
+    generation.add_argument("--target-volume-number", type=int, default=1)
+    generation.add_argument("--target-volume-chapters", type=int)
 
     quality = subparsers.add_parser("quality-summary")
     quality.add_argument("--input-json", required=True)
@@ -54,6 +67,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_id=args.run_id,
             report_root=args.report_root,
             api_base_url=args.api_base_url,
+            resume_novel_id=args.resume_novel_id,
+            resume_from_stage=args.resume_from_stage,
+            resume_reset_current_chapter=args.resume_reset_current_chapter,
+            source_dir=args.source_dir,
+            target_volumes=args.target_volumes,
+            target_chapters=args.target_chapters,
+            target_word_count=args.target_word_count,
+            target_volume_number=args.target_volume_number,
+            target_volume_chapters=args.target_volume_chapters,
         )
         try:
             report = asyncio.run(run_generation_acceptance_and_write(options))

@@ -3,6 +3,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from novel_dev.agents._llm_helpers import register_structured_normalizer
+
 
 class SettingClarificationDecision(BaseModel):
     status: Literal["needs_clarification", "ready"]
@@ -95,9 +97,15 @@ class SettingBatchDraft(BaseModel):
 
 def _parse_json_array_from_text(text: str) -> Any:
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
     except json.JSONDecodeError:
-        pass
+        parsed = None
+    if isinstance(parsed, str) and parsed != text:
+        nested = _parse_json_array_from_text(parsed.strip())
+        if nested is not None:
+            return nested
+    if parsed is not None:
+        return parsed
 
     start = text.find("[")
     if start < 0:
@@ -249,3 +257,367 @@ class SettingWorkbenchAgent:
                 "返回 SettingBatchDraft JSON。",
             ]
         )
+
+
+_TOP_LEVEL_WRAPPER_KEYS = ("data", "result", "output", "payload", "draft")
+_CHANGE_LIST_KEYS = ("changes", "items", "results", "records")
+_CONTROL_CHANGE_KEYS = {
+    "target_type",
+    "type",
+    "kind",
+    "target",
+    "category",
+    "change_type",
+    "operation",
+    "action",
+    "op",
+    "after_snapshot",
+    "after",
+    "data",
+    "payload",
+    "fields",
+    "snapshot",
+    "before_snapshot",
+    "before",
+    "target_id",
+    "source_ref",
+    "target_ref",
+    "conflict_hints",
+}
+
+
+def normalize_setting_clarification_payload(payload: Any, error: Exception | None = None) -> Any:
+    _ = error
+    value = _unwrap_top_level_payload(payload)
+    if not isinstance(value, dict):
+        return payload
+    normalized = dict(value)
+    if "status" not in normalized:
+        raw_status = normalized.get("state") or normalized.get("decision")
+        if raw_status is not None:
+            normalized["status"] = raw_status
+    status_text = str(normalized.get("status") or "").strip().lower()
+    if status_text in {"ready_to_generate", "ready", "完成", "可生成", "信息足够"}:
+        normalized["status"] = "ready"
+    elif status_text in {"clarifying", "needs_more_info", "need_clarification", "needs_clarification", "追问", "需澄清"}:
+        normalized["status"] = "needs_clarification"
+    if "assistant_message" not in normalized:
+        normalized["assistant_message"] = (
+            normalized.get("message")
+            or normalized.get("reply")
+            or normalized.get("content")
+            or ""
+        )
+    if "questions" not in normalized:
+        normalized["questions"] = normalized.get("question") or normalized.get("follow_up_questions") or []
+    if isinstance(normalized.get("questions"), str):
+        normalized["questions"] = [normalized["questions"]]
+    return normalized
+
+
+def normalize_setting_batch_payload(payload: Any, error: Exception | None = None) -> Any:
+    _ = error
+    value = _unwrap_top_level_payload(payload)
+    if isinstance(value, list):
+        return {"summary": "AI 生成设定草稿", "changes": [_normalize_change(item) for item in value]}
+    if not isinstance(value, dict):
+        return payload
+
+    changes = _extract_change_items(value)
+    if not changes:
+        return value
+    return {
+        **{key: item for key, item in value.items() if key not in (*_CHANGE_LIST_KEYS, "cards", "setting_cards", "entities", "relationships")},
+        "summary": str(value.get("summary") or value.get("title") or value.get("name") or "AI 生成设定草稿"),
+        "changes": changes,
+    }
+
+
+def _unwrap_top_level_payload(payload: Any) -> Any:
+    value = payload
+    seen: set[int] = set()
+    while isinstance(value, dict) and id(value) not in seen:
+        seen.add(id(value))
+        if any(key in value for key in _CHANGE_LIST_KEYS) or any(
+            key in value for key in ("cards", "setting_cards", "entities", "relationships")
+        ):
+            return value
+        wrapper_key = next((key for key in _TOP_LEVEL_WRAPPER_KEYS if isinstance(value.get(key), (dict, list))), None)
+        if wrapper_key is None:
+            return value
+        value = value[wrapper_key]
+    return value
+
+
+def _extract_change_items(value: dict[str, Any]) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    raw_changes = next((value.get(key) for key in _CHANGE_LIST_KEYS if value.get(key) is not None), None)
+    parsed_changes = _parse_change_container(raw_changes)
+    if parsed_changes is not None:
+        for item in parsed_changes:
+            changes.append(_normalize_change(item))
+
+    grouped_sources = (
+        ("cards", "setting_card"),
+        ("setting_cards", "setting_card"),
+        ("entities", "entity"),
+        ("relationships", "relationship"),
+    )
+    for key, target_type in grouped_sources:
+        group_items = _parse_change_container(value.get(key))
+        if group_items is None:
+            continue
+        for item in group_items:
+            changes.append(_normalize_change(item, default_target_type=target_type))
+    return changes
+
+
+def _parse_change_container(raw: Any) -> list[Any] | None:
+    if raw is None:
+        return None
+    if isinstance(raw, str):
+        parsed = _parse_json_array_from_text(raw)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            return [parsed]
+        return None
+    if isinstance(raw, list):
+        return raw
+    if isinstance(raw, dict):
+        return [raw]
+    return None
+
+
+def _normalize_change(item: Any, default_target_type: str | None = None) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        return item
+    raw_target = (
+        item.get("target_type")
+        or item.get("kind")
+        or item.get("target")
+        or item.get("category")
+        or item.get("change_type")
+        or item.get("type")
+        or default_target_type
+    )
+    target_type = _normalize_target_type(raw_target, default_target_type=default_target_type)
+    operation = _normalize_operation(item.get("operation") or item.get("action") or item.get("op"))
+    snapshot = _extract_snapshot(item)
+    if target_type == "setting_card" and item.get("category") is not None and "category" not in snapshot:
+        snapshot["category"] = item.get("category")
+    after_snapshot = _normalize_snapshot(snapshot, target_type)
+
+    normalized: dict[str, Any] = {
+        "target_type": target_type,
+        "operation": operation,
+        "after_snapshot": after_snapshot,
+        "conflict_hints": _normalize_conflict_hints(item.get("conflict_hints") or item.get("conflicts") or item.get("notes")),
+    }
+    if item.get("before_snapshot") is not None or item.get("before") is not None:
+        normalized["before_snapshot"] = item.get("before_snapshot") or item.get("before")
+    target_id = item.get("target_id")
+    if target_id is None and operation in {"update", "delete"}:
+        target_id = item.get("id") or item.get("doc_id") or item.get("entity_id") or item.get("relationship_id")
+    if target_id is not None:
+        normalized["target_id"] = str(target_id)
+    for ref_field in ("source_ref", "target_ref"):
+        if item.get(ref_field):
+            normalized[ref_field] = str(item[ref_field])
+    return normalized
+
+
+def _extract_snapshot(item: dict[str, Any]) -> dict[str, Any]:
+    for key in ("after_snapshot", "after", "data", "payload", "fields", "snapshot"):
+        value = item.get(key)
+        if isinstance(value, dict):
+            return dict(value)
+    return {key: value for key, value in item.items() if key not in _CONTROL_CHANGE_KEYS}
+
+
+def _normalize_target_type(value: Any, *, default_target_type: str | None = None) -> str:
+    text = str(value or default_target_type or "setting_card").strip().lower()
+    aliases = {
+        "setting_card": "setting_card",
+        "setting": "setting_card",
+        "card": "setting_card",
+        "document": "setting_card",
+        "doc": "setting_card",
+        "设定": "setting_card",
+        "设定卡": "setting_card",
+        "文档": "setting_card",
+        "entity": "entity",
+        "character": "entity",
+        "faction": "entity",
+        "location": "entity",
+        "item": "entity",
+        "人物": "entity",
+        "角色": "entity",
+        "实体": "entity",
+        "势力": "entity",
+        "地点": "entity",
+        "物品": "entity",
+        "relationship": "relationship",
+        "relation": "relationship",
+        "edge": "relationship",
+        "关系": "relationship",
+    }
+    return aliases.get(text, default_target_type or "setting_card")
+
+
+def _normalize_operation(value: Any) -> str:
+    text = str(value or "create").strip().lower()
+    if text in {"create", "add", "new", "insert", "新增", "创建", "增加"}:
+        return "create"
+    if text in {"update", "modify", "edit", "patch", "revise", "修订", "修改", "更新"}:
+        return "update"
+    if text in {"delete", "remove", "archive", "drop", "删除", "归档", "移除"}:
+        return "delete"
+    return text or "create"
+
+
+def _normalize_snapshot(snapshot: dict[str, Any], target_type: str) -> dict[str, Any]:
+    if target_type == "setting_card":
+        return _normalize_setting_card_snapshot(snapshot)
+    if target_type == "entity":
+        return _normalize_entity_snapshot(snapshot)
+    if target_type == "relationship":
+        return _normalize_relationship_snapshot(snapshot)
+    return snapshot
+
+
+def _normalize_setting_card_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(snapshot)
+    title = normalized.get("title") or normalized.get("name") or normalized.get("标题")
+    content = (
+        normalized.get("content")
+        or normalized.get("body")
+        or normalized.get("description")
+        or normalized.get("正文")
+    )
+    if title is not None:
+        normalized["title"] = str(title)
+    if content is not None:
+        normalized["content"] = str(content)
+    normalized["doc_type"] = _normalize_doc_type(normalized.get("doc_type") or normalized.get("type") or normalized.get("category"))
+    source_doc_ids = _normalize_source_doc_ids(
+        normalized.get("source_doc_ids")
+        or normalized.get("evidence_doc_ids")
+        or normalized.get("source_docs")
+        or normalized.get("source_documents")
+    )
+    if source_doc_ids:
+        normalized["source_doc_ids"] = source_doc_ids
+    return normalized
+
+
+def _normalize_entity_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(snapshot)
+    entity_type = normalized.get("type") or normalized.get("entity_type") or normalized.get("category")
+    if entity_type is not None:
+        normalized["type"] = str(entity_type)
+    state = (
+        normalized.get("state")
+        if normalized.get("state") is not None
+        else normalized.get("attributes")
+        if normalized.get("attributes") is not None
+        else normalized.get("properties")
+        if normalized.get("properties") is not None
+        else normalized.get("profile")
+    )
+    if state is None and normalized.get("description"):
+        state = {"description": normalized.get("description")}
+    if isinstance(state, str):
+        state = {"description": state}
+    if isinstance(state, dict):
+        normalized["state"] = state
+    return normalized
+
+
+def _normalize_relationship_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(snapshot)
+    if "relation_type" not in normalized and normalized.get("relation"):
+        normalized["relation_type"] = normalized.get("relation")
+    if "source_ref" not in normalized and normalized.get("source_name"):
+        normalized["source_ref"] = normalized.get("source_name")
+    if "target_ref" not in normalized and normalized.get("target_name"):
+        normalized["target_ref"] = normalized.get("target_name")
+    return normalized
+
+
+def _normalize_doc_type(value: Any) -> str:
+    text = str(value or "setting").strip().lower()
+    aliases = {
+        "世界观": "worldview",
+        "world": "worldview",
+        "worldview": "worldview",
+        "修炼体系": "power_system",
+        "力量体系": "power_system",
+        "境界体系": "power_system",
+        "power": "power_system",
+        "power_system": "power_system",
+        "剧情": "plot",
+        "情节": "plot",
+        "plot": "plot",
+        "核心冲突": "core_conflict",
+        "冲突": "core_conflict",
+        "core_conflict": "core_conflict",
+        "人物": "character_profile",
+        "角色": "character_profile",
+        "character": "character_profile",
+        "character_profile": "character_profile",
+        "设定": "setting",
+        "setting": "setting",
+    }
+    return aliases.get(text, text or "setting")
+
+
+def _normalize_source_doc_ids(value: Any) -> list[str]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    doc_ids: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("id") or item.get("doc_id")
+        text = str(item or "").strip()
+        if text and text not in doc_ids:
+            doc_ids.append(text)
+    return doc_ids
+
+
+def _normalize_conflict_hints(value: Any) -> list[dict[str, Any]]:
+    if value is None or value == "":
+        return []
+    if isinstance(value, str):
+        return [{"type": "llm_note", "message": value.strip()}] if value.strip() else []
+    if isinstance(value, dict):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    hints: list[dict[str, Any]] = []
+    for item in value:
+        if isinstance(item, dict):
+            if "message" not in item and item.get("content"):
+                item = {**item, "message": item.get("content")}
+            hints.append(item)
+        elif isinstance(item, str) and item.strip():
+            hints.append({"type": "llm_note", "message": item.strip()})
+    return hints
+
+
+register_structured_normalizer(
+    "SettingWorkbenchService",
+    "setting_workbench_clarify",
+    normalize_setting_clarification_payload,
+)
+register_structured_normalizer(
+    "SettingWorkbenchService",
+    "setting_workbench_generate_batch",
+    normalize_setting_batch_payload,
+)

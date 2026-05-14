@@ -1,0 +1,65 @@
+# Test Run longform-vol1-resume-c374-20260512182600-quality-summary
+
+- Entrypoint: `novel-dev-testing quality-summary`
+- Status: `passed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real`
+- Duration: `0.0s`
+
+## Artifacts
+
+- `novel_id`: `codex-c374`
+- `chapter_count`: `30`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `67`
+- `target_volume_word_count`: `111689`
+- `chapter_target_word_count`: `1667`
+- `generated_chapter_count`: `30`
+- `generated_word_count`: `2075`
+- `source_material_count`: `4`
+- `source_material_approved_count`: `0`
+- `source_material_char_count`: `4756898`
+
+## Details
+
+### LONGFORM-SCALE-DETAIL-001
+
+- Stage: `longform_scale`
+- Title: 长篇目标规模与资料导入统计
+- Evidence: generated_chapter_count=30, generated_word_count=2075, source_material_count=4, source_material_approved_count=0, source_material_char_count=4756898, target_volumes=18, target_chapters=1200, target_word_count=2000000, target_volume_number=1, target_volume_chapters=67, target_volume_word_count=111689, chapter_target_word_count=1667
+- Recommendation: none
+
+### SETTING-QUALITY-DETAIL-002
+
+- Stage: `setting_generation`
+- Title: 世界观与设定质量详情
+- Evidence: review_batch_status=pending, review_batch_summary=整合了人物设定、物品设定、修炼体系、势力格局、地点设定、剧情梗概、世界观等7份文档及实体关系数据。主要整合内容：1）合并了'主角（未命名）'与'陆照'为同一人物（存在冲突需resolve）；2）合并了'高原（完美世界）'实体的别名与描述；3）整合了'道经'、'轮回空间'等物品的多来源描述；4）整合了修炼体系、势力格局、地点设定中的重复信息；5）整合了世界观文档与地点设定中的地理层级信息；6）整合了剧情梗概中的成长路径信息。
+- Recommendation: none
+
+### SYNOPSIS-QUALITY-DETAIL-003
+
+- Stage: `brainstorm`
+- Title: 总纲质量详情
+- Evidence: passed=True, structure_score=85, marketability_score=85, conflict_score=85, character_arc_score=85, writability_score=85, core_conflict=陆照 vs 魔佛一脉与九幽邪神关于末劫主导权与道果传承之争
+- Recommendation: none
+
+### VOLUME-QUALITY-DETAIL-004
+
+- Stage: `volume_plan`
+- Title: 卷纲与跨阶段承接质量详情
+- Evidence: passed=True, chapters[0]={'chapter_id': 'vol_1_ch_1', 'chapter_number': 1, 'title': '林家有恨', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[1]={'chapter_id': 'vol_1_ch_2', 'chapter_number': 2, 'title': '签到初临', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[2]={'chapter_id': 'vol_1_ch_3', 'chapter_number': 3, 'title': '道经天降', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[3]={'chapter_id': 'vol_1_ch_4', 'chapter_number': 4, 'title': '双法并行', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[4]={'chapter_id': 'vol_1_ch_5', 'chapter_number': 5, 'title': '同门之交', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[5]={'chapter_id': 'vol_1_ch_6', 'chapter_number': 6, 'title': '血煞暗涌', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[6]={'chapter_id': 'vol_1_ch_7', 'chapter_number': 7, 'title': '试探暗子', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[7]={'chapter_id': 'vol_1_ch_8', 'chapter_number': 8, 'title': '系统卡顿', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[8]={'chapter_id': 'vol_1_ch_9', 'chapter_number': 9, 'title': '三年悬案', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[9]={'chapter_id': 'vol_1_ch_10', 'chapter_number': 10, 'title': '外门大比将近', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[10]={'chapter_id': 'vol_1_ch_11', 'chapter_number': 11, 'title': '暗中布局', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[11]={'chapter_id': 'vol_1_ch_12', 'chapter_number': 12, 'title': '道经初悟', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[12]={'chapter_id': 'vol_1_ch_13', 'chapter_number': 13, 'title': '血煞迷魂术', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[13]={'chapter_id': 'vol_1_ch_14', 'chapter_number': 14, 'title': '大比开幕', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[14]={'chapter_id': 'vol_1_ch_15', 'chapter_number': 15, 'title': '暗子现身', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[15]={'chapter_id': 'vol_1_ch_16', 'chapter_number': 16, 'title': '道经破煞', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[16]={'chapter_id': 'vol_1_ch_17', 'chapter_number': 17, 'title': '揭穿身份', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[17]={'chapter_id': 'vol_1_ch_18', 'chapter_number': 18, 'title': '长老问讯', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[18]={'chapter_id': 'vol_1_ch_19', 'chapter_number': 19, 'title': '暗子遗物', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[19]={'chapter_id': 'vol_1_ch_20', 'chapter_number': 20, 'title': '令符之谜', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[20]={'chapter_id': 'vol_1_ch_21', 'chapter_number': 21, 'title': '印记真相', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[21]={'chapter_id': 'vol_1_ch_22', 'chapter_number': 22, 'title': '血仇再灼', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加悬念、反转、追兵逼近、秘密暴露或赌注升级。'], 'weak_beats': []}}, chapters[22]={'chapter_id': 'vol_1_ch_23', 'chapter_number': 23, 'title': '李大牛之疑', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[23]={'chapter_id': 'vol_1_ch_24', 'chapter_number': 24, 'title': '玄火盟线索', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[24]={'chapter_id': 'vol_1_ch_25', 'chapter_number': 25, 'title': '内门邀请', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[25]={'chapter_id': 'vol_1_ch_26', 'chapter_number': 26, 'title': '道经再悟', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}, chapters[26]={'chapter_id': 'vol_1_ch_27', 'chapter_number': 27, 'title': '风雨欲来', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}
+- Recommendation: none
+
+### CHAPTER-QUALITY-DETAIL-005
+
+- Stage: `chapter_final_review`
+- Title: 章节具体质量评价
+- Evidence: chapter_id=vol_1_ch_1, quality_status=warn, final_review_score=72, overall=72, summary=三条最影响读感的问题：一、AI腔模板化描写密集——'灼目血色''血液骤凝''瞳孔骤缩''后颈汗毛倒竖'等抽象词汇和连续比喻（第2段五处比喻堆叠）严重削弱了场景的真实感和沉浸感，读者会被'套路化'的表达拉出故事。建议将抽象描写替换为具体感官锚点（气味、温度、触感），比喻收束为每段最多两处。二、章末钩子偏弱——系统激活后暗纹没入腕骨本可制造强悬念，但被'痒。转瞬即逝'轻描淡写带过，结尾情绪回落到起点。建议强化暗纹的物理存在感（擦不掉、在皮下蠕动、传来异样脉搏），让读者对下一章产生迫切期待。三、人物内心戏偏总结式推理——系统激活段落的'签，与虎谋皮'是作者替人物做逻辑推演，而非人物在场景中的即时感受。建议用碎片化画面和身体反应代替完整推理链，让读者通过人物的动作和感官去理解其选择。, plot_tension=78, characterization=80, readability=72, consistency=85, humanity=68, hook_strength=65, readability.beat=0.problem=第0段出现多处模板化抽象描写：'灼目血色''翻涌恨意''眼底沉着与年龄不符的阴郁'，属于AI腔常见词汇堆砌，缺乏具体感官锚点。, readability.beat=1.problem=第1段'血液骤凝''瞳孔骤缩''后颈汗毛倒竖'连续三个模板化身体反应描写，属于AI腔典型表达。, readability.beat=2.problem=第2段比喻密度过高：'像道结痂的伤口''边缘符文流转如活物呼吸''墨汁渗入清水未散的尾迹''藤蔓攀树，寄生虫钻脉''砂纸磨过朽木'，连续五处比喻堆叠，削弱了关键场景的冲击力。, humanity.beat=2.problem=系统激活段落的心理描写偏总结式——'签，与虎谋皮。可不签，这鬼东西既能找上门，未必不能找赵奎、找赵执事'，是作者替人物做推理，而非人物在场景中的即时感受。, humanity.beat=2.problem=章末'低笑出声，砂纸磨过朽木'是典型的AI腔比喻式描写，人物情绪被抽象化而非通过动作显示。, hook_strength.beat=2.problem=章末收束平淡——陆照'重新躺下，棉被拉至下颌，姿势与噩梦惊醒时一模一样'，情绪回落到起点，缺乏强悬念或赌注升级。系统激活后的'暗纹没入腕骨'本可做钩子，但被'痒。转瞬即逝'轻描淡写带过。, consistency.whole_chapter.problem=active_entities中陆照的核心身份是'道经传承者'，但本章完全未提及道经或任何与道经相关的修炼内容（如'道经特殊能力：在不同境界提前获得高阶特征'），导致人物设定与正文出现断裂。, editor_guard_warnings_count=4, editor_guard.beat=0.issues=["润色后新增了'经脉深处忽然一滞——那里有股沉钝的异物感，不属于炼气五层该有的东西，像冬眠的蛇，盘着，不动，他却不敢惊动它。三年前那场火之后就有了。他试过催动，气海便翻涌欲裂，只得作罢。道经传承，高阶特征的雏形，也是催命的符。'这段内容属于章节计划外的全新事实（体内异物、道经传承、高阶特征），在原作中完全不存在，且属于后续可能展开的重要设定/伏笔，违反了规则1。", "润色后新增了'门缝下，似乎有片纸角，先前出门时绝对没有。他盯着那片白，肩上的柴捆往下滑了半寸。放下柴去看，还是先去送柴？身后传来巡夜弟子的脚步声，灯笼光晕正漫过拐角。'这段内容提前引入了新的危险信号/悬念（神秘纸条、巡夜弟子逼近），将原本应在beat结尾或后续beat才出现的'新的危险信号'提前呈现，且'纸条'属于章节计划外的新线索，违反了规则1和规则3。", "润色后删除了原作中'数到第七下呼吸，指尖终于不再颤抖'和'眉眼清俊，眼底沉着与年龄不符的阴郁'等人物细节描写，虽然允许删减冗余，但结合新增内容，整体已改变叙事重心。", "润色后将'火光。惨叫。梁柱坍塌的轰鸣。'扩展为更详细的血腥场景描写（血滴、焦糊味、耳膜刺痛等），虽然属于表达层面的扩充，但配合新增剧情内容，已超出'只改表达'的范畴。"], editor_guard.beat=0.issues=["润色后新增了章节计划外事实：陆照体内'有团东西盘在那里，沉钝、陌生，不属于炼气五层该有的滞碍'，这是计划外的新设定（火后留下的经脉异常），原文没有，也不属于beat 0应有的内容。", "润色后提前写了后续beat的核心事件：在beat 0中提前写入了'将一缕气机沉入经脉——林家祖传的炼气法'的修炼场景，这属于beat 1（劈柴默运炼气法）的核心事件，提前到了beat 0中。", "润色后新增了章节计划外事实：赵奎额外增加了'西院那堆柴今日要劈完'的台词和任务，这是新增的情节推动。", "润色后新增了章节计划外事实：结尾处新增'远处传来一声鸦啼'和'竹林中叶声如涛，侧耳听了片刻'的悬疑场景，这是新增的'危险信号'，但方式与计划不符。"], editor_guard.beat=1.issues=["润色后新增'真气走到一半便散了，经脉深处隐有异动，像蛰伏着什么不该属于炼气期的东西——他不敢追索'这一设定，属于章节计划外的全新事实，原稿中仅提到'气行周天，任督交汇处滞涩如泥。炼气五层的壁障纹丝不动'，是正常炼气五层瓶颈，润色后引入了经脉中有异常潜伏物的新线索/伏笔，违反规则1。", "润色后新增'门扇合拢前，苍老声音漏出半句：……林家的东西，处理干净'这一台词，原稿中此处无此台词，属于新增计划外台词，且引入了'林家的东西'这一新线索/事实，违反规则1。", "润色后删除了原稿中'陆照血液骤凝'的描写，改为'后颈汗毛倒竖'，虽为表达改动，但结合其他新增内容，整体已超出仅改表达的范畴。"], editor_guard.beat=1.issues=["润色后新增了章节计划外的事实：'偶有几次，他隐约觉出经脉深处有什么在应和吐纳，沉钝、陌生，像是沉睡的兽。他立刻掐断感知——不敢追，更不能让人知。' 这段内容引入了经脉深处沉睡力量的新线索/伏笔，属于章节计划外的新增事实，违反了规则1。"], quality_gate.final_review_score=成稿评分偏低: 72
+- Recommendation: readability.beat=0.suggestion=将'灼目血色'改为具体画面（如'血从梁上滴落，在青砖上炸开一朵暗红'），将'翻涌恨意'改为身体反应（如'胃里翻出一股酸苦'），将'眼底沉着与年龄不符的阴郁'改为一个具体动作（如'他盯着水面，直到波纹平了才移开眼'）。, readability.beat=1.suggestion=只保留最有辨识度的一个身体反应（如'后颈汗毛倒竖'），其余两个改为具体动作（如'他停住呼吸，指节在柴捆上收紧'）。, readability.beat=2.suggestion=收束为两处比喻：系统界面保留'边缘符文流转如活物呼吸'（最有辨识度），暗纹保留'墨汁渗入清水未散的尾迹'（最贴合场景），其余三处删除或改为直接描写。, humanity.beat=2.suggestion=改为陆照在场景中的即时身体反应和碎片化念头，例如：指尖悬在'是'上方时，他想起的是赵奎那张脸、赵执事那句'炼气五层的废物'，而不是完整的利弊推理。用具体画面代替逻辑推演。, humanity.beat=2.suggestion=改为一个具体动作显示情绪，例如：'他盯着掌心那枚丹药，嘴角扯了一下——不是笑，是嘴角肌肉不受控制地抽搐。', hook_strength.beat=2.suggestion=强化暗纹没入腕骨的细节：改为陆照看到暗纹没入后，腕骨内侧浮现一道极淡的灰色纹路，他试图擦掉却擦不掉，且纹路在皮肤下微微蠕动。结尾改为他躺下后，腕骨处传来一阵不属于自己的脉搏跳动——系统在'活'。这样既有身体悬念又有赌注升级。, consistency.whole_chapter.suggestion=在BEAT1劈柴段落中插入一句暗示：陆照运功时感受到体内有一股不属于炼气期的'异常'在经脉深处蛰伏（呼应道经赋予的高阶特征雏形），但他不敢动用，怕暴露身份。这样既呼应设定又不破坏当前隐忍基调。, editor_guard.beat=0.focus=移除体内异物/道经传承的设定植入，移除门缝纸条和巡夜弟子的新悬念，将beat结尾恢复为与原作一致的状态（赵奎挑衅后陆照隐忍离开即可），仅保留对噩梦场景和人物情绪的表达层面的润色。, editor_guard.beat=0.focus=删除体内'火后留下的滞碍'这一全新设定；将林家祖传炼气法的修炼场景移回beat 1；删除赵奎新增的劈柴任务台词；beat 0结尾的危险信号应更简洁，不要新增过多环境描写和悬疑铺垫。, editor_guard.beat=1.focus=删除经脉异动的新设定，恢复为原稿中炼气五层正常瓶颈的描写；删除苍老声音新增的'林家的东西，处理干净'台词，恢复为原稿中未明确台词的处理方式。仅允许在保留原剧情结构的前提下改善文风、删减冗余。, editor_guard.beat=1.focus=删除新增的经脉深处沉睡力量的描写，保持原文仅围绕炼气五层壁障和杂役房灵气稀薄的设定。
+
+## Issues
+
+No issues recorded.

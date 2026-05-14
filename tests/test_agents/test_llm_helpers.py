@@ -657,6 +657,47 @@ async def test_call_and_parse_model_uses_registered_normalizer_before_retry():
 
 
 @pytest.mark.asyncio
+async def test_call_and_parse_model_uses_setting_workbench_field_drift_normalizer():
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    mock_client = AsyncMock()
+    mock_client.config = TaskConfig(provider="anthropic", model="test-model")
+    mock_client.acomplete.return_value = LLMResponse(
+        text="",
+        structured_payload={
+            "result": {
+                "summary": "漂移结构",
+                "cards": [
+                    {
+                        "action": "新增",
+                        "doc_type": "世界观",
+                        "标题": "北境",
+                        "正文": "北境由雪庭统治。",
+                    }
+                ],
+            }
+        },
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await call_and_parse_model(
+            "SettingWorkbenchService",
+            "setting_workbench_generate_batch",
+            "prompt",
+            SettingBatchDraft,
+            max_retries=3,
+            novel_id="novel-setting-normalize",
+        )
+
+    assert result.summary == "漂移结构"
+    assert result.changes[0].target_type == "setting_card"
+    assert result.changes[0].after_snapshot["doc_type"] == "worldview"
+    assert result.changes[0].after_snapshot["title"] == "北境"
+    assert any(entry.get("node") == "llm_normalize" for entry in LogService._buffers["novel-setting-normalize"])
+
+
+@pytest.mark.asyncio
 async def test_call_and_parse_model_retries_with_json_repair_prompt():
     broken_json = '{"title": "诸天执道者", "tags": ["围绕"自由意志"展开"]}'
     fixed_json = '{"title": "诸天执道者", "tags": ["围绕自由意志展开"]}'
@@ -960,6 +1001,32 @@ async def test_waiting_llm_response_stops_when_cancel_requested():
 
     with pytest.raises(FlowCancelledError):
         await asyncio.wait_for(wait_task, timeout=0.2)
+    assert cancelled is True
+
+
+@pytest.mark.asyncio
+async def test_waiting_llm_response_times_out():
+    cancelled = False
+
+    async def never_returns():
+        nonlocal cancelled
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        await _await_llm_response_with_progress(
+            never_returns(),
+            novel_id="novel-timeout",
+            agent_name="TestAgent",
+            task="test_task",
+            attempt_metadata={},
+            started_at=time.perf_counter(),
+            interval_seconds=0.01,
+            max_wait_seconds=0.03,
+        )
     assert cancelled is True
 
 

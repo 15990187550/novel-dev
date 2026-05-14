@@ -33,6 +33,8 @@ class ChapterStructureGuardResult(BaseModel):
 
 
 class ChapterStructureGuardService:
+    EDITOR_GUARD_TIMEOUT_SECONDS = 30
+
     async def check_writer_beat(
         self,
         *,
@@ -89,14 +91,26 @@ class ChapterStructureGuardService:
             f"### 润色前\n{source_text[:4000]}\n\n"
             f"### 润色后\n{polished_text[:4000]}"
         )
-        return await call_and_parse_model(
-            "ChapterStructureGuardService",
-            "check_editor_beat",
-            prompt,
-            ChapterStructureGuardResult,
-            max_retries=1,
-            novel_id=novel_id,
-        )
+        try:
+            return await call_and_parse_model(
+                "ChapterStructureGuardService",
+                "check_editor_beat",
+                prompt,
+                ChapterStructureGuardResult,
+                max_retries=1,
+                novel_id=novel_id,
+                max_wait_seconds=self.EDITOR_GUARD_TIMEOUT_SECONDS,
+            )
+        except Exception:
+            return ChapterStructureGuardResult(
+                passed=False,
+                completed_current_beat=True,
+                premature_future_beat=False,
+                introduced_plan_external_fact=True,
+                changed_event_order=False,
+                issues=["结构守卫超时或失败，保守回退原文"],
+                suggested_rewrite_focus="保留润色前文本，避免结构漂移",
+            )
 
 
 def _to_jsonable(value: Any) -> Any:

@@ -2739,6 +2739,77 @@ async def test_generate_review_batch_rolls_back_when_change_persistence_fails(
     assert "change persistence failed" in messages[-1].content
 
 
+async def test_generate_review_batch_repairs_business_validation_failure(
+    async_session,
+    monkeypatch,
+):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchChangeDraft, SettingBatchDraft
+
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="novel-ai-business-repair",
+        title="关系生成修复",
+        initial_idea="陆照持有道种，但实体还没建立。",
+        target_categories=["关系"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+    prompts: list[str] = []
+
+    async def fake_call_generation_model(**kwargs):
+        prompts.append(kwargs["prompt"])
+        if len(prompts) == 1:
+            return SettingBatchDraft.model_construct(
+                summary="错误关系草稿",
+                changes=[
+                    SettingBatchChangeDraft.model_construct(
+                        target_type="relationship",
+                        operation="create",
+                        after_snapshot={
+                            "source_ref": "陆照",
+                            "target_ref": "道种",
+                            "relation_type": "持有",
+                        },
+                        conflict_hints=[],
+                    )
+                ],
+            )
+        assert "上一次输出未通过业务校验" in kwargs["prompt"]
+        assert "relationship create" in kwargs["prompt"]
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "改为待审核设定说明",
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": "陆照与道种关系待确认",
+                            "content": "陆照可能持有道种；由于实体 ID 尚未确认，关系暂以设定说明进入审核。",
+                        },
+                        "conflict_hints": [
+                            {"type": "missing_entity_id", "message": "待确认陆照和道种实体后再建立正式关系。"}
+                        ],
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(service, "_call_generation_model", fake_call_generation_model)
+
+    batch = await service.generate_review_batch(
+        novel_id="novel-ai-business-repair",
+        session_id=session.id,
+    )
+
+    changes = await service.repo.list_review_changes(batch.id)
+    assert len(prompts) == 2
+    assert batch.summary == "改为待审核设定说明"
+    assert [change.target_type for change in changes] == ["setting_card"]
+    assert changes[0].after_snapshot["title"] == "陆照与道种关系待确认"
+    assert (await service.repo.get_session(session.id)).status == "generated"
+
+
 async def test_setting_batch_draft_rejects_relationship_create_without_entity_ids():
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 

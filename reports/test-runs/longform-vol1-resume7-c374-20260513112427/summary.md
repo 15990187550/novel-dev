@@ -1,0 +1,92 @@
+# Test Run longform-vol1-resume7-c374-20260513112427
+
+- Entrypoint: `scripts/verify_generation_real.sh`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real_then_fake_on_external_block`
+- Duration: `1274.1s`
+
+## Artifacts
+
+- `fixture_title`: `Codex 最小生成验收`
+- `contract_scope`: `real-longform-volume1`
+- `acceptance_scope`: `real-longform-volume1`
+- `resume_novel_id`: `codex-c374`
+- `resume_from_stage`: `auto_run_chapters`
+- `resume_reset_current_chapter`: `true`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `67`
+- `chapter_target_word_count`: `1667`
+- `target_volume_word_count`: `111689`
+- `source_dir`: `/Users/xuhuibin/Desktop/novel`
+- `source_material_count`: `4`
+- `source_material_char_count`: `4756898`
+- `source_material_byte_count`: `14150138`
+- `source_materials_json`: `[{"filename": "《一世之尊》-+爱潜水的乌贼.txt", "path": "/Users/xuhuibin/Desktop/novel/《一世之尊》-+爱潜水的乌贼.txt", "status": "discovered", "char_count": 4739301, "byte_count": 14110044}, {"filename": "世界观.md", "path": "/Users/xuhuibin/Desktop/novel/世界观.md", "status": "discovered", "char_count": 3523, "byte_count": 7678}, {"filename": "力量体系.md", "path": "/Users/xuhuibin/Desktop/novel/力量体系.md", "status": "discovered", "char_count": 6020, "byte_count": 14312}, {"filename": "诸天万界.md", "path": "/Users/xuhuibin/Desktop/novel/诸天万界.md", "status": "discovered", "char_count": 8054, "byte_count": 18104}]`
+- `novel_id`: `codex-c374`
+- `resume_current_phase`: `context_preparation`
+- `volume_id`: `vol_1`
+- `chapter_id`: `vol_1_ch_8`
+- `resume_reset_chapter_id`: `vol_1_ch_8`
+- `create_novel_status`: `skipped_for_resume`
+- `create_setting_session_status`: `skipped_for_resume`
+- `advance_setting_session_status`: `skipped_for_resume`
+- `generate_setting_review_batch_status`: `skipped_for_resume`
+- `apply_generated_settings_status`: `skipped_for_resume`
+- `upload_source_materials_status`: `skipped_for_resume`
+- `approve_source_materials_status`: `skipped_for_resume`
+- `consolidate_settings_status`: `skipped_for_resume`
+- `apply_consolidated_settings_status`: `skipped_for_resume`
+- `brainstorm_status`: `skipped_for_resume`
+- `volume_plan_status`: `skipped_for_resume`
+- `chapter_auto_run_job_id`: `job_0ddbd996502b`
+- `chapter_job_stopped_reason`: `quality_blocked`
+- `chapter_text_status`: `polished_text`
+- `chapter_text_length`: `2371`
+- `quality_status`: `block`
+- `quality_reasons`: `blocking_items,status,summary,warning_items`
+- `archived_chapter_count`: `7`
+- `total_word_count`: `15751`
+- `generation_snapshot_json`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-resume7-c374-20260513112427/artifacts/generation_snapshot.json`
+- `quality_summary_json`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-resume7-c374-20260513112427/quality-summary/summary.json`
+- `quality_summary_md`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-resume7-c374-20260513112427/quality-summary/summary.md`
+- `quality_summary_status`: `failed`
+- `quality_summary_run_id`: `longform-vol1-resume7-c374-20260513112427-quality-summary`
+
+## Issues
+
+### SYSTEM_BUG-auto_run_chapters_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `auto_run_chapters_contract`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: longform volume generation archived fewer chapters than requested
+- Evidence: requested_chapters=67, completed_chapter_count=0, archived_chapter_count=7, job_id=job_0ddbd996502b
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage auto_run_chapters`
+
+### SYSTEM_BUG-export_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `export_contract`
+- External blocker: `False`
+- Real LLM: `False`
+- Fake rerun status: `None`
+- Message: Exported novel file missing: exported_path not returned
+- Evidence: archived_chapter_count=7
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export`
+
+### CHAPTER-QUALITY-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `chapter_final_review`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 章节质量门禁阻断或成稿评分过低。
+- Evidence: chapter_id=vol_1_ch_8, quality_status=block, final_review_score=72, status=block, blocking_items[0]={'code': 'beat_cohesion', 'message': '节拍之间缺少连续承接', 'detail': ['精修文本BEAT1末尾与BEAT2开头完全重复，节拍衔接断裂，应删除重复段', 'BEAT0新增巷口外门弟子反应和掐指出血细节，但未与后文呼应，显得冗余', '精修文本整体节奏被重复和冗余细节拖慢，应精简至原始草稿的紧凑感']}, warning_items[0]={'code': 'final_review_score', 'message': '成稿评分偏低: 72'}, warning_items[1]={'code': 'required_payoff', 'message': '章节计划要求的线索或章末钩子未充分兑现', 'detail': {'missing': ['陆照必须在继续追查与保全自身之间做出选择，阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号']}}, summary=存在阻断级质量问题，停止归档和世界状态入库。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

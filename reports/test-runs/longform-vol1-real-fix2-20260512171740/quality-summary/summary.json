@@ -1,0 +1,149 @@
+{
+  "run_id": "longform-vol1-real-fix2-20260512171740-quality-summary",
+  "entrypoint": "novel-dev-testing quality-summary",
+  "status": "failed",
+  "duration_seconds": 0.0,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real",
+  "environment": {},
+  "artifacts": {
+    "novel_id": "codex-c374",
+    "chapter_count": "30",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "target_volume_word_count": "111689",
+    "chapter_target_word_count": "1667",
+    "generated_chapter_count": "30",
+    "generated_word_count": "5410",
+    "source_material_count": "4",
+    "source_material_approved_count": "4",
+    "source_material_char_count": "4756898"
+  },
+  "details": [
+    {
+      "id": "LONGFORM-SCALE-DETAIL-001",
+      "stage": "longform_scale",
+      "title": "长篇目标规模与资料导入统计",
+      "evidence": [
+        "generated_chapter_count=30",
+        "generated_word_count=5410",
+        "source_material_count=4",
+        "source_material_approved_count=4",
+        "source_material_char_count=4756898",
+        "target_volumes=18",
+        "target_chapters=1200",
+        "target_word_count=2000000",
+        "target_volume_number=1",
+        "target_volume_chapters=67",
+        "target_volume_word_count=111689",
+        "chapter_target_word_count=1667"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "SETTING-QUALITY-DETAIL-002",
+      "stage": "setting_generation",
+      "title": "世界观与设定质量详情",
+      "evidence": [
+        "passed=True",
+        "review_batch_status=partially_approved",
+        "review_batch_summary=东方玄幻短篇测试小说全量设定生成——基于用户确认信息（青云宗、主角林照、对立势力玄火盟/血海殿、第一章目标方向）配合保守假设（炼气→筑基→金丹→元婴体系；玄火盟为表面主谋、血海殿为幕后黑手；第一章目标为藏经阁发现家族残卷并存活）"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "SYNOPSIS-QUALITY-DETAIL-003",
+      "stage": "brainstorm",
+      "title": "总纲质量详情",
+      "evidence": [
+        "passed=True",
+        "structure_score=85",
+        "marketability_score=85",
+        "conflict_score=85",
+        "character_arc_score=85",
+        "writability_score=85",
+        "core_conflict=陆照 vs 魔佛一脉与九幽邪神关于末劫主导权与道果传承之争"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "VOLUME-QUALITY-DETAIL-004",
+      "stage": "volume_plan",
+      "title": "卷纲与跨阶段承接质量详情",
+      "evidence": [
+        "passed=True",
+        "chapters[0]={'chapter_id': 'vol_1_ch_1', 'chapter_number': 1, 'title': '林家有恨', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[1]={'chapter_id': 'vol_1_ch_2', 'chapter_number': 2, 'title': '签到初临', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[2]={'chapter_id': 'vol_1_ch_3', 'chapter_number': 3, 'title': '道经天降', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[3]={'chapter_id': 'vol_1_ch_4', 'chapter_number': 4, 'title': '双法并行', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[4]={'chapter_id': 'vol_1_ch_5', 'chapter_number': 5, 'title': '同门之交', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[5]={'chapter_id': 'vol_1_ch_6', 'chapter_number': 6, 'title': '血煞暗涌', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[6]={'chapter_id': 'vol_1_ch_7', 'chapter_number': 7, 'title': '试探暗子', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[7]={'chapter_id': 'vol_1_ch_8', 'chapter_number': 8, 'title': '系统卡顿', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[8]={'chapter_id': 'vol_1_ch_9', 'chapter_number': 9, 'title': '三年悬案', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[9]={'chapter_id': 'vol_1_ch_10', 'chapter_number': 10, 'title': '外门大比将近', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[10]={'chapter_id': 'vol_1_ch_11', 'chapter_number': 11, 'title': '暗中布局', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[11]={'chapter_id': 'vol_1_ch_12', 'chapter_number': 12, 'title': '道经初悟', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[12]={'chapter_id': 'vol_1_ch_13', 'chapter_number': 13, 'title': '血煞迷魂术', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[13]={'chapter_id': 'vol_1_ch_14', 'chapter_number': 14, 'title': '大比开幕', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[14]={'chapter_id': 'vol_1_ch_15', 'chapter_number': 15, 'title': '暗子现身', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[15]={'chapter_id': 'vol_1_ch_16', 'chapter_number': 16, 'title': '道经破煞', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[16]={'chapter_id': 'vol_1_ch_17', 'chapter_number': 17, 'title': '揭穿身份', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[17]={'chapter_id': 'vol_1_ch_18', 'chapter_number': 18, 'title': '长老问讯', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[18]={'chapter_id': 'vol_1_ch_19', 'chapter_number': 19, 'title': '暗子遗物', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[19]={'chapter_id': 'vol_1_ch_20', 'chapter_number': 20, 'title': '令符之谜', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[20]={'chapter_id': 'vol_1_ch_21', 'chapter_number': 21, 'title': '印记真相', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[21]={'chapter_id': 'vol_1_ch_22', 'chapter_number': 22, 'title': '血仇再灼', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加悬念、反转、追兵逼近、秘密暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[22]={'chapter_id': 'vol_1_ch_23', 'chapter_number': 23, 'title': '李大牛之疑', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[23]={'chapter_id': 'vol_1_ch_24', 'chapter_number': 24, 'title': '玄火盟线索', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[24]={'chapter_id': 'vol_1_ch_25', 'chapter_number': 25, 'title': '内门邀请', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[25]={'chapter_id': 'vol_1_ch_26', 'chapter_number': 26, 'title': '道经再悟', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[26]={'chapter_id': 'vol_1_ch_27', 'chapter_number': 27, 'title': '风雨欲来', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "CHAPTER-QUALITY-DETAIL-005",
+      "stage": "chapter_final_review",
+      "title": "章节具体质量评价",
+      "evidence": [
+        "chapter_id=vol_1_ch_1",
+        "quality_status=block",
+        "final_review_score=72",
+        "editor_guard_warnings_count=0",
+        "quality_gate.word_count_drift=字数严重偏离目标",
+        "quality_gate.final_review_score=成稿评分偏低: 72"
+      ],
+      "recommendation": []
+    }
+  ],
+  "issues": [
+    {
+      "id": "CHAPTER-TARGET-MISMATCH-001",
+      "type": "GENERATION_QUALITY",
+      "severity": "high",
+      "stage": "chapter_final_review",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "章节质量目标字数来源不一致，质量报告可能存在误判。",
+      "evidence": [
+        "chapter_id=vol_1_ch_1",
+        "quality_status=block",
+        "final_review_score=72",
+        "root_cause=checkpoint_target_mismatch",
+        "current_chapter_plan.target_word_count=2500",
+        "chapter_context.chapter_plan.target_word_count=2500",
+        "quality_gate.target_word_count=3000",
+        "status=block",
+        "blocking_items[0]={'code': 'word_count_drift', 'message': '字数严重偏离目标', 'detail': {'target_word_count': 3000, 'polished_word_count': 5410}}",
+        "warning_items[0]={'code': 'final_review_score', 'message': '成稿评分偏低: 72'}",
+        "summary=存在阻断级质量问题，停止归档和世界状态入库。"
+      ],
+      "reproduce": "novel-dev-testing quality-summary --input-json <snapshot.json>"
+    }
+  ]
+}

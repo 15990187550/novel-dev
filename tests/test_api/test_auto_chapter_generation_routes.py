@@ -1496,6 +1496,50 @@ async def test_auto_run_continues_from_drafting_phase(async_session):
     assert chapter.polished_text
 
 
+@pytest.mark.asyncio
+async def test_auto_run_does_not_stop_on_repairable_quality_gate_block(async_session, monkeypatch):
+    plan = build_test_volume("vol_repairable_block", "ch_repairable_block", count=1)
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_repairable_block",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "quality_gate_repair_attempt_count": 1,
+            "final_polish_issues": {
+                "source": "final_review",
+                "summary_feedback": "读感问题仍可修。",
+            },
+        },
+        volume_id="vol_repairable_block",
+        chapter_id="ch_repairable_block_1",
+    )
+    await ChapterRepository(async_session).ensure_from_plan(
+        "n_auto_repairable_block",
+        "vol_repairable_block",
+        plan.chapters[0],
+    )
+    chapter = await ChapterRepository(async_session).get_by_id("ch_repairable_block_1")
+    chapter.quality_status = "block"
+    chapter.quality_reasons = {
+        "status": "block",
+        "blocking_items": [{"code": "beat_cohesion", "message": "连贯性不足"}],
+    }
+    await async_session.commit()
+
+    async def fake_run_current_chapter(self, novel_id):
+        return "ch_repairable_block_1"
+
+    monkeypatch.setattr(ChapterGenerationService, "_run_current_chapter", fake_run_current_chapter)
+
+    service = ChapterGenerationService(async_session)
+    result = await service.auto_run("n_auto_repairable_block", max_chapters=1)
+
+    assert result.stopped_reason == "max_chapters_reached"
+    assert result.completed_chapters == ["ch_repairable_block_1"]
+
+
 def test_auto_run_uses_embedding_service_like_manual_routes(async_session, monkeypatch):
     class DummyEmbedder:
         pass

@@ -53,7 +53,7 @@ class WriterAgent:
             raise ValueError("chapter_context missing in checkpoint_data")
 
         progress = checkpoint.get("drafting_progress", {})
-        start_idx = progress.get("beat_index", 0)
+        start_idx = max(0, int(progress.get("beat_index", 0) or 0))
         rewrite_plan = checkpoint.get("draft_rewrite_plan") or {}
         if rewrite_plan:
             log_service.add_log(
@@ -80,14 +80,17 @@ class WriterAgent:
         relay_history: List[NarrativeRelay] = []
         inner_beats: List[str] = []
 
-        if start_idx > 0:
-            log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
         # Resume from checkpoint if previous run was interrupted
         if start_idx > 0:
+            relay_history_invalid = False
             if checkpoint.get("relay_history"):
-                relay_history = [
-                    NarrativeRelay(**r) for r in checkpoint["relay_history"]
-                ]
+                try:
+                    relay_history = [
+                        NarrativeRelay(**r) for r in checkpoint["relay_history"]
+                    ]
+                except Exception:
+                    relay_history_invalid = True
+                    relay_history = []
             ch = await self.chapter_repo.get_by_id(chapter_id)
             if ch and ch.raw_draft:
                 raw_draft = ch.raw_draft
@@ -102,6 +105,38 @@ class WriterAgent:
                     for fs in context.pending_foreshadowings:
                         if fs.content in inner and fs.id not in embedded_foreshadowings:
                             embedded_foreshadowings.append(fs.id)
+            available_anchor_count = len([inner for inner in inner_beats if inner])
+            resume_invalid = (
+                start_idx > total_beats
+                or (start_idx == total_beats and not raw_draft.strip())
+                or (available_anchor_count and start_idx > available_anchor_count)
+                or relay_history_invalid
+            )
+            if resume_invalid:
+                log_service.add_log(
+                    novel_id,
+                    "WriterAgent",
+                    "检测到越界或脏恢复点，重置当前章写作进度后重新生成",
+                    level="warning",
+                    event="agent.resume_reset",
+                    status="recovered",
+                    node="draft_resume",
+                    task="write",
+                    metadata={
+                        "requested_beat_index": start_idx,
+                        "total_beats": total_beats,
+                        "available_anchor_count": available_anchor_count,
+                        "had_raw_draft": bool(raw_draft.strip()),
+                    },
+                )
+                start_idx = 0
+                raw_draft = ""
+                beat_coverage = []
+                embedded_foreshadowings = []
+                relay_history = []
+                inner_beats = []
+            else:
+                log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
 
         flow_control = FlowControlService(self.session)
         for idx, beat in enumerate(context.chapter_plan.beats):
@@ -223,6 +258,8 @@ class WriterAgent:
                 novel_id=novel_id,
                 rewrite_plan=rewrite_plan,
             )
+            inner = self._trim_repeated_prefix_from_previous(last_beat_text, inner)
+            beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -431,6 +468,8 @@ class WriterAgent:
                 novel_id=novel_id,
                 rewrite_plan=rewrite_plan,
             )
+            inner = self._trim_repeated_prefix_from_previous(last_beat_text, inner)
+            beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
             inner_beats.append(inner)
             raw_draft += beat_text + "\n\n"
@@ -717,6 +756,43 @@ class WriterAgent:
     @staticmethod
     def _word_count(text: str) -> int:
         return len((text or "").replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+
+    @staticmethod
+    def _trim_repeated_prefix_from_previous(previous_text: str, current_text: str) -> str:
+        prev = (previous_text or "").strip()
+        curr = (current_text or "").strip()
+        if not prev or not curr:
+            return curr
+
+        prev_paragraphs = [part.strip() for part in prev.split("\n\n") if part.strip()]
+        curr_paragraphs = [part.strip() for part in curr.split("\n\n") if part.strip()]
+        shared_prefix = 0
+        for prev_para, curr_para in zip(prev_paragraphs, curr_paragraphs):
+            if prev_para != curr_para:
+                break
+            shared_prefix += 1
+        if shared_prefix > 0:
+            trimmed = "\n\n".join(curr_paragraphs[shared_prefix:]).strip()
+            return trimmed or curr
+
+        max_overlap = min(len(prev_paragraphs), len(curr_paragraphs))
+        for size in range(max_overlap, 0, -1):
+            if prev_paragraphs[-size:] == curr_paragraphs[:size]:
+                trimmed = "\n\n".join(curr_paragraphs[size:]).strip()
+                return trimmed or curr
+
+        max_chars = min(len(prev), len(curr))
+        for size in range(max_chars, 20, -1):
+            if prev[-size:] == curr[:size]:
+                trimmed = curr[size:].lstrip()
+                return trimmed or curr
+            candidate_prev = prev[-size:].rstrip("。！？!?；;：:,，、 \n\t\r")
+            if len(candidate_prev) < 20:
+                continue
+            if curr.startswith(candidate_prev):
+                trimmed = curr[len(candidate_prev):].lstrip()
+                return trimmed or curr
+        return curr
 
     async def _enforce_beat_word_budget(
         self,
@@ -1012,7 +1088,13 @@ class WriterAgent:
         retry_evidence = retry.evidence(beat_index=idx, mode="writer_retry")
         checkpoint.setdefault("writer_guard_failures", []).append(retry_evidence)
         checkpoint["chapter_structure_guard"] = retry_evidence
-        fallback = self._build_conservative_guard_fallback(beat, is_last=is_last)
+        fallback = self._build_conservative_guard_fallback(
+            beat,
+            context=context,
+            beat_idx=idx,
+            is_last=is_last,
+            guard_evidence=retry_evidence,
+        )
         fallback_retry = await self.structure_guard.check_writer_beat(
             novel_id=novel_id,
             chapter_plan=context.chapter_plan,
@@ -1039,6 +1121,24 @@ class WriterAgent:
             )
             return fallback, f"<!--BEAT:{idx}-->\n{fallback}\n<!--/BEAT:{idx}-->"
 
+        checkpoint.setdefault("writer_guard_fallbacks", []).append({
+            "beat_index": idx,
+            "reason": "writer_retry_and_fallback_guard_failed",
+            "source_issues": retry_evidence.get("issues") or [],
+            "fallback_issues": (fallback_retry.evidence(beat_index=idx, mode="writer_fallback_retry") or {}).get("issues") or [],
+            "fallback_preview": preview_text(fallback, 300),
+        })
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"节拍 {idx + 1} 保守兜底仍未完全通过守卫，按当前节拍合同降级放行",
+            node="writer_structure_guard_fallback",
+            task="write",
+            level="warning",
+            metadata=checkpoint["writer_guard_fallbacks"][-1],
+        )
+        return fallback, f"<!--BEAT:{idx}-->\n{fallback}\n<!--/BEAT:{idx}-->"
+
         log_agent_detail(
             novel_id,
             "WriterAgent",
@@ -1063,27 +1163,98 @@ class WriterAgent:
         setattr(error, "failed_phase", Phase.DRAFTING.value)
         raise error
 
-    @classmethod
-    def _build_conservative_guard_fallback(cls, beat: BeatPlan, *, is_last: bool) -> str:
+    def _build_conservative_guard_fallback(
+        self,
+        beat: BeatPlan,
+        *,
+        context: ChapterContext,
+        beat_idx: int,
+        is_last: bool,
+        guard_evidence: dict | None = None,
+    ) -> str:
+        writing_card = self._writing_card(context, beat_idx)
+        beat_context = self._beat_context(context, beat_idx)
+        issues = list((guard_evidence or {}).get("issues") or [])
+
         clauses = [part.strip() for part in re.split(r"[；;。！？!?]", beat.summary or "") if part.strip()]
+        if writing_card:
+            clauses.extend(
+                part.strip()
+                for part in (
+                    writing_card.objective,
+                    writing_card.conflict,
+                    writing_card.turning_point,
+                    writing_card.reader_takeaway,
+                )
+                if part and part.strip()
+            )
+            clauses.extend(item.strip() for item in writing_card.required_facts[:3] if item and item.strip())
+        if beat_context:
+            clauses.extend(item.strip() for item in beat_context.guardrails[:3] if item and item.strip())
         if not clauses:
             clauses = ["当前节拍围绕既定目标推进"]
-        lead = clauses[0]
-        choice_terms = ("选择", "必须", "决定", "被迫", "代价", "隐忍", "压下")
-        conflict_terms = ("冲突", "阻力", "克扣", "嘲讽", "追", "逼", "杀", "异常", "危险", "敌")
-        choice = next((clause for clause in clauses if any(term in clause for term in choice_terms)), "")
-        conflict = next((clause for clause in clauses if any(term in clause for term in conflict_terms)), "")
-        ending = clauses[-1]
-        parts = [lead]
-        if conflict and conflict not in parts:
-            parts.append(conflict)
-        if choice and choice not in parts:
-            parts.append(choice)
-        if ending and ending not in parts:
-            parts.append(ending)
+
+        deduped: list[str] = []
+        seen: set[str] = set()
+        forbidden = []
+        if writing_card:
+            forbidden = [
+                item.strip()
+                for item in writing_card.forbidden_future_events[:4]
+                if item and item.strip()
+            ]
+        for clause in clauses:
+            normalized = clause.strip("。！？!?；;，, ")
+            if not normalized or normalized in seen:
+                continue
+            if any(item and item in normalized for item in forbidden):
+                continue
+            seen.add(normalized)
+            deduped.append(normalized)
+
+        choice_terms = ("选择", "必须", "决定", "被迫", "代价", "隐忍", "压下", "观察", "判断")
+        conflict_terms = ("冲突", "阻力", "克扣", "嘲讽", "追", "逼", "杀", "围", "战", "异常", "危险", "敌", "狼")
+        action = deduped[0]
+        conflict = next((clause for clause in deduped if any(term in clause for term in conflict_terms)), "")
+        choice = next((clause for clause in deduped if any(term in clause for term in choice_terms)), "")
+        anchor = next(
+            (
+                clause
+                for clause in deduped
+                if "当前节拍" not in clause and "读者应" not in clause and len(clause) <= 36
+            ),
+            deduped[-1],
+        )
+
+        parts = [
+            action.rstrip("。！？!?") + "。",
+        ]
+        if conflict and conflict != action:
+            parts.append(conflict.rstrip("。！？!?") + "。")
+        if choice and choice not in {action, conflict}:
+            parts.append(choice.rstrip("。！？!?") + "。")
+
+        if any("观察" in item or "判断" in item for item in deduped + issues):
+            observers = []
+            if writing_card and writing_card.required_entities:
+                observers = [name for name in writing_card.required_entities[:3] if name and name not in "".join(parts)]
+            if observers:
+                parts.append(
+                    f"他把注意力压在{'、'.join(observers)}的动作和应变上，只记下当场可见的习惯与破绽，不把判断说破。"
+                )
+            else:
+                parts.append("他把注意力压在同伴的动作和应变上，只记下当场可见的习惯与破绽，不把判断说破。")
+
+        if any("保留实力" in item or "隐藏实力" in item for item in deduped + issues):
+            parts.append("他只把力量收在眼前这一线，够用就停，不让多余底牌提前露出来。")
+
+        stop_line = "这一拍只把当场目标压到纸面，后续试探、分配与新线索都留到下一步。"
         if is_last:
-            parts.append("已有线索和风险在此处收束，新的疑问压到下一步选择上。")
-        return "\n\n".join(part.rstrip("。！？!?") + "。" for part in parts if part.strip())
+            stop_line = "这一拍的结果先落稳，新的危险与疑问压在下一步选择上。"
+        if any("战斗" in item or "围杀" in item or "头狼" in item for item in deduped + issues):
+            stop_line = f"{anchor.rstrip('。！？!?')}的胜负还扣在眼前这口气里，谁也没有把话题带到战局之外。"
+        parts.append(stop_line)
+        return "\n\n".join(part for part in parts if part.strip())
 
     def _self_check_beat(self, inner: str, beat: BeatPlan, context: ChapterContext, beat_idx: int) -> BeatSelfCheck:
         beat_context = self._beat_context(context, beat_idx)

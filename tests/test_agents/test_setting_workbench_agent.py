@@ -5,6 +5,7 @@ from novel_dev.agents.setting_workbench_agent import (
     SettingBatchDraft,
     SettingClarificationDecision,
     SettingWorkbenchAgent,
+    normalize_setting_batch_payload,
 )
 
 
@@ -156,3 +157,136 @@ def test_setting_batch_draft_rejects_top_level_relationship_source_ref():
                 ],
             }
         )
+
+
+def test_normalize_setting_batch_payload_accepts_common_field_drift():
+    payload = {
+        "result": {
+            "summary": "模型用分组字段返回",
+            "cards": [
+                {
+                    "action": "新增",
+                    "doc_type": "世界观",
+                    "标题": "北境世界观",
+                    "正文": "北境由雪庭统治。",
+                    "source_docs": "doc_world",
+                    "conflict_hints": "需要用户确认雪庭统治边界。",
+                }
+            ],
+            "entities": [
+                {
+                    "op": "add",
+                    "entity_type": "faction",
+                    "name": "雪庭",
+                    "attributes": "北境统治势力",
+                }
+            ],
+        }
+    }
+
+    draft = SettingBatchDraft.model_validate(normalize_setting_batch_payload(payload, None))
+
+    assert draft.summary == "模型用分组字段返回"
+    assert [change.target_type for change in draft.changes] == ["setting_card", "entity"]
+    card_snapshot = draft.changes[0].after_snapshot
+    assert card_snapshot["doc_type"] == "worldview"
+    assert card_snapshot["title"] == "北境世界观"
+    assert card_snapshot["content"] == "北境由雪庭统治。"
+    assert card_snapshot["source_doc_ids"] == ["doc_world"]
+    assert draft.changes[0].operation == "create"
+    assert draft.changes[0].conflict_hints == [
+        {"type": "llm_note", "message": "需要用户确认雪庭统治边界。"}
+    ]
+    assert draft.changes[1].after_snapshot["state"] == {"description": "北境统治势力"}
+
+
+def test_normalize_setting_batch_payload_preserves_unsafe_relationship_refs_for_rejection():
+    payload = {
+        "changes": [
+            {
+                "kind": "关系",
+                "action": "新增",
+                "after": {
+                    "source_name": "陆照",
+                    "target_name": "道种",
+                    "relation": "持有",
+                },
+            }
+        ]
+    }
+
+    normalized = normalize_setting_batch_payload(payload, None)
+
+    with pytest.raises(ValidationError, match="source_id, target_id, and relation_type"):
+        SettingBatchDraft.model_validate(normalized)
+
+
+@pytest.mark.parametrize(
+    ("payload", "expected"),
+    [
+        (
+            [
+                {
+                    "kind": "entity",
+                    "action": "new",
+                    "entity_type": "character",
+                    "name": "陆照",
+                    "profile": {"goal": "寻找道种"},
+                }
+            ],
+            {
+                "target_type": "entity",
+                "operation": "create",
+                "snapshot": {"type": "character", "name": "陆照", "state": {"goal": "寻找道种"}},
+            },
+        ),
+        (
+            {
+                "payload": {
+                    "changes": '[{"kind":"文档","op":"modify","id":"doc_old","category":"核心冲突","name":"主线冲突","body":"陆照与雪庭争夺道种。","evidence_doc_ids":[{"doc_id":"doc_conflict"}]}]'
+                }
+            },
+            {
+                "target_type": "setting_card",
+                "operation": "update",
+                "target_id": "doc_old",
+                "snapshot": {
+                    "doc_type": "core_conflict",
+                    "title": "主线冲突",
+                    "content": "陆照与雪庭争夺道种。",
+                    "source_doc_ids": ["doc_conflict"],
+                },
+            },
+        ),
+        (
+            {
+                "output": {
+                    "records": [
+                        {
+                            "target": "setting",
+                            "action": "archive",
+                            "id": "doc_noise",
+                            "after": {"archive_reason": "已被整合"},
+                        }
+                    ]
+                }
+            },
+            {
+                "target_type": "setting_card",
+                "operation": "delete",
+                "target_id": "doc_noise",
+                "snapshot": {"doc_type": "setting", "archive_reason": "已被整合"},
+            },
+        ),
+    ],
+)
+def test_normalize_setting_batch_payload_accepts_multiple_drift_shapes(payload, expected):
+    draft = SettingBatchDraft.model_validate(normalize_setting_batch_payload(payload, None))
+
+    change = draft.changes[0]
+    assert change.target_type == expected["target_type"]
+    assert change.operation == expected["operation"]
+    if expected.get("target_id"):
+        assert change.target_id == expected["target_id"]
+    for key, value in expected["snapshot"].items():
+        assert change.after_snapshot[key] == value

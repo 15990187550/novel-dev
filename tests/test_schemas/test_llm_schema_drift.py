@@ -189,6 +189,16 @@ def test_setting_batch_draft_parses_stringified_changes_array_from_structured_pa
     assert result.changes[0].after_snapshot["doc_type"] == "worldview"
 
 
+def test_setting_batch_draft_parses_double_encoded_changes_array():
+    result = SettingBatchDraft.model_validate({
+        "summary": "生成全量设定",
+        "changes": '"[{\\"target_type\\": \\"setting_card\\", \\"operation\\": \\"create\\", \\"after_snapshot\\": {\\"doc_type\\": \\"power_system\\", \\"title\\": \\"修炼体系\\", \\"content\\": \\"内天地到外天地。\\"}, \\"source_ref\\": \\"全量设定\\"}]"',
+    })
+
+    assert len(result.changes) == 1
+    assert result.changes[0].after_snapshot["title"] == "修炼体系"
+
+
 def test_setting_batch_draft_parses_stringified_changes_array_with_trailing_fragment():
     result = SettingBatchDraft.model_validate({
         "summary": "生成全量设定",

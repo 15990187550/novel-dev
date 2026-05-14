@@ -1,0 +1,104 @@
+{
+  "run_id": "longform-vol1-real-fix-20260512170833",
+  "novel_id": "codex-1375",
+  "dataset": "minimal_builtin",
+  "llm_mode": "real",
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-longform-volume1",
+    "acceptance_scope": "real-longform-volume1",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "chapter_target_word_count": "1667",
+    "target_volume_word_count": "111689",
+    "source_dir": "/Users/xuhuibin/Desktop/novel",
+    "source_material_count": "4",
+    "source_material_char_count": "4756898",
+    "source_material_byte_count": "14150138",
+    "source_materials_json": "[{\"filename\": \"《一世之尊》-+爱潜水的乌贼.txt\", \"path\": \"/Users/xuhuibin/Desktop/novel/《一世之尊》-+爱潜水的乌贼.txt\", \"status\": \"discovered\", \"char_count\": 4739301, \"byte_count\": 14110044}, {\"filename\": \"世界观.md\", \"path\": \"/Users/xuhuibin/Desktop/novel/世界观.md\", \"status\": \"discovered\", \"char_count\": 3523, \"byte_count\": 7678}, {\"filename\": \"力量体系.md\", \"path\": \"/Users/xuhuibin/Desktop/novel/力量体系.md\", \"status\": \"discovered\", \"char_count\": 6020, \"byte_count\": 14312}, {\"filename\": \"诸天万界.md\", \"path\": \"/Users/xuhuibin/Desktop/novel/诸天万界.md\", \"status\": \"discovered\", \"char_count\": 8054, \"byte_count\": 18104}]",
+    "novel_id": "codex-1375",
+    "setting_session_id": "sgs_2d9a525384fd49789649a6f7dd99a7ef",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "3"
+  },
+  "checkpoint": {
+    "novel_title": "Codex 最小生成验收",
+    "synopsis_data": {
+      "title": "Codex 最小生成验收",
+      "logline": "",
+      "core_conflict": "",
+      "themes": [],
+      "character_arcs": [],
+      "milestones": [],
+      "estimated_volumes": 1,
+      "estimated_total_chapters": 10,
+      "estimated_total_words": 30000
+    },
+    "synopsis_doc_id": null,
+    "story_contract": {
+      "protagonist_goal": "",
+      "current_stage_goal": "",
+      "first_chapter_goal": "",
+      "core_conflict": "",
+      "key_clues": [],
+      "antagonistic_pressure": "",
+      "must_carry_forward": [],
+      "source_status": {
+        "setting_review_batch_status": null,
+        "setting_change_count": 0
+      }
+    },
+    "cross_stage_quality": {
+      "passed": true,
+      "warnings": [],
+      "blocking_issues": [],
+      "contract_fields_present": []
+    },
+    "current_phase": "brainstorming",
+    "current_volume_id": null,
+    "current_chapter_id": null
+  },
+  "chapters": [],
+  "acceptance_target": {
+    "target_volumes": 18,
+    "target_chapters": 1200,
+    "target_word_count": 2000000,
+    "target_volume_number": 1,
+    "target_volume_chapters": 67,
+    "target_volume_word_count": 111689,
+    "chapter_target_word_count": 1667
+  },
+  "source_materials": [
+    {
+      "filename": "《一世之尊》-+爱潜水的乌贼.txt",
+      "path": "/Users/xuhuibin/Desktop/novel/《一世之尊》-+爱潜水的乌贼.txt",
+      "status": "discovered",
+      "char_count": 4739301,
+      "byte_count": 14110044
+    },
+    {
+      "filename": "世界观.md",
+      "path": "/Users/xuhuibin/Desktop/novel/世界观.md",
+      "status": "discovered",
+      "char_count": 3523,
+      "byte_count": 7678
+    },
+    {
+      "filename": "力量体系.md",
+      "path": "/Users/xuhuibin/Desktop/novel/力量体系.md",
+      "status": "discovered",
+      "char_count": 6020,
+      "byte_count": 14312
+    },
+    {
+      "filename": "诸天万界.md",
+      "path": "/Users/xuhuibin/Desktop/novel/诸天万界.md",
+      "status": "discovered",
+      "char_count": 8054,
+      "byte_count": 18104
+    }
+  ]
+}

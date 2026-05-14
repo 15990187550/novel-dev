@@ -31,7 +31,7 @@ from novel_dev.services.story_contract_service import StoryContractService
 
 
 LLMMode = Literal["fake", "real", "real_then_fake_on_external_block"]
-AcceptanceScope = Literal["real-contract", "real-e2e-export"]
+AcceptanceScope = Literal["real-contract", "real-e2e-export", "real-longform-volume1"]
 Step = Callable[[], Awaitable[None]]
 API_GENERATION_STAGES = (
     "preflight_health",
@@ -39,8 +39,13 @@ API_GENERATION_STAGES = (
     "create_setting_session",
     "advance_setting_session",
     "generate_setting_review_batch",
+    "apply_generated_settings",
     "upload_seed_setting",
+    "upload_source_materials",
     "approve_seed_setting",
+    "approve_source_materials",
+    "consolidate_settings",
+    "apply_consolidated_settings",
     "brainstorm",
     "volume_plan",
     "auto_run_chapters",
@@ -68,6 +73,15 @@ class BrainstormContractResult:
     shrunk_estimated_total_chapters: int
 
 
+@dataclass(frozen=True, slots=True)
+class SourceMaterial:
+    filename: str
+    path: str
+    content: str
+    char_count: int
+    byte_count: int
+
+
 def _acceptance_target_word_count(fixture: GenerationFixture) -> int:
     return max(ACCEPTANCE_TARGET_WORD_COUNT_FLOOR, fixture.minimum_chapter_chars)
 
@@ -88,6 +102,33 @@ class GenerationRunOptions:
     run_id: str | None = None
     report_root: str = "reports/test-runs"
     api_base_url: str = "http://127.0.0.1:8000"
+    resume_novel_id: str | None = None
+    resume_from_stage: str | None = None
+    resume_reset_current_chapter: bool = False
+    source_dir: str | None = None
+    target_volumes: int = 18
+    target_chapters: int = 1200
+    target_word_count: int = 2_000_000
+    target_volume_number: int = 1
+    target_volume_chapters: int | None = None
+
+    def resolved_target_volume_chapters(self) -> int:
+        if self.target_volume_chapters is not None:
+            return self.target_volume_chapters
+        if self.target_volumes <= 0:
+            raise ValueError("target_volumes must be positive")
+        if self.target_chapters <= 0:
+            raise ValueError("target_chapters must be positive")
+        base, remainder = divmod(self.target_chapters, self.target_volumes)
+        return base + (1 if self.target_volume_number <= remainder else 0)
+
+    def resolved_chapter_target_word_count(self) -> int:
+        if self.target_chapters <= 0:
+            raise ValueError("target_chapters must be positive")
+        return round(self.target_word_count / self.target_chapters)
+
+    def resolved_target_volume_word_count(self) -> int:
+        return self.resolved_target_volume_chapters() * self.resolved_chapter_target_word_count()
 
 
 def make_run_id(prefix: str) -> str:
@@ -112,21 +153,80 @@ def validate_stage(stage: str | None) -> str | None:
     return stage
 
 
+def validate_resume_options(options: GenerationRunOptions) -> str | None:
+    target_stage = validate_stage(options.stage)
+    resume_from_stage = validate_stage(options.resume_from_stage)
+    if options.resume_novel_id and resume_from_stage is None:
+        raise ValueError("--resume-novel-id requires --resume-from-stage")
+    if resume_from_stage is not None and not options.resume_novel_id:
+        raise ValueError("--resume-from-stage requires --resume-novel-id")
+    if target_stage is not None and resume_from_stage is not None:
+        target_index = API_GENERATION_STAGES.index(target_stage)
+        resume_index = API_GENERATION_STAGES.index(resume_from_stage)
+        if target_index < resume_index:
+            raise ValueError("--stage cannot be before --resume-from-stage")
+    return resume_from_stage
+
+
 def validate_acceptance_scope(scope: str | None) -> AcceptanceScope:
     if scope in {None, ""}:
         return "real-contract"
-    if scope in {"real-contract", "real-e2e-export"}:
+    if scope in {"real-contract", "real-e2e-export", "real-longform-volume1"}:
         return scope
     raise ValueError(
         "Unknown acceptance scope: "
-        f"{scope}. Valid scopes: real-contract, real-e2e-export"
+        f"{scope}. Valid scopes: real-contract, real-e2e-export, real-longform-volume1"
     )
 
 
 def _should_require_export(scope: AcceptanceScope, *, archived_count: int) -> bool:
-    if scope == "real-e2e-export":
+    if scope in {"real-e2e-export", "real-longform-volume1"}:
         return True
     return archived_count >= 1
+
+
+def load_source_materials(source_dir: str | Path) -> list[SourceMaterial]:
+    root = Path(source_dir).expanduser()
+    if not root.exists():
+        raise ValueError(f"Source material directory does not exist: {root}")
+    if not root.is_dir():
+        raise ValueError(f"Source material path is not a directory: {root}")
+
+    materials: list[SourceMaterial] = []
+    for path in sorted(root.iterdir(), key=lambda item: item.name):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.suffix.lower() not in {".md", ".txt"}:
+            continue
+        content = path.read_text(encoding="utf-8")
+        materials.append(
+            SourceMaterial(
+                filename=path.name,
+                path=str(path),
+                content=content,
+                char_count=len(content),
+                byte_count=path.stat().st_size,
+            )
+        )
+    if not materials:
+        raise ValueError(f"No .md or .txt source material files found in: {root}")
+    return materials
+
+
+def _is_longform_volume1(scope: AcceptanceScope) -> bool:
+    return scope == "real-longform-volume1"
+
+
+def _target_artifacts(options: GenerationRunOptions) -> dict[str, str]:
+    return {
+        "target_volumes": str(options.target_volumes),
+        "target_chapters": str(options.target_chapters),
+        "target_word_count": str(options.target_word_count),
+        "target_volume_number": str(options.target_volume_number),
+        "target_volume_chapters": str(options.resolved_target_volume_chapters()),
+        "chapter_target_word_count": str(options.resolved_chapter_target_word_count()),
+        "target_volume_word_count": str(options.resolved_target_volume_word_count()),
+    }
 
 
 def _build_quality_gate_evidence(
@@ -157,6 +257,7 @@ def _build_quality_gate_evidence(
 async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunReport:
     started = time.monotonic()
     target_stage = validate_stage(options.stage)
+    resume_from_stage = validate_resume_options(options)
     acceptance_scope = validate_acceptance_scope(options.acceptance_scope)
     fixture = load_generation_fixture(options.dataset)
     run_id = validate_run_id(options.run_id) or make_run_id("generation-real")
@@ -175,6 +276,39 @@ async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunRep
     report.artifacts["acceptance_scope"] = acceptance_scope
     if target_stage is not None:
         report.artifacts["target_stage"] = target_stage
+    if options.resume_novel_id:
+        report.artifacts["resume_novel_id"] = options.resume_novel_id
+    if resume_from_stage is not None:
+        report.artifacts["resume_from_stage"] = resume_from_stage
+    if options.resume_reset_current_chapter:
+        report.artifacts["resume_reset_current_chapter"] = "true"
+    if _is_longform_volume1(acceptance_scope):
+        if not options.source_dir:
+            raise ValueError("real-longform-volume1 requires --source-dir")
+        source_materials = load_source_materials(options.source_dir)
+        source_materials_payload = [
+            {
+                "filename": item.filename,
+                "path": item.path,
+                "status": "discovered",
+                "char_count": item.char_count,
+                "byte_count": item.byte_count,
+            }
+            for item in source_materials
+        ]
+        report.artifacts.update(_target_artifacts(options))
+        report.artifacts["source_dir"] = str(Path(options.source_dir).expanduser())
+        report.artifacts["source_material_count"] = str(len(source_materials))
+        report.artifacts["source_material_char_count"] = str(
+            sum(item.char_count for item in source_materials)
+        )
+        report.artifacts["source_material_byte_count"] = str(
+            sum(item.byte_count for item in source_materials)
+        )
+        report.artifacts["source_materials_json"] = json.dumps(
+            source_materials_payload,
+            ensure_ascii=False,
+        )
     if options.llm_mode == "fake":
         try:
             _run_fake_generation_diagnostic(fixture)
@@ -206,17 +340,18 @@ async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunRep
             report.artifacts.update(artifacts)
             for issue in issues:
                 report.add_issue(issue)
-            try:
-                _validate_report_artifacts(report.artifacts)
-            except Exception as exc:
-                report.add_issue(
-                    classify_exception(
-                        "export_contract",
-                        exc,
-                        real_llm=False,
-                        acceptance_scope=acceptance_scope,
+            if not any(issue.is_external_blocker for issue in issues):
+                try:
+                    _validate_report_artifacts(report.artifacts)
+                except Exception as exc:
+                    report.add_issue(
+                        classify_exception(
+                            "export_contract",
+                            exc,
+                            real_llm=False,
+                            acceptance_scope=acceptance_scope,
+                        )
                     )
-                )
 
     report.duration_seconds = time.monotonic() - started
     return report
@@ -227,6 +362,10 @@ async def run_generation_acceptance_and_write(
 ) -> TestRunReport:
     report = await run_generation_acceptance(options)
     report_root = Path(options.report_root) / report.run_id
+    if any(issue.is_external_blocker for issue in report.issues):
+        report.artifacts["quality_summary_status"] = "skipped_external_blocker"
+        ReportWriter(report_root).write(report)
+        return report
     try:
         snapshot = await _build_generation_quality_snapshot(report)
         if snapshot is not None:
@@ -324,6 +463,7 @@ async def _build_generation_quality_snapshot(
         "novel_id": novel_id,
         "dataset": report.dataset,
         "llm_mode": report.llm_mode,
+        "artifacts": dict(report.artifacts),
         "checkpoint": {
             **checkpoint,
             "story_contract": story_contract,
@@ -352,6 +492,12 @@ async def _build_generation_quality_snapshot(
             for chapter in chapters
         ],
     }
+    acceptance_target = _acceptance_target_from_artifacts(report.artifacts)
+    if acceptance_target:
+        snapshot["acceptance_target"] = acceptance_target
+    source_materials = _source_materials_from_artifacts(report.artifacts)
+    if source_materials:
+        snapshot["source_materials"] = source_materials
     if review_batch is not None:
         snapshot["setting_review_batch"] = {
             "id": review_batch.id,
@@ -379,6 +525,36 @@ def _write_quality_summary_bundle(
     )
     ReportWriter(report_root / "quality-summary").write(quality_report)
     return quality_report
+
+
+def _acceptance_target_from_artifacts(artifacts: dict[str, str]) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for key in (
+        "target_volumes",
+        "target_chapters",
+        "target_word_count",
+        "target_volume_number",
+        "target_volume_chapters",
+        "target_volume_word_count",
+        "chapter_target_word_count",
+    ):
+        value = _coerce_int(artifacts.get(key))
+        if value is not None:
+            result[key] = value
+    return result
+
+
+def _source_materials_from_artifacts(artifacts: dict[str, str]) -> list[dict[str, Any]]:
+    raw = artifacts.get("source_materials_json")
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [item for item in parsed if isinstance(item, dict)]
 
 
 def _merge_quality_summary_issues(
@@ -429,11 +605,40 @@ async def _run_api_smoke_flow(
     fixture: GenerationFixture,
 ) -> tuple[dict[str, str], list[Issue]]:
     target_stage = validate_stage(options.stage)
+    resume_from_stage = validate_resume_options(options)
+    resume_stage_index = (
+        API_GENERATION_STAGES.index(resume_from_stage)
+        if resume_from_stage is not None
+        else None
+    )
     acceptance_scope = validate_acceptance_scope(options.acceptance_scope)
+    longform_volume1 = _is_longform_volume1(acceptance_scope)
+    source_materials: list[SourceMaterial] = []
+    if longform_volume1:
+        if not options.source_dir:
+            raise ValueError("real-longform-volume1 requires --source-dir")
+        source_materials = load_source_materials(options.source_dir)
     artifacts: dict[str, str] = {
         "contract_scope": acceptance_scope,
         "acceptance_scope": acceptance_scope,
     }
+    if options.resume_novel_id:
+        artifacts["novel_id"] = options.resume_novel_id
+        artifacts["resume_novel_id"] = options.resume_novel_id
+    if resume_from_stage is not None:
+        artifacts["resume_from_stage"] = resume_from_stage
+    if options.resume_reset_current_chapter:
+        artifacts["resume_reset_current_chapter"] = "true"
+    if longform_volume1:
+        artifacts.update(_target_artifacts(options))
+        artifacts["source_dir"] = str(Path(options.source_dir or "").expanduser())
+        artifacts["source_material_count"] = str(len(source_materials))
+        artifacts["source_material_char_count"] = str(
+            sum(item.char_count for item in source_materials)
+        )
+        artifacts["source_material_byte_count"] = str(
+            sum(item.byte_count for item in source_materials)
+        )
     issues: list[Issue] = []
     quality_gate_issue: Issue | None = None
 
@@ -441,6 +646,12 @@ async def _run_api_smoke_flow(
         _run_fake_generation_diagnostic(fixture)
 
     async def run_stage(stage: str, real_step: Step) -> bool:
+        if resume_stage_index is not None and stage in API_GENERATION_STAGES:
+            stage_index = API_GENERATION_STAGES.index(stage)
+            if stage != "preflight_health" and stage_index < resume_stage_index:
+                artifacts[f"{stage}_status"] = "skipped_for_resume"
+                return True
+
         if options.llm_mode == "real_then_fake_on_external_block":
             issue, _fake_status = await run_stage_with_classification(
                 stage,
@@ -486,6 +697,18 @@ async def _run_api_smoke_flow(
         if should_stop_after("preflight_health"):
             return artifacts, issues
 
+        if options.resume_novel_id:
+            async def resume_existing_novel() -> None:
+                resume_artifacts = await _prepare_resume_state(
+                    options.resume_novel_id,
+                    options,
+                    resume_from_stage=resume_from_stage,
+                )
+                artifacts.update(resume_artifacts)
+
+            if not await run_stage("resume_existing_novel", resume_existing_novel):
+                return artifacts, issues
+
         async def create_novel() -> None:
             data = await _request_json(
                 client.post("/api/novels", json={"title": fixture.title})
@@ -521,7 +744,7 @@ async def _run_api_smoke_flow(
         if should_stop_after("create_setting_session"):
             return artifacts, issues
 
-        setting_session_id = artifacts["setting_session_id"]
+        setting_session_id = artifacts.get("setting_session_id", "")
 
         async def advance_setting_session() -> None:
             last_questions: list[str] = []
@@ -588,40 +811,161 @@ async def _run_api_smoke_flow(
         if should_stop_after("generate_setting_review_batch"):
             return artifacts, issues
 
-        async def upload_seed_setting() -> None:
-            data = await _request_json(
-                client.post(
-                    f"/api/novels/{novel_id}/documents/upload",
-                    json={
-                        "filename": "codex_seed_setting.md",
-                        "content": fixture.initial_setting_idea,
-                    },
+        if longform_volume1:
+            async def apply_generated_settings() -> None:
+                review_batch_id = artifacts.get("review_batch_id")
+                if not review_batch_id:
+                    raise RuntimeError("generate_setting_review_batch did not return review_batch_id")
+                await _approve_review_batch_non_conflict_changes(
+                    client,
+                    novel_id,
+                    review_batch_id,
+                    artifacts,
+                    artifact_prefix="generated_setting",
                 )
-            )
-            pending_id = _first_string(data, "pending_id", "id")
-            if pending_id is not None:
-                artifacts["pending_id"] = pending_id
 
-        if not await run_stage("upload_seed_setting", upload_seed_setting):
-            return artifacts, issues
-        if should_stop_after("upload_seed_setting"):
-            return artifacts, issues
+            if not await run_stage("apply_generated_settings", apply_generated_settings):
+                return artifacts, issues
+            if should_stop_after("apply_generated_settings"):
+                return artifacts, issues
 
-        async def approve_seed_setting() -> None:
-            pending_id = artifacts.get("pending_id")
-            if pending_id is None:
-                raise RuntimeError("upload_seed_setting did not return pending_id")
-            await _request_json(
-                client.post(
-                    f"/api/novels/{novel_id}/documents/pending/approve",
-                    json={"pending_id": pending_id, "field_resolutions": []},
+        if longform_volume1:
+            pending_ids: list[str] = []
+            uploaded_materials: list[dict[str, Any]] = []
+
+            async def upload_source_materials() -> None:
+                for material in source_materials:
+                    data = await _request_json(
+                        client.post(
+                            f"/api/novels/{novel_id}/documents/upload",
+                            json={
+                                "filename": material.filename,
+                                "content": material.content,
+                            },
+                        )
+                    )
+                    pending_id = _first_string(data, "pending_id", "id")
+                    if pending_id is None:
+                        raise RuntimeError(
+                            f"upload_source_materials missing pending id for {material.filename}"
+                        )
+                    pending_ids.append(pending_id)
+                    uploaded_materials.append(
+                        {
+                            "filename": material.filename,
+                            "path": material.path,
+                            "pending_id": pending_id,
+                            "status": "uploaded",
+                            "char_count": material.char_count,
+                            "byte_count": material.byte_count,
+                        }
+                    )
+                artifacts["source_material_uploaded_count"] = str(len(pending_ids))
+                artifacts["source_material_pending_ids"] = ",".join(pending_ids)
+
+            if not await run_stage("upload_source_materials", upload_source_materials):
+                return artifacts, issues
+            if should_stop_after("upload_source_materials"):
+                return artifacts, issues
+
+            async def approve_source_materials() -> None:
+                for pending_id in pending_ids:
+                    await _request_json(
+                        client.post(
+                            f"/api/novels/{novel_id}/documents/pending/approve",
+                            json={"pending_id": pending_id, "field_resolutions": []},
+                        )
+                    )
+                for item in uploaded_materials:
+                    item["status"] = "approved"
+                artifacts["source_material_approved_count"] = str(len(pending_ids))
+                artifacts["source_materials_json"] = json.dumps(
+                    uploaded_materials,
+                    ensure_ascii=False,
                 )
-            )
 
-        if not await run_stage("approve_seed_setting", approve_seed_setting):
-            return artifacts, issues
-        if should_stop_after("approve_seed_setting"):
-            return artifacts, issues
+            if not await run_stage("approve_source_materials", approve_source_materials):
+                return artifacts, issues
+            if should_stop_after("approve_source_materials"):
+                return artifacts, issues
+
+            async def consolidate_settings() -> None:
+                data = await _request_json(
+                    client.post(
+                        f"/api/novels/{novel_id}/settings/consolidations",
+                        json={"selected_pending_ids": []},
+                    )
+                )
+                job_id = _require_string(data, "job_id", "consolidate_settings")
+                artifacts["setting_consolidation_job_id"] = job_id
+                job = await _poll_generation_job(
+                    client,
+                    novel_id,
+                    job_id,
+                    failure_stage="consolidate_settings",
+                )
+                result_payload = job.get("result_payload")
+                if isinstance(result_payload, dict):
+                    batch_id = _first_string(result_payload, "batch_id")
+                    if batch_id is not None:
+                        artifacts["setting_consolidation_batch_id"] = batch_id
+
+            if not await run_stage("consolidate_settings", consolidate_settings):
+                return artifacts, issues
+            if should_stop_after("consolidate_settings"):
+                return artifacts, issues
+
+            async def apply_consolidated_settings() -> None:
+                batch_id = artifacts.get("setting_consolidation_batch_id")
+                if not batch_id:
+                    raise RuntimeError("consolidate_settings did not return batch_id")
+                await _approve_review_batch_non_conflict_changes(
+                    client,
+                    novel_id,
+                    batch_id,
+                    artifacts,
+                    artifact_prefix="consolidated_setting",
+                )
+
+            if not await run_stage("apply_consolidated_settings", apply_consolidated_settings):
+                return artifacts, issues
+            if should_stop_after("apply_consolidated_settings"):
+                return artifacts, issues
+        else:
+            async def upload_seed_setting() -> None:
+                data = await _request_json(
+                    client.post(
+                        f"/api/novels/{novel_id}/documents/upload",
+                        json={
+                            "filename": "codex_seed_setting.md",
+                            "content": fixture.initial_setting_idea,
+                        },
+                    )
+                )
+                pending_id = _first_string(data, "pending_id", "id")
+                if pending_id is not None:
+                    artifacts["pending_id"] = pending_id
+
+            if not await run_stage("upload_seed_setting", upload_seed_setting):
+                return artifacts, issues
+            if should_stop_after("upload_seed_setting"):
+                return artifacts, issues
+
+            async def approve_seed_setting() -> None:
+                pending_id = artifacts.get("pending_id")
+                if pending_id is None:
+                    raise RuntimeError("upload_seed_setting did not return pending_id")
+                await _request_json(
+                    client.post(
+                        f"/api/novels/{novel_id}/documents/pending/approve",
+                        json={"pending_id": pending_id, "field_resolutions": []},
+                    )
+                )
+
+            if not await run_stage("approve_seed_setting", approve_seed_setting):
+                return artifacts, issues
+            if should_stop_after("approve_seed_setting"):
+                return artifacts, issues
 
         async def brainstorm() -> None:
             await _request_json(client.post(f"/api/novels/{novel_id}/brainstorm"))
@@ -631,18 +975,21 @@ async def _run_api_smoke_flow(
         if should_stop_after("brainstorm"):
             return artifacts, issues
 
-        brainstorm_contract = await _prepare_minimal_synopsis(novel_id, fixture)
-        if brainstorm_contract.original_estimated_volumes is not None:
-            artifacts["brainstorm_original_estimated_volumes"] = str(
-                brainstorm_contract.original_estimated_volumes
+        if not longform_volume1:
+            brainstorm_contract = await _prepare_minimal_synopsis(novel_id, fixture)
+            if brainstorm_contract.original_estimated_volumes is not None:
+                artifacts["brainstorm_original_estimated_volumes"] = str(
+                    brainstorm_contract.original_estimated_volumes
+                )
+            if brainstorm_contract.original_estimated_total_chapters is not None:
+                artifacts["brainstorm_original_estimated_total_chapters"] = str(
+                    brainstorm_contract.original_estimated_total_chapters
+                )
+            artifacts["brainstorm_shrunk_estimated_total_chapters"] = str(
+                brainstorm_contract.shrunk_estimated_total_chapters
             )
-        if brainstorm_contract.original_estimated_total_chapters is not None:
-            artifacts["brainstorm_original_estimated_total_chapters"] = str(
-                brainstorm_contract.original_estimated_total_chapters
-            )
-        artifacts["brainstorm_shrunk_estimated_total_chapters"] = str(
-            brainstorm_contract.shrunk_estimated_total_chapters
-        )
+        else:
+            await _prepare_longform_synopsis_contract(novel_id, options)
 
         volume_plan_response: dict[str, Any] = {}
 
@@ -651,7 +998,7 @@ async def _run_api_smoke_flow(
             data = await _request_json(
                 client.post(
                     f"/api/novels/{novel_id}/volume_plan",
-                    json={"volume_number": 1},
+                    json={"volume_number": options.target_volume_number if longform_volume1 else 1},
                 )
             )
             volume_plan_response = data
@@ -664,38 +1011,59 @@ async def _run_api_smoke_flow(
         if should_stop_after("volume_plan"):
             return artifacts, issues
 
-        chapter_plan = await _prepare_minimal_chapter_plan(
-            novel_id,
-            fixture,
-            volume_plan_response=volume_plan_response,
-            acceptance_scope=acceptance_scope,
-        )
-        artifacts["chapter_id"] = chapter_plan.chapter_id
-        artifacts["chapter_plan_source"] = chapter_plan.source
-        artifacts["chapter_target_word_count"] = str(chapter_plan.target_word_count)
+        if not longform_volume1:
+            chapter_plan = await _prepare_minimal_chapter_plan(
+                novel_id,
+                fixture,
+                volume_plan_response=volume_plan_response,
+                acceptance_scope=acceptance_scope,
+            )
+            artifacts["chapter_id"] = chapter_plan.chapter_id
+            artifacts["chapter_plan_source"] = chapter_plan.source
+            artifacts["chapter_target_word_count"] = str(chapter_plan.target_word_count)
+        else:
+            await _prepare_longform_volume_plan_contract(novel_id, options)
 
         async def auto_run_chapters() -> None:
             nonlocal quality_gate_issue
+            max_chapters = options.resolved_target_volume_chapters() if longform_volume1 else 1
             data = await _request_json(
                 client.post(
                     f"/api/novels/{novel_id}/chapters/auto-run",
-                    json={"max_chapters": 1, "stop_at_volume_end": True},
+                    json={"max_chapters": max_chapters, "stop_at_volume_end": True},
                 )
             )
             job_id = _require_string(data, "job_id", "auto_run_chapters")
             artifacts["chapter_auto_run_job_id"] = job_id
-            job = await _poll_generation_job(client, novel_id, job_id, failure_stage="auto_run_chapters")
+            max_polls = GENERATION_JOB_MAX_POLLS
+            if longform_volume1:
+                max_polls = max(max_polls, max_chapters * 900)
+            job = await _poll_generation_job(
+                client,
+                novel_id,
+                job_id,
+                failure_stage="auto_run_chapters",
+                max_polls=max_polls,
+            )
             result_payload = job.get("result_payload") or {}
             if not isinstance(result_payload, dict):
                 raise RuntimeError("auto_run_chapters result_payload must be an object")
             completed_chapters = _coerce_string_list(result_payload.get("completed_chapters"))
             if completed_chapters:
                 artifacts["completed_chapter_ids"] = ",".join(completed_chapters)
+                artifacts["completed_chapter_count"] = str(len(completed_chapters))
+                artifacts.setdefault("chapter_id", completed_chapters[0])
             stopped_reason = _first_string(result_payload, "stopped_reason")
             if stopped_reason is not None:
                 artifacts["chapter_job_stopped_reason"] = stopped_reason
 
-            chapter_id = artifacts.get("chapter_id")
+            chapter_id = (
+                artifacts.get("chapter_id")
+                or _first_string(result_payload, "failed_chapter_id", "current_chapter_id")
+                or await _current_chapter_id_from_state(novel_id)
+            )
+            if chapter_id is not None:
+                artifacts["chapter_id"] = chapter_id
             if chapter_id is None:
                 raise ContractValidationError(
                     "auto_run_chapters_contract",
@@ -722,6 +1090,21 @@ async def _run_api_smoke_flow(
             stats = await _request_json(client.get(f"/api/novels/{novel_id}/archive_stats"))
             archived_count = _coerce_int(stats.get("archived_chapter_count")) or 0
             artifacts["archived_chapter_count"] = str(archived_count)
+            total_word_count = _coerce_int(stats.get("total_word_count"))
+            if total_word_count is not None:
+                artifacts["total_word_count"] = str(total_word_count)
+
+            if longform_volume1 and archived_count < max_chapters:
+                raise ContractValidationError(
+                    "auto_run_chapters_contract",
+                    "longform volume generation archived fewer chapters than requested",
+                    [
+                        f"requested_chapters={max_chapters}",
+                        f"completed_chapter_count={len(completed_chapters)}",
+                        f"archived_chapter_count={archived_count}",
+                        f"job_id={job_id}",
+                    ],
+                )
 
             if archived_count < 1:
                 if quality.status == "block":
@@ -821,15 +1204,61 @@ async def _request_json(response_awaitable: Awaitable[httpx.Response]) -> dict[s
     return data
 
 
+async def _approve_review_batch_non_conflict_changes(
+    client: httpx.AsyncClient,
+    novel_id: str,
+    batch_id: str,
+    artifacts: dict[str, str],
+    *,
+    artifact_prefix: str,
+) -> None:
+    detail = await _request_json(
+        client.get(f"/api/novels/{novel_id}/settings/review_batches/{batch_id}")
+    )
+    raw_changes = detail.get("changes")
+    changes = [item for item in raw_changes if isinstance(item, dict)] if isinstance(raw_changes, list) else []
+    approvable_ids = [
+        str(change["id"])
+        for change in changes
+        if change.get("id")
+        and change.get("target_type") != "conflict"
+        and str(change.get("status") or "pending") == "pending"
+    ]
+    conflict_count = sum(1 for change in changes if change.get("target_type") == "conflict")
+    artifacts[f"{artifact_prefix}_change_count"] = str(len(changes))
+    artifacts[f"{artifact_prefix}_approvable_change_count"] = str(len(approvable_ids))
+    artifacts[f"{artifact_prefix}_conflict_change_count"] = str(conflict_count)
+    if not approvable_ids:
+        artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(detail) or "no_approvable_changes"
+        return
+
+    result = await _request_json(
+        client.post(
+            f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/approve",
+            json={"change_ids": approvable_ids, "approve_all": False},
+        )
+    )
+    artifacts[f"{artifact_prefix}_approved_change_ids"] = ",".join(approvable_ids)
+    artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(result) or "unknown"
+
+
+def _batch_status_from_detail(data: dict[str, Any]) -> str | None:
+    batch = data.get("batch")
+    if isinstance(batch, dict):
+        return _first_string(batch, "status")
+    return _first_string(data, "status")
+
+
 async def _poll_generation_job(
     client: httpx.AsyncClient,
     novel_id: str,
     job_id: str,
     *,
     failure_stage: str = "generation_job",
+    max_polls: int | None = None,
 ) -> dict[str, Any]:
     last_status = "unknown"
-    for _ in range(GENERATION_JOB_MAX_POLLS):
+    for _ in range(max_polls or GENERATION_JOB_MAX_POLLS):
         data = await _request_json(client.get(f"/api/novels/{novel_id}/generation_jobs/{job_id}"))
         status = _first_string(data, "status") or "unknown"
         last_status = status
@@ -905,6 +1334,131 @@ async def _get_chapter_contract_state(novel_id: str, chapter_id: str) -> Any | N
         if chapter is None or chapter.novel_id != novel_id:
             return None
         return chapter
+
+
+async def _prepare_resume_state(
+    novel_id: str,
+    options: GenerationRunOptions,
+    *,
+    resume_from_stage: str | None,
+) -> dict[str, str]:
+    async with async_session_maker() as session:
+        repo = NovelStateRepository(session)
+        state = await repo.get_state(novel_id)
+        if state is None:
+            raise RuntimeError(f"Novel state not found for {novel_id}")
+
+        artifacts = {
+            "resume_current_phase": state.current_phase,
+        }
+        if state.current_volume_id:
+            artifacts["volume_id"] = state.current_volume_id
+        if state.current_chapter_id:
+            artifacts["chapter_id"] = state.current_chapter_id
+
+        checkpoint = dict(state.checkpoint_data or {})
+        checkpoint_changed = checkpoint.pop("flow_control", None) is not None
+        if not (
+            options.resume_reset_current_chapter
+            and resume_from_stage == "auto_run_chapters"
+        ):
+            if checkpoint_changed:
+                await repo.save_checkpoint(
+                    novel_id,
+                    state.current_phase,
+                    checkpoint,
+                    current_volume_id=state.current_volume_id,
+                    current_chapter_id=state.current_chapter_id,
+                )
+                await session.commit()
+                artifacts["resume_cleared_flow_stop"] = "true"
+            return artifacts
+
+        chapter_id = _chapter_id_from_state_payload(
+            current_chapter_id=state.current_chapter_id,
+            checkpoint=checkpoint,
+        )
+        if chapter_id is None:
+            raise ContractValidationError(
+                "resume_contract",
+                "cannot reset current chapter because no persisted chapter id was found",
+                [f"novel_id={novel_id}", f"current_phase={state.current_phase}"],
+            )
+
+        await ChapterRepository(session).reset_generation(chapter_id)
+        for key in (
+            "chapter_context",
+            "chapter_draft",
+            "review_result",
+            "review_scores",
+            "edit_result",
+            "fast_review_result",
+            "librarian_result",
+            "quality_gate",
+        ):
+            checkpoint.pop(key, None)
+
+        await repo.save_checkpoint(
+            novel_id,
+            Phase.CONTEXT_PREPARATION.value,
+            checkpoint,
+            current_volume_id=state.current_volume_id,
+            current_chapter_id=chapter_id,
+        )
+        await session.commit()
+
+        artifacts["resume_reset_chapter_id"] = chapter_id
+        artifacts["resume_current_phase"] = Phase.CONTEXT_PREPARATION.value
+        artifacts["chapter_id"] = chapter_id
+        if checkpoint_changed:
+            artifacts["resume_cleared_flow_stop"] = "true"
+        return artifacts
+
+
+async def _current_chapter_id_from_state(novel_id: str) -> str | None:
+    async with async_session_maker() as session:
+        state = await NovelStateRepository(session).get_state(novel_id)
+        if state is None:
+            return None
+        return _chapter_id_from_state_payload(
+            current_chapter_id=state.current_chapter_id,
+            checkpoint=dict(state.checkpoint_data or {}),
+        )
+
+
+def _chapter_id_from_state_payload(
+    *,
+    current_chapter_id: str | None,
+    checkpoint: dict[str, Any],
+) -> str | None:
+    if current_chapter_id:
+        return current_chapter_id
+
+    current_plan = checkpoint.get("current_chapter_plan")
+    if isinstance(current_plan, dict):
+        chapter_id = _first_string(current_plan, "chapter_id", "id")
+        if chapter_id:
+            return chapter_id
+
+    context = checkpoint.get("chapter_context")
+    if isinstance(context, dict):
+        context_plan = context.get("chapter_plan")
+        if isinstance(context_plan, dict):
+            chapter_id = _first_string(context_plan, "chapter_id", "id")
+            if chapter_id:
+                return chapter_id
+
+    volume_plan = checkpoint.get("current_volume_plan")
+    if isinstance(volume_plan, dict):
+        chapters = volume_plan.get("chapters")
+        if isinstance(chapters, list):
+            for item in chapters:
+                if isinstance(item, dict):
+                    chapter_id = _first_string(item, "chapter_id", "id")
+                    if chapter_id:
+                        return chapter_id
+
+    return None
 
 
 async def _prepare_minimal_chapter_plan(
@@ -1078,6 +1632,264 @@ async def _prepare_minimal_synopsis(
         original_estimated_total_chapters=original_estimated_total_chapters,
         shrunk_estimated_total_chapters=1,
     )
+
+
+async def _prepare_longform_synopsis_contract(
+    novel_id: str,
+    options: GenerationRunOptions,
+) -> None:
+    async with async_session_maker() as session:
+        repo = NovelStateRepository(session)
+        state = await repo.get_state(novel_id)
+        if state is None:
+            raise RuntimeError(f"Novel state not found for {novel_id}")
+
+        checkpoint = dict(state.checkpoint_data or {})
+        raw_synopsis = checkpoint.get("synopsis_data")
+        if raw_synopsis is not None and not isinstance(raw_synopsis, dict):
+            raise ContractValidationError(
+                "brainstorm_contract",
+                "brainstorm persisted malformed synopsis_data",
+                _build_brainstorm_contract_evidence(checkpoint, synopsis=raw_synopsis),
+            )
+        synopsis = dict(raw_synopsis or {})
+        if not synopsis:
+            raise ContractValidationError(
+                "brainstorm_contract",
+                "brainstorm did not persist synopsis_data",
+                _build_brainstorm_contract_evidence(checkpoint, synopsis=None),
+            )
+        outlines = synopsis.get("volume_outlines")
+        if outlines is not None and not isinstance(outlines, list):
+            raise ContractValidationError(
+                "brainstorm_contract",
+                "brainstorm persisted malformed volume_outlines",
+                _build_brainstorm_contract_evidence(checkpoint, synopsis=synopsis),
+            )
+
+        normalized_outlines = []
+        for item in outlines or []:
+            if isinstance(item, dict):
+                normalized_outlines.append(dict(item))
+        target_outline = next(
+            (
+                item
+                for item in normalized_outlines
+                if _coerce_int(item.get("volume_number")) == options.target_volume_number
+            ),
+            None,
+        )
+        if target_outline is None:
+            target_outline = {
+                "volume_number": options.target_volume_number,
+                "title": f"第{options.target_volume_number}卷",
+                "summary": synopsis.get("logline") or synopsis.get("core_conflict") or "长篇验收目标卷",
+            }
+            normalized_outlines.append(target_outline)
+
+        start_chapter, end_chapter = _target_volume_chapter_range(options)
+        target_outline["volume_number"] = options.target_volume_number
+        target_outline.setdefault("title", f"第{options.target_volume_number}卷")
+        target_outline.setdefault("summary", synopsis.get("logline") or synopsis.get("core_conflict") or "长篇验收目标卷")
+        target_outline["target_chapter_range"] = f"{start_chapter}-{end_chapter}"
+
+        synopsis["estimated_volumes"] = options.target_volumes
+        synopsis["estimated_total_chapters"] = options.target_chapters
+        synopsis["estimated_total_words"] = options.target_word_count
+        synopsis["volume_outlines"] = sorted(
+            normalized_outlines,
+            key=lambda item: _coerce_int(item.get("volume_number")) or 0,
+        )
+        checkpoint["synopsis_data"] = synopsis
+        checkpoint["acceptance_scope"] = options.acceptance_scope
+        checkpoint["longform_target"] = {
+            "target_volumes": options.target_volumes,
+            "target_chapters": options.target_chapters,
+            "target_word_count": options.target_word_count,
+            "target_volume_number": options.target_volume_number,
+            "target_volume_chapters": options.resolved_target_volume_chapters(),
+            "chapter_target_word_count": options.resolved_chapter_target_word_count(),
+            "target_volume_word_count": options.resolved_target_volume_word_count(),
+        }
+
+        await repo.save_checkpoint(
+            novel_id,
+            state.current_phase,
+            checkpoint,
+            current_volume_id=state.current_volume_id,
+            current_chapter_id=state.current_chapter_id,
+        )
+        await session.commit()
+
+
+async def _prepare_longform_volume_plan_contract(
+    novel_id: str,
+    options: GenerationRunOptions,
+) -> None:
+    chapter_target = options.resolved_chapter_target_word_count()
+    target_chapter_count = options.resolved_target_volume_chapters()
+    async with async_session_maker() as session:
+        repo = NovelStateRepository(session)
+        state = await repo.get_state(novel_id)
+        if state is None:
+            raise RuntimeError(f"Novel state not found for {novel_id}")
+
+        checkpoint = dict(state.checkpoint_data or {})
+        volume_plan = checkpoint.get("current_volume_plan")
+        if not isinstance(volume_plan, dict):
+            raise ContractValidationError(
+                "volume_plan_contract",
+                "volume_plan did not persist current_volume_plan",
+                build_volume_plan_contract_evidence({}, checkpoint),
+            )
+        volume_plan = dict(volume_plan)
+        chapters = volume_plan.get("chapters")
+        if not isinstance(chapters, list) or not chapters:
+            raise ContractValidationError(
+                "volume_plan_contract",
+                "volume_plan did not persist usable chapters",
+                build_volume_plan_contract_evidence(volume_plan, checkpoint),
+            )
+
+        source_chapters = []
+        for chapter in chapters:
+            if not isinstance(chapter, dict):
+                continue
+            source_chapters.append(dict(chapter))
+
+        archived_rows = await session.execute(
+            select(Chapter.chapter_number)
+            .where(Chapter.novel_id == novel_id)
+            .where(Chapter.volume_id == (volume_plan.get("volume_id") or state.current_volume_id))
+            .where(Chapter.status == "archived")
+        )
+        fixed_prefix_count = max([number for number in archived_rows.scalars().all() if number] or [0])
+        if len(source_chapters) < target_chapter_count:
+            source_chapters = _expand_longform_chapter_plan(
+                source_chapters,
+                target_count=target_chapter_count,
+                fixed_prefix_count=fixed_prefix_count,
+                volume_id=str(volume_plan.get("volume_id") or state.current_volume_id or "vol_1"),
+            )
+        elif len(source_chapters) > target_chapter_count:
+            source_chapters = source_chapters[:target_chapter_count]
+
+        normalized_chapters = []
+        for chapter_payload in source_chapters:
+            chapter_payload = dict(chapter_payload)
+            chapter_payload["target_word_count"] = chapter_target
+            beats = chapter_payload.get("beats")
+            if isinstance(beats, list) and beats:
+                beat_target = max(1, round(chapter_target / len(beats)))
+                normalized_beats = []
+                for beat in beats:
+                    beat_payload = dict(beat) if isinstance(beat, dict) else {"summary": str(beat)}
+                    beat_payload["target_word_count"] = beat_target
+                    normalized_beats.append(beat_payload)
+                chapter_payload["beats"] = normalized_beats
+            normalized_chapters.append(chapter_payload)
+
+        volume_plan["chapters"] = normalized_chapters
+        volume_plan["total_chapters"] = target_chapter_count
+        volume_plan["estimated_total_words"] = options.resolved_target_volume_word_count()
+        checkpoint["current_volume_plan"] = volume_plan
+        checkpoint["acceptance_scope"] = options.acceptance_scope
+
+        current_chapter_id = state.current_chapter_id
+        current_plan = checkpoint.get("current_chapter_plan")
+        replacement = None
+        if isinstance(current_plan, dict):
+            current_id = current_plan.get("chapter_id")
+            replacement = next((item for item in normalized_chapters if item.get("chapter_id") == current_id), None)
+        if replacement is None and current_chapter_id:
+            replacement = next((item for item in normalized_chapters if item.get("chapter_id") == current_chapter_id), None)
+        if replacement is None and normalized_chapters:
+            replacement = normalized_chapters[0]
+        if replacement is not None:
+            checkpoint["current_chapter_plan"] = dict(replacement)
+            chapter_context = checkpoint.get("chapter_context")
+            if isinstance(chapter_context, dict):
+                chapter_context = dict(chapter_context)
+                chapter_context["chapter_plan"] = dict(replacement)
+                checkpoint["chapter_context"] = chapter_context
+
+        await repo.save_checkpoint(
+            novel_id,
+            state.current_phase,
+            checkpoint,
+            current_volume_id=state.current_volume_id,
+            current_chapter_id=state.current_chapter_id,
+        )
+        await session.commit()
+
+
+def _target_volume_chapter_range(options: GenerationRunOptions) -> tuple[int, int]:
+    start = 1
+    for volume_number in range(1, options.target_volume_number):
+        base, remainder = divmod(options.target_chapters, options.target_volumes)
+        start += base + (1 if volume_number <= remainder else 0)
+    end = start + options.resolved_target_volume_chapters() - 1
+    return start, end
+
+
+def _expand_longform_chapter_plan(
+    chapters: list[dict[str, Any]],
+    *,
+    target_count: int,
+    fixed_prefix_count: int = 0,
+    volume_id: str,
+) -> list[dict[str, Any]]:
+    if target_count <= 0 or not chapters:
+        return chapters
+
+    fixed_prefix_count = max(0, min(fixed_prefix_count, len(chapters), target_count))
+    fixed_prefix = [dict(chapter) for chapter in chapters[:fixed_prefix_count]]
+    remaining_sources = [dict(chapter) for chapter in chapters[fixed_prefix_count:]]
+    remaining_target = target_count - fixed_prefix_count
+    if remaining_target <= 0 or not remaining_sources:
+        return fixed_prefix[:target_count]
+
+    source_indexes = [
+        min(
+            len(remaining_sources) - 1,
+            int(offset * len(remaining_sources) / remaining_target),
+        )
+        for offset in range(remaining_target)
+    ]
+    total_parts_by_source: dict[int, int] = {}
+    for source_index in source_indexes:
+        total_parts_by_source[source_index] = total_parts_by_source.get(source_index, 0) + 1
+    seen_parts_by_source: dict[int, int] = {}
+
+    expanded = fixed_prefix
+    phase_labels = ("铺垫", "试探", "升级", "兑现", "余波")
+    for offset, source_index in enumerate(source_indexes, start=1):
+        chapter_number = fixed_prefix_count + offset
+        source = dict(remaining_sources[source_index])
+        seen_parts_by_source[source_index] = seen_parts_by_source.get(source_index, 0) + 1
+        part_index = seen_parts_by_source[source_index]
+        part_total = total_parts_by_source[source_index]
+        phase = phase_labels[min(part_index - 1, len(phase_labels) - 1)]
+
+        title = str(source.get("title") or f"第{chapter_number}章").strip()
+        if part_total > 1:
+            title = f"{title}·{phase}"
+
+        summary = str(source.get("summary") or title).strip()
+        if part_total > 1:
+            summary = (
+                f"{summary} 本章作为该情节节点的{phase}段推进，"
+                "只完成当前小目标，保留后续冲突、线索或反转给下一章。"
+            )
+
+        payload = dict(source)
+        payload["chapter_id"] = f"{volume_id}_ch_{chapter_number}"
+        payload["chapter_number"] = chapter_number
+        payload["title"] = title
+        payload["summary"] = summary
+        expanded.append(payload)
+
+    return expanded
 
 
 def _first_string(data: dict[str, Any], *keys: str) -> str | None:
@@ -1256,6 +2068,22 @@ def _exception_is_parse_failure(message: str) -> bool:
     return any(marker in normalized for marker in markers)
 
 
+def _auth_or_config_is_external(message: str) -> bool:
+    normalized = message.lower()
+    markers = (
+        "api key",
+        "authentication",
+        "unauthorized",
+        "permission denied",
+        "invalid key",
+        "401",
+        "认证失败",
+        "配置或认证失败",
+        "有效的 api key",
+    )
+    return any(marker in normalized or marker in message for marker in markers)
+
+
 def classify_exception(
     stage: str,
     exc: Exception,
@@ -1264,6 +2092,7 @@ def classify_exception(
 ) -> Issue:
     issue_type: IssueType
     is_external_blocker = False
+    evidence: list[str] = []
 
     if isinstance(exc, ContractValidationError):
         issue_type = "SYSTEM_BUG"
@@ -1282,7 +2111,14 @@ def classify_exception(
     if isinstance(exc, httpx.HTTPStatusError):
         status_code = exc.response.status_code
         message = _http_status_error_message(exc)
+        evidence.append(f"http_status={status_code}")
+        response_text = getattr(exc.response, "text", "")
+        if response_text:
+            evidence.append(f"response_text={_truncate_evidence(response_text)}")
         if status_code == 429:
+            issue_type = "EXTERNAL_BLOCKED"
+            is_external_blocker = True
+        elif status_code in {401, 502} and _auth_or_config_is_external(message):
             issue_type = "EXTERNAL_BLOCKED"
             is_external_blocker = True
         elif status_code in {402, 403} and _quota_or_provider_is_external(message):
@@ -1321,9 +2157,14 @@ def classify_exception(
         real_llm=real_llm,
         fake_rerun_status=None,
         message=str(exc) or exc.__class__.__name__,
-        evidence=[],
+        evidence=evidence,
         reproduce=_reproduce_command_for_stage(stage, acceptance_scope),
     )
+
+
+def _truncate_evidence(value: str, limit: int = 800) -> str:
+    value = value.replace("\n", "\\n")
+    return value if len(value) <= limit else f"{value[:limit]}..."
 
 
 def _reproduce_command_for_stage(

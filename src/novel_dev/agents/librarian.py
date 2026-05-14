@@ -96,6 +96,9 @@ class SoftStateExtraction(BaseModel):
 
 
 class LibrarianAgent:
+    PRIMARY_EXTRACT_TIMEOUT_SECONDS = 120
+    SOFT_STATE_TIMEOUT_SECONDS = 45
+
     def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
         self.session = session
         self.embedding_service = embedding_service
@@ -165,7 +168,10 @@ class LibrarianAgent:
         try:
             payload = await call_and_parse_model(
                 "LibrarianAgent", "extract_relationships", prompt,
-                SoftStateExtraction, max_retries=2, novel_id=novel_id
+                SoftStateExtraction,
+                max_retries=2,
+                novel_id=novel_id,
+                max_wait_seconds=self.SOFT_STATE_TIMEOUT_SECONDS,
             )
             updates_raw = payload.character_updates
             rels_raw = payload.new_relationships
@@ -207,7 +213,12 @@ class LibrarianAgent:
         context = await self._load_context(novel_id, chapter_id)
         prompt = self._build_prompt(polished_text, context)
         extraction = await call_and_parse_model(
-            "LibrarianAgent", "extract", prompt, ExtractionResult, novel_id=novel_id
+            "LibrarianAgent",
+            "extract",
+            prompt,
+            ExtractionResult,
+            novel_id=novel_id,
+            max_wait_seconds=self.PRIMARY_EXTRACT_TIMEOUT_SECONDS,
         )
 
         # 第二 pass:补抽隐性的情感/关系变化(硬事实常挤掉软状态)
@@ -702,10 +713,62 @@ class LibrarianAgent:
 
         entity = await entity_repo.find_by_name(raw_ref, novel_id=novel_id)
         if entity is None:
-            return None
+            entity = await self._resolve_duplicate_name_entity(raw_ref, novel_id, entity_repo)
+            if entity is None:
+                return None
         name_to_id[raw_ref] = entity.id
         name_to_id[entity.name] = entity.id
         return entity.id
+
+    @staticmethod
+    def _entity_group(entity_type: str) -> str:
+        normalized = str(entity_type or "").strip().lower()
+        groups = {
+            "character": "character",
+            "人物": "character",
+            "role": "character",
+            "item": "item",
+            "物品": "item",
+            "法宝": "item",
+            "concept": "concept",
+            "概念": "concept",
+            "功法": "concept",
+            "location": "location",
+            "地点": "location",
+            "place": "location",
+            "faction": "faction",
+            "势力": "faction",
+            "organization": "faction",
+        }
+        return groups.get(normalized, normalized)
+
+    async def _resolve_duplicate_name_entity(
+        self,
+        raw_ref: str,
+        novel_id: str,
+        entity_repo: EntityRepository,
+    ):
+        candidates = [
+            entity
+            for entity in await entity_repo.list_by_novel(novel_id)
+            if entity.name == raw_ref
+        ]
+        if len(candidates) <= 1:
+            return candidates[0] if candidates else None
+
+        groups = {self._entity_group(entity.type) for entity in candidates}
+        if len(groups) != 1:
+            return None
+        raw_types = {str(entity.type or "").strip().lower() for entity in candidates}
+        if len(raw_types) == 1:
+            return None
+
+        def sort_key(entity) -> tuple[int, str]:
+            version = int(entity.current_version or 0)
+            updated = entity.updated_at.isoformat() if getattr(entity, "updated_at", None) else ""
+            return (version, updated)
+
+        return max(candidates, key=sort_key)
 
     async def _normalize_spaceline_parent_id(
         self,

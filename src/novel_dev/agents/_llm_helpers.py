@@ -517,6 +517,7 @@ async def _await_llm_response_with_progress(
     attempt_metadata: dict[str, Any],
     started_at: float,
     interval_seconds: int = 15,
+    max_wait_seconds: float | None = None,
 ) -> Any:
     response_task = asyncio.create_task(awaitable)
     heartbeat = 0
@@ -529,6 +530,13 @@ async def _await_llm_response_with_progress(
             raise_if_cancelled_sync(novel_id)
             heartbeat += 1
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            if max_wait_seconds is not None and elapsed_ms >= int(max_wait_seconds * 1000):
+                response_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await response_task
+                raise TimeoutError(
+                    f"{agent_name}/{task} timed out after {elapsed_ms // 1000}s waiting for LLM response"
+                )
             _log_llm_event(
                 novel_id,
                 agent_name,
@@ -643,6 +651,7 @@ async def call_and_parse(
     config_agent_name: str | None = None,
     config_task: str | None = None,
     client: Any | None = None,
+    max_wait_seconds: float | None = None,
 ) -> T:
     context_metadata = context_metadata or {}
     config_agent_name = config_agent_name or agent_name
@@ -677,6 +686,7 @@ async def call_and_parse(
                 task=task,
                 attempt_metadata=attempt_metadata,
                 started_at=started_at,
+                max_wait_seconds=max_wait_seconds,
             )
             cleaned = _strip_markdown(response.text)
             try:
@@ -749,6 +759,7 @@ async def call_and_parse_model(
     context_metadata: dict[str, Any] | None = None,
     config_agent_name: str | None = None,
     config_task: str | None = None,
+    max_wait_seconds: float | None = None,
 ) -> Any:
     context_metadata = context_metadata or {}
     config_agent_name = config_agent_name or agent_name
@@ -845,6 +856,7 @@ async def call_and_parse_model(
                     task=task,
                     attempt_metadata=attempt_metadata,
                     started_at=started_at,
+                    max_wait_seconds=max_wait_seconds,
                 )
                 if response.structured_payload is not None:
                     result = payload_parser(response.structured_payload)

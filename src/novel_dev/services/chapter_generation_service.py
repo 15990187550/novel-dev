@@ -344,7 +344,20 @@ class ChapterGenerationService:
     async def _raise_if_quality_blocked(self, chapter_id: str) -> None:
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         if chapter and getattr(chapter, "quality_status", "unchecked") == "block":
+            state = await self.director.resume(chapter.novel_id or "")
+            if self._is_repairable_quality_block(state, chapter_id):
+                return
             raise QualityGateBlockedError(chapter_id, chapter.quality_reasons)
+
+    @staticmethod
+    def _is_repairable_quality_block(state, chapter_id: str) -> bool:
+        if state is None or state.current_phase != Phase.EDITING.value or state.current_chapter_id != chapter_id:
+            return False
+        checkpoint = dict(state.checkpoint_data or {})
+        return bool(
+            checkpoint.get("final_polish_issues")
+            and int(checkpoint.get("quality_gate_repair_attempt_count", 0) or 0) > 0
+        )
 
     async def _maybe_run_periodic_global_consistency_audit(
         self,

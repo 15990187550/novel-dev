@@ -21,6 +21,7 @@ FAST_REVIEW_PASS_SCORE = 100
 FAST_REVIEW_FAIL_SCORE = 50
 # Editor ↔ FastReview 最大循环次数,防止极端情况下无限翻译
 MAX_EDIT_ATTEMPTS = 2
+MAX_QUALITY_GATE_REPAIR_ATTEMPTS = 1
 
 
 def _apply_continuity_audit_to_gate(gate, audit):
@@ -50,7 +51,7 @@ AI_FLAVOR_KEYWORDS = (
 
 
 def _is_acceptance_contract_checkpoint(checkpoint: dict) -> bool:
-    return str(checkpoint.get("acceptance_scope") or "") == "real-contract"
+    return str(checkpoint.get("acceptance_scope") or "") in {"real-contract", "real-longform-volume1"}
 
 
 class FastReviewLLMCheck(BaseModel):
@@ -393,23 +394,54 @@ class FastReviewAgent:
             )
 
             if gate.status == QUALITY_BLOCK:
-                log_agent_detail(
-                    novel_id,
-                    "FastReviewAgent",
-                    "质量门禁阻断，停止进入 librarian",
-                    node="quality_gate_decision",
-                    task="review",
-                    status="failed",
-                    level="warning",
-                    metadata=gate.model_dump(),
-                )
-                await self.director.save_checkpoint(
-                    novel_id,
-                    phase=Phase.FAST_REVIEWING,
-                    checkpoint_data=checkpoint,
-                    volume_id=state.current_volume_id,
-                    chapter_id=state.current_chapter_id,
-                )
+                repair_attempts = int(checkpoint.get("quality_gate_repair_attempt_count", 0) or 0)
+                if self._can_repair_quality_gate_block(gate, checkpoint) and repair_attempts < MAX_QUALITY_GATE_REPAIR_ATTEMPTS:
+                    checkpoint["quality_gate_repair_attempt_count"] = repair_attempts + 1
+                    checkpoint["final_polish_issues"] = self._build_final_polish_issues(
+                        final_feedback=final_feedback,
+                        gate_data=gate.model_dump(),
+                        checkpoint=checkpoint,
+                    )
+                    log_agent_detail(
+                        novel_id,
+                        "FastReviewAgent",
+                        "质量门禁命中可修复阻断，回到 editing 定点精修",
+                        node="quality_gate_repair",
+                        task="review",
+                        status="failed",
+                        level="warning",
+                        metadata={
+                            "quality_gate": gate.model_dump(),
+                            "quality_gate_repair_attempt_count": checkpoint["quality_gate_repair_attempt_count"],
+                            "max_quality_gate_repair_attempts": MAX_QUALITY_GATE_REPAIR_ATTEMPTS,
+                            "final_polish_issues": checkpoint["final_polish_issues"],
+                        },
+                    )
+                    await self.director.save_checkpoint(
+                        novel_id,
+                        phase=Phase.EDITING,
+                        checkpoint_data=checkpoint,
+                        volume_id=state.current_volume_id,
+                        chapter_id=state.current_chapter_id,
+                    )
+                else:
+                    log_agent_detail(
+                        novel_id,
+                        "FastReviewAgent",
+                        "质量门禁阻断，停止进入 librarian",
+                        node="quality_gate_decision",
+                        task="review",
+                        status="failed",
+                        level="warning",
+                        metadata=gate.model_dump(),
+                    )
+                    await self.director.save_checkpoint(
+                        novel_id,
+                        phase=Phase.FAST_REVIEWING,
+                        checkpoint_data=checkpoint,
+                        volume_id=state.current_volume_id,
+                        chapter_id=state.current_chapter_id,
+                    )
             elif self._should_return_to_editing_for_final_polish(
                 gate=gate,
                 final_review_score=final_score,
@@ -480,6 +512,7 @@ class FastReviewAgent:
                     metadata={"passed": passed, "target_phase": Phase.LIBRARIAN.value, "quality_gate": gate.model_dump()},
                 )
                 checkpoint.pop("edit_attempt_count", None)
+                checkpoint.pop("quality_gate_repair_attempt_count", None)
                 await self.director.save_checkpoint(
                     novel_id,
                     phase=Phase.LIBRARIAN,
@@ -559,6 +592,21 @@ class FastReviewAgent:
         return isinstance(editor_warnings, list) and bool(editor_warnings)
 
     @staticmethod
+    def _can_repair_quality_gate_block(gate, checkpoint: dict) -> bool:
+        blocking_codes = {
+            str(item.get("code"))
+            for item in gate.blocking_items
+            if isinstance(item, dict) and item.get("code")
+        }
+        if not blocking_codes:
+            return False
+        recoverable_codes = {"beat_cohesion", "text_integrity"}
+        if not blocking_codes.issubset(recoverable_codes):
+            return False
+        acceptance_scope = str(checkpoint.get("acceptance_scope") or "")
+        return acceptance_scope in {"real-contract", "real-longform-volume1"}
+
+    @staticmethod
     def _build_final_polish_issues(
         *,
         final_feedback: dict,
@@ -599,6 +647,7 @@ class FastReviewAgent:
                 for beat_idx, issues in sorted(beat_issues.items())
             ],
             "global_issues": global_issues,
+            "quality_gate_blocking_items": gate_data.get("blocking_items") or [],
             "quality_gate_warnings": gate_data.get("warning_items") or [],
         }
 

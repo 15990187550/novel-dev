@@ -56,6 +56,107 @@ async def test_load_location_context(async_session):
     assert mock_client.acomplete.call_count == 2
 
 
+@pytest.mark.asyncio
+async def test_load_location_context_falls_back_when_scene_narrative_empty(
+    async_session,
+    monkeypatch,
+):
+    agent = ContextAgent(async_session)
+    monkeypatch.setattr(
+        agent,
+        "_analyze_context_needs",
+        AsyncMock(
+            return_value={
+                "locations": [],
+                "entities": [],
+                "time_range": {"start_tick": -1, "end_tick": 1},
+                "foreshadowing_keywords": [],
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        "novel_dev.agents.context_agent.orchestrated_call_and_parse_model",
+        AsyncMock(
+            side_effect=RuntimeError(
+                "build_scene_context failed validator subtask after repair: "
+                "{'valid': False, 'reason': 'narrative_too_short'}"
+            )
+        ),
+    )
+
+    class FakeFactory:
+        @staticmethod
+        def resolve_orchestration_config(_agent, _task):
+            return OrchestratedTaskConfig(
+                tool_allowlist=[],
+                enable_subtasks=True,
+                validator_subtask="location_context_quality",
+                repairer_subtask="schema_repair",
+            )
+
+    monkeypatch.setattr("novel_dev.agents.context_agent.llm_factory", FakeFactory())
+    plan = ChapterPlan(
+        chapter_number=4,
+        title="暗线初现",
+        target_word_count=1667,
+        beats=[
+            BeatPlan(
+                summary="陆照追查血海殿线索，在外门夜色里发现一枚陌生令符。",
+                target_mood="紧张",
+                key_entities=["陆照", "血海殿"],
+            )
+        ],
+    )
+
+    result = await agent._load_location_context(plan, "n_scene_fallback")
+
+    assert result.current == "暗线初现"
+    assert len(result.narrative) >= 30
+    assert "陆照" in result.narrative
+    assert "陌生令符" in result.narrative
+
+
+@pytest.mark.asyncio
+async def test_analyze_context_needs_falls_back_on_connection_error(
+    async_session,
+    monkeypatch,
+):
+    from novel_dev.repositories.spaceline_repo import SpacelineRepository
+
+    await SpacelineRepository(async_session).create(
+        location_id="loc_ctx_fb",
+        name="青云宗",
+        novel_id="n_ctx_fb",
+    )
+
+    async def fail_call(*args, **kwargs):
+        raise RuntimeError("Connection error.")
+
+    monkeypatch.setattr("novel_dev.agents.context_agent.call_and_parse_model", fail_call)
+
+    agent = ContextAgent(async_session)
+    plan = ChapterPlan(
+        chapter_number=8,
+        title="夜巡异兆",
+        target_word_count=2200,
+        beats=[
+            BeatPlan(
+                summary="陆照在青云宗夜巡时发现山门外血光一闪，怀疑有人借古镜引动旧阵。",
+                target_mood="紧张",
+                key_entities=["陆照", "青云宗", "古镜"],
+                foreshadowings_to_embed=["旧阵异动"],
+            )
+        ],
+    )
+
+    result = await agent._analyze_context_needs(plan, "n_ctx_fb")
+
+    assert result["locations"] == ["青云宗"]
+    assert result["entities"] == ["陆照", "古镜"]
+    assert result["time_range"] == {"start_tick": -2, "end_tick": 2}
+    assert result["foreshadowing_keywords"] == ["旧阵异动"]
+
+
 def test_llm_config_enables_context_agent_orchestration():
     config = yaml.safe_load(Path("llm_config.yaml").read_text())
 

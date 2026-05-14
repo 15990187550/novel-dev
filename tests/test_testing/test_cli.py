@@ -1,6 +1,41 @@
 import json
 
+from novel_dev.testing import cli
 from novel_dev.testing.cli import main
+
+
+def test_generation_parser_accepts_longform_volume1_options():
+    parser = cli._build_parser()
+
+    args = parser.parse_args(
+        [
+            "generation",
+            "--llm-mode",
+            "real",
+            "--acceptance-scope",
+            "real-longform-volume1",
+            "--source-dir",
+            "/Users/xuhuibin/Desktop/novel",
+            "--target-volumes",
+            "18",
+            "--target-chapters",
+            "1200",
+            "--target-word-count",
+            "2000000",
+            "--target-volume-number",
+            "1",
+            "--target-volume-chapters",
+            "67",
+        ]
+    )
+
+    assert args.acceptance_scope == "real-longform-volume1"
+    assert args.source_dir == "/Users/xuhuibin/Desktop/novel"
+    assert args.target_volumes == 18
+    assert args.target_chapters == 1200
+    assert args.target_word_count == 2_000_000
+    assert args.target_volume_number == 1
+    assert args.target_volume_chapters == 67
 
 
 def test_generation_command_writes_summary_report(tmp_path):

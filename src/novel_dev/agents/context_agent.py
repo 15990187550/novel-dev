@@ -441,10 +441,10 @@ class ContextAgent:
         return StoryQualityService.build_writing_cards(chapter_plan)
 
     def _extract_key_entities_from_plan(self, chapter_plan: ChapterPlan) -> List[str]:
-        names = set()
+        names: list[str] = []
         for beat in chapter_plan.beats:
-            names.update(beat.key_entities)
-        return list(names)
+            names.extend(beat.key_entities)
+        return self._unique_names(names)
 
     async def _expand_context_entity_names(
         self,
@@ -697,11 +697,92 @@ class ContextAgent:
             "- foreshadowing_keywords: 用于筛选相关伏笔的关键词\n\n"
             f"章节计划：\n{chapter_plan.model_dump_json()}"
         )
-        result = await call_and_parse_model(
-            "ContextAgent", "analyze_context_needs", prompt,
-            ContextNeeds, max_retries=3, novel_id=novel_id
+        try:
+            result = await call_and_parse_model(
+                "ContextAgent", "analyze_context_needs", prompt,
+                ContextNeeds, max_retries=3, novel_id=novel_id
+            )
+            return result.model_dump()
+        except Exception as exc:
+            return await self._fallback_context_needs(
+                chapter_plan=chapter_plan,
+                novel_id=novel_id,
+                error=exc,
+            )
+
+    async def _fallback_context_needs(
+        self,
+        *,
+        chapter_plan: ChapterPlan,
+        novel_id: str,
+        error: Exception,
+    ) -> dict:
+        summary_text = " ".join(
+            beat.summary.strip()
+            for beat in chapter_plan.beats
+            if beat.summary and beat.summary.strip()
         )
-        return result.model_dump()
+        search_text = f"{chapter_plan.title or ''} {summary_text}"
+        location_names = await self._infer_location_names_from_plan(search_text, chapter_plan, novel_id)
+        entity_names = [
+            name
+            for name in self._extract_key_entities_from_plan(chapter_plan)
+            if name not in set(location_names)
+        ][:6]
+        foreshadowing_keywords = self._unique_names(
+            [
+                content
+                for beat in chapter_plan.beats
+                for content in beat.foreshadowings_to_embed
+            ]
+        )[:6]
+        fallback = {
+            "locations": location_names[:3],
+            "entities": entity_names,
+            "time_range": {"start_tick": -2, "end_tick": 2},
+            "foreshadowing_keywords": foreshadowing_keywords,
+        }
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            "场景需求分析失败，已使用章节计划推断上下文需求",
+            level="warning",
+            event="agent.warning",
+            status="recovered",
+            node="context_scene_query",
+            task="analyze_context_needs",
+            metadata={
+                "error": str(error),
+                "fallback": fallback,
+            },
+        )
+        return fallback
+
+    async def _infer_location_names_from_plan(
+        self,
+        search_text: str,
+        chapter_plan: ChapterPlan,
+        novel_id: str,
+    ) -> List[str]:
+        text = str(search_text or "")
+        try:
+            all_locations = await self.spaceline_repo.list_by_novel(novel_id)
+        except Exception:
+            all_locations = []
+
+        key_entities = self._extract_key_entities_from_plan(chapter_plan)
+        exact_key_matches = []
+        fuzzy_text_matches = []
+        for location in all_locations:
+            name = str(location.name or "").strip()
+            if not name:
+                continue
+            if name in key_entities:
+                exact_key_matches.append(name)
+                continue
+            if name in text:
+                fuzzy_text_matches.append(name)
+        return self._unique_names([*exact_key_matches, *fuzzy_text_matches])
 
     async def _load_location_context(
         self, chapter_plan: ChapterPlan, novel_id: str
@@ -804,24 +885,117 @@ class ContextAgent:
             f"场景上下文：{json.dumps(prompt_scene_inputs, ensure_ascii=False)}\n"
         )
         if orchestration_config is not None:
-            return await orchestrated_call_and_parse_model(
-                "ContextAgent",
-                "build_scene_context",
-                prompt,
-                LocationContext,
-                tools=self._build_scene_context_tools(
+            try:
+                return await orchestrated_call_and_parse_model(
+                    "ContextAgent",
+                    "build_scene_context",
+                    prompt,
+                    LocationContext,
+                    tools=self._build_scene_context_tools(
+                        novel_id=novel_id,
+                        scene_inputs=scene_inputs,
+                        orchestration_config=orchestration_config,
+                    ),
+                    task_config=orchestration_config,
                     novel_id=novel_id,
+                    max_retries=3,
+                )
+            except RuntimeError as exc:
+                return self._fallback_location_context(
+                    novel_id=novel_id,
+                    chapter_plan=chapter_plan,
                     scene_inputs=scene_inputs,
-                    orchestration_config=orchestration_config,
-                ),
-                task_config=orchestration_config,
-                novel_id=novel_id,
-                max_retries=3,
+                    error=exc,
+                )
+        try:
+            return await call_and_parse_model(
+                "ContextAgent", "build_scene_context", prompt,
+                LocationContext, max_retries=3, novel_id=novel_id
             )
-        return await call_and_parse_model(
-            "ContextAgent", "build_scene_context", prompt,
-            LocationContext, max_retries=3, novel_id=novel_id
+        except RuntimeError as exc:
+            return self._fallback_location_context(
+                novel_id=novel_id,
+                chapter_plan=chapter_plan,
+                scene_inputs=scene_inputs,
+                error=exc,
+            )
+
+    def _fallback_location_context(
+        self,
+        *,
+        novel_id: str,
+        chapter_plan: ChapterPlan,
+        scene_inputs: dict,
+        error: Exception,
+    ) -> LocationContext:
+        first_location = next(
+            (
+                item for item in scene_inputs.get("locations", [])
+                if isinstance(item, dict) and str(item.get("name") or "").strip()
+            ),
+            None,
         )
+        current = str((first_location or {}).get("name") or chapter_plan.title or "当前场景").strip()
+        parent = ""
+        if isinstance(first_location, dict):
+            meta = first_location.get("meta")
+            if isinstance(meta, dict):
+                parent = str(meta.get("parent") or meta.get("region") or "").strip()
+
+        entity_names = [
+            str(item.get("name") or "").strip()
+            for item in scene_inputs.get("entity_states", [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        if not entity_names:
+            entity_names = self._extract_key_entities_from_plan(chapter_plan)
+
+        beat_summaries = [
+            beat.summary.strip()
+            for beat in chapter_plan.beats[:3]
+            if beat.summary and beat.summary.strip()
+        ]
+        timeline = [
+            str(item.get("narrative") or "").strip()
+            for item in scene_inputs.get("timeline_events", [])[:2]
+            if isinstance(item, dict) and str(item.get("narrative") or "").strip()
+        ]
+        foreshadowings = [
+            str(item.get("content") or "").strip()
+            for item in scene_inputs.get("foreshadowings", [])[:2]
+            if isinstance(item, dict) and str(item.get("content") or "").strip()
+        ]
+
+        parts = [
+            f"当前镜头落在「{current}」，围绕第{chapter_plan.chapter_number}章《{chapter_plan.title}》展开。",
+        ]
+        if entity_names:
+            parts.append(f"在场核心对象包括{self._join_names(entity_names[:4])}。")
+        if beat_summaries:
+            parts.append("本场承接：" + "；".join(beat_summaries) + "。")
+        if timeline:
+            parts.append("临近事件：" + "；".join(timeline) + "。")
+        if foreshadowings:
+            parts.append("需要照应的伏笔：" + "；".join(foreshadowings) + "。")
+        parts.append("描写时保持具体的光线、声音、气味与人物站位，让下一节拍自然推进。")
+        narrative = "".join(parts)
+
+        log_service.add_log(
+            novel_id,
+            "ContextAgent",
+            "场景镜头生成失败，已使用章节计划合成兜底上下文",
+            level="warning",
+            event="agent.warning",
+            status="recovered",
+            node="context_location",
+            task="build_scene_context",
+            metadata={
+                "error": str(error),
+                "current": current,
+                "narrative_chars": len(narrative),
+            },
+        )
+        return LocationContext(current=current, parent=parent, narrative=narrative)
 
     def _build_scene_context_catalog(self, scene_inputs: dict, chapter_plan: ChapterPlan) -> dict:
         return {

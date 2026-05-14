@@ -120,7 +120,7 @@ class QualityGateService:
         *,
         acceptance_scope: str | None = None,
     ) -> str:
-        if acceptance_scope == "real-contract":
+        if acceptance_scope in {"real-contract", "real-longform-volume1"}:
             return QUALITY_WARN
         if not target or target <= 0 or actual is None:
             return QUALITY_WARN

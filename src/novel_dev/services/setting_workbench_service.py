@@ -1,4 +1,5 @@
 import asyncio
+import json
 import re
 import time
 import uuid
@@ -869,7 +870,31 @@ class SettingWorkbenchService:
         self._fill_missing_source_doc_ids_from_coverage(draft, source_coverage)
         missing_sections = self._missing_required_sections(draft, required_sections)
         if not missing_sections:
-            return draft
+            validation_error = self._business_validation_error(draft, required_sections=required_sections)
+            if validation_error is None:
+                return draft
+            log_service.add_log(
+                novel_id,
+                "SettingWorkbenchService",
+                "设定审核草稿业务校验失败，开始修复生成",
+                event="agent.progress",
+                status="started",
+                node="setting_generate_repair",
+                task="setting_workbench_generate_batch",
+                metadata={
+                    **common_metadata,
+                    "validation_error": str(validation_error),
+                    "draft": self._draft_stats(draft),
+                },
+            )
+            repaired_draft = await self._call_generation_model(
+                novel_id=novel_id,
+                prompt=self._build_business_validation_repair_prompt(prompt, draft, validation_error),
+                current_setting_context=current_setting_context,
+                orchestration_config=orchestration_config,
+            )
+            self._fill_missing_source_doc_ids_from_coverage(repaired_draft, source_coverage)
+            return repaired_draft
 
         log_service.add_log(
             novel_id,
@@ -893,6 +918,19 @@ class SettingWorkbenchService:
         )
         self._fill_missing_source_doc_ids_from_coverage(repaired_draft, source_coverage)
         return repaired_draft
+
+    def _business_validation_error(
+        self,
+        draft: SettingBatchDraft,
+        *,
+        required_sections: list[dict[str, str]],
+    ) -> Exception | None:
+        try:
+            self._repair_same_batch_entity_create_ids(draft)
+            self._validate_batch_draft(draft, required_sections=required_sections)
+        except ValueError as exc:
+            return exc
+        return None
 
     @staticmethod
     def _merge_generation_drafts(drafts: list[SettingBatchDraft]) -> SettingBatchDraft:
@@ -953,6 +991,29 @@ class SettingWorkbenchService:
                 "请重新输出完整 SettingBatchDraft JSON。",
                 "最终 changes 必须覆盖全部建议批次，而不只是补充缺失项；每个建议批次对应 1 条独立 setting_card create change。",
                 "不要省略已覆盖批次，不要把多个建议批次合并到同一条 change。",
+            ]
+        )
+
+    @staticmethod
+    def _build_business_validation_repair_prompt(
+        base_prompt: str,
+        draft: SettingBatchDraft,
+        error: Exception,
+    ) -> str:
+        return "\n".join(
+            [
+                base_prompt,
+                "",
+                "上一次输出未通过业务校验，请重新输出完整 SettingBatchDraft JSON。",
+                f"业务校验错误：{error}",
+                "修复要求：",
+                "- 只返回合法 JSON，不要返回 Markdown 或解释。",
+                "- 保留用户已确认事实，不要新增无来源事实。",
+                "- update/delete 必须使用真实 target_id；无法确定 target_id 时改为 setting_card create 并写明待确认点。",
+                "- relationship create 必须使用明确 source_id、target_id、relation_type；无法确定实体 ID 时不要生成 relationship change。",
+                "- 如果关系只能用名称描述，请改为 setting_card create 或 entity state 描述，并在 conflict_hints 标明需要确认实体 ID。",
+                "上一次草稿：",
+                json.dumps(draft.model_dump(), ensure_ascii=False, default=str),
             ]
         )
 

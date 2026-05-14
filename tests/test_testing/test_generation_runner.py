@@ -48,6 +48,336 @@ def test_acceptance_target_word_count_has_runner_only_floor():
     assert generation_runner._acceptance_target_word_count(fixture) == 1000
 
 
+def test_longform_source_loader_reads_supported_files_and_ignores_hidden(tmp_path):
+    source_dir = tmp_path / "novel"
+    source_dir.mkdir()
+    (source_dir / "世界观.md").write_text("世界观设定", encoding="utf-8")
+    (source_dir / "力量体系.md").write_text("力量体系设定", encoding="utf-8")
+    (source_dir / "原文.txt").write_text("正文参考", encoding="utf-8")
+    (source_dir / ".DS_Store").write_text("ignored", encoding="utf-8")
+    (source_dir / "notes.pdf").write_text("ignored", encoding="utf-8")
+
+    materials = generation_runner.load_source_materials(source_dir)
+
+    assert [item.filename for item in materials] == ["世界观.md", "力量体系.md", "原文.txt"]
+    assert [item.content for item in materials] == ["世界观设定", "力量体系设定", "正文参考"]
+    assert all(item.char_count > 0 for item in materials)
+    assert all(item.byte_count > 0 for item in materials)
+
+
+def test_longform_options_default_volume1_distribution():
+    options = GenerationRunOptions(
+        acceptance_scope="real-longform-volume1",
+        target_volumes=18,
+        target_chapters=1200,
+        target_word_count=2_000_000,
+    )
+
+    assert options.resolved_target_volume_chapters() == 67
+    assert options.resolved_chapter_target_word_count() == 1667
+    assert options.resolved_target_volume_word_count() == 111_689
+
+
+@pytest.mark.asyncio
+async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_session):
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel-longform-contract",
+        "volume_planning",
+        {
+            "synopsis_data": {
+                "title": "长篇",
+                "logline": "主角追索超脱。",
+                "core_conflict": "主角 vs 末劫",
+                "estimated_volumes": 6,
+                "estimated_total_chapters": 450,
+                "estimated_total_words": 1_350_000,
+                "volume_outlines": [
+                    {
+                        "volume_number": 1,
+                        "title": "第一卷",
+                        "summary": "开局卷。",
+                        "target_chapter_range": "1-30",
+                    }
+                ],
+            }
+        },
+    )
+    await async_session.commit()
+
+    @asynccontextmanager
+    async def fake_session_maker():
+        yield async_session
+
+    options = GenerationRunOptions(
+        acceptance_scope="real-longform-volume1",
+        source_dir="/tmp/novel",
+        target_volumes=18,
+        target_chapters=1200,
+        target_word_count=2_000_000,
+        target_volume_number=1,
+        target_volume_chapters=67,
+    )
+
+    old_session_maker = generation_runner.async_session_maker
+    generation_runner.async_session_maker = fake_session_maker
+    try:
+        await generation_runner._prepare_longform_synopsis_contract("novel-longform-contract", options)
+    finally:
+        generation_runner.async_session_maker = old_session_maker
+
+    state = await NovelStateRepository(async_session).get_state("novel-longform-contract")
+    synopsis = state.checkpoint_data["synopsis_data"]
+    assert synopsis["estimated_volumes"] == 18
+    assert synopsis["estimated_total_chapters"] == 1200
+    assert synopsis["estimated_total_words"] == 2_000_000
+    assert synopsis["volume_outlines"][0]["target_chapter_range"] == "1-67"
+    assert state.checkpoint_data["acceptance_scope"] == "real-longform-volume1"
+
+
+@pytest.mark.asyncio
+async def test_prepare_longform_volume_plan_contract_sets_chapter_targets(async_session):
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel-longform-volume",
+        "context_preparation",
+        {
+            "current_volume_plan": {
+                "volume_id": "vol_1",
+                "volume_number": 1,
+                "title": "第一卷",
+                "total_chapters": 2,
+                "estimated_total_words": 6000,
+                "chapters": [
+                    {
+                        "chapter_id": "vol_1_ch_1",
+                        "chapter_number": 1,
+                        "title": "一",
+                        "summary": "一",
+                        "target_word_count": 3000,
+                        "beats": [{"summary": "a"}, {"summary": "b"}],
+                    },
+                    {
+                        "chapter_id": "vol_1_ch_2",
+                        "chapter_number": 2,
+                        "title": "二",
+                        "summary": "二",
+                        "target_word_count": 3000,
+                        "beats": [{"summary": "c"}],
+                    },
+                ],
+            },
+            "current_chapter_plan": {
+                "chapter_id": "vol_1_ch_1",
+                "chapter_number": 1,
+                "title": "一",
+                "summary": "一",
+                "target_word_count": 3000,
+                "beats": [{"summary": "a"}, {"summary": "b"}],
+            },
+        },
+        current_volume_id="vol_1",
+        current_chapter_id="vol_1_ch_1",
+    )
+    await async_session.commit()
+
+    @asynccontextmanager
+    async def fake_session_maker():
+        yield async_session
+
+    options = GenerationRunOptions(
+        acceptance_scope="real-longform-volume1",
+        source_dir="/tmp/novel",
+        target_volumes=1,
+        target_chapters=2,
+        target_word_count=4000,
+        target_volume_number=1,
+        target_volume_chapters=2,
+    )
+
+    old_session_maker = generation_runner.async_session_maker
+    generation_runner.async_session_maker = fake_session_maker
+    try:
+        await generation_runner._prepare_longform_volume_plan_contract("novel-longform-volume", options)
+    finally:
+        generation_runner.async_session_maker = old_session_maker
+
+    state = await NovelStateRepository(async_session).get_state("novel-longform-volume")
+    plan = state.checkpoint_data["current_volume_plan"]
+    assert plan["estimated_total_words"] == 4000
+    assert [chapter["target_word_count"] for chapter in plan["chapters"]] == [2000, 2000]
+    assert [beat["target_word_count"] for beat in plan["chapters"][0]["beats"]] == [1000, 1000]
+    assert state.checkpoint_data["current_chapter_plan"]["target_word_count"] == 2000
+
+
+@pytest.mark.asyncio
+async def test_prepare_longform_volume_plan_contract_expands_short_volume_plan(
+    async_session,
+):
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel-longform-expand",
+        "context_preparation",
+        {
+            "current_volume_plan": {
+                "volume_id": "vol_1",
+                "volume_number": 1,
+                "title": "第一卷",
+                "total_chapters": 2,
+                "chapters": [
+                    {
+                        "chapter_id": "vol_1_ch_1",
+                        "chapter_number": 1,
+                        "title": "起点",
+                        "summary": "陆照获得线索。",
+                        "beats": [{"summary": "a"}],
+                    },
+                    {
+                        "chapter_id": "vol_1_ch_2",
+                        "chapter_number": 2,
+                        "title": "交锋",
+                        "summary": "陆照与暗子交锋。",
+                        "beats": [{"summary": "b"}],
+                    },
+                ],
+            },
+            "current_chapter_plan": {
+                "chapter_id": "vol_1_ch_1",
+                "chapter_number": 1,
+                "title": "起点",
+                "summary": "陆照获得线索。",
+                "beats": [{"summary": "a"}],
+            },
+        },
+        current_volume_id="vol_1",
+        current_chapter_id="vol_1_ch_1",
+    )
+    await async_session.commit()
+
+    @asynccontextmanager
+    async def fake_session_maker():
+        yield async_session
+
+    old_session_maker = generation_runner.async_session_maker
+    generation_runner.async_session_maker = fake_session_maker
+    try:
+        await generation_runner._prepare_longform_volume_plan_contract(
+            "novel-longform-expand",
+            GenerationRunOptions(
+                acceptance_scope="real-longform-volume1",
+                source_dir="/tmp/novel",
+                target_volumes=1,
+                target_chapters=5,
+                target_word_count=5000,
+                target_volume_number=1,
+                target_volume_chapters=5,
+            ),
+        )
+    finally:
+        generation_runner.async_session_maker = old_session_maker
+
+    state = await NovelStateRepository(async_session).get_state("novel-longform-expand")
+    chapters = state.checkpoint_data["current_volume_plan"]["chapters"]
+    assert len(chapters) == 5
+    assert state.checkpoint_data["current_volume_plan"]["total_chapters"] == 5
+    assert [chapter["chapter_id"] for chapter in chapters] == [
+        "vol_1_ch_1",
+        "vol_1_ch_2",
+        "vol_1_ch_3",
+        "vol_1_ch_4",
+        "vol_1_ch_5",
+    ]
+    assert all(chapter["target_word_count"] == 1000 for chapter in chapters)
+    assert any("只完成当前小目标" in chapter["summary"] for chapter in chapters)
+
+
+@pytest.mark.asyncio
+async def test_prepare_resume_state_can_reset_only_current_failed_chapter(
+    async_session,
+    monkeypatch,
+):
+    chapter_plan = {
+        "chapter_id": "vol_1_ch_1",
+        "chapter_number": 1,
+        "title": "第一章",
+        "summary": "章节概要",
+        "beats": [{"summary": "进入主线"}],
+    }
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel-resume",
+        "fast_reviewing",
+        {
+            "current_chapter_plan": chapter_plan,
+            "chapter_context": {"chapter_plan": chapter_plan, "notes": ["stale"]},
+            "quality_gate": {"status": "block"},
+            "flow_control": {"cancel_requested": True},
+        },
+        current_volume_id="vol-1",
+        current_chapter_id="vol_1_ch_1",
+    )
+    chapter = await ChapterRepository(async_session).ensure_from_plan(
+        "novel-resume",
+        "vol-1",
+        chapter_plan,
+    )
+    chapter.status = "edited"
+    chapter.raw_draft = "raw"
+    chapter.polished_text = "polished"
+    chapter.quality_status = "block"
+    chapter.quality_reasons = {"issues": ["old gate"]}
+    await async_session.commit()
+
+    @asynccontextmanager
+    async def fake_session_maker():
+        yield async_session
+
+    monkeypatch.setattr(generation_runner, "async_session_maker", fake_session_maker)
+
+    artifacts = await generation_runner._prepare_resume_state(
+        "novel-resume",
+        GenerationRunOptions(
+            resume_novel_id="novel-resume",
+            resume_from_stage="auto_run_chapters",
+            resume_reset_current_chapter=True,
+        ),
+        resume_from_stage="auto_run_chapters",
+    )
+
+    state = await NovelStateRepository(async_session).get_state("novel-resume")
+    reset_chapter = await ChapterRepository(async_session).get_by_id("vol_1_ch_1")
+    assert artifacts["resume_reset_chapter_id"] == "vol_1_ch_1"
+    assert artifacts["resume_cleared_flow_stop"] == "true"
+    assert state.current_phase == "context_preparation"
+    assert state.current_chapter_id == "vol_1_ch_1"
+    assert "chapter_context" not in state.checkpoint_data
+    assert "quality_gate" not in state.checkpoint_data
+    assert "flow_control" not in state.checkpoint_data
+    assert reset_chapter.status == "pending"
+    assert reset_chapter.raw_draft is None
+    assert reset_chapter.polished_text is None
+    assert reset_chapter.quality_status == "unchecked"
+
+
+@pytest.mark.asyncio
+async def test_fake_longform_run_validates_source_dir_and_records_target_artifacts(tmp_path):
+    source_dir = tmp_path / "novel"
+    source_dir.mkdir()
+    (source_dir / "世界观.md").write_text("世界观设定", encoding="utf-8")
+
+    report = await run_generation_acceptance(
+        GenerationRunOptions(
+            llm_mode="fake",
+            acceptance_scope="real-longform-volume1",
+            source_dir=str(source_dir),
+            target_volumes=18,
+            target_chapters=1200,
+            target_word_count=2_000_000,
+        )
+    )
+
+    assert report.status == "passed"
+    assert report.artifacts["target_volume_chapters"] == "67"
+    assert report.artifacts["chapter_target_word_count"] == "1667"
+    assert report.artifacts["source_material_count"] == "1"
+
+
 def test_httpx_timeout_exception_is_internal_timeout_with_message():
     issue = classify_exception("generate_setting_review_batch", httpx.ReadTimeout(""), True)
 
@@ -215,6 +545,28 @@ def test_http_429_status_error_is_external_blocker():
     assert issue.is_external_blocker is True
 
 
+def test_http_502_authentication_error_is_external_blocker():
+    request = httpx.Request("POST", "http://testserver/api/novels/n/settings/sessions/s/reply")
+    response = httpx.Response(
+        502,
+        request=request,
+        text="AI 模型配置或认证失败：Error code: 401 - invalid API key",
+    )
+
+    issue = classify_exception(
+        "advance_setting_session",
+        httpx.HTTPStatusError(
+            "bad gateway",
+            request=request,
+            response=response,
+        ),
+        True,
+    )
+
+    assert issue.type == "EXTERNAL_BLOCKED"
+    assert issue.is_external_blocker is True
+
+
 def test_http_504_without_external_marker_is_internal_timeout():
     request = httpx.Request("POST", "http://testserver/api/novels")
     response = httpx.Response(504, request=request, text="local worker timed out")
@@ -300,6 +652,9 @@ def test_options_default_to_real_then_fake_on_external_block():
     assert options.run_id is None
     assert options.report_root == "reports/test-runs"
     assert options.api_base_url == "http://127.0.0.1:8000"
+    assert options.resume_novel_id is None
+    assert options.resume_from_stage is None
+    assert options.resume_reset_current_chapter is False
 
 
 def test_acceptance_scope_defaults_to_real_contract():
@@ -314,6 +669,29 @@ def test_validate_acceptance_scope_accepts_known_scopes():
 def test_validate_acceptance_scope_rejects_unknown_scope():
     with pytest.raises(ValueError, match="Unknown acceptance scope"):
         validate_acceptance_scope("full")
+
+
+def test_validate_resume_options_requires_novel_id_and_stage():
+    with pytest.raises(ValueError, match="requires --resume-from-stage"):
+        generation_runner.validate_resume_options(
+            GenerationRunOptions(resume_novel_id="novel-1")
+        )
+
+    with pytest.raises(ValueError, match="requires --resume-novel-id"):
+        generation_runner.validate_resume_options(
+            GenerationRunOptions(resume_from_stage="auto_run_chapters")
+        )
+
+
+def test_validate_resume_options_rejects_stop_stage_before_resume_stage():
+    with pytest.raises(ValueError, match="cannot be before"):
+        generation_runner.validate_resume_options(
+            GenerationRunOptions(
+                stage="volume_plan",
+                resume_novel_id="novel-1",
+                resume_from_stage="auto_run_chapters",
+            )
+        )
 
 
 def test_export_required_for_real_contract_only_when_archived():
@@ -485,7 +863,40 @@ async def test_generation_acceptance_classifies_api_smoke_flow_failure(monkeypat
     assert report.issues[0].stage == "api_smoke_flow"
     assert report.issues[0].type == "SYSTEM_BUG"
     assert report.issues[0].real_llm is False
-    assert report.issues[0].reproduce == "scripts/verify_generation_real.sh"
+
+
+@pytest.mark.asyncio
+async def test_generation_acceptance_skips_export_contract_after_external_blocker(monkeypatch, tmp_path):
+    source_dir = tmp_path / "novel"
+    source_dir.mkdir()
+    (source_dir / "世界观.md").write_text("世界观", encoding="utf-8")
+
+    async def external_blocked_flow(_options, _fixture):
+        issue = generation_runner.classify_exception(
+            "advance_setting_session",
+            LLMRateLimitError("quota exhausted"),
+            real_llm=True,
+            acceptance_scope="real-longform-volume1",
+        )
+        return {"acceptance_scope": "real-longform-volume1"}, [issue]
+
+    monkeypatch.setattr(generation_runner, "_run_api_smoke_flow", external_blocked_flow)
+
+    report = await run_generation_acceptance(
+        GenerationRunOptions(
+            llm_mode="real",
+            acceptance_scope="real-longform-volume1",
+            source_dir=str(source_dir),
+            run_id="external-block-test",
+        )
+    )
+
+    assert report.status == "external_blocked"
+    assert [issue.stage for issue in report.issues] == ["advance_setting_session"]
+    assert report.issues[0].reproduce == (
+        "scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 "
+        "--stage advance_setting_session"
+    )
 
 
 @pytest.mark.asyncio
@@ -820,6 +1231,309 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
     assert artifacts["quality_status"] == "pass"
     assert artifacts["archived_chapter_count"] == "1"
     assert artifacts["exported_path"] == "./novel_output/novel-test/novel.md"
+
+
+@pytest.mark.asyncio
+async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_volume(
+    monkeypatch,
+    tmp_path,
+):
+    source_dir = tmp_path / "novel"
+    source_dir.mkdir()
+    (source_dir / "世界观.md").write_text("世界观设定", encoding="utf-8")
+    (source_dir / "原文.txt").write_text("正文参考", encoding="utf-8")
+    (source_dir / ".DS_Store").write_text("ignored", encoding="utf-8")
+    calls = []
+
+    class FakeChapter:
+        raw_draft = "raw generated chapter"
+        polished_text = "正文" * 900
+        quality_status = "pass"
+        quality_reasons = {}
+        final_review_score = 82
+
+    class FakeAsyncClient:
+        def __init__(self, *, base_url, timeout, trust_env):
+            self.base_url = str(base_url)
+            self.timeout = timeout
+            self.trust_env = trust_env
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def get(self, path):
+            calls.append(("GET", path, None))
+            if path == "/healthz":
+                return self._response("GET", path, {"ok": True})
+            if path == "/api/novels/novel-test/generation_jobs/job-consolidation":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "job_id": "job-consolidation",
+                        "status": "succeeded",
+                        "result_payload": {"batch_id": "batch-consolidation"},
+                    },
+                )
+            if path == "/api/novels/novel-test/generation_jobs/job-volume":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "job_id": "job-volume",
+                        "status": "succeeded",
+                        "result_payload": {
+                            "completed_chapters": [f"ch_{index}" for index in range(1, 68)],
+                            "stopped_reason": "volume_completed",
+                        },
+                    },
+                )
+            if path == "/api/novels/novel-test/archive_stats":
+                return self._response(
+                    "GET",
+                    path,
+                    {"archived_chapter_count": 67, "total_word_count": 111689},
+                )
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "batch": {"id": "batch-test", "status": "pending"},
+                        "changes": [
+                            {"id": "change-1", "target_type": "setting_card", "status": "pending"},
+                            {"id": "change-conflict", "target_type": "conflict", "status": "pending"},
+                        ],
+                    },
+                )
+            if path == "/api/novels/novel-test/settings/review_batches/batch-consolidation":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "batch": {"id": "batch-consolidation", "status": "pending"},
+                        "changes": [
+                            {"id": "change-2", "target_type": "setting_card", "status": "pending"},
+                        ],
+                    },
+                )
+            raise AssertionError(f"Unexpected GET request: {path}")
+
+        async def post(self, path, json=None, params=None):
+            payload = json if json is not None else params
+            calls.append(("POST", path, payload))
+            if path == "/api/novels":
+                return self._response("POST", path, {"novel_id": "novel-test"})
+            if path == "/api/novels/novel-test/settings/sessions":
+                return self._response("POST", path, {"id": "session-test"})
+            if path.endswith("/reply"):
+                return self._response(
+                    "POST",
+                    path,
+                    {
+                        "session": {"id": "session-test", "status": "ready_to_generate"},
+                        "questions": [],
+                    },
+                )
+            if path.endswith("/generate"):
+                return self._response("POST", path, {"id": "batch-test"})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test/approve":
+                assert payload == {"change_ids": ["change-1"], "approve_all": False}
+                return self._response(
+                    "POST",
+                    path,
+                    {"batch": {"id": "batch-test", "status": "partially_approved"}, "changes": []},
+                )
+            if path == "/api/novels/novel-test/documents/upload":
+                return self._response("POST", path, {"id": f"pending-{payload['filename']}"})
+            if path == "/api/novels/novel-test/documents/pending/approve":
+                return self._response("POST", path, {})
+            if path == "/api/novels/novel-test/settings/consolidations":
+                return self._response("POST", path, {"job_id": "job-consolidation", "status": "queued"})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-consolidation/approve":
+                assert payload == {"change_ids": ["change-2"], "approve_all": False}
+                return self._response(
+                    "POST",
+                    path,
+                    {"batch": {"id": "batch-consolidation", "status": "approved"}, "changes": []},
+                )
+            if path == "/api/novels/novel-test/brainstorm":
+                return self._response("POST", path, {})
+            if path == "/api/novels/novel-test/volume_plan":
+                return self._response("POST", path, {"volume_id": "vol-test"})
+            if path == "/api/novels/novel-test/chapters/auto-run":
+                assert payload == {"max_chapters": 67, "stop_at_volume_end": True}
+                return self._response("POST", path, {"job_id": "job-volume", "status": "queued"})
+            if path == "/api/novels/novel-test/export":
+                return self._response("POST", path, {"exported_path": "./novel_output/novel-test/novel.md"})
+            raise AssertionError(f"Unexpected POST request: {path}")
+
+        def _response(self, method, path, data):
+            request = httpx.Request(method, f"http://testserver{path}")
+            return httpx.Response(200, request=request, json=data)
+
+    async def immediate_sleep(_seconds):
+        return None
+
+    async def fail_prepare_minimal_synopsis(*args, **kwargs):
+        raise AssertionError("longform flow must not shrink synopsis")
+
+    async def fail_prepare_minimal_chapter_plan(*args, **kwargs):
+        raise AssertionError("longform flow must not shrink chapter plan")
+
+    async def noop_prepare_longform_contract(*args, **kwargs):
+        return None
+
+    async def fake_get_chapter_contract_state(_novel_id, _chapter_id):
+        return FakeChapter()
+
+    monkeypatch.setattr(generation_runner.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(generation_runner.asyncio, "sleep", immediate_sleep)
+    monkeypatch.setattr(generation_runner, "_prepare_minimal_synopsis", fail_prepare_minimal_synopsis)
+    monkeypatch.setattr(generation_runner, "_prepare_minimal_chapter_plan", fail_prepare_minimal_chapter_plan)
+    monkeypatch.setattr(generation_runner, "_prepare_longform_synopsis_contract", noop_prepare_longform_contract)
+    monkeypatch.setattr(generation_runner, "_prepare_longform_volume_plan_contract", noop_prepare_longform_contract)
+    monkeypatch.setattr(generation_runner, "_get_chapter_contract_state", fake_get_chapter_contract_state)
+    fixture = generation_runner.load_generation_fixture("minimal_builtin")
+
+    artifacts, issues = await generation_runner._run_api_smoke_flow(
+        GenerationRunOptions(
+            llm_mode="real",
+            acceptance_scope="real-longform-volume1",
+            source_dir=str(source_dir),
+            target_volumes=18,
+            target_chapters=1200,
+            target_word_count=2_000_000,
+        ),
+        fixture,
+    )
+
+    assert issues == []
+    upload_payloads = [
+        payload for method, path, payload in calls
+        if method == "POST" and path == "/api/novels/novel-test/documents/upload"
+    ]
+    assert [payload["filename"] for payload in upload_payloads] == ["世界观.md", "原文.txt"]
+    assert ("POST", "/api/novels/novel-test/settings/consolidations", {"selected_pending_ids": []}) in calls
+    assert artifacts["acceptance_scope"] == "real-longform-volume1"
+    assert artifacts["generated_setting_approvable_change_count"] == "1"
+    assert artifacts["generated_setting_conflict_change_count"] == "1"
+    assert artifacts["generated_setting_batch_status"] == "partially_approved"
+    assert artifacts["consolidated_setting_approvable_change_count"] == "1"
+    assert artifacts["consolidated_setting_batch_status"] == "approved"
+    assert artifacts["source_material_count"] == "2"
+    assert artifacts["target_volume_chapters"] == "67"
+    assert artifacts["chapter_auto_run_job_id"] == "job-volume"
+    assert artifacts["completed_chapter_count"] == "67"
+    assert artifacts["archived_chapter_count"] == "67"
+    assert artifacts["total_word_count"] == "111689"
+
+
+@pytest.mark.asyncio
+async def test_resume_from_auto_run_skips_transient_setting_session_state(
+    monkeypatch,
+    tmp_path,
+):
+    source_dir = tmp_path / "novel"
+    source_dir.mkdir()
+    (source_dir / "世界观.md").write_text("世界观设定", encoding="utf-8")
+    calls = []
+
+    class FakeChapter:
+        raw_draft = "raw"
+        polished_text = "正文" * 900
+        quality_status = "pass"
+        quality_reasons = {}
+        final_review_score = 82
+
+    class FakeAsyncClient:
+        def __init__(self, *, base_url, timeout, trust_env):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, traceback):
+            return False
+
+        async def get(self, path):
+            calls.append(("GET", path))
+            if path == "/healthz":
+                return self._response("GET", path, {"ok": True})
+            if path == "/api/novels/novel-resume/generation_jobs/job-resume":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "job_id": "job-resume",
+                        "status": "succeeded",
+                        "result_payload": {
+                            "completed_chapters": ["vol_1_ch_1"],
+                            "stopped_reason": "max_chapters_reached",
+                        },
+                    },
+                )
+            if path == "/api/novels/novel-resume/archive_stats":
+                return self._response(
+                    "GET",
+                    path,
+                    {"archived_chapter_count": 67, "total_word_count": 111689},
+                )
+            raise AssertionError(f"Unexpected GET request: {path}")
+
+        async def post(self, path, json=None, params=None):
+            calls.append(("POST", path))
+            if path == "/api/novels/novel-resume/chapters/auto-run":
+                return self._response("POST", path, {"job_id": "job-resume"})
+            raise AssertionError(f"Unexpected POST request: {path}")
+
+        def _response(self, method, path, data):
+            request = httpx.Request(method, f"http://testserver{path}")
+            return httpx.Response(200, request=request, json=data)
+
+    async def fake_prepare_resume_state(*args, **kwargs):
+        return {"chapter_id": "vol_1_ch_1", "volume_id": "vol_1"}
+
+    async def noop_prepare_longform_contract(*args, **kwargs):
+        return None
+
+    async def fake_get_chapter_contract_state(_novel_id, _chapter_id):
+        return FakeChapter()
+
+    async def immediate_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(generation_runner.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(generation_runner.asyncio, "sleep", immediate_sleep)
+    monkeypatch.setattr(generation_runner, "_prepare_resume_state", fake_prepare_resume_state)
+    monkeypatch.setattr(generation_runner, "_prepare_longform_synopsis_contract", noop_prepare_longform_contract)
+    monkeypatch.setattr(generation_runner, "_prepare_longform_volume_plan_contract", noop_prepare_longform_contract)
+    monkeypatch.setattr(generation_runner, "_get_chapter_contract_state", fake_get_chapter_contract_state)
+    fixture = generation_runner.load_generation_fixture("minimal_builtin")
+
+    artifacts, issues = await generation_runner._run_api_smoke_flow(
+        GenerationRunOptions(
+            llm_mode="real",
+            acceptance_scope="real-longform-volume1",
+            source_dir=str(source_dir),
+            target_volumes=18,
+            target_chapters=1200,
+            target_word_count=2_000_000,
+            resume_novel_id="novel-resume",
+            resume_from_stage="auto_run_chapters",
+            stage="auto_run_chapters",
+        ),
+        fixture,
+    )
+
+    assert issues == []
+    assert artifacts["create_setting_session_status"] == "skipped_for_resume"
+    assert artifacts["chapter_auto_run_job_id"] == "job-resume"
+    assert artifacts["archived_chapter_count"] == "67"
+    assert ("POST", "/api/novels/novel-resume/settings/sessions") not in calls
 
 
 @pytest.mark.asyncio
@@ -1484,6 +2198,54 @@ async def test_run_generation_acceptance_and_write_emits_snapshot_and_quality_su
     assert summary["artifacts"]["generation_snapshot_json"] == str(snapshot_path)
     assert summary["artifacts"]["quality_summary_json"] == str(quality_summary_path)
     assert summary["artifacts"]["quality_summary_status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_run_generation_acceptance_and_write_skips_quality_summary_after_external_blocker(
+    monkeypatch,
+    tmp_path,
+):
+    async def fake_run_generation_acceptance(_options):
+        report = TestRunReport(
+            run_id="external-quality-skip",
+            entrypoint="scripts/verify_generation_real.sh",
+            status="passed",
+            duration_seconds=1.0,
+            dataset="minimal_builtin",
+            llm_mode="real",
+            artifacts={"novel_id": "novel-external"},
+        )
+        report.add_issue(
+            generation_runner.classify_exception(
+                "advance_setting_session",
+                LLMRateLimitError("quota exhausted"),
+                real_llm=True,
+            )
+        )
+        return report
+
+    async def fail_build_generation_quality_snapshot(_report):
+        raise AssertionError("quality summary should be skipped after external blockers")
+
+    monkeypatch.setattr(generation_runner, "run_generation_acceptance", fake_run_generation_acceptance)
+    monkeypatch.setattr(
+        generation_runner,
+        "_build_generation_quality_snapshot",
+        fail_build_generation_quality_snapshot,
+    )
+
+    report = await generation_runner.run_generation_acceptance_and_write(
+        GenerationRunOptions(
+            run_id="external-quality-skip",
+            report_root=str(tmp_path / "reports"),
+        )
+    )
+
+    assert report.status == "external_blocked"
+    assert report.artifacts["quality_summary_status"] == "skipped_external_blocker"
+    root = tmp_path / "reports" / "external-quality-skip"
+    assert (root / "summary.json").exists()
+    assert not (root / "quality-summary" / "summary.json").exists()
 
 
 @pytest.mark.asyncio

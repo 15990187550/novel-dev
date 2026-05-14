@@ -107,6 +107,42 @@ async def test_fast_review_fail_word_count(async_session):
 
 
 @pytest.mark.asyncio
+async def test_fast_review_longform_acceptance_scope_relaxes_word_count(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_longform_scope",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "chapter_context": {"chapter_plan": {"target_word_count": 3000}},
+        },
+        volume_id="v1",
+        chapter_id="c_longform_scope",
+    )
+    await ChapterRepository(async_session).create("c_longform_scope", "v1", 1, "Longform")
+    await ChapterRepository(async_session).update_text(
+        "c_longform_scope",
+        raw_draft="陆照提着药篓走进巷口，风从墙缝里钻出来，吹得衣角微动。",
+        polished_text="陆照提着药篓走进巷口，风从墙缝里钻出来，吹得衣角微动。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_longform_scope", "c_longform_scope")
+
+    assert report.word_count_ok is True
+
+    state = await director.resume("novel_fr_longform_scope")
+    assert state.current_phase == Phase.LIBRARIAN.value
+
+
+@pytest.mark.asyncio
 async def test_fast_review_fails_unapproved_english_terms(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -248,6 +284,64 @@ async def test_fast_review_blocks_severe_failure_at_edit_limit(async_session):
     state = await director.resume("novel_fr_block")
     assert state.current_phase == Phase.FAST_REVIEWING.value
     assert state.checkpoint_data["quality_gate"]["status"] == "block"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_returns_to_editing_for_recoverable_quality_gate_block(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_recoverable_block",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "edit_attempt_count": 2,
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 12},
+                "writing_cards": [
+                    {"beat_index": 0, "required_payoffs": ["主角做出当场选择"], "ending_hook": "危险信号逼近"}
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_recoverable_block",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_recoverable_block", "v1", 1, "Recoverable Block")
+    await repo.update_text(
+        "c_recoverable_block",
+        raw_draft="甲乙丙丁。",
+        polished_text="甲乙丙丁。甲乙丙丁。",
+    )
+
+    final_score = ScoreResult(
+        overall=78,
+        dimensions=[DimensionScore(name="readability", score=78, comment="基本顺畅")],
+        summary_feedback="存在可修复的转场问题",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": False,
+            "notes": ["节拍之间缺少承接"],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_recoverable_block", "c_recoverable_block")
+
+    chapter = await repo.get_by_id("c_recoverable_block")
+    assert chapter.quality_status == "block"
+
+    state = await director.resume("novel_fr_recoverable_block")
+    assert state.current_phase == Phase.EDITING.value
+    assert state.checkpoint_data["quality_gate_repair_attempt_count"] == 1
+    assert state.checkpoint_data["final_polish_issues"]["quality_gate_blocking_items"][0]["code"] == "beat_cohesion"
 
 
 @pytest.mark.asyncio

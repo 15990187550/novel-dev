@@ -332,9 +332,12 @@ class NarrativeConstraintBuilder:
         current_outline: SynopsisVolumeOutline | None,
     ) -> list[ExecutableNarrativeConstraint]:
         constraints: list[ExecutableNarrativeConstraint] = []
+        # Sequence constraints are executable for the current volume only.
+        # Global synopsis text often contains terminal states (for example
+        # "超脱") that should guide long-range direction but should not become
+        # mandatory chapter nodes in volume one.
         scope_text = "\n".join([
-            query_text,
-            current_outline.model_dump_json() if current_outline else "",
+            current_outline.model_dump_json() if current_outline else query_text,
             "\n".join(context.current_scope),
         ])
 

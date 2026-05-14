@@ -42,6 +42,7 @@ def build_quality_summary_report(
     if not isinstance(cross_stage_quality, dict):
         cross_stage_quality = StoryContractService.evaluate_cross_stage_quality(snapshot, story_contract)
 
+    _add_longform_scale_detail(report, snapshot, chapters)
     _add_setting_quality_detail(report, setting_quality, snapshot)
     synopsis_quality = _synopsis_quality_from_checkpoint(checkpoint)
     _add_synopsis_quality_detail(report, checkpoint, synopsis_quality)
@@ -116,6 +117,72 @@ def build_quality_summary_report(
             break
 
     return report
+
+
+def _add_longform_scale_detail(
+    report: TestRunReport,
+    snapshot: dict[str, Any],
+    chapters: list[Any],
+) -> None:
+    target = snapshot.get("acceptance_target")
+    source_materials = snapshot.get("source_materials")
+    if not isinstance(target, dict) and not isinstance(source_materials, list):
+        return
+
+    normalized_chapters = [item for item in chapters if isinstance(item, dict)]
+    generated_word_count = sum(_chapter_text_length(item) for item in normalized_chapters)
+    source_items = [item for item in source_materials or [] if isinstance(item, dict)]
+    source_char_count = sum(_safe_int(item.get("char_count")) or 0 for item in source_items)
+    approved_count = sum(1 for item in source_items if str(item.get("status") or "") == "approved")
+
+    if isinstance(target, dict):
+        for key in (
+            "target_volumes",
+            "target_chapters",
+            "target_word_count",
+            "target_volume_number",
+            "target_volume_chapters",
+            "target_volume_word_count",
+            "chapter_target_word_count",
+        ):
+            value = _safe_int(target.get(key))
+            if value is not None:
+                report.artifacts[key] = str(value)
+
+    report.artifacts["generated_chapter_count"] = str(len(normalized_chapters))
+    report.artifacts["generated_word_count"] = str(generated_word_count)
+    report.artifacts["source_material_count"] = str(len(source_items))
+    report.artifacts["source_material_approved_count"] = str(approved_count)
+    report.artifacts["source_material_char_count"] = str(source_char_count)
+
+    evidence = [
+        f"generated_chapter_count={len(normalized_chapters)}",
+        f"generated_word_count={generated_word_count}",
+        f"source_material_count={len(source_items)}",
+        f"source_material_approved_count={approved_count}",
+        f"source_material_char_count={source_char_count}",
+    ]
+    if isinstance(target, dict):
+        evidence.extend(
+            f"{key}={target.get(key)}"
+            for key in (
+                "target_volumes",
+                "target_chapters",
+                "target_word_count",
+                "target_volume_number",
+                "target_volume_chapters",
+                "target_volume_word_count",
+                "chapter_target_word_count",
+            )
+            if target.get(key) not in (None, "")
+        )
+    report.details.append(Detail(
+        id=f"LONGFORM-SCALE-DETAIL-{len(report.details) + 1:03d}",
+        stage="longform_scale",
+        title="长篇目标规模与资料导入统计",
+        evidence=evidence[:28],
+        recommendation=[],
+    ))
 
 
 def _add_setting_quality_detail(
@@ -384,6 +451,26 @@ def _target_word_count_mismatch(checkpoint: dict[str, Any], chapter: dict[str, A
         f"chapter_context.chapter_plan.target_word_count={context_target}",
         f"quality_gate.target_word_count={gate_targets[0] if gate_targets else None}",
     ]
+
+
+def _chapter_text_length(chapter: dict[str, Any]) -> int:
+    text = chapter.get("polished_text") or chapter.get("raw_draft") or ""
+    if not isinstance(text, str):
+        return 0
+    return len(text.replace(" ", "").replace("\n", ""))
+
+
+def _safe_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 def _flatten_evidence(value: Any, *, prefix: str = "") -> list[str]:

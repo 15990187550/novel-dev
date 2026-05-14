@@ -35,6 +35,20 @@ VALID_TRANSITIONS = {
     Phase.COMPLETED: [Phase.CONTEXT_PREPARATION, Phase.VOLUME_PLANNING],
 }
 
+CHAPTER_SCOPED_CHECKPOINT_KEYS = {
+    "chapter_context",
+    "context_debug_snapshot",
+    "drafting_progress",
+    "relay_history",
+    "draft_metadata",
+    "draft_rewrite_plan",
+    "beat_scores",
+    "critique_feedback",
+    "per_dim_issues",
+    "editor_feedback",
+    "fast_review_feedback",
+}
+
 
 class NovelDirector:
     def __init__(self, session: Optional[AsyncSession] = None):
@@ -122,6 +136,9 @@ class NovelDirector:
             if not checkpoint.get("chapter_context"):
                 log_service.add_log(novel_id, "NovelDirector", "章节上下文未准备", level="error")
                 raise ValueError("Chapter context not prepared. Call POST /chapters/{cid}/context first.")
+            if not self._chapter_context_matches_current_plan(checkpoint):
+                log_service.add_log(novel_id, "NovelDirector", "章节上下文与当前章节计划不匹配", level="error")
+                raise ValueError("Chapter context is stale for current chapter. Call POST /chapters/{cid}/context first.")
             log_service.add_log(novel_id, "NovelDirector", "context_preparation → drafting")
             return await self.save_checkpoint(
                 novel_id, Phase.DRAFTING, checkpoint,
@@ -320,6 +337,8 @@ class NovelDirector:
                     state.current_volume_id,
                     next_plan,
                 )
+                for key in CHAPTER_SCOPED_CHECKPOINT_KEYS:
+                    checkpoint.pop(key, None)
                 checkpoint["current_chapter_plan"] = next_plan
                 log_agent_detail(
                     novel_id,
@@ -388,3 +407,25 @@ class NovelDirector:
             volume_id=next_volume_id,
             chapter_id=placeholder_volume["chapters"][0]["chapter_id"],
         )
+
+    @staticmethod
+    def _chapter_context_matches_current_plan(checkpoint: dict) -> bool:
+        context_data = checkpoint.get("chapter_context")
+        current_plan = checkpoint.get("current_chapter_plan")
+        if not isinstance(context_data, dict) or not isinstance(current_plan, dict):
+            return False
+
+        context_plan = context_data.get("chapter_plan")
+        if not isinstance(context_plan, dict):
+            return False
+
+        if context_plan.get("chapter_number") != current_plan.get("chapter_number"):
+            return False
+        if (context_plan.get("title") or "") != (current_plan.get("title") or ""):
+            return False
+        if int(context_plan.get("target_word_count") or 0) != int(current_plan.get("target_word_count") or 0):
+            return False
+
+        context_beats = context_plan.get("beats") or []
+        current_beats = current_plan.get("beats") or []
+        return len(context_beats) == len(current_beats)

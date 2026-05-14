@@ -1,0 +1,88 @@
+# Test Run longform-vol1-real-fix2-20260512171740
+
+- Entrypoint: `scripts/verify_generation_real.sh`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real`
+- Duration: `1140.1s`
+
+## Artifacts
+
+- `fixture_title`: `Codex 最小生成验收`
+- `contract_scope`: `real-longform-volume1`
+- `acceptance_scope`: `real-longform-volume1`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `67`
+- `chapter_target_word_count`: `1667`
+- `target_volume_word_count`: `111689`
+- `source_dir`: `/Users/xuhuibin/Desktop/novel`
+- `source_material_count`: `4`
+- `source_material_char_count`: `4756898`
+- `source_material_byte_count`: `14150138`
+- `source_materials_json`: `[{"filename": "《一世之尊》-+爱潜水的乌贼.txt", "path": "/Users/xuhuibin/Desktop/novel/《一世之尊》-+爱潜水的乌贼.txt", "pending_id": "pe_723282a2", "status": "approved", "char_count": 4739301, "byte_count": 14110044}, {"filename": "世界观.md", "path": "/Users/xuhuibin/Desktop/novel/世界观.md", "pending_id": "pe_2209c356", "status": "approved", "char_count": 3523, "byte_count": 7678}, {"filename": "力量体系.md", "path": "/Users/xuhuibin/Desktop/novel/力量体系.md", "pending_id": "pe_bad2cb60", "status": "approved", "char_count": 6020, "byte_count": 14312}, {"filename": "诸天万界.md", "path": "/Users/xuhuibin/Desktop/novel/诸天万界.md", "pending_id": "pe_dc572a13", "status": "approved", "char_count": 8054, "byte_count": 18104}]`
+- `novel_id`: `codex-c374`
+- `setting_session_id`: `sgs_b76729e62a0a447dbef357f6fdb1028b`
+- `setting_session_status`: `ready_to_generate`
+- `setting_clarification_round`: `4`
+- `review_batch_id`: `122cde684a1b4211b80704c13612c91f`
+- `generated_setting_change_count`: `13`
+- `generated_setting_approvable_change_count`: `13`
+- `generated_setting_conflict_change_count`: `0`
+- `generated_setting_approved_change_ids`: `4f1420691f264ac8a41092c469103c8d,da85a37d76e1488085fb106c9211e88d,6836f90d741b4e379bfa5eccd60e5f09,f479471b50c2477e9f18f9f2ae80143f,c9d4df49b9f74405b4fc2aa7167cb750,098f8a667a304a4d97b3eb26b0e2d084,025d95a5e39647ee8f7e7d32f68fb618,832690d05bdd4b188f7ca90a027896f3,71139e7cdf204cdfbb536c0c21d231d7,325883a8b2a74af8873069c904e9ab8a,2221b2f3c76b49b1b1f804186f204d97,d0ac0a699f3d486bbf6cb939c7051eb3,fc224de2f1424ebb9efa71e9b2e4f3ea`
+- `generated_setting_batch_status`: `partially_approved`
+- `source_material_uploaded_count`: `4`
+- `source_material_pending_ids`: `pe_723282a2,pe_2209c356,pe_bad2cb60,pe_dc572a13`
+- `source_material_approved_count`: `4`
+- `setting_consolidation_job_id`: `job_5a3e0ef57186`
+- `setting_consolidation_batch_id`: `694fa04332a5462badaaf91d623807dd`
+- `consolidated_setting_change_count`: `64`
+- `consolidated_setting_approvable_change_count`: `62`
+- `consolidated_setting_conflict_change_count`: `2`
+- `consolidated_setting_approved_change_ids`: `4e265ff657794d24b9551d20e5852ef0,1291da56aeeb42cc814ac536359abb55,eb16c11d3f514ec3881809f9609fb768,81bf55765ae6491697dfb6b83cf507a4,e4d34c2a9d7347b1b47401a09956d47b,6304b46dc20c4fd3b8a512097da2e96c,dbcd214adcaf4c72963497cc78153f69,5f648a218eb84408aee3b9da7ac65335,cb502ce04c94457394eab16129692fe1,ef6860cbb9c8406e883b50ae3fc6ae81,f1bb505da9594c50986b4979b5079d76,ee57a1c551384fdd89b0a0e98a551056,0be048201d6641ce8d09f123f36d45ee,314a3703ae734c4799602894faf6dc12,4c88faa86e074adab3cedf767b38a3d2,0292a044801742c694e336d311e2a2e6,8c5bdc60aa7c4bc2b5938201837a878c,a5ef3132d0fc4973bf3a8622185cd41d,a71a68e414214174985199131d4a087e,f14d77d2c22c463a818b1c81cb9fa144,37bcfa1026a5477b890b7c09d2209c0f,48d75727c61546d091f74038bd6a7395,9bcdf5ea275b4cedb780fad57e48ce3e,1d7c4df5142d4a549585911c82925584,496d2e23ab0348318b67204f51ff4dcc,f7cfc2b07e0b40d6a8922059db1722f3,51629548c86d428ba85f5be6b6a6e196,56c38eb7a44345cc95fbc25018e6425d,6c565bf7970a445cab33c64b19fa3b08,37572835eafd4113a29e66aa624a3ebf,79390454474047adaff0c10855211f4d,4b37881928cc4def8bd96f0b2cae5719,0664e3e21f0242faac444a3f0ba82ac6,a81f5597f1114f318df086587f64a4d7,c628e250814b496c97d88809e84d213e,203dd00e5b88407bac909f6c59883cae,909582c2fd534000b943d49fb79ce26a,dbc010f2c61b43f49bdae7534d41d6b0,80ee57ffe67b4a68b5e770ee7216246f,4224df06b97b4cafbe8f5db1483b45bb,68c31cbfc4324fedabb7a302976e1038,2865529883d948ba9c4dfe36e9c00a69,104c8c103d6141c39ed81f20fa11c648,1cc5141008084b2c888157a2128bcd26,03d40b7fa71f4af58c53e77fee21b311,11d6da0f576a4bd9b04b8926a8c781d1,b90bef124ebd486db3a325c0bfa86254,27fb11f19fb842a2bced956e5c372144,e921524980d144cbb99a914a0d46b717,6c2306cb0dff406780414270c7c43341,cfdea510121847f3b44bb18671fa6699,0917bcbcd62642d1abe1057ee516c6fe,e4d24e882c5b4aeab54e91ceef677556,500970468d714445a0da72ad924ffcf6,72d5469de68c44509b13c6f64b1c335d,1ad2cdc619dc4947a42ebe5365f5e5a9,5ceb7a67b63c4d18a77fb347a7b02339,58fc5f5c1af447639ad69fc447777a4f,5a9c44fac6664db59b8cbb69f5c70fc2,6d4d95fd2cf94ecd94353e897a26b1cd,945fd2c752284ee4b7f0d81b190533a9,bb2d53d1b3ba458a9831205feb6ec9a1`
+- `consolidated_setting_batch_status`: `pending`
+- `volume_id`: `vol_1`
+- `chapter_auto_run_job_id`: `job_c7e5aecd3afe`
+- `chapter_job_stopped_reason`: `quality_blocked`
+- `generation_snapshot_json`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-real-fix2-20260512171740/artifacts/generation_snapshot.json`
+- `quality_summary_json`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-real-fix2-20260512171740/quality-summary/summary.json`
+- `quality_summary_md`: `/Users/xuhuibin/Documents/popo/Modules/novel-dev/reports/test-runs/longform-vol1-real-fix2-20260512171740/quality-summary/summary.md`
+- `quality_summary_status`: `failed`
+- `quality_summary_run_id`: `longform-vol1-real-fix2-20260512171740-quality-summary`
+
+## Issues
+
+### SYSTEM_BUG-auto_run_chapters_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `auto_run_chapters_contract`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: auto_run_chapters missing prepared chapter_id
+- Evidence: none
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage auto_run_chapters`
+
+### SYSTEM_BUG-export_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `export_contract`
+- External blocker: `False`
+- Real LLM: `False`
+- Fake rerun status: `None`
+- Message: Exported novel file missing: exported_path not returned
+- Evidence: archived_chapter_count=0
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export`
+
+### CHAPTER-TARGET-MISMATCH-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `chapter_final_review`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 章节质量目标字数来源不一致，质量报告可能存在误判。
+- Evidence: chapter_id=vol_1_ch_1, quality_status=block, final_review_score=72, root_cause=checkpoint_target_mismatch, current_chapter_plan.target_word_count=2500, chapter_context.chapter_plan.target_word_count=2500, quality_gate.target_word_count=3000, status=block, blocking_items[0]={'code': 'word_count_drift', 'message': '字数严重偏离目标', 'detail': {'target_word_count': 3000, 'polished_word_count': 5410}}, warning_items[0]={'code': 'final_review_score', 'message': '成稿评分偏低: 72'}, summary=存在阻断级质量问题，停止归档和世界状态入库。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

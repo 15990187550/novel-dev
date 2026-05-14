@@ -66,6 +66,39 @@ async def test_director_continue_to_next_chapter(async_session):
 
 
 @pytest.mark.asyncio
+async def test_director_continue_to_next_chapter_clears_chapter_scoped_checkpoint(async_session):
+    director = NovelDirector(session=async_session)
+    plans = [
+        ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump(),
+        ChapterPlan(chapter_number=2, title="Ch2", target_word_count=3000, beats=[BeatPlan(summary="B2", target_mood="calm")]).model_dump(),
+    ]
+    plans[0]["chapter_id"] = "c1"
+    plans[1]["chapter_id"] = "c2"
+    await director.save_checkpoint(
+        "n_next_clear",
+        phase=Phase.COMPLETED,
+        checkpoint_data={
+            "current_volume_plan": {"chapters": plans},
+            "chapter_context": {"chapter_plan": {"title": "Ch1", "chapter_number": 1, "target_word_count": 3000, "beats": [{"summary": "B1", "target_mood": "tense"}]}},
+            "drafting_progress": {"beat_index": 3},
+            "relay_history": [{"scene_state": "old"}],
+            "draft_metadata": {"total_words": 999},
+        },
+        volume_id="v1",
+        chapter_id="c1",
+    )
+
+    state = await director._continue_to_next_chapter("n_next_clear")
+
+    assert state.current_phase == Phase.CONTEXT_PREPARATION.value
+    assert state.current_chapter_id == "c2"
+    assert "chapter_context" not in state.checkpoint_data
+    assert "drafting_progress" not in state.checkpoint_data
+    assert "relay_history" not in state.checkpoint_data
+    assert "draft_metadata" not in state.checkpoint_data
+
+
+@pytest.mark.asyncio
 async def test_director_last_chapter_to_volume_planning(async_session):
     director = NovelDirector(session=async_session)
     plan = ChapterPlan(chapter_number=1, title="Ch1", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump()
@@ -140,3 +173,36 @@ async def test_director_librarian_fallback_success(async_session, tmp_path, monk
         / "v1"
         / "c1.md"
     ).exists()
+
+
+@pytest.mark.asyncio
+async def test_director_librarian_fallback_on_extract_timeout(async_session, tmp_path, monkeypatch):
+    monkeypatch.setattr("novel_dev.agents.director.settings.data_dir", str(tmp_path))
+    director = NovelDirector(session=async_session)
+    plan = ChapterPlan(
+        chapter_number=1,
+        title="Ch1",
+        target_word_count=3000,
+        beats=[BeatPlan(summary="B1", target_mood="tense")],
+    ).model_dump()
+    plan["chapter_id"] = "c1"
+    await director.save_checkpoint(
+        "n_timeout",
+        phase=Phase.LIBRARIAN,
+        checkpoint_data={"current_volume_plan": {"chapters": [plan]}},
+        volume_id="v1",
+        chapter_id="c1",
+    )
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Ch1", novel_id="n_timeout")
+    await ChapterRepository(async_session).update_text("c1", polished_text="三天后，Lin Feng 来到 Qingyun City。")
+
+    with patch(
+        "novel_dev.agents.librarian.call_and_parse_model",
+        new_callable=AsyncMock,
+        side_effect=TimeoutError("LibrarianAgent/extract timed out after 120s waiting for LLM response"),
+    ):
+        state = await director._run_librarian(await director.resume("n_timeout"))
+
+    assert state.current_phase == Phase.VOLUME_PLANNING.value
+    ch = await ChapterRepository(async_session).get_by_id("c1")
+    assert ch.status == "archived"

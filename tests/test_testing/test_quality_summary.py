@@ -87,6 +87,60 @@ def test_quality_summary_passes_clean_snapshot():
     assert report.issues == []
 
 
+def test_quality_summary_records_longform_scale_and_import_metrics():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-longform",
+            "acceptance_target": {
+                "target_volumes": 18,
+                "target_chapters": 1200,
+                "target_word_count": 2_000_000,
+                "target_volume_number": 1,
+                "target_volume_chapters": 67,
+                "target_volume_word_count": 111_689,
+                "chapter_target_word_count": 1667,
+            },
+            "source_materials": [
+                {"filename": "世界观.md", "status": "approved", "char_count": 100},
+                {"filename": "原文.txt", "status": "approved", "char_count": 1000},
+            ],
+            "checkpoint": {
+                "setting_quality_report": {"passed": True},
+                "synopsis_data": {
+                    "estimated_volumes": 18,
+                    "estimated_total_chapters": 1200,
+                    "estimated_total_words": 2_000_000,
+                    "review_status": {"synopsis_quality_report": {"passed": True}},
+                },
+                "current_volume_plan": {
+                    "chapters": [{"chapter_number": 1}, {"chapter_number": 2}],
+                    "review_status": {
+                        "writability_status": {"passed": True, "failed_chapter_numbers": []}
+                    },
+                },
+            },
+            "chapters": [
+                {"chapter_id": "ch_1", "quality_status": "pass", "final_review_score": 82, "polished_text": "甲" * 1700},
+                {"chapter_id": "ch_2", "quality_status": "pass", "final_review_score": 84, "polished_text": "乙" * 1600},
+            ],
+        },
+        run_id="quality-longform",
+    )
+
+    assert report.status == "passed"
+    assert report.artifacts["target_volumes"] == "18"
+    assert report.artifacts["target_chapters"] == "1200"
+    assert report.artifacts["target_word_count"] == "2000000"
+    assert report.artifacts["target_volume_chapters"] == "67"
+    assert report.artifacts["generated_chapter_count"] == "2"
+    assert report.artifacts["generated_word_count"] == "3300"
+    assert report.artifacts["source_material_count"] == "2"
+    assert report.artifacts["source_material_approved_count"] == "2"
+    detail = next(item for item in report.details if item.stage == "longform_scale")
+    assert "target_volume_word_count=111689" in detail.evidence
+    assert "source_material_char_count=1100" in detail.evidence
+
+
 def test_quality_summary_records_passed_stage_quality_details():
     report = build_quality_summary_report(
         {

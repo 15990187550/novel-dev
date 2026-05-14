@@ -593,6 +593,21 @@ class EditorAgent:
         for issue in plan.get("global_issues") or []:
             if isinstance(issue, dict):
                 whole_chapter_issues.append(issue)
+        for blocking in plan.get("quality_gate_blocking_items") or []:
+            if not isinstance(blocking, dict):
+                continue
+            detail = blocking.get("detail")
+            detail_lines = detail if isinstance(detail, list) else []
+            suggestion = "删去重复承接、补齐节拍转场，并用当前节拍已有事实补足动作因果。"
+            if blocking.get("code") == "text_integrity":
+                suggestion = "修复残句、孤立标点或截断段落，保持完整句读和动作承接。"
+            if detail_lines:
+                suggestion = "；".join(str(item) for item in detail_lines[:3])
+            whole_chapter_issues.append({
+                "dim": blocking.get("code") or "quality_gate",
+                "problem": blocking.get("message") or "成稿质量门禁触发阻断项。",
+                "suggestion": suggestion,
+            })
         for warning in plan.get("quality_gate_warnings") or []:
             if not isinstance(warning, dict):
                 continue

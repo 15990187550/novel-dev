@@ -84,6 +84,31 @@ async def test_editor_guard_compares_source_and_polished(monkeypatch):
     assert fake_call.await_count == 1
 
 
+@pytest.mark.asyncio
+async def test_editor_guard_times_out_to_closed_failure(monkeypatch):
+    async def fail_call(*args, **kwargs):
+        raise RuntimeError("Request timed out")
+
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_structure_guard_service.call_and_parse_model",
+        fail_call,
+    )
+    service = ChapterStructureGuardService()
+
+    result = await service.check_editor_beat(
+        novel_id="novel-guard-timeout",
+        chapter_plan={"beats": [{"summary": "林照藏起玉佩"}]},
+        beat_index=0,
+        source_text="林照藏起玉佩。",
+        polished_text="林照藏起玉佩，呼吸一窒。",
+    )
+
+    assert result.passed is False
+    assert result.introduced_plan_external_fact is True
+    assert result.issues == ["结构守卫超时或失败，保守回退原文"]
+    assert result.suggested_rewrite_focus == "保留润色前文本，避免结构漂移"
+
+
 def test_guard_normalizer_accepts_common_alias_fields():
     normalized = _normalize_writer_guard_payload(
         {

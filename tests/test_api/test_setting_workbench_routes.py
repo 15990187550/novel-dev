@@ -168,3 +168,73 @@ async def test_generate_setting_review_batch_returns_504_on_llm_timeout(
 
     assert response.status_code == 504
     assert response.json()["detail"] == "AI 生成设定审核记录超时，请稍后重试"
+
+
+@pytest.mark.asyncio
+async def test_reply_setting_generation_session_returns_502_on_llm_config_error(
+    test_client,
+    async_session,
+    monkeypatch,
+):
+    from novel_dev.llm.exceptions import LLMConfigError
+    from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-auth-api",
+        title="认证失败测试",
+        target_categories=["worldview"],
+    )
+    await async_session.commit()
+
+    async def config_error(self, novel_id, session_id, content):
+        raise LLMConfigError("Error code: 401 - invalid API key")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.SettingWorkbenchService.reply_to_session",
+        config_error,
+    )
+
+    async with test_client as client:
+        response = await client.post(
+            f"/api/novels/novel-auth-api/settings/sessions/{session.id}/reply",
+            json={"content": "继续"},
+        )
+
+    assert response.status_code == 502
+    assert "AI 模型配置或认证失败" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_setting_review_batch_returns_502_on_llm_config_error(
+    test_client,
+    async_session,
+    monkeypatch,
+):
+    from novel_dev.llm.exceptions import LLMConfigError
+    from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+
+    repo = SettingWorkbenchRepository(async_session)
+    session = await repo.create_session(
+        novel_id="novel-generate-auth-api",
+        title="认证失败测试",
+        target_categories=["worldview"],
+    )
+    await async_session.commit()
+
+    async def config_error(self, novel_id, session_id):
+        raise LLMConfigError("Error code: 401 - invalid API key")
+
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.SettingWorkbenchService.generate_review_batch",
+        config_error,
+    )
+
+    async with test_client as client:
+        response = await client.post(
+            f"/api/novels/novel-generate-auth-api/settings/sessions/{session.id}/generate",
+            json={},
+        )
+
+    assert response.status_code == 502
+    assert "AI 模型配置或认证失败" in response.json()["detail"]

@@ -237,7 +237,7 @@ async def test_write_rewrites_once_when_structure_guard_fails(async_session):
             "open_threads": "",
             "next_beat_hook": "",
             "model_dump": lambda self: {
-                "scene_state": self.scene_state,
+            "scene_state": self.scene_state,
                 "emotional_tone": self.emotional_tone,
                 "new_info_revealed": self.new_info_revealed,
                 "open_threads": self.open_threads,
@@ -337,6 +337,190 @@ async def test_write_uses_conservative_fallback_when_guard_retry_fails(async_ses
 
 
 @pytest.mark.asyncio
+async def test_write_degrades_to_conservative_fallback_when_fallback_guard_still_fails(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=800,
+        beats=[
+            BeatPlan(summary="陆照跟踪赵厉，确认身份后选择先撤离，不提前进入深夜返住处。", target_mood="tense"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="外门集市"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        writing_cards=[{
+            "beat_index": 0,
+            "objective": "确认赵厉身份后先撤离。",
+            "required_facts": ["陆照跟踪赵厉", "确认身份", "先撤离"],
+            "forbidden_future_events": ["深夜返回住处", "宗门暗流涌动"],
+        }],
+    )
+    await director.save_checkpoint(
+        "novel_guard_fallback_degrade",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_guard",
+        chapter_id="ch_guard_fallback_degrade",
+    )
+    await ChapterRepository(async_session).create("ch_guard_fallback_degrade", "vol_guard", 1, "Test")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_writer_beat(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=True,
+                    premature_future_beat=True,
+                    issues=["提前写到后续节拍"],
+                    suggested_rewrite_focus="停在确认身份后撤离。",
+                )
+            if self.calls == 2:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=False,
+                    premature_future_beat=True,
+                    introduced_plan_external_fact=True,
+                    issues=["仍然混入深夜返住处", "新增计划外宗门暗流"],
+                    suggested_rewrite_focus="删除后续节拍元素。",
+                )
+            return ChapterStructureGuardResult(
+                passed=False,
+                completed_current_beat=True,
+                premature_future_beat=False,
+                introduced_plan_external_fact=False,
+                issues=["表述仍偏强，但已收束在当前节拍"],
+                suggested_rewrite_focus="保持当前节拍收束。",
+            )
+
+    guard = FakeGuard()
+    agent = WriterAgent(async_session, structure_guard=guard)
+    agent._generate_beat = AsyncMock(return_value="陆照在集市认出赵厉，深夜回住处时察觉宗门暗流已至。")
+    agent._rewrite_angle = AsyncMock(return_value="陆照跟着赵厉穿过廊道，回住处后才决定明日再查。")
+    agent._generate_relay = AsyncMock(return_value=type(
+        "Relay",
+        (),
+        {
+            "scene_state": "state",
+            "emotional_tone": "tense",
+            "new_info_revealed": "",
+            "open_threads": "",
+            "next_beat_hook": "",
+            "model_dump": lambda self: {
+                "scene_state": self.scene_state,
+                "emotional_tone": self.emotional_tone,
+                "new_info_revealed": self.new_info_revealed,
+                "open_threads": self.open_threads,
+                "next_beat_hook": self.next_beat_hook,
+            },
+        },
+    )())
+
+    await agent.write("novel_guard_fallback_degrade", context, "ch_guard_fallback_degrade")
+
+    ch = await ChapterRepository(async_session).get_by_id("ch_guard_fallback_degrade")
+    assert "陆照" in ch.raw_draft
+    assert "赵厉" in ch.raw_draft
+    assert "撤" in ch.raw_draft or "先" in ch.raw_draft
+    state = await director.resume("novel_guard_fallback_degrade")
+    assert state.current_phase == Phase.REVIEWING.value
+    assert state.checkpoint_data["writer_guard_fallbacks"][0]["reason"] == "writer_retry_and_fallback_guard_failed"
+
+
+def test_conservative_guard_fallback_prefers_current_beat_contract(async_session):
+    agent = WriterAgent(async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=5,
+        title="山谷伏杀",
+        target_word_count=2400,
+        beats=[
+            BeatPlan(summary="三人合力设伏围杀头狼，陆照刻意保留实力，暗中观察李大牛与王明月的战斗习惯。", target_mood="tense"),
+            BeatPlan(summary="战后分配报酬，并试探彼此信任。", target_mood="suspicious"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="山谷"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        writing_cards=[
+            {
+                "beat_index": 0,
+                "objective": "围住头狼，把它逼回陷坑边。",
+                "conflict": "头狼扑击凶猛，阵型稍乱就会被撕开口子。",
+                "turning_point": "陆照压住真实实力，只在关键一线补位。",
+                "required_entities": ["陆照", "李大牛", "王明月"],
+                "required_facts": ["三人合力设伏围杀头狼", "陆照刻意保留实力", "暗中观察李大牛与王明月的战斗习惯"],
+                "forbidden_future_events": ["战后分配报酬", "试探彼此信任"],
+                "reader_takeaway": "这一拍必须让读者看见战斗中的配合、保留与观察。",
+            },
+            {
+                "beat_index": 1,
+                "objective": "分报酬并互相试探。",
+            },
+        ],
+        beat_contexts=[
+            {
+                "beat_index": 0,
+                "beat": chapter_plan.beats[0].model_dump(),
+                "guardrails": ["只写围杀头狼过程，不进入战后谈话。"],
+            }
+        ],
+    )
+
+    fallback = agent._build_conservative_guard_fallback(
+        chapter_plan.beats[0],
+        context=context,
+        beat_idx=0,
+        is_last=False,
+        guard_evidence={
+            "issues": [
+                "当前beat的核心事件是战斗中刻意保留实力，暗中观察二人战斗习惯。",
+                "正文提前写了战后分配报酬和试探信任。",
+            ]
+        },
+    )
+
+    assert "围" in fallback or "头狼" in fallback
+    assert "保留实力" in fallback
+    assert "观察" in fallback
+    assert "战后分配报酬" not in fallback
+    assert "试探彼此信任" not in fallback
+
+
+def test_trim_repeated_prefix_from_previous_removes_cross_beat_duplicate(async_session):
+    agent = WriterAgent(async_session)
+    previous = (
+        "陆照后背抵上门板，袖袋里蛇血硌着腕骨。\n\n"
+        "不是同一个人。是同一脉。\n\n"
+        "拇指指甲掐进食指，疼让。"
+    )
+    current = (
+        "陆照后背抵上门板，袖袋里蛇血硌着腕骨。\n\n"
+        "不是同一个人。是同一脉。\n\n"
+        "拇指指甲掐进食指，疼让他回神。油灯没点，他从枕下摸出粗纸。"
+    )
+
+    trimmed = agent._trim_repeated_prefix_from_previous(previous, current)
+
+    assert trimmed.startswith("拇指指甲掐进食指，疼让他回神。")
+    assert "不是同一个人。是同一脉。" not in trimmed
+
+
+@pytest.mark.asyncio
 async def test_write_wrong_phase(async_session):
     director = NovelDirector(session=async_session)
     plan = ChapterPlan(chapter_number=1, title="T", target_word_count=100, beats=[])
@@ -359,3 +543,90 @@ async def test_write_wrong_phase(async_session):
     agent = WriterAgent(async_session)
     with pytest.raises(ValueError, match="Cannot write draft"):
         await agent.write("novel_wrong", context, "ch_1")
+
+
+@pytest.mark.asyncio
+async def test_write_resets_stale_resume_progress_when_chapter_has_no_draft(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=11,
+        title="Resume Reset",
+        target_word_count=1200,
+        beats=[
+            BeatPlan(summary="开场试探", target_mood="tense"),
+            BeatPlan(summary="确认线索", target_mood="suspicious"),
+            BeatPlan(summary="夜里记档", target_mood="cold"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="后山"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    await director.save_checkpoint(
+        "novel_resume_reset",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "chapter_context": context.model_dump(),
+            "drafting_progress": {"beat_index": 3, "total_beats": 3, "current_word_count": 9999},
+            "relay_history": [{"scene_state": "stale"}],
+        },
+        volume_id="vol_1",
+        chapter_id="ch_resume_reset",
+    )
+    await ChapterRepository(async_session).create("ch_resume_reset", "vol_1", 11, "Resume Reset")
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text="第一拍正文足够长，人物进入后山，故意把话只说半句，气氛紧绷，读者能看见他在观察同伴与地形变化。"),
+        LLMResponse(text="第二拍正文足够长，线索逐渐被确认，人物动作、对话和怀疑同步推进，没有跳到结尾。"),
+        LLMResponse(text="第三拍正文足够长，回到夜里整理线索，留下新的危险信号，形成完整停点。"),
+    ]
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        mock_factory._resolve_config.return_value = None
+        agent = WriterAgent(async_session)
+        agent._self_check_beat = lambda *args, **kwargs: type(
+            "BeatCheck",
+            (),
+            {
+                "needs_rewrite": False,
+                "missing_entities": [],
+                "missing_foreshadowings": [],
+                "contradictions": [],
+            },
+        )()
+        agent._rewrite_angle = AsyncMock(return_value="重写后的正文足够长，人物动作、判断和局势变化都落在当前节拍里，没有越界，也不会触发新的结构问题。")
+        agent._guard_writer_beat = AsyncMock(side_effect=lambda **kwargs: (kwargs["inner"], f"<!--BEAT:{kwargs['idx']}-->\n{kwargs['inner']}\n<!--/BEAT:{kwargs['idx']}-->"))
+        agent._enforce_beat_word_budget = AsyncMock(side_effect=lambda **kwargs: (kwargs["inner"], f"<!--BEAT:{kwargs['idx']}-->\n{kwargs['inner']}\n<!--/BEAT:{kwargs['idx']}-->"))
+        agent._generate_relay = AsyncMock(return_value=type(
+            "Relay",
+            (),
+            {
+                "scene_state": "state",
+                "emotional_tone": "tone",
+                "new_info_revealed": "",
+                "open_threads": "",
+                "next_beat_hook": "",
+                "model_dump": lambda self: {
+                    "scene_state": self.scene_state,
+                    "emotional_tone": self.emotional_tone,
+                    "new_info_revealed": self.new_info_revealed,
+                    "open_threads": self.open_threads,
+                    "next_beat_hook": self.next_beat_hook,
+                },
+            },
+        )())
+        metadata = await agent.write("novel_resume_reset", context, "ch_resume_reset")
+
+    assert metadata.total_words > 0
+    assert len(metadata.beat_coverage) == 3
+    chapter = await ChapterRepository(async_session).get_by_id("ch_resume_reset")
+    assert chapter.raw_draft
+    assert "<!--BEAT:0-->" in chapter.raw_draft
+    assert "<!--BEAT:2-->" in chapter.raw_draft

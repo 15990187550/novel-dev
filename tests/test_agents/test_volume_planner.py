@@ -435,6 +435,37 @@ def test_narrative_constraints_derive_required_sequence_from_settings():
     assert "可执行设定约束" in context.to_prompt_block()
 
 
+def test_narrative_constraints_do_not_pull_terminal_nodes_from_global_synopsis():
+    synopsis = SynopsisData(
+        title="混沌问道",
+        logline="陆照最终将在诸天万界尽头走出自己的超脱之路。",
+        core_conflict="陆照 vs 阻断超脱的末劫棋局",
+        estimated_volumes=3,
+        estimated_total_chapters=180,
+        estimated_total_words=360000,
+        volume_outlines=[{
+            "volume_number": 1,
+            "title": "内天地初成",
+            "summary": "陆照在第一卷只完成内天地雏形，并窥见外天地与诸天万界的线索。",
+            "main_goal": "完成内天地雏形，确认外天地与诸天万界并非传说。",
+            "end_state": "陆照掌握内天地雏形，获得通往外天地的线索。",
+        }],
+    )
+    source_text = (
+        "[setting] 最高等级修炼体系\n"
+        "无垠混沌海最高等级修炼体系：内天地→外天地→诸天万界→超脱"
+    )
+
+    context = NarrativeConstraintBuilder().build_for_volume(
+        synopsis=synopsis,
+        volume_number=1,
+        source_text=source_text,
+    )
+
+    sequence = next(item for item in context.executable_constraints if item.constraint_type == "sequence")
+    assert sequence.terms == ["内天地", "外天地", "诸天万界"]
+
+
 @pytest.mark.asyncio
 async def test_generate_volume_plan_repairs_missing_setting_constraints(async_session):
     await DocumentRepository(async_session).create(

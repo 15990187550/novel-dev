@@ -25,7 +25,7 @@ from novel_dev.agents.context_agent import ContextAgent
 from novel_dev.agents.writer_agent import WriterAgent
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.llm import llm_factory
-from novel_dev.llm.exceptions import LLMTimeoutError
+from novel_dev.llm.exceptions import LLMConfigError, LLMTimeoutError
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterContext
 from novel_dev.schemas.outline import VolumePlan
@@ -103,6 +103,13 @@ async def _raise_flow_cancelled(session: AsyncSession, novel_id: str):
     )
     await session.commit()
     raise HTTPException(status_code=409, detail="流程已停止")
+
+
+def _llm_config_http_exception(exc: LLMConfigError) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_502_BAD_GATEWAY,
+        detail=f"AI 模型配置或认证失败：{exc}",
+    )
 
 
 class CreateNovelRequest(BaseModel):
@@ -2681,6 +2688,9 @@ async def reply_setting_generation_session(
             session_id=session_id,
             content=req.content,
         )
+    except LLMConfigError as exc:
+        await session.rollback()
+        raise _llm_config_http_exception(exc) from exc
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -2706,6 +2716,9 @@ async def generate_setting_review_batch(
     service = SettingWorkbenchService(session)
     try:
         batch = await service.generate_review_batch(novel_id=novel_id, session_id=session_id)
+    except LLMConfigError as exc:
+        await session.rollback()
+        raise _llm_config_http_exception(exc) from exc
     except LLMTimeoutError as exc:
         await session.rollback()
         raise HTTPException(

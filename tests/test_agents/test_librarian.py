@@ -380,6 +380,42 @@ async def test_librarian_persist_skips_ambiguous_duplicate_entity_name(async_ses
 
 
 @pytest.mark.asyncio
+async def test_librarian_persist_resolves_duplicate_same_group_entity_name(async_session):
+    from novel_dev.repositories.entity_repo import EntityRepository
+    from novel_dev.repositories.relationship_repo import RelationshipRepository
+    from novel_dev.repositories.version_repo import EntityVersionRepository
+
+    agent = LibrarianAgent(async_session)
+    entity_repo = EntityRepository(async_session)
+    version_repo = EntityVersionRepository(async_session)
+
+    await entity_repo.create("e_ldz", "character", "陆照", novel_id="n1")
+    await entity_repo.create("e_wmy_old", "character", "王明月", novel_id="n1")
+    await entity_repo.create("e_wmy_new", "人物", "王明月", novel_id="n1")
+    await version_repo.create("e_ldz", 1, {"name": "陆照"})
+    await version_repo.create("e_wmy_old", 1, {"name": "王明月"})
+    await version_repo.create("e_wmy_new", 2, {"name": "王明月"})
+    await entity_repo.update_version("e_ldz", 1)
+    await entity_repo.update_version("e_wmy_old", 1)
+    await entity_repo.update_version("e_wmy_new", 2)
+
+    extraction = ExtractionResult(
+        new_relationships=[{
+            "source_entity_id": "陆照",
+            "target_entity_id": "王明月",
+            "relation_type": "mentioned",
+        }],
+    )
+
+    await agent.persist(extraction, "c1", "n1")
+    await async_session.commit()
+
+    rels = await RelationshipRepository(async_session).list_by_source("e_ldz", novel_id="n1")
+    assert len(rels) == 1
+    assert rels[0].target_id == "e_wmy_new"
+
+
+@pytest.mark.asyncio
 async def test_librarian_persist_demotes_canonical_conflict_to_current_state(async_session):
     from novel_dev.repositories.entity_repo import EntityRepository
     from novel_dev.repositories.version_repo import EntityVersionRepository
