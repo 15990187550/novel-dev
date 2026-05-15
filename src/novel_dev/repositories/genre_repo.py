@@ -10,10 +10,7 @@ class GenreRepository:
         self.session = session
 
     async def list_categories(self, include_disabled: bool = False) -> list[GenreCategory]:
-        stmt = select(NovelCategory)
-        if not include_disabled:
-            stmt = stmt.where(NovelCategory.enabled.is_(True))
-        result = await self.session.execute(stmt)
+        result = await self.session.execute(select(NovelCategory))
 
         categories_by_slug = {category.slug: category for category in BUILTIN_CATEGORIES}
         for row in result.scalars().all():

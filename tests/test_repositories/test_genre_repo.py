@@ -28,6 +28,33 @@ async def test_list_categories_merges_database_rows(async_session):
 
 
 @pytest.mark.asyncio
+async def test_disabled_database_category_override_hides_builtin_by_default(async_session):
+    async_session.add(
+        NovelCategory(
+            slug="xuanhuan",
+            name="玄幻停用",
+            level=1,
+            parent_slug=None,
+            description="停用内置玄幻",
+            sort_order=10,
+            enabled=False,
+            source="db",
+        )
+    )
+    await async_session.commit()
+
+    repo = GenreRepository(async_session)
+    visible = await repo.list_categories(include_disabled=False)
+    all_categories = await repo.list_categories(include_disabled=True)
+
+    assert not any(item.slug == "xuanhuan" for item in visible)
+    override = next(item for item in all_categories if item.slug == "xuanhuan")
+    assert override.name == "玄幻停用"
+    assert override.enabled is False
+    assert override.source == "db"
+
+
+@pytest.mark.asyncio
 async def test_get_template_overrides_returns_enabled_rows(async_session):
     async_session.add_all(
         [
