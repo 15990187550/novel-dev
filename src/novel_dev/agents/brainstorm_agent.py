@@ -10,6 +10,7 @@ from novel_dev.services.narrative_constraint_service import NarrativeConstraintB
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.story_quality_service import StoryQualityService
+from novel_dev.services.genre_template_service import GenreTemplateService
 
 
 class BrainstormAgent:
@@ -412,6 +413,18 @@ class BrainstormAgent:
             metadata={"source_chars": len(combined_text)},
         )
         source_text = combined_text[:12000]
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "BrainstormAgent",
+            "generate_synopsis_top_level",
+        )
+        genre_block = genre_template.render_prompt_block(
+            "source_rules",
+            "setting_rules",
+            "structure_rules",
+            "quality_rules",
+            "forbidden_rules",
+        )
         prompt = (
             "你是一位资深商业小说大纲生成专家,面向网文连载读者。"
             "根据用户提供的设定文档,先生成顶层总纲。卷级概要会在下一步分批生成,"
@@ -451,6 +464,7 @@ class BrainstormAgent:
             "- relationship_highlights: 字符串数组,每项描述一个关键关系推进\n"
             "不要输出 worldview_summary、three_act_structure、volume_hooks、suspense_plants、chapters、beats 等任何额外结构。\n"
             "不要输出 Markdown、代码块、解释文字或字段注释,只返回单个 JSON 对象。\n\n"
+            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             f"{source_text}"
         )
         result = await call_and_parse_model(
@@ -582,6 +596,18 @@ class BrainstormAgent:
         end: int,
         novel_id: str,
     ) -> list[SynopsisVolumeOutline]:
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "BrainstormAgent",
+            "generate_volume_outlines_batch",
+        )
+        genre_block = genre_template.render_prompt_block(
+            "source_rules",
+            "setting_rules",
+            "structure_rules",
+            "quality_rules",
+            "forbidden_rules",
+        )
         prompt = (
             "你是一位长篇网文分卷策划。请基于顶层总纲,只生成指定范围内的卷级概要数组。"
             "这些概要是后续完整卷纲的方向契约,不是章节表。\n\n"
@@ -596,6 +622,7 @@ class BrainstormAgent:
             "- 每一卷必须遵守对应的 ActiveConstraintContext:只能写当前阶段可触达冲突;"
             "高阶概念只能作为伏笔/残痕/传闻/代理人间接出现;缺少设定依据时保守降级,不要硬编。\n"
             "- 只返回 JSON 数组,不要解释、Markdown 或额外字段。\n\n"
+            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             f"### 顶层总纲\n{synopsis.model_copy(update={'volume_outlines': []}).model_dump_json()}\n\n"
             f"{constraints}\n\n"
             f"### 参考设定\n{source_text or '无'}"

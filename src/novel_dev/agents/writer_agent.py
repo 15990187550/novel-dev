@@ -13,6 +13,8 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
+from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.services.genre_template_service import GenreTemplateService
 
 
 _BEAT_ANCHOR_STRIP_RE = re.compile(r"<!--/?BEAT:\d+-->")
@@ -526,7 +528,14 @@ class WriterAgent:
         novel_id: str = "",
         rewrite_plan: dict | None = None,
     ) -> str:
-        system_prompt = self._build_system_prompt(context, is_last)
+        genre_template = None
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "WriterAgent",
+                "generate_beat",
+            )
+        system_prompt = self._build_system_prompt(context, is_last, genre_template=genre_template)
         context_msg = self._build_context_message(
             beat, context, relay_history, last_beat_text, idx, total, is_last, rewrite_plan
         )
@@ -557,12 +566,22 @@ class WriterAgent:
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-    def _build_system_prompt(self, context: ChapterContext, is_last: bool) -> str:
+    def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None) -> str:
         """Layer 1: Rules. Goes in system message for highest LLM priority."""
+        genre_block = ""
+        if genre_template is not None:
+            genre_block = genre_template.render_prompt_block(
+                "setting_rules",
+                "prose_rules",
+                "forbidden_rules",
+                "quality_rules",
+            )
         parts = [
             "你是一位追求沉浸感与可读性的中文小说家。按以下约束生成正文。只返回正文，不添加解释。",
             self._build_style_guide_block(context),
             self._build_writing_rules_block(is_last),
+            genre_block,
+            ProseHygieneService.prompt_rules(context),
         ]
         return "\n\n".join(p for p in parts if p)
 

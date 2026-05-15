@@ -210,6 +210,76 @@ async def test_brainstorm_uses_llm_factory(async_session):
     assert "score_synopsis" in get_tasks
 
 
+@pytest.mark.asyncio
+async def test_brainstorm_prompt_includes_resolved_genre_rules(async_session):
+    from novel_dev.db.models import NovelState
+
+    async_session.add(
+        NovelState(
+            novel_id="n_brain_genre",
+            current_phase="brainstorming",
+            checkpoint_data={
+                "genre": {
+                    "primary_slug": "xuanyi",
+                    "primary_name": "悬疑",
+                    "secondary_slug": "detective",
+                    "secondary_name": "推理探案",
+                }
+            },
+        )
+    )
+    await DocumentRepository(async_session).create(
+        "doc_brain_genre",
+        "n_brain_genre",
+        "setting",
+        "案件设定",
+        "一桩封闭空间案件，所有证词互相矛盾。",
+    )
+    await async_session.commit()
+
+    captured_prompts = []
+    mock_synopsis = SynopsisData(
+        title="雾中证词",
+        logline="侦探在证词互相矛盾的封闭案件中寻找真相。",
+        core_conflict="侦探 vs 隐藏关键事实的嫌疑人",
+        themes=["真相", "选择"],
+        character_arcs=[],
+        milestones=[],
+        estimated_volumes=1,
+        estimated_total_chapters=12,
+        estimated_total_words=36000,
+    )
+    mock_score = SynopsisScoreResult(
+        overall=85,
+        logline_specificity=85,
+        conflict_concreteness=85,
+        character_arc_depth=85,
+        structural_turns=85,
+        hook_strength=85,
+        summary_feedback="ok",
+    )
+
+    async def fake_call_and_parse_model(agent_name, task_name, prompt, model_type, **kwargs):
+        captured_prompts.append(prompt)
+        if task_name == "generate_synopsis_top_level":
+            return mock_synopsis
+        if task_name == "generate_synopsis_volume_outlines_batch":
+            return [make_volume_outline(1)]
+        if task_name == "score_synopsis":
+            return mock_score
+        raise AssertionError(f"unexpected task: {task_name}")
+
+    with patch(
+        "novel_dev.agents.brainstorm_agent.call_and_parse_model",
+        side_effect=fake_call_and_parse_model,
+    ):
+        await BrainstormAgent(async_session).brainstorm("n_brain_genre")
+
+    joined = "\n\n".join(captured_prompts)
+    assert "线索" in joined
+    assert "信息披露" in joined
+
+
 def test_synopsis_score_result_accepts_nested_scores_shape():
     payload = {
         "scores": {

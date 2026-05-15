@@ -187,3 +187,56 @@ async def test_writer_prompt_carries_story_contract_goal(async_session):
     assert "故事契约" in user
     assert "追查家族覆灭真相" in user
     assert "当前节拍动作要服务这个长期目标" in user
+
+
+@pytest.mark.asyncio
+async def test_writer_prompt_includes_resolved_genre_rules(async_session):
+    from novel_dev.db.models import NovelState
+    from novel_dev.agents.writer_agent import WriterAgent
+    from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, LocationContext
+
+    async_session.add(
+        NovelState(
+            novel_id="n_writer_genre",
+            current_phase="drafting",
+            checkpoint_data={
+                "genre": {
+                    "primary_slug": "xuanhuan",
+                    "primary_name": "玄幻",
+                    "secondary_slug": "zhutian",
+                    "secondary_name": "诸天文",
+                }
+            },
+        )
+    )
+    await async_session.commit()
+
+    captured = {}
+
+    async def fake_generate(*args, **kwargs):
+        captured["system"] = args[0][0].content
+        return type("Resp", (), {"text": "他按住呼吸，沿着既定规则推进。"})
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = fake_generate
+
+    agent = WriterAgent(async_session)
+    beat = BeatPlan(summary="主角在规则压力下做出选择。", target_mood="紧张", target_word_count=300)
+    context = ChapterContext(
+        chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="测试场景"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        story_contract={},
+    )
+    with patch("novel_dev.llm.llm_factory.get", return_value=mock_client), patch(
+        "novel_dev.llm.llm_factory._resolve_config",
+        return_value={},
+    ):
+        await agent._generate_beat(beat, context, [], "", 0, 1, True, novel_id="n_writer_genre")
+
+    assert "互联网黑话" in captured["system"]
+    assert "跨世界" in captured["system"]
