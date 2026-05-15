@@ -22,7 +22,14 @@ async def test_minimal_generation_flow_uses_fake_llm_gate(async_session, tmp_pat
 
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            create_resp = await client.post("/api/novels", json={"title": "Fake Gate Novel"})
+            create_resp = await client.post(
+                "/api/novels",
+                json={
+                    "title": "Fake Gate Novel",
+                    "primary_category_slug": "xuanhuan",
+                    "secondary_category_slug": "zhutian",
+                },
+            )
             assert create_resp.status_code == 201
             novel_id = create_resp.json()["novel_id"]
             assert create_resp.json()["current_phase"] == Phase.BRAINSTORMING.value

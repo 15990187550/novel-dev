@@ -30,5 +30,14 @@ async def test_list_novels(async_session):
             assert len(data["items"]) == 2
             ids = {i["novel_id"] for i in data["items"]}
             assert ids == {"n1", "n2"}
+            assert all(
+                item["genre"] == {
+                    "primary_slug": "general",
+                    "primary_name": "通用",
+                    "secondary_slug": "uncategorized",
+                    "secondary_name": "未分类",
+                }
+                for item in data["items"]
+            )
     finally:
         app.dependency_overrides.clear()

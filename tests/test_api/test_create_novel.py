@@ -32,6 +32,14 @@ app = FastAPI()
 app.include_router(router)
 
 
+def create_payload(title="测试小说", primary="xuanhuan", secondary="zhutian"):
+    return {
+        "title": title,
+        "primary_category_slug": primary,
+        "secondary_category_slug": secondary,
+    }
+
+
 @pytest.mark.asyncio
 async def test_create_novel(async_session):
     async def override():
@@ -42,12 +50,14 @@ async def test_create_novel(async_session):
 
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/novels", json={"title": "测试小说"})
+            resp = await client.post("/api/novels", json=create_payload())
             assert resp.status_code == 201
             data = resp.json()
             assert data["novel_id"].startswith("novel-")
             assert data["title"] == "测试小说"
             assert data["current_phase"] == "brainstorming"
+            assert data["genre"]["primary_slug"] == "xuanhuan"
+            assert data["genre"]["secondary_slug"] == "zhutian"
             assert data["checkpoint_data"]["novel_title"] == "测试小说"
             assert data["checkpoint_data"]["synopsis_data"]["title"] == "测试小说"
             assert data["checkpoint_data"]["synopsis_data"]["estimated_volumes"] == 1
@@ -67,7 +77,7 @@ async def test_create_novel_empty_title(async_session):
 
     try:
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            resp = await client.post("/api/novels", json={"title": "  "})
+            resp = await client.post("/api/novels", json=create_payload("  "))
             assert resp.status_code == 422
     finally:
         app.dependency_overrides.clear()

@@ -12,6 +12,7 @@ from novel_dev.db.engine import async_session_maker
 from novel_dev.db.models import AgentLog, EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.entity_repo import EntityRepository
+from novel_dev.repositories.genre_repo import GenreRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
@@ -83,6 +84,7 @@ from novel_dev.services.global_consistency_audit_service import GlobalConsistenc
 from novel_dev.services.world_state_review_service import WorldStateReviewService
 from novel_dev.agents.brainstorm_agent import BrainstormAgent
 from novel_dev.agents.volume_planner import VolumePlannerAgent
+from novel_dev.genres import default_genre
 import re
 import secrets
 
@@ -114,6 +116,8 @@ def _llm_config_http_exception(exc: LLMConfigError) -> HTTPException:
 
 class CreateNovelRequest(BaseModel):
     title: str
+    primary_category_slug: str
+    secondary_category_slug: str
 
 
 class WorldStateReviewResolveRequest(BaseModel):
@@ -580,6 +584,7 @@ async def list_novels(session: AsyncSession = Depends(get_session)):
                 "novel_id": r.novel_id,
                 "title": _get_novel_display_title(r.novel_id, r.checkpoint_data or {}),
                 "current_phase": r.current_phase,
+                "genre": _get_checkpoint_genre(r.checkpoint_data),
                 "last_updated": r.last_updated.isoformat() if r.last_updated else None,
             }
             for r in rows
@@ -595,6 +600,51 @@ def _get_novel_display_title(novel_id: str, checkpoint_data: dict[str, Any]) -> 
     )
 
 
+def _serialize_genre(genre) -> dict[str, str]:
+    return {
+        "primary_slug": genre.primary_slug,
+        "primary_name": genre.primary_name,
+        "secondary_slug": genre.secondary_slug,
+        "secondary_name": genre.secondary_name,
+    }
+
+
+def _get_checkpoint_genre(checkpoint_data) -> dict[str, str]:
+    raw_genre = (checkpoint_data or {}).get("genre") if isinstance(checkpoint_data, dict) else None
+    if not isinstance(raw_genre, dict):
+        return _serialize_genre(default_genre())
+
+    fallback = _serialize_genre(default_genre())
+    return {
+        "primary_slug": raw_genre.get("primary_slug") or fallback["primary_slug"],
+        "primary_name": raw_genre.get("primary_name") or fallback["primary_name"],
+        "secondary_slug": raw_genre.get("secondary_slug") or fallback["secondary_slug"],
+        "secondary_name": raw_genre.get("secondary_name") or fallback["secondary_name"],
+    }
+
+
+async def _resolve_create_genre(session: AsyncSession, primary_slug: str, secondary_slug: str):
+    categories = await GenreRepository(session).list_categories(include_disabled=False)
+    by_slug = {category.slug: category for category in categories}
+
+    primary = by_slug.get(primary_slug)
+    if primary is None or primary.level != 1:
+        raise HTTPException(status_code=422, detail="一级分类不存在或不可用")
+
+    secondary = by_slug.get(secondary_slug)
+    if secondary is None or secondary.level != 2 or secondary.parent_slug != primary.slug:
+        raise HTTPException(status_code=422, detail="二级分类不存在或不属于所选一级分类")
+
+    return default_genre().model_copy(
+        update={
+            "primary_slug": primary.slug,
+            "primary_name": primary.name,
+            "secondary_slug": secondary.slug,
+            "secondary_name": secondary.name,
+        }
+    )
+
+
 def _generate_novel_id(title: str) -> str:
     # Strip non-ASCII first so CJK titles get a clean slug
     slug = re.sub(r'[^\x00-\x7F]', '', title.lower())
@@ -606,11 +656,42 @@ def _generate_novel_id(title: str) -> str:
     return f"{slug}-{suffix}"
 
 
+@router.get("/api/novel-categories")
+async def list_novel_categories(session: AsyncSession = Depends(get_session)):
+    categories = await GenreRepository(session).list_categories(include_disabled=False)
+    children_by_parent: dict[str, list[dict[str, Any]]] = {}
+    for category in categories:
+        if category.level != 2 or not category.parent_slug:
+            continue
+        children_by_parent.setdefault(category.parent_slug, []).append(
+            {
+                "slug": category.slug,
+                "name": category.name,
+                "description": category.description,
+                "sort_order": category.sort_order,
+            }
+        )
+
+    return [
+        {
+            "slug": category.slug,
+            "name": category.name,
+            "description": category.description,
+            "sort_order": category.sort_order,
+            "children": children_by_parent.get(category.slug, []),
+        }
+        for category in categories
+        if category.level == 1
+    ]
+
+
 @router.post("/api/novels", status_code=201)
 async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(get_session)):
     title = req.title.strip()
     if not title:
         raise HTTPException(status_code=422, detail="标题不能为空")
+    genre = await _resolve_create_genre(session, req.primary_category_slug, req.secondary_category_slug)
+    genre_data = _serialize_genre(genre)
 
     novel_id = None
     for _ in range(5):
@@ -625,6 +706,7 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
 
     checkpoint_data = {
         "novel_title": title,
+        "genre": genre_data,
         "synopsis_data": {
             "title": title,
             "logline": "",
@@ -655,6 +737,7 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
+        "genre": _get_checkpoint_genre(state.checkpoint_data),
         "checkpoint_data": state.checkpoint_data,
         "last_updated": state.last_updated.isoformat() if state.last_updated else None,
     }
@@ -672,6 +755,7 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
+        "genre": _get_checkpoint_genre(state.checkpoint_data),
         "checkpoint_data": state.checkpoint_data,
         "last_updated": state.last_updated.isoformat(),
     }
@@ -700,6 +784,7 @@ async def update_novel(novel_id: str, req: UpdateNovelRequest, session: AsyncSes
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
+        "genre": _get_checkpoint_genre(state.checkpoint_data),
         "checkpoint_data": state.checkpoint_data,
         "last_updated": state.last_updated.isoformat(),
     }
