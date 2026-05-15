@@ -24,7 +24,8 @@ api.interceptors.response.use(
 )
 
 export const listNovels = () => api.get('/novels').then(r => r.data)
-export const createNovel = (title) => api.post('/novels', { title }).then(r => r.data)
+export const getNovelCategories = () => api.get('/novel-categories').then(r => r.data)
+export const createNovel = (payload) => api.post('/novels', payload).then(r => r.data)
 export const updateNovel = (id, title) => api.patch(`/novels/${id}`, { title }).then(r => r.data)
 export const deleteNovel = (id) => api.delete(`/novels/${id}`).then(r => r.data)
 export const getNovelState = (id) => api.get(`/novels/${id}/state`).then(r => r.data)

@@ -43,10 +43,39 @@
         <el-form-item label="标题">
           <el-input v-model="createForm.title" placeholder="请输入小说标题" @keyup.enter="doCreate" />
         </el-form-item>
+        <el-form-item label="一级分类">
+          <el-select
+            v-model="createForm.primary_category_slug"
+            placeholder="请选择一级分类"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="category in categoryOptions"
+              :key="category.slug"
+              :label="category.name"
+              :value="category.slug"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="二级分类">
+          <el-select
+            v-model="createForm.secondary_category_slug"
+            placeholder="请选择二级分类"
+            :disabled="!createForm.primary_category_slug"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="category in secondaryCategoryOptions"
+              :key="category.slug"
+              :label="category.name"
+              :value="category.slug"
+            />
+          </el-select>
+        </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="showCreateDialog = false">取消</el-button>
-        <el-button type="primary" :loading="creating" :disabled="!createForm.title.trim()" @click="doCreate">
+        <el-button type="primary" :loading="creating" :disabled="!canCreate" @click="doCreate">
           创建
         </el-button>
       </template>
@@ -55,17 +84,30 @@
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { listNovels, createNovel } from '@/api.js'
+import { computed, ref, watch } from 'vue'
+import { listNovels, createNovel, getNovelCategories } from '@/api.js'
 import { useNovelStore } from '@/stores/novel.js'
 import { ElMessage } from 'element-plus'
 
 const store = useNovelStore()
 const selected = ref('')
 const options = ref([])
+const categoryOptions = ref([])
 const showCreateDialog = ref(false)
 const creating = ref(false)
-const createForm = ref({ title: '' })
+const createForm = ref({ title: '', primary_category_slug: '', secondary_category_slug: '' })
+
+const selectedPrimaryCategory = computed(() =>
+  categoryOptions.value.find(category => category.slug === createForm.value.primary_category_slug)
+)
+const secondaryCategoryOptions = computed(() => selectedPrimaryCategory.value?.children || [])
+const canCreate = computed(() =>
+  Boolean(
+    createForm.value.title.trim() &&
+    createForm.value.primary_category_slug &&
+    createForm.value.secondary_category_slug
+  )
+)
 
 async function fetchNovels() {
   try {
@@ -73,6 +115,15 @@ async function fetchNovels() {
     options.value = (res.items || []).map(n => ({ value: n.novel_id, label: n.title || n.novel_id }))
   } catch {
     options.value = []
+  }
+}
+
+async function fetchCategories() {
+  try {
+    const res = await getNovelCategories()
+    categoryOptions.value = Array.isArray(res) ? res : (res.items || [])
+  } catch {
+    categoryOptions.value = []
   }
 }
 
@@ -84,13 +135,17 @@ function load() {
 
 async function doCreate() {
   const title = createForm.value.title.trim()
-  if (!title) return
+  if (!canCreate.value) return
   creating.value = true
   try {
-    const res = await createNovel(title)
+    const res = await createNovel({
+      title,
+      primary_category_slug: createForm.value.primary_category_slug,
+      secondary_category_slug: createForm.value.secondary_category_slug,
+    })
     ElMessage.success('小说创建成功')
     showCreateDialog.value = false
-    createForm.value.title = ''
+    createForm.value = { title: '', primary_category_slug: '', secondary_category_slug: '' }
     await fetchNovels()
     if (res.novel_id) {
       store.loadNovel(res.novel_id)
@@ -103,6 +158,11 @@ async function doCreate() {
 }
 
 fetchNovels()
+fetchCategories()
+
+watch(() => createForm.value.primary_category_slug, () => {
+  createForm.value.secondary_category_slug = ''
+})
 
 watch(() => store.novelId, (id) => {
   if (id && !options.value.find(o => o.value === id)) {

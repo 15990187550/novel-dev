@@ -41,6 +41,7 @@ import {
   resolveWorldStateReview,
   runGlobalConsistencyAudit,
   getSynopsis,
+  getNovelCategories,
   getBrainstormWorkspace,
   getVolumePlan,
   getOutlineWorkbench,
@@ -54,6 +55,7 @@ import {
   submitBrainstormWorkspace,
   submitOutlineFeedback,
   updateNovel,
+  createNovel,
   updateEntity,
   getKnowledgeDomains,
   getSettingSessions,
@@ -214,6 +216,24 @@ describe('outline workbench api', () => {
     await expect(updateNovel('novel-1', '新标题')).resolves.toEqual({ ok: true })
 
     expect(mockPatch).toHaveBeenCalledWith('/novels/novel-1', { title: '新标题' })
+  })
+
+  it('requests available novel categories', async () => {
+    await expect(getNovelCategories()).resolves.toEqual({ ok: true })
+
+    expect(mockGet).toHaveBeenCalledWith('/novel-categories')
+  })
+
+  it('creates a novel with complete category payload', async () => {
+    const payload = {
+      title: '新小说',
+      primary_category_slug: 'xuanhuan',
+      secondary_category_slug: 'zhutian',
+    }
+
+    await expect(createNovel(payload)).resolves.toEqual({ ok: true })
+
+    expect(mockPost).toHaveBeenCalledWith('/novels', payload)
   })
 
   it('updates and deletes entities through dedicated endpoints', async () => {
