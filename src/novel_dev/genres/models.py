@@ -6,6 +6,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+def _validate_slug(value: str) -> str:
+    normalized = value.strip()
+    if not re.fullmatch(r"[a-z][a-z0-9_]*", normalized):
+        raise ValueError("slug must be lowercase snake_case")
+    return normalized
+
+
 PromptBlockName = Literal[
     "role_rules",
     "source_rules",
@@ -31,10 +38,7 @@ class GenreCategory(BaseModel):
     @field_validator("slug")
     @classmethod
     def validate_slug(cls, value: str) -> str:
-        normalized = value.strip()
-        if not re.fullmatch(r"[a-z][a-z0-9_]*", normalized):
-            raise ValueError("slug must be lowercase snake_case")
-        return normalized
+        return _validate_slug(value)
 
 
 class NovelGenre(BaseModel):
@@ -42,6 +46,11 @@ class NovelGenre(BaseModel):
     primary_name: str
     secondary_slug: str
     secondary_name: str
+
+    @field_validator("primary_slug", "secondary_slug")
+    @classmethod
+    def validate_slug(cls, value: str) -> str:
+        return _validate_slug(value)
 
 
 class GenreTemplate(BaseModel):
@@ -56,6 +65,13 @@ class GenreTemplate(BaseModel):
     enabled: bool = True
     version: int = 1
     source: Literal["builtin", "db"] = "builtin"
+
+    @field_validator("category_slug", "parent_slug")
+    @classmethod
+    def validate_optional_slug(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_slug(value)
 
 
 class ResolvedGenreTemplate(BaseModel):
