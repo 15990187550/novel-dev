@@ -247,3 +247,17 @@ def test_quality_gate_classifies_continuity_audit_codes_as_guided_continuity_iss
         assert issue.scope == "chapter"
         assert issue.repairability == "guided"
         assert issue.source == "quality_gate"
+
+
+def test_quality_gate_builds_genre_type_drift_items():
+    items = QualityGateService.genre_type_drift_items(
+        "董事会刚结束，他突然回宗门突破境界。",
+        {
+            "blocking_rules": {"type_drift": True},
+            "forbidden_drift_patterns": ["宗门", "境界突破"],
+        },
+    )
+    assert items == [
+        "type_drift: 命中类型漂移规则：宗门",
+        "type_drift: 命中类型漂移规则：境界突破",
+    ]

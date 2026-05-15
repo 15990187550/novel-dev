@@ -156,6 +156,26 @@ class QualityGateService:
         return issues
 
     @classmethod
+    def genre_type_drift_items(cls, text: str, quality_config: dict | None = None) -> list[str]:
+        config = quality_config or {}
+        if not (config.get("blocking_rules") or {}).get("type_drift"):
+            return []
+        items = []
+        for pattern in config.get("forbidden_drift_patterns") or []:
+            if pattern and cls._genre_pattern_in_text(str(pattern), text):
+                items.append(f"type_drift: 命中类型漂移规则：{pattern}")
+        return items
+
+    @staticmethod
+    def _genre_pattern_in_text(pattern: str, text: str) -> bool:
+        if pattern in text:
+            return True
+        if len(pattern) == 4:
+            reversed_compound = pattern[2:] + pattern[:2]
+            return reversed_compound in text
+        return False
+
+    @classmethod
     def _gate_item_to_quality_issue(cls, item: dict[str, Any], severity: str) -> QualityIssue:
         code = str(item.get("code") or "unknown")
         category, scope, repairability = cls._quality_issue_classification(code)
