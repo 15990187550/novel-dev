@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def _validate_slug(value: str) -> str:
@@ -23,6 +23,7 @@ PromptBlockName = Literal[
     "quality_rules",
     "output_rules",
 ]
+PROMPT_BLOCK_NAMES = set(get_args(PromptBlockName))
 
 
 class GenreCategory(BaseModel):
@@ -38,6 +39,13 @@ class GenreCategory(BaseModel):
     @field_validator("slug")
     @classmethod
     def validate_slug(cls, value: str) -> str:
+        return _validate_slug(value)
+
+    @field_validator("parent_slug")
+    @classmethod
+    def validate_parent_slug(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
         return _validate_slug(value)
 
 
@@ -72,6 +80,29 @@ class GenreTemplate(BaseModel):
         if value is None:
             return None
         return _validate_slug(value)
+
+    @field_validator("prompt_blocks")
+    @classmethod
+    def validate_prompt_block_names(cls, value: dict[str, list[str]]) -> dict[str, list[str]]:
+        unknown = sorted(key for key in value if key not in PROMPT_BLOCK_NAMES)
+        if unknown:
+            raise ValueError(f"unknown prompt block names: {unknown}")
+        return value
+
+    @model_validator(mode="after")
+    def validate_scope_structure(self) -> GenreTemplate:
+        if self.scope == "global":
+            if self.category_slug is not None or self.parent_slug is not None:
+                raise ValueError("global templates must not define category_slug or parent_slug")
+        elif self.scope == "primary":
+            if self.category_slug is None:
+                raise ValueError("primary templates must define category_slug")
+            if self.parent_slug is not None:
+                raise ValueError("primary templates must not define parent_slug")
+        elif self.scope == "secondary":
+            if self.category_slug is None or self.parent_slug is None:
+                raise ValueError("secondary templates must define category_slug and parent_slug")
+        return self
 
 
 class ResolvedGenreTemplate(BaseModel):

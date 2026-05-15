@@ -1,7 +1,7 @@
 import pytest
 
 from novel_dev.genres.defaults import BUILTIN_CATEGORIES, BUILTIN_TEMPLATES, default_genre
-from novel_dev.genres.models import GenreTemplate, NovelGenre, validate_template_is_generic
+from novel_dev.genres.models import GenreCategory, GenreTemplate, NovelGenre, validate_template_is_generic
 
 
 def test_builtin_categories_include_required_core_tree():
@@ -35,9 +35,34 @@ def test_genre_template_rejects_invalid_category_slug():
         GenreTemplate(scope="primary", category_slug="Bad-Slug")
 
 
+def test_genre_category_rejects_invalid_parent_slug():
+    with pytest.raises(ValueError):
+        GenreCategory(slug="child", name="子类", level=2, parent_slug="Bad-Slug")
+
+
 def test_genre_template_rejects_invalid_parent_slug():
     with pytest.raises(ValueError):
         GenreTemplate(scope="secondary", category_slug="zhutian", parent_slug="Bad-Slug")
+
+
+def test_genre_template_rejects_unknown_prompt_block_name():
+    with pytest.raises(ValueError):
+        GenreTemplate(scope="global", prompt_blocks={"bad_block": ["x"]})
+
+
+def test_genre_template_requires_category_for_primary_scope():
+    with pytest.raises(ValueError):
+        GenreTemplate(scope="primary")
+
+
+def test_genre_template_rejects_category_for_global_scope():
+    with pytest.raises(ValueError):
+        GenreTemplate(scope="global", category_slug="xuanhuan")
+
+
+def test_genre_template_requires_parent_for_secondary_scope():
+    with pytest.raises(ValueError):
+        GenreTemplate(scope="secondary", category_slug="zhutian")
 
 
 def test_genre_template_allows_none_parent_slug():
