@@ -35,6 +35,11 @@ def test_genre_template_rejects_invalid_category_slug():
         GenreTemplate(scope="primary", category_slug="Bad-Slug")
 
 
+def test_genre_template_rejects_invalid_parent_slug():
+    with pytest.raises(ValueError):
+        GenreTemplate(scope="secondary", category_slug="zhutian", parent_slug="Bad-Slug")
+
+
 def test_genre_template_allows_none_parent_slug():
     template = GenreTemplate(scope="global", category_slug=None, parent_slug=None)
     assert template.category_slug is None
@@ -48,6 +53,16 @@ def test_novel_genre_rejects_invalid_primary_slug():
             primary_name="坏",
             secondary_slug="uncategorized",
             secondary_name="未分类",
+        )
+
+
+def test_novel_genre_rejects_invalid_secondary_slug():
+    with pytest.raises(ValueError):
+        NovelGenre(
+            primary_slug="general",
+            primary_name="通用",
+            secondary_slug="Bad-Slug",
+            secondary_name="坏",
         )
 
 
