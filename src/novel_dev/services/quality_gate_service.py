@@ -161,19 +161,15 @@ class QualityGateService:
         if not (config.get("blocking_rules") or {}).get("type_drift"):
             return []
         items = []
+        seen = set()
         for pattern in config.get("forbidden_drift_patterns") or []:
-            if pattern and cls._genre_pattern_in_text(str(pattern), text):
-                items.append(f"type_drift: 命中类型漂移规则：{pattern}")
+            normalized_pattern = str(pattern).strip() if pattern is not None else ""
+            if not normalized_pattern or normalized_pattern in seen:
+                continue
+            seen.add(normalized_pattern)
+            if normalized_pattern in text:
+                items.append(f"type_drift: 命中类型漂移规则：{normalized_pattern}")
         return items
-
-    @staticmethod
-    def _genre_pattern_in_text(pattern: str, text: str) -> bool:
-        if pattern in text:
-            return True
-        if len(pattern) == 4:
-            reversed_compound = pattern[2:] + pattern[:2]
-            return reversed_compound in text
-        return False
 
     @classmethod
     def _gate_item_to_quality_issue(cls, item: dict[str, Any], severity: str) -> QualityIssue:
