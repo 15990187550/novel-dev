@@ -623,6 +623,12 @@ def _get_checkpoint_genre(checkpoint_data) -> dict[str, str]:
     }
 
 
+def _checkpoint_with_genre(checkpoint_data: dict[str, Any] | None) -> dict[str, Any]:
+    checkpoint = dict(checkpoint_data or {})
+    checkpoint["genre"] = _get_checkpoint_genre(checkpoint)
+    return checkpoint
+
+
 async def _resolve_create_genre(session: AsyncSession, primary_slug: str, secondary_slug: str):
     categories = await GenreRepository(session).list_categories(include_disabled=False)
     by_slug = {category.slug: category for category in categories}
@@ -730,15 +736,16 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
     )
     session.add(state)
     await session.commit()
+    checkpoint = _checkpoint_with_genre(state.checkpoint_data)
 
     return {
         "novel_id": state.novel_id,
-        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
+        "title": _get_novel_display_title(state.novel_id, checkpoint),
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
-        "genre": _get_checkpoint_genre(state.checkpoint_data),
-        "checkpoint_data": state.checkpoint_data,
+        "genre": checkpoint["genre"],
+        "checkpoint_data": checkpoint,
         "last_updated": state.last_updated.isoformat() if state.last_updated else None,
     }
 
@@ -749,14 +756,15 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
     state = await repo.get_state(novel_id)
     if not state:
         raise HTTPException(status_code=404, detail="Novel state not found")
+    checkpoint = _checkpoint_with_genre(state.checkpoint_data)
     return {
         "novel_id": state.novel_id,
-        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
+        "title": _get_novel_display_title(state.novel_id, checkpoint),
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
-        "genre": _get_checkpoint_genre(state.checkpoint_data),
-        "checkpoint_data": state.checkpoint_data,
+        "genre": checkpoint["genre"],
+        "checkpoint_data": checkpoint,
         "last_updated": state.last_updated.isoformat(),
     }
 
@@ -777,15 +785,16 @@ async def update_novel(novel_id: str, req: UpdateNovelRequest, session: AsyncSes
     state.checkpoint_data = checkpoint_data
     await session.commit()
     await session.refresh(state)
+    checkpoint = _checkpoint_with_genre(state.checkpoint_data)
 
     return {
         "novel_id": state.novel_id,
-        "title": _get_novel_display_title(state.novel_id, state.checkpoint_data or {}),
+        "title": _get_novel_display_title(state.novel_id, checkpoint),
         "current_phase": state.current_phase,
         "current_volume_id": state.current_volume_id,
         "current_chapter_id": state.current_chapter_id,
-        "genre": _get_checkpoint_genre(state.checkpoint_data),
-        "checkpoint_data": state.checkpoint_data,
+        "genre": checkpoint["genre"],
+        "checkpoint_data": checkpoint,
         "last_updated": state.last_updated.isoformat(),
     }
 

@@ -73,11 +73,13 @@ async def test_state_for_historical_novel_returns_default_genre(async_session):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.get("/api/novels/n_legacy_genre/state")
             assert resp.status_code == 200
-            assert resp.json()["genre"] == {
+            data = resp.json()
+            assert data["genre"] == {
                 "primary_slug": "general",
                 "primary_name": "通用",
                 "secondary_slug": "uncategorized",
                 "secondary_name": "未分类",
             }
+            assert data["checkpoint_data"]["genre"] == data["genre"]
     finally:
         app.dependency_overrides.clear()
