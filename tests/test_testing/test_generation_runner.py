@@ -78,6 +78,22 @@ def test_longform_options_default_volume1_distribution():
     assert options.resolved_target_volume_word_count() == 111_689
 
 
+def test_create_novel_payload_includes_genre_for_scope():
+    assert generation_runner._build_create_novel_payload(
+        "长篇",
+        "real-longform-volume1",
+    ) == {
+        "title": "长篇",
+        "primary_category_slug": "xuanhuan",
+        "secondary_category_slug": "zhutian",
+    }
+    assert generation_runner._build_create_novel_payload("普通", "real-contract") == {
+        "title": "普通",
+        "primary_category_slug": "general",
+        "secondary_category_slug": "uncategorized",
+    }
+
+
 @pytest.mark.asyncio
 async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_session):
     await NovelStateRepository(async_session).save_checkpoint(

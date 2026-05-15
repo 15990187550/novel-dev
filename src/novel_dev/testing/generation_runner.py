@@ -217,6 +217,20 @@ def _is_longform_volume1(scope: AcceptanceScope) -> bool:
     return scope == "real-longform-volume1"
 
 
+def _build_create_novel_payload(title: str, acceptance_scope: str = "") -> dict[str, str]:
+    if acceptance_scope == "real-longform-volume1":
+        return {
+            "title": title,
+            "primary_category_slug": "xuanhuan",
+            "secondary_category_slug": "zhutian",
+        }
+    return {
+        "title": title,
+        "primary_category_slug": "general",
+        "secondary_category_slug": "uncategorized",
+    }
+
+
 def _target_artifacts(options: GenerationRunOptions) -> dict[str, str]:
     return {
         "target_volumes": str(options.target_volumes),
@@ -711,7 +725,10 @@ async def _run_api_smoke_flow(
 
         async def create_novel() -> None:
             data = await _request_json(
-                client.post("/api/novels", json={"title": fixture.title})
+                client.post(
+                    "/api/novels",
+                    json=_build_create_novel_payload(fixture.title, options.acceptance_scope),
+                )
             )
             artifacts["novel_id"] = _require_string(data, "novel_id", "create_novel")
 
