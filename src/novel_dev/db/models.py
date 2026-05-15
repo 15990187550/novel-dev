@@ -170,6 +170,54 @@ class NovelState(Base):
     last_updated: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class NovelCategory(Base):
+    __tablename__ = "novel_categories"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uix_novel_categories_slug"),
+        Index("ix_novel_categories_parent_slug", "parent_slug"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    level: Mapped[int] = mapped_column(Integer, nullable=False)
+    parent_slug: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="db")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NovelGenreTemplate(Base):
+    __tablename__ = "novel_genre_templates"
+    __table_args__ = (
+        Index(
+            "ix_novel_genre_templates_scope_category_agent_task",
+            "scope",
+            "category_slug",
+            "agent_name",
+            "task_name",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scope: Mapped[str] = mapped_column(Text, nullable=False)
+    category_slug: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    parent_slug: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    agent_name: Mapped[str] = mapped_column(Text, nullable=False, default="*")
+    task_name: Mapped[str] = mapped_column(Text, nullable=False, default="*")
+    prompt_blocks: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    quality_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    merge_policy: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    source: Mapped[str] = mapped_column(Text, nullable=False, default="db")
+    created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Chapter(Base):
     __tablename__ = "chapters"
     __table_args__ = (UniqueConstraint("volume_id", "chapter_number", name="uix_volume_chapter"),)
