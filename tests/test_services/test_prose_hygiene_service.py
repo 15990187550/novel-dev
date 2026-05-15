@@ -27,7 +27,7 @@ def test_modern_terms_block_when_genre_policy_blocks_even_with_ambiguous_context
 
 def test_modern_terms_allow_when_genre_policy_allows():
     issues = ProseHygieneService.find_issues(
-        "合同、融资和公司会议让他意识到局势正在变化。",
+        "他用 KPI 和互联网项目复盘解释眼前的危机。",
         context={"genre_quality_config": {"modern_terms_policy": "allow"}},
     )
     assert not any(issue.code == "modern_drift" for issue in issues)
