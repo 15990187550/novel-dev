@@ -62,13 +62,21 @@ class GenreTemplateService:
             and self._matches_layer(template, genre)
             and self._matches_specificity(template, agent_name, task_name)
         ]
-        selected.sort(key=lambda template: (self._layer_rank(template), self._specificity_rank(template)))
+        selected.sort(
+            key=lambda template: (
+                self._layer_rank(template),
+                self._specificity_rank(template),
+                self._source_rank(template),
+                template.version,
+            )
+        )
 
         warnings: list[str] = []
-        if not any(template.scope == "primary" for template in selected):
-            warnings.append(f"genre_template_missing:primary:{genre.primary_slug}")
-        if not any(template.scope == "secondary" for template in selected):
-            warnings.append(f"genre_template_missing:secondary:{genre.secondary_slug}")
+        if not self._is_default_compat_genre(genre):
+            if not any(template.scope == "primary" for template in selected):
+                warnings.append(f"genre_template_missing:primary:{genre.primary_slug}")
+            if not any(template.scope == "secondary" for template in selected):
+                warnings.append(f"genre_template_missing:secondary:{genre.secondary_slug}")
 
         return selected, warnings
 
@@ -143,6 +151,13 @@ class GenreTemplateService:
             return 2
         return 3
 
+    def _source_rank(self, template: GenreTemplate) -> int:
+        return 0 if template.source == "builtin" else 1
+
+    def _is_default_compat_genre(self, genre: NovelGenre) -> bool:
+        default = default_genre()
+        return genre.primary_slug == default.primary_slug and genre.secondary_slug == default.secondary_slug
+
     def _template_id(self, template: GenreTemplate) -> str:
         slug = template.category_slug if template.category_slug is not None else "*"
         return f"{template.source}:{template.scope}:{slug}:{template.agent_name}:{template.task_name}:v{template.version}"
@@ -167,5 +182,5 @@ class GenreTemplateService:
         deduped: list[Any] = []
         for value in values:
             if value not in deduped:
-                deduped.append(value)
+                deduped.append(deepcopy(value))
         return deduped
