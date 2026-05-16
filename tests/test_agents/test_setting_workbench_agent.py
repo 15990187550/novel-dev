@@ -7,6 +7,8 @@ from novel_dev.agents.setting_workbench_agent import (
     SettingWorkbenchAgent,
     normalize_setting_batch_payload,
 )
+from novel_dev.db.models import NovelState
+from novel_dev.services.setting_workbench_service import SettingWorkbenchService
 
 
 def test_setting_clarification_decision_accepts_ready_payload():
@@ -113,6 +115,64 @@ def test_setting_generation_prompt_includes_genre_setting_rules():
     assert "明确力量体系" in prompt
     assert "世界秩序" in prompt
     assert "资源稀缺性" in prompt
+
+
+@pytest.mark.asyncio
+async def test_setting_service_generation_prompt_includes_genre_rules(async_session, monkeypatch):
+    monkeypatch.setattr(
+        "novel_dev.services.setting_workbench_service.llm_factory.resolve_orchestration_config",
+        lambda agent_name, task: None,
+    )
+    async_session.add(
+        NovelState(
+            novel_id="n_setting_service_genre",
+            current_phase="brainstorming",
+            checkpoint_data={
+                "genre": {
+                    "primary_slug": "xuanhuan",
+                    "primary_name": "玄幻",
+                    "secondary_slug": "zhutian",
+                    "secondary_name": "诸天文",
+                }
+            },
+        )
+    )
+    await async_session.commit()
+    service = SettingWorkbenchService(async_session)
+    session = await service.create_generation_session(
+        novel_id="n_setting_service_genre",
+        title="类型设定",
+        initial_idea="生成基础设定。",
+        target_categories=["setting"],
+    )
+    await service.repo.update_session_state(session.id, status="ready_to_generate")
+    captured: dict[str, str] = {}
+
+    async def fake_call_and_repair_generation_model(**kwargs):
+        captured["prompt"] = kwargs["prompt"]
+        return SettingBatchDraft.model_validate(
+            {
+                "summary": "新增类型设定",
+                "changes": [
+                    {
+                        "target_type": "setting_card",
+                        "operation": "create",
+                        "after_snapshot": {
+                            "doc_type": "setting",
+                            "title": "基础设定",
+                            "content": "基于已确认资料整理基础设定。",
+                        },
+                    }
+                ],
+            }
+        )
+
+    monkeypatch.setattr(service, "_call_and_repair_generation_model", fake_call_and_repair_generation_model)
+
+    await service.generate_review_batch(novel_id="n_setting_service_genre", session_id=session.id)
+
+    assert "## 类型模板约束" in captured["prompt"]
+    assert "力量体系" in captured["prompt"]
 
 
 def test_generation_prompt_guides_conflict_hints_and_cross_work_people_shape():

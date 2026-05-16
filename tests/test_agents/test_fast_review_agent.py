@@ -39,6 +39,13 @@ def test_find_language_style_issues_allows_authorized_modern_terms():
 
     assert not any("现代" in issue or "英文/外文" in issue for issue in issues)
 
+    unauthorized_issues = _find_language_style_issues(
+        "他突然说出 UNKNOWNTERM。",
+        context={"genre_quality_config": {"modern_terms_policy": "allow"}},
+    )
+
+    assert any("英文/外文" in issue for issue in unauthorized_issues)
+
 
 @pytest.mark.asyncio
 async def test_fast_review_pass(async_session):

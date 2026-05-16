@@ -340,6 +340,7 @@ class SettingWorkbenchService:
                         required_sections=required_sections,
                         orchestration_config=orchestration_config,
                         common_metadata=common_metadata,
+                        genre_prompt_block=genre_prompt_block,
                     )
             except TimeoutError as exc:
                 raise LLMTimeoutError(
@@ -783,6 +784,7 @@ class SettingWorkbenchService:
         required_sections: list[dict[str, str]],
         orchestration_config: OrchestratedTaskConfig | None,
         common_metadata: dict[str, Any],
+        genre_prompt_block: str = "",
     ) -> SettingBatchDraft:
         if len(required_sections) <= 1:
             prompt = SettingWorkbenchAgent.build_generation_prompt(
@@ -793,6 +795,7 @@ class SettingWorkbenchService:
                 focused_context=setting_session.focused_target,
                 current_setting_context=prompt_context,
                 required_sections=required_sections,
+                genre_prompt_block=genre_prompt_block,
             )
             return await self._call_and_repair_generation_model(
                 novel_id=novel_id,
@@ -814,6 +817,7 @@ class SettingWorkbenchService:
                 focused_context=setting_session.focused_target,
                 current_setting_context=prompt_context,
                 required_sections=[section],
+                genre_prompt_block=genre_prompt_block,
             )
             log_service.add_log(
                 novel_id,

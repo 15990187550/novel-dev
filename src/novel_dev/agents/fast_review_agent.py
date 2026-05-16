@@ -81,6 +81,7 @@ def _word_count(text: str) -> int:
 _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
+AUTHORIZED_MODERN_LATIN_TERMS = {"AI", "API", "APP", "CEO", "CTO", "ICU", "KPI", "OKR"}
 
 
 def _modern_terms_authorized_for_fast_review(context: object | None) -> bool:
@@ -103,16 +104,17 @@ def _find_language_style_issues(text: str, context: object | None = None) -> lis
         issue for issue in ProseHygieneService.find_modern_drift_issues(text, context=context)
         if not issue.startswith("发现英文/外文词:")
     ]
-    if _modern_terms_authorized_for_fast_review(context):
-        return plan_issues + modern_issues
     words = []
     seen = set()
+    modern_authorized = _modern_terms_authorized_for_fast_review(context)
     for match in _LATIN_WORD_RE.finditer(text or ""):
         word = match.group(0)
         key = word.lower()
         if len(set(key)) == 1:
             continue
         if key in seen:
+            continue
+        if modern_authorized and word.upper() in AUTHORIZED_MODERN_LATIN_TERMS:
             continue
         seen.add(key)
         words.append(word)
