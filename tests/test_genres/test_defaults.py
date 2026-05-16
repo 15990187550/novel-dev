@@ -100,3 +100,19 @@ def test_validate_template_is_generic_exported_from_package():
 @pytest.mark.parametrize("template", BUILTIN_TEMPLATES)
 def test_builtin_templates_do_not_contain_concrete_story_content(template):
     validate_template_is_generic(template)
+
+
+@pytest.mark.parametrize(
+    "prompt_line",
+    [
+        "第三章安排主角进入新地图并揭开隐藏身份。",
+        "角色说道:\"这里的规则由我来定。\"",
+        "模板默认地点是风雷宗，默认道具是九转丹。",
+        "参考《某某名著》的世界观和主角关系。",
+    ],
+)
+def test_validate_template_is_generic_rejects_story_specific_prompt_lines(prompt_line):
+    template = GenreTemplate(scope="global", prompt_blocks={"setting_rules": [prompt_line]})
+
+    with pytest.raises(ValueError, match="genre template must stay generic"):
+        validate_template_is_generic(template)

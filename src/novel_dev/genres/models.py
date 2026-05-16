@@ -123,23 +123,73 @@ class ResolvedGenreTemplate(BaseModel):
         return "\n".join(lines).strip()
 
 
-FORBIDDEN_TEMPLATE_FRAGMENTS = (
-    "陆照",
-    "李大牛",
-    "王明月",
-    "青云宗",
-    "玄火盟",
-    "血海殿",
-    "瓦片",
-    "凝气草",
-    "职场霸凌还不用负法律责任",
-    "搁前世",
-    "藏书阁",
+_DIALOGUE_OR_QUOTED_LINE_PATTERN = re.compile(r"([：:][\"“「『])|([说问道][：:][\"“「『])")
+_SERIAL_CONTENT_MARKER_PATTERN = re.compile(r"第[一二三四五六七八九十百千万0-9]+[章节卷幕]")
+_EXTERNAL_IP_TITLE_PATTERN = re.compile(r"《[^》]{2,}》")
+_CONCRETE_ENTITY_PATTERN = re.compile(
+    r"[一-龥]{2,10}(?:宗|盟|殿|阁|宫|城|国|朝|府|堂|会|帮|派|院|司|队|团|"
+    r"草|丹|剑|刀|珠|印|符|鼎|炉|诀|经|功)(?![一-龥])"
+)
+_GENERIC_ENTITY_TERMS = (
+    "宗门",
+    "势力",
+    "组织",
+    "公司",
+    "学院",
+    "团队",
+    "门派",
+    "法门",
+    "功法",
+    "道具",
+    "资源",
+    "物品",
+    "合同",
+    "资金",
+    "法律",
+    "职位",
+    "商业",
+    "推理",
+    "探案",
 )
 
 
+def _template_text_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        values: list[str] = []
+        for item in value.values():
+            values.extend(_template_text_values(item))
+        return values
+    if isinstance(value, list | tuple | set):
+        values = []
+        for item in value:
+            values.extend(_template_text_values(item))
+        return values
+    return []
+
+
+def _looks_like_concrete_entity(value: str) -> str | None:
+    for match in _CONCRETE_ENTITY_PATTERN.finditer(value):
+        token = match.group(0)
+        if token not in _GENERIC_ENTITY_TERMS and not any(generic in token for generic in _GENERIC_ENTITY_TERMS):
+            return token
+    return None
+
+
 def validate_template_is_generic(template: GenreTemplate) -> None:
-    payload = template.model_dump_json(ensure_ascii=False)
-    found = [fragment for fragment in FORBIDDEN_TEMPLATE_FRAGMENTS if fragment in payload]
-    if found:
-        raise ValueError(f"genre template contains concrete story fragments: {found}")
+    violations: list[str] = []
+    for value in _template_text_values(template.prompt_blocks):
+        if _DIALOGUE_OR_QUOTED_LINE_PATTERN.search(value):
+            violations.append("dialogue_or_scene_line")
+        if _SERIAL_CONTENT_MARKER_PATTERN.search(value):
+            violations.append("chapter_or_volume_marker")
+        if _EXTERNAL_IP_TITLE_PATTERN.search(value):
+            violations.append("external_ip_title")
+        concrete_entity = _looks_like_concrete_entity(value)
+        if concrete_entity is not None:
+            violations.append(f"concrete_named_entity:{concrete_entity}")
+
+    if violations:
+        unique_violations = sorted(set(violations))
+        raise ValueError(f"genre template must stay generic: {unique_violations}")
