@@ -232,15 +232,34 @@ def _build_create_novel_payload(title: str, acceptance_scope: str = "") -> dict[
 
 
 def _summarize_genre_report(state_payload: dict) -> dict:
-    checkpoint = state_payload.get("checkpoint_data") or {}
-    genre = state_payload.get("genre") or checkpoint.get("genre") or {}
-    template = checkpoint.get("genre_template") or {}
+    payload = state_payload if isinstance(state_payload, dict) else {}
+    checkpoint = payload.get("checkpoint_data")
+    if not isinstance(checkpoint, dict):
+        checkpoint = {}
+
+    genre = payload.get("genre") or checkpoint.get("genre") or {}
+    if not isinstance(genre, dict):
+        genre = {}
+
+    template = checkpoint.get("genre_template")
+    if not isinstance(template, dict):
+        template = {}
+
+    matched_templates = template.get("matched_templates")
+    if not isinstance(matched_templates, list):
+        matched_templates = []
+
+    warnings = template.get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+
     primary = genre.get("primary_name") or "通用"
     secondary = genre.get("secondary_name") or "未分类"
     return {
         "genre": f"{primary} / {secondary}",
-        "template_layers": len(template.get("matched_templates") or []),
-        "template_warnings": template.get("warnings") or [],
+        "template_layers": len(matched_templates),
+        "template_warnings": warnings,
+        "template_evidence_available": bool(matched_templates or warnings),
     }
 
 

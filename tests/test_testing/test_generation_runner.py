@@ -121,6 +121,30 @@ def test_report_summary_includes_genre_resolution():
 
     assert summary["genre"] == "玄幻 / 诸天文"
     assert summary["template_layers"] == 1
+    assert summary["template_evidence_available"] is True
+
+
+def test_report_summary_marks_missing_template_evidence():
+    from novel_dev.testing.generation_runner import _summarize_genre_report
+
+    summary = _summarize_genre_report(
+        {"genre": {"primary_name": "都市", "secondary_name": "职场商战"}}
+    )
+
+    assert summary["genre"] == "都市 / 职场商战"
+    assert summary["template_layers"] == 0
+    assert summary["template_evidence_available"] is False
+
+
+def test_report_summary_tolerates_malformed_payload():
+    from novel_dev.testing.generation_runner import _summarize_genre_report
+
+    summary = _summarize_genre_report({"genre": "bad", "checkpoint_data": "bad"})
+
+    assert summary["genre"] == "通用 / 未分类"
+    assert summary["template_layers"] == 0
+    assert summary["template_warnings"] == []
+    assert summary["template_evidence_available"] is False
 
 
 @pytest.mark.asyncio
@@ -1105,6 +1129,7 @@ async def test_api_smoke_flow_replies_before_setting_generation(monkeypatch):
         "genre": "玄幻 / 诸天文",
         "template_layers": 1,
         "template_warnings": ["template warning"],
+        "template_evidence_available": True,
     }
     assert client_kwargs == {
         "base_url": "http://127.0.0.1:8000",
