@@ -231,6 +231,19 @@ def _build_create_novel_payload(title: str, acceptance_scope: str = "") -> dict[
     }
 
 
+def _summarize_genre_report(state_payload: dict) -> dict:
+    checkpoint = state_payload.get("checkpoint_data") or {}
+    genre = state_payload.get("genre") or checkpoint.get("genre") or {}
+    template = checkpoint.get("genre_template") or {}
+    primary = genre.get("primary_name") or "通用"
+    secondary = genre.get("secondary_name") or "未分类"
+    return {
+        "genre": f"{primary} / {secondary}",
+        "template_layers": len(template.get("matched_templates") or []),
+        "template_warnings": template.get("warnings") or [],
+    }
+
+
 def _target_artifacts(options: GenerationRunOptions) -> dict[str, str]:
     return {
         "target_volumes": str(options.target_volumes),
@@ -702,6 +715,12 @@ async def _run_api_smoke_flow(
         timeout=API_SMOKE_TIMEOUT_SECONDS,
         trust_env=False,
     ) as client:
+        def record_genre_template_summary(state_payload: dict[str, Any]) -> None:
+            artifacts["genre_template_summary"] = json.dumps(
+                _summarize_genre_report(state_payload),
+                ensure_ascii=False,
+            )
+
         async def preflight_health() -> None:
             response = await client.get("/healthz")
             response.raise_for_status()
@@ -731,6 +750,7 @@ async def _run_api_smoke_flow(
                 )
             )
             artifacts["novel_id"] = _require_string(data, "novel_id", "create_novel")
+            record_genre_template_summary(data)
 
         if not await run_stage("create_novel", create_novel):
             return artifacts, issues

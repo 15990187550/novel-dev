@@ -94,6 +94,35 @@ def test_create_novel_payload_includes_genre_for_scope():
     }
 
 
+def test_create_novel_payload_includes_default_genre_for_longform_runner():
+    from novel_dev.testing.generation_runner import _build_create_novel_payload
+
+    payload = _build_create_novel_payload("正式小说", acceptance_scope="real-longform-volume1")
+
+    assert payload["title"] == "正式小说"
+    assert payload["primary_category_slug"] == "xuanhuan"
+    assert payload["secondary_category_slug"] == "zhutian"
+
+
+def test_report_summary_includes_genre_resolution():
+    from novel_dev.testing.generation_runner import _summarize_genre_report
+
+    summary = _summarize_genre_report(
+        {
+            "genre": {"primary_name": "玄幻", "secondary_name": "诸天文"},
+            "checkpoint_data": {
+                "genre_template": {
+                    "matched_templates": ["builtin:global:global:*:*:v1"],
+                    "warnings": [],
+                }
+            },
+        }
+    )
+
+    assert summary["genre"] == "玄幻 / 诸天文"
+    assert summary["template_layers"] == 1
+
+
 @pytest.mark.asyncio
 async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_session):
     await NovelStateRepository(async_session).save_checkpoint(
@@ -991,7 +1020,23 @@ async def test_api_smoke_flow_replies_before_setting_generation(monkeypatch):
         async def post(self, path, json=None, params=None):
             calls.append(("POST", path, json or params))
             if path == "/api/novels":
-                return self._response("POST", path, {"novel_id": "novel-test"})
+                return self._response(
+                    "POST",
+                    path,
+                    {
+                        "novel_id": "novel-test",
+                        "genre": {
+                            "primary_name": "玄幻",
+                            "secondary_name": "诸天文",
+                        },
+                        "checkpoint_data": {
+                            "genre_template": {
+                                "matched_templates": ["builtin:global:global:*:*:v1"],
+                                "warnings": ["template warning"],
+                            },
+                        },
+                    },
+                )
             if path == "/api/novels/novel-test/settings/sessions":
                 return self._response("POST", path, {"id": "session-test"})
             if path.endswith("/reply"):
@@ -1056,6 +1101,11 @@ async def test_api_smoke_flow_replies_before_setting_generation(monkeypatch):
     assert artifacts["setting_session_status"] == "ready_to_generate"
     assert artifacts["setting_clarification_round"] == "2"
     assert artifacts["review_batch_id"] == "batch-test"
+    assert json.loads(artifacts["genre_template_summary"]) == {
+        "genre": "玄幻 / 诸天文",
+        "template_layers": 1,
+        "template_warnings": ["template warning"],
+    }
     assert client_kwargs == {
         "base_url": "http://127.0.0.1:8000",
         "timeout": generation_runner.API_SMOKE_TIMEOUT_SECONDS,
