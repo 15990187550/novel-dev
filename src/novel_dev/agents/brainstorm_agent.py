@@ -403,6 +403,25 @@ class BrainstormAgent:
         )
         return result
 
+    async def _build_genre_prompt_block(self, novel_id: str, task_name: str) -> str:
+        if not novel_id:
+            return ""
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "BrainstormAgent",
+            task_name,
+        )
+        genre_block = genre_template.render_prompt_block(
+            "source_rules",
+            "setting_rules",
+            "structure_rules",
+            "quality_rules",
+            "forbidden_rules",
+        )
+        if not genre_block:
+            genre_block = "使用通用类型约束。"
+        return f"## 类型模板约束\n{genre_block}\n\n"
+
     async def _generate_top_level_synopsis(self, combined_text: str, novel_id: str) -> SynopsisData:
         self._log_progress(
             novel_id,
@@ -413,17 +432,9 @@ class BrainstormAgent:
             metadata={"source_chars": len(combined_text)},
         )
         source_text = combined_text[:12000]
-        genre_template = await GenreTemplateService(self.session).resolve(
+        genre_prompt_block = await self._build_genre_prompt_block(
             novel_id,
-            "BrainstormAgent",
             "generate_synopsis_top_level",
-        )
-        genre_block = genre_template.render_prompt_block(
-            "source_rules",
-            "setting_rules",
-            "structure_rules",
-            "quality_rules",
-            "forbidden_rules",
         )
         prompt = (
             "你是一位资深商业小说大纲生成专家,面向网文连载读者。"
@@ -445,7 +456,7 @@ class BrainstormAgent:
             "- core_conflict:写具体的对抗关系(例『主角 vs 宗门长老会关于传承之争』),"
             "避免抽象标签(如『正邪对立』『人性与命运』)。\n"
             "- milestones.climax_event:写一个可被后续章节直接展开的具体事件,不要只写情绪。\n\n"
-            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
+            f"{genre_prompt_block}"
             "## 输出字段约束(必须严格遵守)\n"
             "只允许以下顶层字段,禁止输出任何额外字段:\n"
             '{"title","logline","core_conflict","themes","character_arcs","milestones",'
@@ -596,22 +607,14 @@ class BrainstormAgent:
         end: int,
         novel_id: str,
     ) -> list[SynopsisVolumeOutline]:
-        genre_template = await GenreTemplateService(self.session).resolve(
+        genre_prompt_block = await self._build_genre_prompt_block(
             novel_id,
-            "BrainstormAgent",
             "generate_volume_outlines_batch",
-        )
-        genre_block = genre_template.render_prompt_block(
-            "source_rules",
-            "setting_rules",
-            "structure_rules",
-            "quality_rules",
-            "forbidden_rules",
         )
         prompt = (
             "你是一位长篇网文分卷策划。请基于顶层总纲,只生成指定范围内的卷级概要数组。"
             "这些概要是后续完整卷纲的方向契约,不是章节表。\n\n"
-            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
+            f"{genre_prompt_block}"
             "## 输出要求\n"
             f"- 只生成第 {start} 卷到第 {end} 卷,必须正好 {end - start + 1} 项。\n"
             "- 每项必须包含 volume_number/title/summary/narrative_role/main_goal/main_conflict/"

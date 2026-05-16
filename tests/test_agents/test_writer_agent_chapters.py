@@ -283,3 +283,82 @@ async def test_writer_prompt_without_novel_id_skips_genre_resolution(async_sessi
 
     assert "Genre setting rules" not in captured["system"]
     assert "跨世界" not in captured["system"]
+
+
+@pytest.mark.asyncio
+async def test_write_standalone_without_novel_id_passes_no_genre_template(async_session):
+    from novel_dev.agents.writer_agent import WriterAgent
+    from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, LocationContext
+
+    captured = {}
+
+    async def fake_generate_beat(*args, **kwargs):
+        captured["genre_template"] = kwargs.get("genre_template")
+        text = "他按住呼吸，沿着既定规则推进，动作和选择都落在眼前压力里，直到这一场阻力有了清楚结果。"
+        return f"<!--BEAT:0-->\n{text}\n<!--/BEAT:0-->"
+
+    async def pass_guard(*args, **kwargs):
+        inner = kwargs["inner"]
+        idx = kwargs["idx"]
+        return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+    async def pass_budget(*args, **kwargs):
+        inner = kwargs["inner"]
+        idx = kwargs["idx"]
+        return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+    async def pass_hygiene(*args, **kwargs):
+        inner = kwargs["inner"]
+        idx = kwargs["idx"]
+        return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+    async def no_relay(*args, **kwargs):
+        raise RuntimeError("skip relay")
+
+    async def fail_resolve(*args, **kwargs):
+        raise AssertionError("GenreTemplateService.resolve should not be called without novel_id")
+
+    agent = WriterAgent(async_session)
+    beat = BeatPlan(summary="主角在压力下做出选择。", target_mood="紧张", target_word_count=300)
+    context = ChapterContext(
+        chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="测试场景"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        story_contract={},
+    )
+
+    with patch.object(agent, "_generate_beat", side_effect=fake_generate_beat), patch.object(
+        agent,
+        "_guard_writer_beat",
+        side_effect=pass_guard,
+    ), patch.object(
+        agent,
+        "_enforce_beat_word_budget",
+        side_effect=pass_budget,
+    ), patch.object(
+        agent,
+        "_enforce_prose_hygiene",
+        side_effect=pass_hygiene,
+    ), patch.object(
+        agent,
+        "_generate_relay",
+        side_effect=no_relay,
+    ), patch.object(
+        agent.chapter_repo,
+        "update_text",
+        new_callable=AsyncMock,
+    ), patch.object(
+        agent.chapter_repo,
+        "update_status",
+        new_callable=AsyncMock,
+    ), patch(
+        "novel_dev.agents.writer_agent.GenreTemplateService.resolve",
+        side_effect=fail_resolve,
+    ):
+        await agent.write_standalone("", context, "ch_empty_genre")
+
+    assert captured["genre_template"] is None

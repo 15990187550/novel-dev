@@ -280,6 +280,41 @@ async def test_brainstorm_prompt_includes_resolved_genre_rules(async_session):
     assert "信息披露" in joined
 
 
+@pytest.mark.asyncio
+async def test_top_level_synopsis_without_novel_id_skips_genre_resolution(async_session):
+    captured = {}
+    mock_synopsis = SynopsisData(
+        title="无名总纲",
+        logline="主角在压力中寻找出路。",
+        core_conflict="主角 vs 外部阻力",
+        themes=["选择"],
+        character_arcs=[],
+        milestones=[],
+        estimated_volumes=1,
+        estimated_total_chapters=10,
+        estimated_total_words=30000,
+    )
+
+    async def fake_call_and_parse_model(agent_name, task_name, prompt, model_type, **kwargs):
+        captured["prompt"] = prompt
+        return mock_synopsis
+
+    async def fail_resolve(*args, **kwargs):
+        raise AssertionError("GenreTemplateService.resolve should not be called without novel_id")
+
+    with patch(
+        "novel_dev.agents.brainstorm_agent.call_and_parse_model",
+        side_effect=fake_call_and_parse_model,
+    ), patch(
+        "novel_dev.agents.brainstorm_agent.GenreTemplateService.resolve",
+        side_effect=fail_resolve,
+    ):
+        result = await BrainstormAgent(async_session)._generate_top_level_synopsis("资料", "")
+
+    assert result.title == "无名总纲"
+    assert "类型模板约束" not in captured["prompt"]
+
+
 def test_synopsis_score_result_accepts_nested_scores_shape():
     payload = {
         "scores": {

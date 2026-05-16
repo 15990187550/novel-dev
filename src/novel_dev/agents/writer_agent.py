@@ -397,11 +397,13 @@ class WriterAgent:
         relay_history: List[NarrativeRelay] = []
         inner_beats: List[str] = []
         flow_control = FlowControlService(self.session)
-        genre_template = await GenreTemplateService(self.session).resolve(
-            novel_id,
-            "WriterAgent",
-            "generate_beat",
-        )
+        genre_template = None
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "WriterAgent",
+                "generate_beat",
+            )
 
         for idx, beat in enumerate(context.chapter_plan.beats):
             await flow_control.raise_if_cancelled(novel_id)
