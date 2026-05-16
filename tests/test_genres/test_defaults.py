@@ -133,15 +133,32 @@ def test_validate_template_is_generic_rejects_story_specific_quality_config():
         validate_template_is_generic(template)
 
 
-def test_validate_template_is_generic_rejects_story_specific_payload_keys():
+def test_validate_template_is_generic_rejects_story_specific_quality_config_key():
     template = GenreTemplate(
         scope="global",
         quality_config={
             "默认地点是风雷宗": True,
+        },
+    )
+
+    with pytest.raises(ValueError, match="genre template must stay generic"):
+        validate_template_is_generic(template)
+
+
+def test_validate_template_is_generic_rejects_story_specific_nested_key():
+    template = GenreTemplate(
+        scope="global",
+        quality_config={
             "nested": {"参考《某某名著》的案件结构": "block"},
         },
-        merge_policy={"默认道具是九转丹": "append"},
     )
+
+    with pytest.raises(ValueError, match="genre template must stay generic"):
+        validate_template_is_generic(template)
+
+
+def test_validate_template_is_generic_rejects_story_specific_merge_policy_key():
+    template = GenreTemplate(scope="global", merge_policy={"默认道具是九转丹": "append"})
 
     with pytest.raises(ValueError, match="genre template must stay generic"):
         validate_template_is_generic(template)
