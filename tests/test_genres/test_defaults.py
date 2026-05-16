@@ -116,3 +116,39 @@ def test_validate_template_is_generic_rejects_story_specific_prompt_lines(prompt
 
     with pytest.raises(ValueError, match="genre template must stay generic"):
         validate_template_is_generic(template)
+
+
+def test_validate_template_is_generic_rejects_story_specific_quality_config():
+    template = GenreTemplate(
+        scope="global",
+        quality_config={
+            "forbidden_drift_patterns": [
+                "默认地点是风雷宗",
+                "参考《某某名著》的案件结构",
+            ]
+        },
+    )
+
+    with pytest.raises(ValueError, match="genre template must stay generic"):
+        validate_template_is_generic(template)
+
+
+def test_validate_template_is_generic_allows_generic_taxonomy_terms():
+    template = GenreTemplate(
+        scope="global",
+        prompt_blocks={
+            "setting_rules": [
+                "奇幻模板可约束帝国、王朝、城邦、教会、公会和学院等政治结构。",
+                "历史模板可描述朝代、国家、军队和官府关系，但不得指定专名。",
+            ]
+        },
+        quality_config={
+            "required_setting_dimensions": [
+                "empire_structure",
+                "dynasty_order",
+                "guild_relationship",
+            ]
+        },
+    )
+
+    validate_template_is_generic(template)

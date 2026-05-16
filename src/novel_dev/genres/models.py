@@ -126,30 +126,11 @@ class ResolvedGenreTemplate(BaseModel):
 _DIALOGUE_OR_QUOTED_LINE_PATTERN = re.compile(r"([：:][\"“「『])|([说问道][：:][\"“「『])")
 _SERIAL_CONTENT_MARKER_PATTERN = re.compile(r"第[一二三四五六七八九十百千万0-9]+[章节卷幕]")
 _EXTERNAL_IP_TITLE_PATTERN = re.compile(r"《[^》]{2,}》")
-_CONCRETE_ENTITY_PATTERN = re.compile(
-    r"[一-龥]{2,10}(?:宗|盟|殿|阁|宫|城|国|朝|府|堂|会|帮|派|院|司|队|团|"
-    r"草|丹|剑|刀|珠|印|符|鼎|炉|诀|经|功)(?![一-龥])"
-)
-_GENERIC_ENTITY_TERMS = (
-    "宗门",
-    "势力",
-    "组织",
-    "公司",
-    "学院",
-    "团队",
-    "门派",
-    "法门",
-    "功法",
-    "道具",
-    "资源",
-    "物品",
-    "合同",
-    "资金",
-    "法律",
-    "职位",
-    "商业",
-    "推理",
-    "探案",
+_CONCRETE_ENTITY_CONTEXT_PATTERN = re.compile(
+    r"(?:默认|固定|指定|预设|示例|样例|名为|叫做|设为|地点是|道具是|组织是|势力是)"
+    r"[^。；;，,\n]{0,20}?"
+    r"([一-龥]{2,10}(?:宗|盟|殿|阁|宫|城|国|朝|府|堂|会|帮|派|院|司|队|团|"
+    r"草|丹|剑|刀|珠|印|符|鼎|炉|诀|经|功)(?![一-龥]))"
 )
 
 
@@ -169,26 +150,26 @@ def _template_text_values(value: Any) -> list[str]:
     return []
 
 
-def _looks_like_concrete_entity(value: str) -> str | None:
-    for match in _CONCRETE_ENTITY_PATTERN.finditer(value):
-        token = match.group(0)
-        if token not in _GENERIC_ENTITY_TERMS and not any(generic in token for generic in _GENERIC_ENTITY_TERMS):
-            return token
-    return None
+def _template_payload_for_generic_validation(template: GenreTemplate) -> dict[str, Any]:
+    return {
+        "prompt_blocks": template.prompt_blocks,
+        "quality_config": template.quality_config,
+        "merge_policy": template.merge_policy,
+    }
 
 
 def validate_template_is_generic(template: GenreTemplate) -> None:
     violations: list[str] = []
-    for value in _template_text_values(template.prompt_blocks):
+    for value in _template_text_values(_template_payload_for_generic_validation(template)):
         if _DIALOGUE_OR_QUOTED_LINE_PATTERN.search(value):
             violations.append("dialogue_or_scene_line")
         if _SERIAL_CONTENT_MARKER_PATTERN.search(value):
             violations.append("chapter_or_volume_marker")
         if _EXTERNAL_IP_TITLE_PATTERN.search(value):
             violations.append("external_ip_title")
-        concrete_entity = _looks_like_concrete_entity(value)
-        if concrete_entity is not None:
-            violations.append(f"concrete_named_entity:{concrete_entity}")
+        concrete_entity_match = _CONCRETE_ENTITY_CONTEXT_PATTERN.search(value)
+        if concrete_entity_match is not None:
+            violations.append(f"concrete_named_entity:{concrete_entity_match.group(1)}")
 
     if violations:
         unique_violations = sorted(set(violations))
