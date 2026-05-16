@@ -120,3 +120,12 @@ Key endpoints:
 - The EditorAgent uses CJK bigram overlap (35% threshold) as a hallucination guard when rewriting beats.
 - VolumePlannerAgent has a self-scoring loop: it generates a plan, scores it, and revises if `overall < 85`, up to 3 attempts.
 - Fallback volume plans (when LLM parsing fails) must have at least 3 beats so the writer can reach target word count.
+
+### Formal Novel Workflow Generalization
+
+- The formal novel workflow must stay genre-agnostic and source-driven. Do not hardcode a specific novel, character, setting domain, external IP, cultivation system, item, place, plot event, or example sentence into production prompts, cleanup logic, validators, or fallback content.
+- Novel genre templates are type-level rules only. Production templates must not contain concrete novel characters, places, organizations, plot events, one-off fallback paragraphs, or external-IP facts. Genre prompts may describe generic type expectations such as power-system boundaries, clue fairness, modern vocabulary policy, or cross-domain consistency, but must stay source-driven and reusable across novels in the same category.
+- Fallbacks may preserve structure, mark missing information, or request/trigger a same-stage retry; they must not invent story facts such as pursuers, evidence, sects, artifacts, realm names, locations, or character choices unless those facts already exist in the imported materials, approved settings, outline, chapter plan, or current beat contract.
+- Text cleanup and repair code must be non-generative by default: remove broken fragments, normalize wrappers/separators, or escalate to contextual rewrite. It must not patch known failed chapters with concrete replacement prose.
+- Quality-left-shift checks must be configurable or derived from source context/style profile. Genre-specific forbidden terms, external-world validation, and domain mappings must not be global constants that bias unrelated novels.
+- Test fixtures may use concrete names, but production code and formal workflow scripts must not leak fixture titles, minimal-acceptance wording, or sample plot assumptions into real novel data.
