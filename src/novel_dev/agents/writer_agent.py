@@ -141,6 +141,11 @@ class WriterAgent:
                 log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
 
         flow_control = FlowControlService(self.session)
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "WriterAgent",
+            "generate_beat",
+        )
         for idx, beat in enumerate(context.chapter_plan.beats):
             if idx < start_idx:
                 continue
@@ -173,7 +178,7 @@ class WriterAgent:
 
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
-                idx, total_beats, is_last, novel_id, rewrite_plan,
+                idx, total_beats, is_last, novel_id, rewrite_plan, genre_template=genre_template,
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
@@ -392,6 +397,11 @@ class WriterAgent:
         relay_history: List[NarrativeRelay] = []
         inner_beats: List[str] = []
         flow_control = FlowControlService(self.session)
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "WriterAgent",
+            "generate_beat",
+        )
 
         for idx, beat in enumerate(context.chapter_plan.beats):
             await flow_control.raise_if_cancelled(novel_id)
@@ -401,7 +411,7 @@ class WriterAgent:
 
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
-                idx, total_beats, is_last, novel_id, rewrite_plan,
+                idx, total_beats, is_last, novel_id, rewrite_plan, genre_template=genre_template,
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
@@ -527,9 +537,9 @@ class WriterAgent:
         is_last: bool = False,
         novel_id: str = "",
         rewrite_plan: dict | None = None,
+        genre_template=None,
     ) -> str:
-        genre_template = None
-        if novel_id:
+        if genre_template is None and novel_id:
             genre_template = await GenreTemplateService(self.session).resolve(
                 novel_id,
                 "WriterAgent",

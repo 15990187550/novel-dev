@@ -445,6 +445,7 @@ class BrainstormAgent:
             "- core_conflict:写具体的对抗关系(例『主角 vs 宗门长老会关于传承之争』),"
             "避免抽象标签(如『正邪对立』『人性与命运』)。\n"
             "- milestones.climax_event:写一个可被后续章节直接展开的具体事件,不要只写情绪。\n\n"
+            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             "## 输出字段约束(必须严格遵守)\n"
             "只允许以下顶层字段,禁止输出任何额外字段:\n"
             '{"title","logline","core_conflict","themes","character_arcs","milestones",'
@@ -464,7 +465,6 @@ class BrainstormAgent:
             "- relationship_highlights: 字符串数组,每项描述一个关键关系推进\n"
             "不要输出 worldview_summary、three_act_structure、volume_hooks、suspense_plants、chapters、beats 等任何额外结构。\n"
             "不要输出 Markdown、代码块、解释文字或字段注释,只返回单个 JSON 对象。\n\n"
-            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             f"{source_text}"
         )
         result = await call_and_parse_model(
@@ -611,6 +611,7 @@ class BrainstormAgent:
         prompt = (
             "你是一位长篇网文分卷策划。请基于顶层总纲,只生成指定范围内的卷级概要数组。"
             "这些概要是后续完整卷纲的方向契约,不是章节表。\n\n"
+            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             "## 输出要求\n"
             f"- 只生成第 {start} 卷到第 {end} 卷,必须正好 {end - start + 1} 项。\n"
             "- 每项必须包含 volume_number/title/summary/narrative_role/main_goal/main_conflict/"
@@ -622,7 +623,6 @@ class BrainstormAgent:
             "- 每一卷必须遵守对应的 ActiveConstraintContext:只能写当前阶段可触达冲突;"
             "高阶概念只能作为伏笔/残痕/传闻/代理人间接出现;缺少设定依据时保守降级,不要硬编。\n"
             "- 只返回 JSON 数组,不要解释、Markdown 或额外字段。\n\n"
-            f"## 类型模板约束\n{genre_block or '使用通用类型约束。'}\n\n"
             f"### 顶层总纲\n{synopsis.model_copy(update={'volume_outlines': []}).model_dump_json()}\n\n"
             f"{constraints}\n\n"
             f"### 参考设定\n{source_text or '无'}"
