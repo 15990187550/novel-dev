@@ -112,7 +112,7 @@
             <el-input
               v-model="domainName"
               size="small"
-              placeholder="例如：完美世界 / 遮天 / 一世之尊"
+              placeholder="例如：东荒规则域 / 上古遗迹 / 北境战线"
             />
             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
               不需要指定第几卷，系统会在总纲生成后建议绑定范围。

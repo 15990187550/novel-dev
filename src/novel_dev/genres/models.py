@@ -126,12 +126,40 @@ class ResolvedGenreTemplate(BaseModel):
 _DIALOGUE_OR_QUOTED_LINE_PATTERN = re.compile(r"([：:][\"“「『])|([说问道][：:][\"“「『])")
 _SERIAL_CONTENT_MARKER_PATTERN = re.compile(r"第[一二三四五六七八九十百千万0-9]+[章节卷幕]")
 _EXTERNAL_IP_TITLE_PATTERN = re.compile(r"《[^》]{2,}》")
-_CONCRETE_ENTITY_CONTEXT_PATTERN = re.compile(
-    r"(?:默认|固定|指定|预设|示例|样例|名为|叫做|设为|地点是|道具是|组织是|势力是)"
-    r"[^。；;，,\n]{0,20}?"
-    r"([一-龥]{2,10}(?:宗|盟|殿|阁|宫|城|国|朝|府|堂|会|帮|派|院|司|队|团|"
-    r"草|丹|剑|刀|珠|印|符|鼎|炉|诀|经|功)(?![一-龥]))"
+_CONCRETE_ENTITY_TOKEN_PATTERN = re.compile(
+    r"[一-龥]{2,10}(?:宗|盟|殿|阁|宫|城|国|朝|府|堂|会|帮|派|院|司|队|团|"
+    r"草|丹|剑|刀|珠|印|符|鼎|炉|诀|经|功)(?![一-龥])"
 )
+_CONCRETE_ENTITY_CONTEXT_PATTERN = re.compile(
+    r"(?:"
+    r"(?:默认|固定|指定|预设|示例|样例)(?:的)?(?:地点|道具|组织|势力|角色|人物|门派|宗门|国家|城市)(?:名|名称)?(?:是|为|叫做|名为|设为)?"
+    r"|(?:地点|道具|组织|势力|角色|人物|门派|宗门|国家|城市)(?:名|名称)?(?:是|为|叫做|名为|设为)"
+    r"|(?:名为|叫做|设为)"
+    r")"
+)
+_GENERIC_TAXONOMY_TERMS = {
+    "帝国",
+    "王朝",
+    "城邦",
+    "教会",
+    "公会",
+    "学院",
+    "宗门",
+    "门派",
+    "国家",
+    "城市",
+    "官府",
+    "军队",
+    "组织",
+    "势力",
+    "公司",
+    "团队",
+    "道具",
+    "资源",
+    "物品",
+    "法门",
+    "功法",
+}
 
 
 def _template_text_values(value: Any) -> list[str]:
@@ -139,7 +167,8 @@ def _template_text_values(value: Any) -> list[str]:
         return [value]
     if isinstance(value, dict):
         values: list[str] = []
-        for item in value.values():
+        for key, item in value.items():
+            values.extend(_template_text_values(key))
             values.extend(_template_text_values(item))
         return values
     if isinstance(value, list | tuple | set):
@@ -158,6 +187,19 @@ def _template_payload_for_generic_validation(template: GenreTemplate) -> dict[st
     }
 
 
+def _find_contextual_concrete_entity(value: str) -> str | None:
+    for context_match in _CONCRETE_ENTITY_CONTEXT_PATTERN.finditer(value):
+        candidate_text = value[context_match.end() : context_match.end() + 24]
+        candidate_text = re.split(r"[。；;，,\n、/ ]", candidate_text, maxsplit=1)[0]
+        token_match = _CONCRETE_ENTITY_TOKEN_PATTERN.search(candidate_text)
+        if token_match is None:
+            continue
+        token = token_match.group(0)
+        if token not in _GENERIC_TAXONOMY_TERMS:
+            return token
+    return None
+
+
 def validate_template_is_generic(template: GenreTemplate) -> None:
     violations: list[str] = []
     for value in _template_text_values(_template_payload_for_generic_validation(template)):
@@ -167,9 +209,9 @@ def validate_template_is_generic(template: GenreTemplate) -> None:
             violations.append("chapter_or_volume_marker")
         if _EXTERNAL_IP_TITLE_PATTERN.search(value):
             violations.append("external_ip_title")
-        concrete_entity_match = _CONCRETE_ENTITY_CONTEXT_PATTERN.search(value)
-        if concrete_entity_match is not None:
-            violations.append(f"concrete_named_entity:{concrete_entity_match.group(1)}")
+        concrete_entity = _find_contextual_concrete_entity(value)
+        if concrete_entity is not None:
+            violations.append(f"concrete_named_entity:{concrete_entity}")
 
     if violations:
         unique_violations = sorted(set(violations))

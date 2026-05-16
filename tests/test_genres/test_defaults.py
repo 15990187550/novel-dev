@@ -133,6 +133,20 @@ def test_validate_template_is_generic_rejects_story_specific_quality_config():
         validate_template_is_generic(template)
 
 
+def test_validate_template_is_generic_rejects_story_specific_payload_keys():
+    template = GenreTemplate(
+        scope="global",
+        quality_config={
+            "默认地点是风雷宗": True,
+            "nested": {"参考《某某名著》的案件结构": "block"},
+        },
+        merge_policy={"默认道具是九转丹": "append"},
+    )
+
+    with pytest.raises(ValueError, match="genre template must stay generic"):
+        validate_template_is_generic(template)
+
+
 def test_validate_template_is_generic_allows_generic_taxonomy_terms():
     template = GenreTemplate(
         scope="global",
@@ -140,6 +154,8 @@ def test_validate_template_is_generic_allows_generic_taxonomy_terms():
             "setting_rules": [
                 "奇幻模板可约束帝国、王朝、城邦、教会、公会和学院等政治结构。",
                 "历史模板可描述朝代、国家、军队和官府关系，但不得指定专名。",
+                "默认类型是帝国、王朝、城邦。",
+                "模板默认组织是公会，默认地点是城市，默认门派是宗门。",
             ]
         },
         quality_config={
