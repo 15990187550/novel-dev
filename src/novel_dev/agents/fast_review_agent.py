@@ -12,10 +12,13 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QUALITY_UNCHECKED, QualityGateService
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
+from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.schemas.quality import QualityIssue
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +83,28 @@ _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
 
 
-def _find_language_style_issues(text: str) -> list[str]:
+def _modern_terms_authorized_for_fast_review(context: object | None) -> bool:
+    if not isinstance(context, dict):
+        return False
+    quality_config = context.get("genre_quality_config")
+    if isinstance(quality_config, dict):
+        policy = quality_config.get("modern_terms_policy")
+        if policy == "allow":
+            return True
+        if policy == "block":
+            return False
+    context_text = json.dumps(context, ensure_ascii=False)
+    return any(marker in context_text for marker in ProseHygieneService.MODERN_AUTHORIZATION_MARKERS)
+
+
+def _find_language_style_issues(text: str, context: object | None = None) -> list[str]:
+    plan_issues = ProseHygieneService.find_plan_language_issues(text)
+    modern_issues = [
+        issue for issue in ProseHygieneService.find_modern_drift_issues(text, context=context)
+        if not issue.startswith("发现英文/外文词:")
+    ]
+    if _modern_terms_authorized_for_fast_review(context):
+        return plan_issues + modern_issues
     words = []
     seen = set()
     for match in _LATIN_WORD_RE.finditer(text or ""):
@@ -92,11 +116,29 @@ def _find_language_style_issues(text: str) -> list[str]:
             continue
         seen.add(key)
         words.append(word)
+    issues = plan_issues + modern_issues
     if not words:
-        return []
+        return issues
     preview = "、".join(words[:8])
     suffix = " 等" if len(words) > 8 else ""
-    return [f"发现英文/外文词: {preview}{suffix}。正文应改为中文表达，除非章节计划明确要求保留原文。"]
+    issues.append(f"发现英文/外文词: {preview}{suffix}。正文应改为中文表达，除非章节计划明确要求保留原文。")
+    return issues
+
+
+def _build_genre_quality_issues(text: str, genre_quality_config: dict | None = None) -> list[QualityIssue]:
+    return [
+        QualityIssue(
+            code="type_drift",
+            category="style",
+            severity="block",
+            scope="chapter",
+            repairability="guided",
+            evidence=[item],
+            suggestion="按所选小说分类移除未授权类型漂移内容。",
+            source="fast_review",
+        )
+        for item in QualityGateService.genre_type_drift_items(text, genre_quality_config)
+    ]
 
 
 def _parse_review_json(text: str) -> dict:
@@ -140,8 +182,14 @@ class FastReviewAgent:
         self.director = NovelDirector(session)
 
     async def _llm_check_consistency_and_cohesion(
-        self, polished: str, raw: str, chapter_context: dict, novel_id: str = ""
+        self,
+        polished: str,
+        raw: str,
+        chapter_context: dict,
+        novel_id: str = "",
+        genre_prompt_block: str = "",
     ) -> FastReviewLLMCheck:
+        genre_section = f"### 类型模板约束\n{genre_prompt_block}\n\n" if genre_prompt_block.strip() else ""
         prompt = (
             "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
             "从读者体验出发检查两点并返回严格 JSON:\n"
@@ -153,6 +201,7 @@ class FastReviewAgent:
             "如果精修文本仍有比喻过密、抽象玄幻词复读、感官平均用力、模板化奇遇/入体演出或现代吐槽突兀,"
             "请写入 notes 并说明下一版应呈现什么效果。\n"
             "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
+            f"{genre_section}"
             f"### 章节上下文\n{json.dumps(chapter_context, ensure_ascii=False)}\n\n"
             f"### 原始草稿\n{raw}\n\n"
             f"### 精修文本\n{polished}\n\n"
@@ -175,10 +224,21 @@ class FastReviewAgent:
         return result
 
     async def _safe_llm_check_consistency_and_cohesion(
-        self, polished: str, raw: str, chapter_context: dict, novel_id: str = ""
+        self,
+        polished: str,
+        raw: str,
+        chapter_context: dict,
+        novel_id: str = "",
+        genre_prompt_block: str = "",
     ) -> FastReviewLLMCheck:
         try:
-            return await self._llm_check_consistency_and_cohesion(polished, raw, chapter_context, novel_id)
+            return await self._llm_check_consistency_and_cohesion(
+                polished,
+                raw,
+                chapter_context,
+                novel_id,
+                genre_prompt_block,
+            )
         except Exception as exc:
             log_agent_detail(
                 novel_id,
@@ -262,6 +322,17 @@ class FastReviewAgent:
         target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
+        genre_quality_config: dict = {}
+        genre_prompt_block = ""
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "FastReviewAgent",
+                "fast_review",
+            )
+            genre_quality_config = genre_template.quality_config
+            genre_prompt_block = genre_template.render_prompt_block("quality_rules", "forbidden_rules")
+        language_context = {"genre_quality_config": genre_quality_config}
         is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
         log_agent_detail(
             novel_id,
@@ -286,7 +357,8 @@ class FastReviewAgent:
         else:
             word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
-        language_issues = _find_language_style_issues(polished)
+        language_issues = _find_language_style_issues(polished, context=language_context)
+        genre_quality_issues = _build_genre_quality_issues(polished, genre_quality_config)
         language_style_ok = not language_issues
 
         # Trim context to only what FastReview needs, avoiding retrieval bloat
@@ -301,9 +373,16 @@ class FastReviewAgent:
                 for e in chapter_context.get("active_entities", [])
             ],
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
+            "genre_quality_config": genre_quality_config,
         }
         if language_style_ok:
-            llm_result = await self._safe_llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            llm_result = await self._safe_llm_check_consistency_and_cohesion(
+                polished,
+                raw,
+                trimmed_context,
+                novel_id,
+                genre_prompt_block,
+            )
             consistency_fixed = llm_result.consistency_fixed
             beat_cohesion_ok = llm_result.beat_cohesion_ok
             notes = list(llm_result.notes)
@@ -315,6 +394,7 @@ class FastReviewAgent:
         if not word_count_ok:
             notes.append("字数偏离目标超过10%")
         notes.extend(language_issues)
+        notes.extend(issue.evidence[0] for issue in genre_quality_issues if issue.evidence)
 
         report = FastReviewReport(
             word_count_ok=word_count_ok,
@@ -384,8 +464,14 @@ class FastReviewAgent:
             checkpoint["continuity_audit"] = continuity_audit.model_dump()
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             gate = self._apply_structure_guard_to_gate(checkpoint, gate)
+            gate = self._apply_genre_quality_issues_to_gate(gate, genre_quality_issues)
             checkpoint["quality_gate"] = gate.model_dump()
-            self._store_quality_issues_and_repairs(checkpoint, gate, chapter_id)
+            self._store_quality_issues_and_repairs(
+                checkpoint,
+                gate,
+                chapter_id,
+                extra_issues=genre_quality_issues,
+            )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
                 quality_status=gate.status,
@@ -574,6 +660,21 @@ class FastReviewAgent:
         return gate
 
     @staticmethod
+    def _apply_genre_quality_issues_to_gate(gate, genre_quality_issues: list[QualityIssue]):
+        for issue in genre_quality_issues:
+            item = {
+                "code": issue.code,
+                "message": issue.suggestion,
+                "detail": issue.evidence,
+            }
+            if not any(existing == item for existing in gate.blocking_items):
+                gate.blocking_items.append(item)
+        if genre_quality_issues:
+            gate.status = QUALITY_BLOCK
+            gate.summary = "存在阻断级质量问题，停止归档和世界状态入库。"
+        return gate
+
+    @staticmethod
     def _clear_terminal_quality_metadata(checkpoint: dict) -> None:
         for key in (
             "quality_gate",
@@ -594,7 +695,12 @@ class FastReviewAgent:
         )
 
     @staticmethod
-    def _store_quality_issues_and_repairs(checkpoint: dict, gate, chapter_id: str) -> None:
+    def _store_quality_issues_and_repairs(
+        checkpoint: dict,
+        gate,
+        chapter_id: str,
+        extra_issues: list[QualityIssue] | None = None,
+    ) -> None:
         structure_guard = FastReviewAgent._unresolved_structure_guard(checkpoint)
         quality_issues = QualityGateService.to_quality_issues(gate)
         if structure_guard is not None:
@@ -603,6 +709,13 @@ class FastReviewAgent:
                 if issue.code != "plan_boundary_violation" or issue.source != "quality_gate"
             ]
         quality_issues.extend(QualityIssueService.from_structure_guard(structure_guard, source="structure_guard"))
+        if extra_issues:
+            extra_codes = {issue.code for issue in extra_issues}
+            quality_issues = [
+                issue for issue in quality_issues
+                if issue.code not in extra_codes or issue.source != "quality_gate"
+            ]
+            quality_issues.extend(extra_issues)
         checkpoint["quality_issues"] = [issue.model_dump() for issue in quality_issues]
         checkpoint["quality_issue_summary"] = QualityIssueService.summarize(quality_issues)
 
@@ -736,6 +849,17 @@ class FastReviewAgent:
         target = checkpoint.get("chapter_context", {}).get("chapter_plan", {}).get("target_word_count", 3000)
         raw = ch.raw_draft or ""
         polished = ch.polished_text or ""
+        genre_quality_config: dict = {}
+        genre_prompt_block = ""
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "FastReviewAgent",
+                "fast_review",
+            )
+            genre_quality_config = genre_template.quality_config
+            genre_prompt_block = genre_template.render_prompt_block("quality_rules", "forbidden_rules")
+        language_context = {"genre_quality_config": genre_quality_config}
         is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
 
         if is_acceptance_contract:
@@ -743,7 +867,8 @@ class FastReviewAgent:
         else:
             word_count_ok = abs(_word_count(polished) - target) <= target * 0.1 if target > 0 else True
         ai_flavor_reduced = _check_ai_flavor_reduced(raw, polished)
-        language_issues = _find_language_style_issues(polished)
+        language_issues = _find_language_style_issues(polished, context=language_context)
+        genre_quality_issues = _build_genre_quality_issues(polished, genre_quality_config)
         language_style_ok = not language_issues
 
         chapter_context = checkpoint.get("chapter_context", {})
@@ -757,9 +882,16 @@ class FastReviewAgent:
                 for e in chapter_context.get("active_entities", [])
             ],
             "pending_foreshadowings": chapter_context.get("pending_foreshadowings", []),
+            "genre_quality_config": genre_quality_config,
         }
         if language_style_ok:
-            llm_result = await self._safe_llm_check_consistency_and_cohesion(polished, raw, trimmed_context, novel_id)
+            llm_result = await self._safe_llm_check_consistency_and_cohesion(
+                polished,
+                raw,
+                trimmed_context,
+                novel_id,
+                genre_prompt_block,
+            )
             consistency_fixed = llm_result.consistency_fixed
             beat_cohesion_ok = llm_result.beat_cohesion_ok
             notes = list(llm_result.notes)
@@ -770,6 +902,7 @@ class FastReviewAgent:
         if not word_count_ok:
             notes.append("字数偏离目标超过10%")
         notes.extend(language_issues)
+        notes.extend(issue.evidence[0] for issue in genre_quality_issues if issue.evidence)
         report = FastReviewReport(
             word_count_ok=word_count_ok,
             consistency_fixed=consistency_fixed,
@@ -816,8 +949,14 @@ class FastReviewAgent:
             checkpoint["continuity_audit"] = continuity_audit.model_dump()
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             gate = self._apply_structure_guard_to_gate(checkpoint, gate)
+            gate = self._apply_genre_quality_issues_to_gate(gate, genre_quality_issues)
             checkpoint["quality_gate"] = gate.model_dump()
-            self._store_quality_issues_and_repairs(checkpoint, gate, chapter_id)
+            self._store_quality_issues_and_repairs(
+                checkpoint,
+                gate,
+                chapter_id,
+                extra_issues=genre_quality_issues,
+            )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
                 quality_status=gate.status,

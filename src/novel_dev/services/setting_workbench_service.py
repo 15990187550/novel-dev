@@ -25,6 +25,7 @@ from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.entity_context_sanitizer import INTERNAL_ENTITY_STATE_KEYS, sanitize_entity_state_for_context
 from novel_dev.services.entity_service import EntityService
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.story_quality_service import SettingQualityReport, StoryQualityService
 
@@ -259,6 +260,19 @@ class SettingWorkbenchService:
             if orchestration_config is not None
             else current_setting_context
         )
+        genre_prompt_block = ""
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "SettingWorkbenchAgent",
+                "generate_settings",
+            )
+            genre_prompt_block = genre_template.render_prompt_block(
+                "source_rules",
+                "setting_rules",
+                "quality_rules",
+                "forbidden_rules",
+            )
         prompt = SettingWorkbenchAgent.build_generation_prompt(
             title=setting_session.title,
             target_categories=setting_session.target_categories or [],
@@ -267,6 +281,7 @@ class SettingWorkbenchService:
             focused_context=setting_session.focused_target,
             current_setting_context=prompt_context,
             required_sections=required_sections,
+            genre_prompt_block=genre_prompt_block,
         )
         context_stats = self._generation_context_stats(current_setting_context)
         common_metadata = {

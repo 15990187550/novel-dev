@@ -11,6 +11,7 @@ from novel_dev.agents.volume_planner import (
     VolumePlanSemanticJudgement,
 )
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.db.models import NovelState
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.knowledge_domain_repo import KnowledgeDomainRepository
 from novel_dev.repositories.timeline_repo import TimelineRepository
@@ -85,6 +86,53 @@ def test_volume_plan_blueprint_backfills_missing_chapter_titles():
         "山门之中暗流正在缓慢扩散",
     ]
     assert [chapter.chapter_id for chapter in blueprint.chapters] == ["vol_1_ch_1", "vol_1_ch_2"]
+
+
+@pytest.mark.asyncio
+async def test_generate_volume_plan_prompt_includes_genre_template_rules(async_session):
+    async_session.add(
+        NovelState(
+            novel_id="n_volume_genre",
+            current_phase="volume_planning",
+            checkpoint_data={
+                "genre": {
+                    "primary_slug": "xuanhuan",
+                    "primary_name": "玄幻",
+                    "secondary_slug": "zhutian",
+                    "secondary_name": "诸天文",
+                }
+            },
+        )
+    )
+    await async_session.commit()
+    synopsis = SynopsisData(
+        title="类型测试",
+        logline="主角追索跨域真相。",
+        core_conflict="主角与未知压力对抗。",
+        estimated_volumes=1,
+        estimated_total_chapters=3,
+        estimated_total_words=9000,
+    )
+    captured = {}
+
+    async def capture_prompt(agent_name, task, prompt, model_cls, **kwargs):
+        captured["prompt"] = prompt
+        raise RuntimeError("stop after prompt capture")
+
+    with patch("novel_dev.agents.volume_planner.call_and_parse_model", side_effect=capture_prompt), patch(
+        "novel_dev.agents.volume_planner.llm_factory.resolve_orchestration_config",
+        return_value=None,
+    ):
+        with pytest.raises(RuntimeError, match="stop after prompt capture"):
+            await VolumePlannerAgent(async_session)._generate_volume_plan(
+                synopsis,
+                1,
+                novel_id="n_volume_genre",
+            )
+
+    assert "## 类型模板约束" in captured["prompt"]
+    assert "跨世界" in captured["prompt"]
+    assert "力量映射" in captured["prompt"]
 
 
 def test_extract_chapter_plan_adds_writability_status_and_writing_cards(async_session):

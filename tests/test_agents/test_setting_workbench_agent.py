@@ -101,6 +101,20 @@ def test_generation_prompt_guides_realm_mapping_by_source_world_groups():
     assert "每组从低到高排列" in prompt
 
 
+def test_setting_generation_prompt_includes_genre_setting_rules():
+    prompt = SettingWorkbenchAgent.build_generation_prompt(
+        title="类型设定",
+        target_categories=["setting"],
+        messages=[{"role": "user", "content": "生成基础设定。"}],
+        genre_prompt_block="明确力量体系、世界秩序、资源稀缺性。",
+    )
+
+    assert "## 类型模板约束" in prompt
+    assert "明确力量体系" in prompt
+    assert "世界秩序" in prompt
+    assert "资源稀缺性" in prompt
+
+
 def test_generation_prompt_guides_conflict_hints_and_cross_work_people_shape():
     prompt = SettingWorkbenchAgent.build_generation_prompt(
         title="跨作品联动",

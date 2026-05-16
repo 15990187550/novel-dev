@@ -3,12 +3,41 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from novel_dev.agents.fast_review_agent import FastReviewAgent
+from novel_dev.agents.fast_review_agent import (
+    FastReviewAgent,
+    _build_genre_quality_issues,
+    _find_language_style_issues,
+)
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.review import DimensionIssue, DimensionScore, ScoreResult
 from novel_dev.services.quality_gate_service import QUALITY_UNCHECKED, QualityGateResult
+
+
+def test_build_genre_quality_issues_converts_type_drift_items():
+    issues = _build_genre_quality_issues(
+        "董事会刚结束，他突然回宗门突破境界。",
+        {
+            "blocking_rules": {"type_drift": True},
+            "forbidden_drift_patterns": ["宗门", "境界突破"],
+        },
+    )
+
+    assert [issue.code for issue in issues] == ["type_drift"]
+    assert issues[0].category == "style"
+    assert issues[0].severity == "block"
+    assert issues[0].source == "fast_review"
+    assert any("宗门" in item for item in issues[0].evidence)
+
+
+def test_find_language_style_issues_allows_authorized_modern_terms():
+    issues = _find_language_style_issues(
+        "他用 KPI 和 APP 复盘项目。",
+        context={"genre_quality_config": {"modern_terms_policy": "allow"}},
+    )
+
+    assert not any("现代" in issue or "英文/外文" in issue for issue in issues)
 
 
 @pytest.mark.asyncio

@@ -32,6 +32,7 @@ from novel_dev.llm import llm_factory
 from novel_dev.llm.context_tools import build_mcp_context_tools
 from novel_dev.llm.orchestrator import LLMToolSpec, OrchestratedTaskConfig
 from novel_dev.services.flow_control_service import FlowControlService
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
 from novel_dev.services.domain_activation_service import DomainActivationService
@@ -790,6 +791,19 @@ class VolumePlannerAgent:
             },
         )
         constraint_block = constraint_context.to_prompt_block()
+        genre_prompt_block = ""
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "VolumePlannerAgent",
+                "generate_volume_plan",
+            )
+            genre_prompt_block = genre_template.render_prompt_block(
+                "structure_rules",
+                "setting_rules",
+                "quality_rules",
+                "forbidden_rules",
+            )
 
         world_block = ""
         if world_snapshot:
@@ -870,6 +884,7 @@ class VolumePlannerAgent:
             "story_contract": story_contract,
             "world_snapshot": world_snapshot,
             "constraint_block": constraint_block,
+            "genre_prompt_block": genre_prompt_block,
             "generation_instruction": generation_instruction,
             "target_chapters": target_chapters,
         }
@@ -903,6 +918,7 @@ class VolumePlannerAgent:
             f"{volume_contract_block}\n\n"
             f"{story_contract_block}\n\n"
             f"{constraint_block}\n\n"
+            f"{'## 类型模板约束' + chr(10) + genre_prompt_block + chr(10) + chr(10) if genre_prompt_block else ''}"
             f"当前卷号:{volume_number}"
             f"{world_block}"
             f"{instruction_block}"

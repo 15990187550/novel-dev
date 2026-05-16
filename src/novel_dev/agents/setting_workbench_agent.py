@@ -207,6 +207,7 @@ class SettingWorkbenchAgent:
         focused_context: dict[str, Any] | None = None,
         current_setting_context: dict[str, Any] | None = None,
         required_sections: list[dict[str, str]] | None = None,
+        genre_prompt_block: str = "",
     ) -> str:
         required_section_lines = []
         if required_sections:
@@ -254,6 +255,7 @@ class SettingWorkbenchAgent:
                 f"当前已生效设定上下文：{current_setting_context or {}}",
                 "消息历史：",
                 *[f"{item.get('role')}: {item.get('content')}" for item in messages],
+                *(["## 类型模板约束", genre_prompt_block] if genre_prompt_block.strip() else []),
                 "返回 SettingBatchDraft JSON。",
             ]
         )
