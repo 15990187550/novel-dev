@@ -147,6 +147,24 @@ def test_report_summary_tolerates_malformed_payload():
     assert summary["template_evidence_available"] is False
 
 
+def test_report_summary_warnings_without_matches_are_not_template_evidence():
+    from novel_dev.testing.generation_runner import _summarize_genre_report
+
+    summary = _summarize_genre_report(
+        {
+            "checkpoint_data": {
+                "genre_template": {
+                    "warnings": ["genre_template_missing:primary:foo"],
+                }
+            }
+        }
+    )
+
+    assert summary["template_layers"] == 0
+    assert summary["template_warnings"] == ["genre_template_missing:primary:foo"]
+    assert summary["template_evidence_available"] is False
+
+
 @pytest.mark.asyncio
 async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_session):
     await NovelStateRepository(async_session).save_checkpoint(

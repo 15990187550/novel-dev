@@ -259,7 +259,7 @@ def _summarize_genre_report(state_payload: dict) -> dict:
         "genre": f"{primary} / {secondary}",
         "template_layers": len(matched_templates),
         "template_warnings": warnings,
-        "template_evidence_available": bool(matched_templates or warnings),
+        "template_evidence_available": bool(matched_templates),
     }
 
 
