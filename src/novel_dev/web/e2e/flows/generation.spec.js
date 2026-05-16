@@ -37,7 +37,16 @@ test.describe('web generation flow', () => {
     const sessionTitle = `Codex AI Settings ${Date.now()}`
     const errors = installPageErrorCollector(page)
 
-    const novel = await apiPost(request, '/api/novels', { title }, 'web-generation-create-novel')
+    const novel = await apiPost(
+      request,
+      '/api/novels',
+      {
+        title,
+        primary_category_slug: 'general',
+        secondary_category_slug: 'uncategorized',
+      },
+      'web-generation-create-novel',
+    )
     expect(novel.novel_id).toBeTruthy()
     expect(novel.title).toBe(title)
 
