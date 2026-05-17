@@ -198,6 +198,7 @@ def test_context_agent_builds_writing_cards_from_chapter_plan(async_session):
     assert len(cards) == 2
     assert cards[0].objective
     assert cards[0].conflict
+    assert cards[0].readability_contract
     assert cards[0].forbidden_future_events == ["陆照利用玉佩残光脱身"]
 
 

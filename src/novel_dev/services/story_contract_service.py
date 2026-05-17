@@ -8,21 +8,19 @@ class StoryContractService:
     """Build lightweight cross-stage story contracts from existing checkpoints."""
 
     SALIENT_TERMS = (
-        "父亲玉佩",
         "父亲",
-        "玉佩",
-        "玉简",
-        "残图",
-        "兄长遗物",
+        "母亲",
         "兄长",
+        "妹妹",
         "遗物",
-        "祠堂",
-        "后山",
-        "巡逻",
-        "家族覆灭",
-        "覆灭真相",
-        "血煞盟",
+        "信物",
         "线索",
+        "真相",
+        "证据",
+        "旧案",
+        "秘密",
+        "承诺",
+        "目标",
     )
 
     @classmethod
@@ -200,7 +198,7 @@ class StoryContractService:
         source = cls._coerce_text(text)
         terms = {term for term in cls.SALIENT_TERMS if term in source}
         for token in re.findall(r"[\u4e00-\u9fff]{2,8}", source):
-            if token.endswith(("真相", "线索", "玉佩", "玉简", "遗物")):
+            if token.endswith(("真相", "线索", "证据", "信物", "遗物", "秘密", "目标", "承诺")):
                 terms.add(token)
         return terms
 

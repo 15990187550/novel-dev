@@ -4,6 +4,13 @@ import pytest
 from novel_dev.mcp_server.server import internal_mcp_registry, mcp
 
 
+def executable_beat_summary() -> str:
+    return (
+        "陆照为追查旧案潜入药库，却被执事当场拦住；"
+        "他必须在继续搜证和立刻撤离之间选择，失败会暴露玉佩，结尾听见追兵逼近。"
+    )
+
+
 def test_mcp_server_has_tools():
     expected = {
         "query_entity",
@@ -374,7 +381,7 @@ async def test_mcp_prepare_chapter_context(mock_llm_factory):
             chapter_number=1,
             title="MCP Test",
             target_word_count=3000,
-            beats=[BeatPlan(summary="B1", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
         )
         await director.save_checkpoint(
             novel_id,
@@ -412,7 +419,7 @@ async def test_mcp_generate_chapter_draft(mock_llm_factory):
             chapter_number=1,
             title="Draft Test",
             target_word_count=3000,
-            beats=[BeatPlan(summary="B1", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
         )
         context = ChapterContext(
             chapter_plan=chapter_plan,
@@ -494,7 +501,7 @@ async def test_mcp_advance_novel(mock_llm_factory):
             chapter_number=1,
             title="MCP Adv",
             target_word_count=3000,
-            beats=[BeatPlan(summary="B1", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
         )
         context = ChapterContext(
             chapter_plan=plan,
@@ -540,7 +547,7 @@ async def test_mcp_get_review_result():
             chapter_number=1,
             title="MCP Review",
             target_word_count=3000,
-            beats=[BeatPlan(summary="B1", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
         )
         context = ChapterContext(
             chapter_plan=plan,
@@ -591,7 +598,7 @@ async def test_mcp_get_fast_review_result():
             chapter_number=1,
             title="MCP Fast Review",
             target_word_count=3000,
-            beats=[BeatPlan(summary="B1", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
         )
         context = ChapterContext(
             chapter_plan=plan,
@@ -751,7 +758,12 @@ async def test_mcp_run_librarian(tmp_path, monkeypatch):
     async_session_local = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with async_session_local() as session:
         director = NovelDirector(session=session)
-        plan = ChapterPlan(chapter_number=1, title="MCP Lib", target_word_count=3000, beats=[BeatPlan(summary="B1", target_mood="tense")]).model_dump()
+        plan = ChapterPlan(
+            chapter_number=1,
+            title="MCP Lib",
+            target_word_count=3000,
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
+        ).model_dump()
         plan["chapter_id"] = chapter_id
         await director.save_checkpoint(
             novel_id,

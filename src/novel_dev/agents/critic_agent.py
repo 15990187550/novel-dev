@@ -122,6 +122,46 @@ class CriticAgent:
                 },
             )
             if attempt >= 3:
+                if self._allow_forced_editing_after_max_draft_attempts(checkpoint):
+                    checkpoint["draft_attempt_count"] = attempt
+                    checkpoint["draft_rewrite_plan"] = self._build_draft_rewrite_plan(
+                        score_result,
+                        beat_scores,
+                        beat_count=len(context_data.get("chapter_plan", {}).get("beats", [])),
+                        rewrite_all=True,
+                    )
+                    checkpoint["critic_forced_editing"] = {
+                        "attempt": attempt,
+                        "overall": overall,
+                        "red_line_failed": red_line_failed,
+                        "summary_feedback": score_result.summary_feedback,
+                        "dimensions": dimensions,
+                    }
+                    log_agent_detail(
+                        novel_id,
+                        "CriticAgent",
+                        "已达最大草稿重写次数，切到 editing 做抢救式收敛",
+                        node="critic_decision",
+                        task="review",
+                        status="failed",
+                        level="warning",
+                        metadata={
+                            "chapter_id": chapter_id,
+                            "attempt": attempt,
+                            "overall": overall,
+                            "red_line_failed": red_line_failed,
+                            "target_phase": Phase.EDITING.value,
+                            "acceptance_scope": checkpoint.get("acceptance_scope"),
+                        },
+                    )
+                    await self.director.save_checkpoint(
+                        novel_id,
+                        phase=Phase.EDITING,
+                        checkpoint_data=checkpoint,
+                        volume_id=state.current_volume_id,
+                        chapter_id=state.current_chapter_id,
+                    )
+                    return score_result
                 log_service.add_log(novel_id, "CriticAgent", "已达最大重写次数", level="error")
                 raise RuntimeError("Max draft attempts exceeded")
             checkpoint["draft_attempt_count"] = attempt
@@ -170,6 +210,11 @@ class CriticAgent:
             )
 
         return score_result
+
+    @staticmethod
+    def _allow_forced_editing_after_max_draft_attempts(checkpoint: dict) -> bool:
+        acceptance_scope = str(checkpoint.get("acceptance_scope") or "")
+        return acceptance_scope in {"real-contract", "real-longform-volume1"}
 
     def _build_draft_rewrite_plan(
         self,
@@ -267,7 +312,7 @@ class CriticAgent:
             "### readability(可读性)\n"
             "- 85-100: 句式多变,场景/对话/心理节奏合理,无冗余\n"
             "- 70-84: 可读但有长句堆砌、重复用词、比喻密度略高\n"
-            "- 50-69: 大量书面语/AI 腔,段落结构雷同,比喻密度失控,抽象玄幻词连环复读,"
+            "- 50-69: 大量书面语/AI 腔,段落结构雷同,比喻密度失控,类型概念连环复读,"
             "感官平均用力,或出现未授权英文/拼音/网络缩写/UI 术语原文\n"
             "- <50: 生硬、难以连读\n\n"
             "### consistency(设定一致性)\n"
@@ -277,8 +322,8 @@ class CriticAgent:
             "- <50: 与核心设定严重矛盾\n\n"
             "### humanity(人味/沉浸感)\n"
             "- 85-100: 对话自然、有潜台词,内心戏节制,能『显示不说』\n"
-            "- 70-84: 偶有 AI 腔词汇、过度解释情感、现代吐槽突兀或奇观描写偏模板\n"
-            "- 50-69: 明显 AI 腔、总结式心理描写、对话扁平、模板化奇遇/入体/传承演出,"
+            "- 70-84: 偶有 AI 腔词汇、过度解释情感、跨语域表达突兀或异常事件描写偏模板\n"
+            "- 50-69: 明显 AI 腔、总结式心理描写、对话扁平、模板化异常事件演出,"
             "人物被抽象光影和设定说明淹没\n"
             "- <50: 通篇 AI 味、读起来像设定说明\n\n"
             "### hook_strength(章末钩子强度,仅评价最后一个 beat)\n"
@@ -294,9 +339,9 @@ class CriticAgent:
             "problem 写清楚章末为什么不够勾人,suggestion 给出可执行的改写方向。\n"
             "3. beat_idx 指向 chapter_plan.beats 的索引,跨 beat 的整章问题填 null。\n"
             "4. suggestion 要给可直接执行的改写方向(例:『改为 A 用一个动作代替解释』)。\n"
-            "5. 语言体验:英文、拼音、网络缩写和 UI 术语原文(如 snooze/APP/OK)会破坏沉浸感。"
+            "5. 语言体验:英文、拼音、网络缩写和 UI 术语原文会破坏沉浸感。"
             "如果草稿出现这类词,readability 必须低于 75,并在 per_dim_issues 写出原词和自然中文表达建议。\n"
-            "6. AI 味问题必须具体定位:连续比喻、抽象玄幻词、感官平均用力、模板化奇遇、现代吐槽突兀。"
+            "6. AI 味问题必须具体定位:连续比喻、类型概念堆叠、感官平均用力、模板化异常事件、跨语域表达突兀。"
             "suggestion 必须给正向改写目标,例如『把连续三处像字比喻收束为一个身体反应,只保留最有辨识度的一处』。\n"
             "7. per_dim_issues 可填写 source_stage,用于标记问题来自哪个流程阶段;"
             "取值优先使用 setting_generation / brainstorm / volume_plan / drafting / editing。"
@@ -371,8 +416,8 @@ class CriticAgent:
             "- plot_tension 70-84: 有推进但缺少不确定性或节拍过长稀释张力\n"
             "- plot_tension <70: 无推进/重复前文/场景铺陈过多无事件\n"
             "- humanity >=85: 对话/动作自然,情感通过细节呈现,无 AI 腔\n"
-            "- humanity 70-84: 有少量 AI 腔、心理直述、比喻过密或现代吐槽突兀,瑕疵不影响读感\n"
-            "- humanity <70: 书面语堆砌、总结式情感、对话扁平、抽象玄幻词复读、奇观堆叠或模板化奇遇\n\n"
+            "- humanity 70-84: 有少量 AI 腔、心理直述、比喻过密或跨语域表达突兀,瑕疵不影响读感\n"
+            "- humanity <70: 书面语堆砌、总结式情感、对话扁平、类型概念复读、奇观堆叠或模板化异常事件\n\n"
             "## 输出格式\n"
             "JSON 数组,每元素:\n"
             '{"beat_index": 0, "scores": {"plot_tension": 75, "humanity": 75}, '

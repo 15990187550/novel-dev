@@ -36,7 +36,7 @@ def _new_id(prefix: str) -> str:
 
 class SettingWorkbenchService:
     MAX_CLARIFICATION_ROUNDS = 5
-    GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 300
+    GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 540
     SOURCE_CRITICAL_MARKERS = (
         "外部宇宙",
         "跨作品",
@@ -64,74 +64,28 @@ class SettingWorkbenchService:
         "synopsis",
         "concept",
     )
-    KNOWN_EXTERNAL_DOMAINS = (
-        "一世之尊",
-        "仙逆",
-        "遮天",
-        "灭运图录",
-        "阳神",
-        "完美世界",
-        "吞噬星空",
-        "莽荒纪",
-        "凡人修仙传",
-        "星辰变",
-    )
-    CANONICAL_WORLD_PROTAGONISTS = {
-        "一世之尊": "孟奇",
-        "仙逆": "王林",
-        "遮天": "叶凡",
-        "灭运图录": "石轩",
-        "阳神": "洪易",
-        "完美世界": "石昊",
-        "吞噬星空": "罗峰",
-        "莽荒纪": "纪宁",
-        "凡人修仙传": "韩立",
-        "星辰变": "秦羽",
-    }
-    YISHI_REALM_RANKS = {
-        "开窍": 1,
-        "外景": 2,
-        "法身": 3,
-        "传说": 4,
-        "造化": 5,
-        "彼岸": 6,
-    }
-    DOMAIN_REALM_KEYWORDS = {
-        "仙逆": (
-            "凝气", "筑基", "结丹", "元婴", "化神", "婴变", "问鼎", "阴虚",
-            "阳实", "窥涅", "净涅", "碎涅", "天人",
-        ),
-        "遮天": (
-            "轮海", "道宫", "四极", "化龙", "仙台", "圣人", "圣王", "大圣",
-            "准帝", "大帝", "古皇", "红尘仙",
-        ),
-        "灭运图录": (
-            "出窍", "引气", "神魂", "金丹", "元神", "道基", "合道", "金仙",
-        ),
-        "阳神": (
-            "鬼仙", "雷劫", "造物主", "阳神", "人仙", "粉碎真空",
-        ),
-        "完美世界": (
-            "搬血", "洞天", "化灵", "铭纹", "列阵", "尊者", "神火", "真一",
-            "圣祭", "天神", "虚道", "斩我", "遁一", "至尊", "真仙", "仙王",
-            "准仙帝", "仙帝",
-        ),
-        "吞噬星空": (
-            "行星级", "恒星级", "宇宙级", "域主", "界主", "不朽", "宇宙尊者",
-            "宇宙之主", "真神", "虚空真神", "永恒真神", "混沌主宰", "神王",
-        ),
-        "莽荒纪": (
-            "后天", "先天", "紫府", "万象", "返虚", "天仙", "真仙", "祖仙",
-            "世界境", "道君", "永恒帝君", "混沌宇宙掌控者",
-        ),
-        "凡人修仙传": (
-            "炼气", "筑基", "结丹", "元婴", "化神", "炼虚", "合体", "大乘",
-            "真仙", "金仙", "太乙", "大罗", "道祖",
-        ),
-        "星辰变": (
-            "洞虚", "空冥", "渡劫", "大成", "玄仙", "仙帝", "神人", "天神",
-            "神王", "天尊",
-        ),
+    DOMAIN_CANDIDATE_STOPWORDS = {
+        "生成",
+        "请生成",
+        "设定",
+        "世界",
+        "体系",
+        "原著",
+        "规则",
+        "境界",
+        "修炼体系",
+        "境界映射",
+        "境界对标",
+        "跨作品",
+        "联动",
+        "外部宇宙",
+        "统一对标体系",
+        "并纳入",
+        "主角",
+        "人物",
+        "世界观",
+        "资料",
+        "当前作品",
     }
 
     def __init__(self, session: AsyncSession):
@@ -1613,39 +1567,37 @@ class SettingWorkbenchService:
 
     @staticmethod
     def _build_worldview_completion_text(source_text: str) -> str:
-        source = source_text.strip() or "当前作品围绕主角、核心冲突和势力关系展开。"
+        source = source_text.strip() or "当前资料不足，需补充世界运行规则、角色活动边界和主要阻力来源。"
         return (
-            "世界观基础：故事发生在由宗门、家族与隐秘势力共同塑造的修行世界。"
-            "资源、传承、身份与规则共同决定人物行动边界；主角必须在既有秩序的压迫下寻找线索、争取生存空间并推动真相浮出。"
+            "世界观基础：仅依据已导入或已确认资料描述故事发生环境、行动边界、资源约束和秩序压力。"
+            "资料未覆盖的时代背景、组织形态、能力规则、地名物件和历史事件一律标记为待确认，不按题材套路补写。"
             f"\n可核参考：{source[:600]}"
         )
 
     @staticmethod
     def _build_power_system_completion_text(source_text: str) -> str:
-        source = source_text.strip() or "当前作品需要明确力量边界和成长代价。"
+        source = source_text.strip() or "当前资料不足，需补充能力、资源、技术、身份或其他成长/约束体系。"
         return (
-            "修炼体系基础：力量成长必须遵守阶段边界、资源消耗和暴露风险。"
-            "任何突破都需要明确触发条件、外部阻力和失败代价；未在设定中确认的境界、功法层级和高阶能力不得在正文中硬编。"
+            "力量/能力体系基础：成长、资源、技术、身份权限或其他能力变化必须遵守已确认的阶段边界、消耗、代价和暴露风险。"
+            "未在资料中确认的层级名称、能力效果、升级路径和高阶规则不得硬编，只能列为待确认或正文禁用项。"
             f"\n可核参考：{source[:600]}"
         )
 
     @staticmethod
     def _build_character_goal_completion_text(source_text: str) -> str:
-        source = source_text.strip() or "当前作品需要主角围绕核心真相展开行动。"
+        source = source_text.strip() or "当前资料不足，需补充核心人物的可执行目标、动机、限制和失败代价。"
         return (
-            "主角目标与当前动机：主角当前目标必须是一个可执行行动，而不是抽象成长。"
-            "他需要查明关键真相、保护自身处境，并在资源不足和外部监视下推进下一条线索；"
-            "失败代价是线索被夺、身份暴露或被迫放弃追查。"
+            "核心人物目标与当前动机：当前目标必须能落到可执行行动、明确阻力和失败代价上，不能只写抽象成长或情绪愿望。"
+            "若资料没有说明具体目标、行动路径、风险来源或选择代价，应明确标注待确认，不补写固定追查/复仇/升级模板。"
             f"\n可核参考：{source[:600]}"
         )
 
     @staticmethod
     def _build_core_conflict_completion_text(source_text: str) -> str:
-        source = source_text.strip() or "当前作品需要明确谁阻止主角、争夺什么、失败代价是什么。"
+        source = source_text.strip() or "当前资料不足，需补充阻力方、争夺对象、冲突边界和失败代价。"
         return (
-            "核心冲突与阻力来源：主角为了查明真相并取得第一条关键线索，"
-            "必须对抗试图掩盖事实的宗门/敌对势力眼线。双方争夺线索、身份安全和行动主动权；"
-            "若主角失败，将失去证据、暴露调查意图，并被更强势力追逼。"
+            "核心冲突与阻力来源：必须说明谁与核心人物发生利益、信念、资源、身份或行动目标冲突，双方争夺什么，当前阶段边界在哪里。"
+            "未由资料支撑的敌对组织、追捕者、证据、秘密身份或更高层势力不得作为兜底补入。"
             f"\n可核参考：{source[:600]}"
         )
 
@@ -1701,7 +1653,7 @@ class SettingWorkbenchService:
                 *[section.get("title", "") for section in required_sections],
             ]
         )
-        domains = [domain for domain in self.KNOWN_EXTERNAL_DOMAINS if domain in source_text]
+        domains = self._extract_mentioned_domains(source_text)
         required = bool(domains and any(marker in source_text for marker in self.SOURCE_CRITICAL_MARKERS))
         if not required:
             return {"required": False, "domains": [], "missing_domains": []}
@@ -1740,6 +1692,70 @@ class SettingWorkbenchService:
             "domains": coverage_domains,
             "missing_domains": missing_domains,
         }
+
+    @classmethod
+    def _extract_mentioned_domains(cls, text: str) -> list[str]:
+        if not text:
+            return []
+        candidates: list[str] = []
+
+        def add(raw: str) -> None:
+            cleaned = cls._clean_domain_candidate(raw)
+            if cleaned and cleaned not in candidates:
+                candidates.append(cleaned)
+
+        for quoted in re.findall(r"《([^》]{2,30})》", text):
+            add(quoted)
+
+        def add_group(raw: str) -> None:
+            for part in re.split(r"[、,，/与和及\s]+", raw):
+                add(part)
+
+        for left, right in re.findall(
+            r"([\u4e00-\u9fffA-Za-z0-9·、，,和与及 \t（）()]{2,80})"
+            r"对标"
+            r"([\u4e00-\u9fffA-Za-z0-9·、，,和与及 \t（）()]{2,80})",
+            text,
+        ):
+            add_group(left)
+            add_group(right)
+
+        for group in re.findall(
+            r"(?:含|包含)?([\u4e00-\u9fffA-Za-z0-9·、，,和与及 \t（）()]{2,80})"
+            r"(?:等)?(?:的)?(?:境界映射|境界对标)",
+            text,
+        ):
+            add_group(group)
+
+        for group in re.findall(
+            r"([\u4e00-\u9fffA-Za-z0-9·、，,和与及 \t（）()]{2,80})"
+            r"(?:作为|参与|纳入).{0,30}(?:跨作品|联动|外部宇宙)",
+            text,
+        ):
+            add_group(group)
+
+        return candidates
+
+    @classmethod
+    def _clean_domain_candidate(cls, raw: str) -> str:
+        text = str(raw or "").strip(" \t\r\n：:；;,.，。！？!?（）()[]【】《》")
+        text = re.split(r"[:：]", text)[-1]
+        text = re.split(r"[（(]", text)[-1]
+        text = re.split(r"(?:作为|参与|纳入)", text)[0]
+        text = text.strip(" \t\r\n：:；;,.，。！？!?（）()[]【】《》")
+        text = re.sub(r"^(?:请|帮我|需要|生成|补充|建立|制作|关于|含|包含|以及|和|与|及)+", "", text)
+        text = re.sub(r"(?:的)?(?:境界映射|境界对标|修炼体系|境界体系|体系|原著|规则|设定)$", "", text)
+        text = re.sub(r"(?:的|作为|进行|相关|资料|文档|内容|等)$", "", text)
+        text = text.strip(" \t\r\n：:；;,.，。！？!?（）()[]【】《》")
+        if "*" in text or "批次" in text or "完整" in text or "内容" in text or re.search(r"\d+卷|第\d+", text):
+            return ""
+        if not text or text in cls.DOMAIN_CANDIDATE_STOPWORDS:
+            return ""
+        if any(marker in text for marker in cls.SOURCE_CRITICAL_MARKERS):
+            return ""
+        if len(text) < 2 or len(text) > 24:
+            return ""
+        return text
 
     @staticmethod
     def _document_matches_domain(doc: NovelDocument, domain: str) -> bool:
@@ -1797,7 +1813,7 @@ class SettingWorkbenchService:
                     )
                 docs.append(doc)
 
-            mentioned_domains = [domain for domain in self.KNOWN_EXTERNAL_DOMAINS if domain in text]
+            mentioned_domains = self._extract_mentioned_domains(text)
             if not mentioned_domains:
                 continue
             evidence_text = "\n".join(f"{doc.title}\n{doc.content}" for doc in docs)
@@ -1815,7 +1831,7 @@ class SettingWorkbenchService:
         *,
         index: int,
     ) -> None:
-        mentions_domain = any(domain in text for domain in self.KNOWN_EXTERNAL_DOMAINS)
+        mentions_domain = bool(self._extract_mentioned_domains(text))
         source_critical = mentions_domain and any(marker in text for marker in self.SOURCE_CRITICAL_MARKERS)
         if not source_critical:
             return
@@ -1860,14 +1876,13 @@ class SettingWorkbenchService:
             )
             if not text.strip():
                 continue
-            mentions_domain = any(domain in text for domain in self.KNOWN_EXTERNAL_DOMAINS)
+            mentioned_domains = self._extract_mentioned_domains(text)
+            mentions_domain = bool(mentioned_domains)
             source_critical = any(marker in text for marker in self.SOURCE_CRITICAL_MARKERS)
             if not source_critical:
                 continue
             source_doc_ids: list[str] = []
-            for domain in self.KNOWN_EXTERNAL_DOMAINS:
-                if domain not in text:
-                    continue
+            for domain in mentioned_domains:
                 for doc_id in matched_by_domain.get(domain) or []:
                     if doc_id not in source_doc_ids:
                         source_doc_ids.append(doc_id)
@@ -1889,32 +1904,42 @@ class SettingWorkbenchService:
         return [str(doc_id).strip() for doc_id in source_doc_ids if str(doc_id).strip()]
 
     def _validate_canonical_world_protagonists(self, text: str, *, index: int) -> None:
-        protagonist_home = {
-            protagonist: world
-            for world, protagonist in self.CANONICAL_WORLD_PROTAGONISTS.items()
-        }
-        segments = [segment.strip() for segment in re.split(r"[\n。；;]", text) if segment.strip()]
-        for segment in segments:
-            mentioned_worlds = [world for world in self.CANONICAL_WORLD_PROTAGONISTS if world in segment]
-            if not mentioned_worlds:
-                continue
-            if self._is_cross_work_co_presence_segment(segment):
-                continue
-            for protagonist, home_world in protagonist_home.items():
-                if protagonist not in segment:
-                    continue
-                for world in mentioned_worlds:
-                    if world == home_world or home_world in segment:
-                        continue
-                    if self._is_explicit_wrong_world_protagonist_assignment(
-                        segment,
-                        world=world,
-                        protagonist=protagonist,
-                    ):
-                        raise ValueError(
-                            f"Draft change {index} Canonical world/protagonist mismatch: "
-                            f"{world} segment mentions {protagonist}, whose canonical world is {home_world}"
-                        )
+        assignments = self._extract_world_person_assignments(text)
+        if not assignments:
+            return
+        person_to_worlds: dict[str, set[str]] = {}
+        for world, person in assignments:
+            person_to_worlds.setdefault(person, set()).add(world)
+        conflicts = [
+            (person, sorted(worlds))
+            for person, worlds in person_to_worlds.items()
+            if len(worlds) > 1
+        ]
+        if conflicts:
+            person, worlds = conflicts[0]
+            raise ValueError(
+                f"Draft change {index} source-domain/person assignment conflict: "
+                f"{person} assigned to multiple source domains: {', '.join(worlds)}"
+            )
+
+    @staticmethod
+    def _extract_world_person_assignments(text: str) -> list[tuple[str, str]]:
+        assignments: list[tuple[str, str]] = []
+        patterns = (
+            r"([\u4e00-\u9fffA-Za-z0-9·《》]{2,24})(?:世界|规则域|体系|原著)?(?:主角|主人公|核心人物|关键人物)\s*(?:为|是|：|:)\s*([\u4e00-\u9fffA-Za-z0-9·]{2,16})",
+            r"([\u4e00-\u9fffA-Za-z0-9·]{2,16})\s*(?:是|为|作为)\s*([\u4e00-\u9fffA-Za-z0-9·《》]{2,24})(?:世界|规则域|体系|原著)?(?:主角|主人公|核心人物|关键人物)",
+        )
+        for match in re.finditer(patterns[0], text or ""):
+            assignments.append((
+                match.group(1).strip("《》"),
+                match.group(2).strip("《》"),
+            ))
+        for match in re.finditer(patterns[1], text or ""):
+            assignments.append((
+                match.group(2).strip("《》"),
+                match.group(1).strip("《》"),
+            ))
+        return assignments
 
     @staticmethod
     def _is_cross_work_co_presence_segment(segment: str) -> bool:
@@ -1949,38 +1974,30 @@ class SettingWorkbenchService:
         return any(re.search(pattern, segment) for pattern in assignment_patterns)
 
     def _validate_realm_mapping_order(self, text: str, *, index: int) -> None:
-        rows = self._extract_yishi_mapping_rows(text)
+        rows = self._extract_mapping_rows(text)
         if len(rows) < 2:
             return
-        previous_rank = None
-        previous_source = ""
-        previous_domain = None
-        for source_realm, target_mapping in rows:
-            rank = self._yishi_mapping_rank(target_mapping)
+        previous_by_group: dict[str, tuple[int, str]] = {}
+        for source_value, target_value in rows:
+            rank = self._target_mapping_rank(target_value)
             if rank is None:
                 continue
-            source_domain = self._infer_mapping_source_domain(source_realm)
-            same_domain = (
-                source_domain == previous_domain
-                if source_domain and previous_domain
-                else source_domain is None and previous_domain is None
-            )
-            if previous_rank is not None and same_domain and rank < previous_rank:
+            group = self._infer_mapping_source_group(source_value)
+            previous = previous_by_group.get(group)
+            if previous is not None and rank < previous[0]:
                 raise ValueError(
                     f"Draft change {index} Realm mapping order regression: "
-                    f"{source_realm} maps to {target_mapping}, below previous row {previous_source}"
+                    f"{source_value} maps to {target_value}, below previous row {previous[1]}"
                 )
-            previous_rank = rank
-            previous_source = source_realm
-            previous_domain = source_domain
+            previous_by_group[group] = (rank, source_value)
 
     @staticmethod
-    def _extract_yishi_mapping_rows(text: str) -> list[tuple[str, str]]:
+    def _extract_mapping_rows(text: str) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         in_mapping_table = False
         source_index = 0
         target_index = 1
-        for raw_line in text.splitlines():
+        for raw_line in (text or "").splitlines():
             line = raw_line.strip()
             if not line.startswith("|") or "|" not in line[1:]:
                 in_mapping_table = False
@@ -1990,51 +2007,61 @@ class SettingWorkbenchService:
                 continue
             if all(re.fullmatch(r":?-{2,}:?", cell.replace(" ", "")) for cell in cells):
                 continue
-            if any("对标一世之尊" in cell for cell in cells):
+            target_header = next(
+                (
+                    idx for idx, cell in enumerate(cells)
+                    if any(marker in cell for marker in ("对标", "映射", "对应"))
+                ),
+                None,
+            )
+            if target_header is not None:
                 in_mapping_table = True
-                source_index = 0
-                target_index = next(
-                    (idx for idx, cell in enumerate(cells) if "对标一世之尊" in cell),
-                    1,
-                )
+                target_index = target_header
+                source_index = 0 if target_index != 0 else 1
                 continue
             if not in_mapping_table or len(cells) <= max(source_index, target_index):
                 continue
             rows.append((cells[source_index], cells[target_index]))
         return rows
 
-    @classmethod
-    def _yishi_mapping_rank(cls, target_mapping: str) -> int | None:
-        ranks = [
-            rank
-            for realm, rank in cls.YISHI_REALM_RANKS.items()
-            if realm in target_mapping
-        ]
-        if not ranks:
-            return None
-        return max(ranks)
-
-    @classmethod
-    def _infer_mapping_source_domain(cls, source_realm: str) -> str | None:
-        text = source_realm.strip()
-        for domain in cls.KNOWN_EXTERNAL_DOMAINS:
-            if domain in text:
-                return domain
-            if f"{domain}世界" in text:
-                return domain
-        scores = [
-            (domain, sum(1 for keyword in keywords if keyword in text))
-            for domain, keywords in cls.DOMAIN_REALM_KEYWORDS.items()
-        ]
-        scored_matches = [(domain, score) for domain, score in scores if score > 0]
-        if len(scored_matches) == 1:
-            return scored_matches[0][0]
-        if scored_matches:
-            top_score = max(score for _, score in scored_matches)
-            top_domains = [domain for domain, score in scored_matches if score == top_score]
-            if len(top_domains) == 1:
-                return top_domains[0]
+    @staticmethod
+    def _target_mapping_rank(value: str) -> int | None:
+        text = str(value or "")
+        digit_match = re.search(r"\d+", text)
+        if digit_match:
+            return int(digit_match.group(0))
+        chinese_numbers = {
+            "零": 0,
+            "一": 1,
+            "二": 2,
+            "两": 2,
+            "三": 3,
+            "四": 4,
+            "五": 5,
+            "六": 6,
+            "七": 7,
+            "八": 8,
+            "九": 9,
+            "十": 10,
+        }
+        ranks = [rank for marker, rank in chinese_numbers.items() if marker in text]
+        if ranks:
+            return max(ranks)
+        phase_markers = {"初": 1, "前": 1, "中": 2, "后": 3, "高": 4, "顶": 5, "圆满": 6}
+        phase_ranks = [rank for marker, rank in phase_markers.items() if marker in text]
+        if phase_ranks:
+            return max(phase_ranks)
         return None
+
+    @staticmethod
+    def _infer_mapping_source_group(value: str) -> str:
+        text = str(value or "").strip()
+        if "：" in text or ":" in text:
+            return re.split(r"[:：]", text, maxsplit=1)[0].strip()
+        match = re.match(r"([\u4e00-\u9fffA-Za-z0-9·《》]{2,24})(?:境界|体系|世界|规则域)", text)
+        if match:
+            return match.group(1).strip("《》")
+        return "default"
 
     @classmethod
     def _missing_required_sections(

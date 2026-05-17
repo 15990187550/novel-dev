@@ -12,6 +12,7 @@ from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
+from novel_dev.services.prose_hygiene_service import ProseHygieneService
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
@@ -131,6 +132,8 @@ class EditorAgent:
                 + beat_level_issues
                 + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
             )
+            hygiene_issues = self._prose_hygiene_issues(beat_text, idx, chapter_context)
+            all_issues += hygiene_issues
 
             # 章末钩子弱时强制改最后一个 beat,并注入一条章末改写指引
             is_forced_last = force_last_beat_rewrite and idx == last_idx
@@ -325,6 +328,8 @@ class EditorAgent:
                 + beat_level_issues
                 + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
             )
+            hygiene_issues = self._prose_hygiene_issues(beat_text, idx, chapter_context)
+            all_issues += hygiene_issues
             is_forced_last = force_last_beat_rewrite and idx == last_idx
             if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
                 all_issues = all_issues + [{
@@ -531,10 +536,11 @@ class EditorAgent:
             "   写法顺序为:先点住本段已经出现的具体物/伤/话/选择,再写人物必须承受的代价或迟疑,最后落在一个未完成动作或已知风险的逼近感。\n"
             "5. 自然中文表达:英文、拼音、网络缩写和 UI 术语原文转写为贴合角色处境的中文说法。\n"
             "6. 情绪呈现:把直述心理改成动作、对话潜台词、身体反应或环境反衬,让读者自己感到人物变化。\n"
-            "7. 低 AI 味修整:处理比喻过密、抽象玄幻词连环复读、感官平均用力、奇观堆叠、模板化入体/传承演出。\n"
-            "8. 异象/奇遇段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
-            "9. 现代吐槽:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
+            "7. 低 AI 味修整:处理比喻过密、类型概念连环复读、感官平均用力、奇观堆叠、模板化异常事件演出。\n"
+            "8. 异常事件段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
+            "9. 跨语域表达:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
             "10. 字数节奏:保持与原段相近的字数(±20%),优先补顺断句、压缩重复解释、保留有效冲突。\n",
+            ProseHygieneService.prompt_rules(chapter_context),
             "## 事实边界\n"
             "1. 使用计划和原段已经给出的事实强化表达,保留事件先后顺序和人物已完成动作。\n"
             "2. 使用已有悬念增强章末钩子:放大当前风险、未完成选择、情绪余波或已埋伏笔。\n"
@@ -565,6 +571,18 @@ class EditorAgent:
         problem = issue.get("problem")
         suggestion = cls._bounded_suggestion_for_issue(issue)
         return f"- [{dim}] 问题: {problem}\n  建议: {suggestion}"
+
+    @staticmethod
+    def _prose_hygiene_issues(text: str, beat_index: int, chapter_context: dict | None = None) -> list[dict]:
+        issues = ProseHygieneService.find_issues(text, context=chapter_context)
+        if not issues:
+            return []
+        return [{
+            "dim": "prose_hygiene",
+            "beat_idx": beat_index,
+            "problem": "；".join(issues[:8]),
+            "suggestion": "删除规划/元叙述语言、现代/外文漂移和工程字段痕迹，改成当前场景里的动作、对白、身体反应、物件变化或直接后果。",
+        }]
 
     @staticmethod
     def _repair_tasks_for_beat(tasks: list[dict], beat_index: int) -> list[dict]:
@@ -870,20 +888,48 @@ class EditorAgent:
     def _clean_text_integrity_fragments(cls, text: str) -> str:
         cleaned = cls._clean_isolated_punctuation_paragraphs(text)
         paragraphs = [
-            cls._repair_truncated_paragraph(paragraph)
+            repaired
             for paragraph in cleaned.split("\n\n")
+            if (repaired := cls._repair_truncated_paragraph(paragraph)).strip()
         ]
-        return "\n\n".join(paragraphs).strip()
+        return cls._clean_section_separator_fragments("\n\n".join(paragraphs)).strip()
 
     @staticmethod
     def _repair_truncated_paragraph(paragraph: str) -> str:
         stripped = paragraph.strip()
-        replacements = (
-            (r"，照[。.!]$", "，照出一片昏黄。"),
-            (r"，还是[。.!]$", "，还是保全自身。"),
-            (r"站不[。.!]$", "站不起来。"),
+        truncated_tail_patterns = (
+            r"[，,][\u4e00-\u9fffA-Za-z0-9]{1,4}[。.!]$",
+            r"站不[。.!]$",
+            r"僵在半[。.!]$",
+            r"上的[。.!]$",
+            r"绕[。.!]$",
         )
-        for pattern, replacement in replacements:
+        for pattern in truncated_tail_patterns:
             if re.search(pattern, stripped):
-                return re.sub(pattern, replacement, paragraph.rstrip()).strip()
+                return EditorAgent._drop_truncated_tail(paragraph)
         return paragraph
+
+    @staticmethod
+    def _drop_truncated_tail(paragraph: str) -> str:
+        text = paragraph.rstrip()
+        comma_tail = re.search(r"[，,][^。！？!?；;：:]{1,8}[。.!]$", text)
+        if comma_tail:
+            text = text[: comma_tail.start()]
+            return EditorAgent._ensure_sentence_end(text)
+        sentence_matches = list(re.finditer(r"[。！？!?]", text))
+        if not sentence_matches:
+            return ""
+        return text[: sentence_matches[-1].end()].strip()
+
+    @staticmethod
+    def _ensure_sentence_end(text: str) -> str:
+        cleaned = text.strip(" \t\r\n，,；;：:")
+        if not cleaned:
+            return ""
+        if cleaned[-1] in "。！？!?":
+            return cleaned
+        return f"{cleaned}。"
+
+    @staticmethod
+    def _clean_section_separator_fragments(text: str) -> str:
+        return re.sub(r"\n{2,}\s*---+\s*\n{2,}", "\n\n", text or "")

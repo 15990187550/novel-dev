@@ -81,7 +81,6 @@ def _word_count(text: str) -> int:
 _MD_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE | re.MULTILINE)
 _FIRST_OBJ_RE = re.compile(r"\{[\s\S]*\}")
 _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
-AUTHORIZED_MODERN_LATIN_TERMS = {"AI", "API", "APP", "CEO", "CTO", "ICU", "KPI", "OKR"}
 
 
 def _modern_terms_authorized_for_fast_review(context: object | None) -> bool:
@@ -98,6 +97,18 @@ def _modern_terms_authorized_for_fast_review(context: object | None) -> bool:
     return any(marker in context_text for marker in ProseHygieneService.MODERN_AUTHORIZATION_MARKERS)
 
 
+def _authorized_latin_terms_for_fast_review(context: object | None) -> set[str]:
+    if not isinstance(context, dict):
+        return set()
+    quality_config = context.get("genre_quality_config")
+    if not isinstance(quality_config, dict):
+        return set()
+    terms = quality_config.get("authorized_latin_terms") or ()
+    if not isinstance(terms, (list, tuple, set)):
+        return set()
+    return {str(term).upper() for term in terms if str(term).strip()}
+
+
 def _find_language_style_issues(text: str, context: object | None = None) -> list[str]:
     plan_issues = ProseHygieneService.find_plan_language_issues(text)
     modern_issues = [
@@ -107,6 +118,7 @@ def _find_language_style_issues(text: str, context: object | None = None) -> lis
     words = []
     seen = set()
     modern_authorized = _modern_terms_authorized_for_fast_review(context)
+    authorized_latin_terms = _authorized_latin_terms_for_fast_review(context)
     for match in _LATIN_WORD_RE.finditer(text or ""):
         word = match.group(0)
         key = word.lower()
@@ -114,7 +126,7 @@ def _find_language_style_issues(text: str, context: object | None = None) -> lis
             continue
         if key in seen:
             continue
-        if modern_authorized and word.upper() in AUTHORIZED_MODERN_LATIN_TERMS:
+        if modern_authorized and word.upper() in authorized_latin_terms:
             continue
         seen.add(key)
         words.append(word)
@@ -200,7 +212,7 @@ class FastReviewAgent:
             "3. notes: 问题列表(字符串数组),最多 3 条,每条不超过 60 个汉字。"
             "简短指出最影响读感的问题和正向改写目标；若没有问题返回空数组。"
             "检查读者是否看得懂、是否相信人物、是否愿意继续读。"
-            "如果精修文本仍有比喻过密、抽象玄幻词复读、感官平均用力、模板化奇遇/入体演出或现代吐槽突兀,"
+            "如果精修文本仍有比喻过密、类型概念复读、感官平均用力、模板化异常事件或跨语域表达突兀,"
             "请写入 notes 并说明下一版应呈现什么效果。\n"
             "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
             f"{genre_section}"
@@ -791,7 +803,13 @@ class FastReviewAgent:
         }
         if not blocking_codes:
             return False
-        recoverable_codes = {"beat_cohesion", "text_integrity"}
+        recoverable_codes = {
+            "beat_cohesion",
+            "consistency",
+            "plan_boundary_violation",
+            "required_payoff",
+            "text_integrity",
+        }
         if not blocking_codes.issubset(recoverable_codes):
             return False
         acceptance_scope = str(checkpoint.get("acceptance_scope") or "")

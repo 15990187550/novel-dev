@@ -40,7 +40,8 @@ def test_story_contract_extracts_cross_stage_contract_fields():
     assert contract["protagonist_goal"] == "追查家族覆灭真相"
     assert "血煞盟" in contract["core_conflict"]
     assert "父亲留下的玉佩" in contract["first_chapter_goal"]
-    assert "父亲玉佩" in contract["must_carry_forward"]
+    assert "父亲" in contract["must_carry_forward"]
+    assert "线索" in contract["must_carry_forward"]
 
 
 def test_story_contract_warns_when_first_chapter_goal_drifts_from_volume_plan():
@@ -73,7 +74,7 @@ def test_story_contract_warns_when_first_chapter_goal_drifts_from_volume_plan():
     assert quality["passed"] is True
     assert quality["warnings"][0]["code"] == "first_chapter_goal_drift"
     assert quality["warnings"][0]["source_stage"] == "volume_plan"
-    assert "父亲玉佩" in quality["warnings"][0]["evidence"]
+    assert "父亲" in quality["warnings"][0]["evidence"]
 
 
 def test_story_contract_attributes_editor_plan_external_warnings():

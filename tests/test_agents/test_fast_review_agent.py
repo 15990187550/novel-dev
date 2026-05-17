@@ -34,14 +34,14 @@ def test_build_genre_quality_issues_converts_type_drift_items():
 def test_find_language_style_issues_allows_authorized_modern_terms():
     issues = _find_language_style_issues(
         "他用 KPI 和 APP 复盘项目。",
-        context={"genre_quality_config": {"modern_terms_policy": "allow"}},
+        context={"genre_quality_config": {"modern_terms_policy": "allow", "authorized_latin_terms": ["KPI", "APP"]}},
     )
 
     assert not any("现代" in issue or "英文/外文" in issue for issue in issues)
 
     unauthorized_issues = _find_language_style_issues(
         "他突然说出 UNKNOWNTERM。",
-        context={"genre_quality_config": {"modern_terms_policy": "allow"}},
+        context={"genre_quality_config": {"modern_terms_policy": "allow", "authorized_latin_terms": ["KPI", "APP"]}},
     )
 
     assert any("英文/外文" in issue for issue in unauthorized_issues)
@@ -236,6 +236,40 @@ async def test_fast_review_fails_unapproved_english_terms(async_session):
 
 
 @pytest.mark.asyncio
+async def test_fast_review_fails_plan_language_in_polished_text(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_fail_plan_language",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 40}}},
+        volume_id="v1",
+        chapter_id="c_plan_language",
+    )
+    await ChapterRepository(async_session).create("c_plan_language", "v1", 1, "Test")
+    await ChapterRepository(async_session).update_text(
+        "c_plan_language",
+        raw_draft="陆照站在石阶上，压住肩背伤势。",
+        polished_text="阻力不需要另起一条线，它就压在当前这件事上。陆照站在石阶上。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_fail_plan_language", "c_plan_language")
+
+    assert report.language_style_ok is False
+    assert any("规划/元叙述" in note for note in report.notes)
+
+    state = await director.resume("novel_fr_fail_plan_language")
+    assert state.current_phase == Phase.EDITING.value
+
+
+@pytest.mark.asyncio
 async def test_fast_review_llm_prompt_asks_for_ai_flavor_residue_notes(async_session):
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(
@@ -258,7 +292,7 @@ async def test_fast_review_llm_prompt_asks_for_ai_flavor_residue_notes(async_ses
     assert "愿意继续读" in prompt
     assert "正向改写目标" in prompt
     assert "比喻过密" in prompt
-    assert "抽象玄幻词" in prompt
+    assert "类型概念" in prompt
     assert "最多 3 条" in prompt
     assert "不超过 60 个汉字" in prompt
     assert "简短指出" in prompt
@@ -627,6 +661,69 @@ async def test_fast_review_returns_to_editing_for_recoverable_quality_gate_block
     assert state.current_phase == Phase.EDITING.value
     assert state.checkpoint_data["quality_gate_repair_attempt_count"] == 1
     assert state.checkpoint_data["final_polish_issues"]["quality_gate_blocking_items"][0]["code"] == "beat_cohesion"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_returns_to_editing_for_longform_repairable_structure_block(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_longform_structure_repair",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "edit_attempt_count": 2,
+            "chapter_structure_guard": {
+                "beat_index": 2,
+                "issues": ["新增计划外事实", "删除关键决心表达"],
+                "suggested_rewrite_focus": "删除计划外事实，恢复原决心表达，只做承接润色",
+            },
+            "chapter_context": {"chapter_plan": {"target_word_count": 12}},
+        },
+        volume_id="v1",
+        chapter_id="c_longform_structure_repair",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_longform_structure_repair", "v1", 1, "Longform Repair")
+    await repo.update_text(
+        "c_longform_structure_repair",
+        raw_draft="甲乙丙丁戊己庚辛壬癸子丑",
+        polished_text="甲乙丙丁戊己庚辛壬癸子丑甲乙丙丁",
+    )
+
+    final_score = ScoreResult(
+        overall=68,
+        dimensions=[DimensionScore(name="readability", score=68, comment="转场和承接偏弱")],
+        summary_feedback="需要修节拍承接和计划边界",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": False,
+            "beat_cohesion_ok": False,
+            "notes": ["节拍之间缺少承接", "存在拼接感"],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_longform_structure_repair", "c_longform_structure_repair")
+
+    chapter = await repo.get_by_id("c_longform_structure_repair")
+    assert chapter.quality_status == "block"
+
+    state = await director.resume("novel_fr_longform_structure_repair")
+    assert state.current_phase == Phase.EDITING.value
+    assert state.checkpoint_data["quality_gate_repair_attempt_count"] == 1
+    repair_codes = {
+        item["code"]
+        for item in state.checkpoint_data["final_polish_issues"]["quality_gate_blocking_items"]
+        if isinstance(item, dict) and item.get("code")
+    }
+    assert {"consistency", "beat_cohesion", "plan_boundary_violation"} <= repair_codes
 
 
 @pytest.mark.asyncio

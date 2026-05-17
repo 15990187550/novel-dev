@@ -1497,7 +1497,7 @@ async def test_generation_document_full_tool_is_bound_to_current_novel(async_ses
     assert result["content"] == "搬血、洞天、化灵、铭纹、列阵。"
 
 
-async def test_validate_batch_draft_rejects_non_monotonic_external_realm_mapping(async_session):
+async def test_validate_batch_draft_does_not_use_builtin_realm_rank_order(async_session):
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
     draft = SettingBatchDraft.model_validate(
@@ -1523,8 +1523,7 @@ async def test_validate_batch_draft_rejects_non_monotonic_external_realm_mapping
         }
     )
 
-    with pytest.raises(ValueError, match="Realm mapping order regression.*红尘仙"):
-        SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
 async def test_validate_batch_draft_allows_multi_world_realm_mapping_table(async_session):
@@ -1558,7 +1557,7 @@ async def test_validate_batch_draft_allows_multi_world_realm_mapping_table(async
     SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
-async def test_validate_batch_draft_still_rejects_same_world_realm_mapping_regression(async_session):
+async def test_validate_batch_draft_does_not_use_builtin_same_world_realm_rank_order(async_session):
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
     draft = SettingBatchDraft.model_validate(
@@ -1584,11 +1583,10 @@ async def test_validate_batch_draft_still_rejects_same_world_realm_mapping_regre
         }
     )
 
-    with pytest.raises(ValueError, match="Realm mapping order regression.*圣祭/天神"):
-        SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
-async def test_validate_batch_draft_rejects_cross_world_protagonist_contamination(async_session):
+async def test_validate_batch_draft_does_not_use_builtin_world_protagonist_map(async_session):
     from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
 
     draft = SettingBatchDraft.model_validate(
@@ -1609,7 +1607,31 @@ async def test_validate_batch_draft_rejects_cross_world_protagonist_contaminatio
         }
     )
 
-    with pytest.raises(ValueError, match="Canonical world/protagonist mismatch.*灭运图录.*纪宁"):
+    SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_batch_draft_rejects_conflicting_source_domain_person_assignment(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "人物归属冲突",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "setting",
+                        "title": "跨域人物归属",
+                        "source_doc_ids": ["doc_domain_a", "doc_domain_b"],
+                        "content": "甲世界主角为阿照。\n乙世界主角为阿照。",
+                    },
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="source-domain/person assignment conflict.*阿照"):
         SettingWorkbenchService(async_session)._validate_batch_draft(draft)
 
 
@@ -2414,7 +2436,7 @@ async def test_generate_review_batch_times_out_before_frontend_request_budget(
 
 
 async def test_generate_review_batch_default_timeout_allows_large_setting_batches():
-    assert SettingWorkbenchService.GENERATE_BATCH_WALL_TIMEOUT_SECONDS == 300
+    assert SettingWorkbenchService.GENERATE_BATCH_WALL_TIMEOUT_SECONDS == 540
 
 
 async def test_generate_review_batch_rejects_update_draft_without_target_id_before_creating_batch(

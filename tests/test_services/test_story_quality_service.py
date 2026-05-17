@@ -172,6 +172,29 @@ def test_chapter_writability_requires_conflict_choice_and_hook():
     assert any("阻力" in issue or "选择" in issue for issue in report.blocking_issues)
 
 
+def test_chapter_writability_blocks_repeated_generic_repair_constraints():
+    generic = "陆照必须在继续行动与保全自身之间做出选择，阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号。"
+    chapter = VolumeBeat(
+        chapter_id="ch_generic",
+        chapter_number=1,
+        title="模板章",
+        summary="陆照入门。",
+        target_word_count=2000,
+        target_mood="紧张",
+        key_entities=["陆照"],
+        beats=[
+            BeatPlan(summary=f"陆照通过入门考核；{generic}", target_mood="紧张", key_entities=["陆照"]),
+            BeatPlan(summary=f"陆照被分到杂役处；{generic}", target_mood="压迫", key_entities=["陆照"]),
+        ],
+    )
+
+    report = StoryQualityService.evaluate_chapter_writability(chapter)
+
+    assert report.passed is False
+    assert report.weak_beats == [0, 1]
+    assert any("重复使用通用硬约束" in issue for issue in report.blocking_issues)
+
+
 def test_build_writing_cards_from_executable_chapter_plan():
     plan = ChapterPlan(
         chapter_number=1,
@@ -199,10 +222,17 @@ def test_build_writing_cards_from_executable_chapter_plan():
     assert "陆照" in cards[0].required_entities
     assert cards[0].conflict
     assert cards[0].ending_hook
+    assert cards[0].stake
+    assert cards[0].allowed_bridge_details
     assert cards[0].required_payoffs
     assert cards[0].reader_takeaway
     assert "陆照利用玉佩残光脱身" in cards[0].forbidden_future_events
     assert cards[0].target_word_count == 1000
+    assert cards[0].source_summary == plan.beats[0].summary
+    assert cards[0].readability_contract
+    assert cards[0].causal_links
+    assert all(len(item) <= 83 for item in cards[0].required_facts)
+    assert not any(item == plan.beats[0].summary for item in cards[0].required_facts)
 
 
 def test_build_writing_cards_extracts_last_beat_payoff_and_reader_hook():

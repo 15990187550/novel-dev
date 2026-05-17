@@ -91,6 +91,13 @@ class NarrativeConstraintBuilder:
     """
 
     _DOMAIN_TITLE_PATTERN = re.compile(r"^[#>\-\s]*([\w\u4e00-\u9fff·《》：:]{2,30})")
+    _SPECIAL_TERM_ALIASES = {
+        "开窍": ["开启九窍", "开九窍", "九窍"],
+        "开启九窍": ["开九窍", "九窍", "开窍"],
+        "开九窍": ["开启九窍", "九窍", "开窍"],
+        "九窍": ["开启九窍", "开九窍", "开窍"],
+        "眉心祖窍": ["祖窍", "眉心窍"],
+    }
 
     def build_for_volume(
         self,
@@ -497,6 +504,10 @@ class NarrativeConstraintBuilder:
             aliases.append(cleaned)
         for inner in re.findall(r"[（(](.*?)[）)]", term):
             aliases.extend(part.strip() for part in re.split(r"[+/、，,;；]", inner) if part.strip())
+        for candidate in [term, cleaned, *aliases]:
+            for alias in self._SPECIAL_TERM_ALIASES.get(candidate, ()):
+                if alias and alias not in aliases:
+                    aliases.append(alias)
         return aliases
 
     def _constraint_title_from_source(self, source: str) -> str:

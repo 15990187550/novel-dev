@@ -157,7 +157,7 @@ async def test_local_rules_prefer_skill_over_treasure_for_item_names(async_sessi
     )
 
     assert result.system_category == "功法"
-    assert result.system_group_name == "剑道传承"
+    assert result.system_group_name == "传承"
 
 
 @pytest.mark.asyncio

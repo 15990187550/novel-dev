@@ -56,6 +56,9 @@ class ChapterPlan(BaseModel):
     target_word_count: int
     beats: List[BeatPlan]
     beat_boundary_cards: List[BeatBoundaryCard] = Field(default_factory=list)
+    writability_status: dict[str, Any] = Field(default_factory=dict)
+    chapter_plan_sanity_report: dict[str, Any] = Field(default_factory=dict)
+    quality_preflight_report: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("title", mode="before")
     @classmethod
@@ -70,6 +73,11 @@ class ChapterPlan(BaseModel):
         if isinstance(value, list):
             return value
         return []
+
+    @field_validator("writability_status", "chapter_plan_sanity_report", "quality_preflight_report", mode="before")
+    @classmethod
+    def _coerce_dict_fields(cls, value: Any) -> dict[str, Any]:
+        return value if isinstance(value, dict) else {}
 
 
 class EntityState(BaseModel):
@@ -149,23 +157,50 @@ class BeatWritingCard(BaseModel):
     """Executable beat contract used by WriterAgent before prose generation."""
 
     beat_index: int
+    source_summary: str = ""
     objective: str = ""
     conflict: str = ""
     turning_point: str = ""
+    stake: str = ""
     required_entities: List[str] = Field(default_factory=list)
     required_facts: List[str] = Field(default_factory=list)
     required_payoffs: List[str] = Field(default_factory=list)
+    canonical_constraints: List[str] = Field(default_factory=list)
+    continuity_requirements: List[str] = Field(default_factory=list)
+    readability_contract: List[str] = Field(default_factory=list)
+    causal_links: List[str] = Field(default_factory=list)
+    allowed_bridge_details: List[str] = Field(default_factory=list)
     forbidden_future_events: List[str] = Field(default_factory=list)
     ending_hook: str = ""
     reader_takeaway: str = ""
     target_word_count: int = 800
 
-    @field_validator("objective", "conflict", "turning_point", "ending_hook", "reader_takeaway", mode="before")
+    @field_validator(
+        "source_summary",
+        "objective",
+        "conflict",
+        "turning_point",
+        "stake",
+        "ending_hook",
+        "reader_takeaway",
+        mode="before",
+    )
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)
 
-    @field_validator("required_entities", "required_facts", "required_payoffs", "forbidden_future_events", mode="before")
+    @field_validator(
+        "required_entities",
+        "required_facts",
+        "required_payoffs",
+        "canonical_constraints",
+        "continuity_requirements",
+        "readability_contract",
+        "causal_links",
+        "allowed_bridge_details",
+        "forbidden_future_events",
+        mode="before",
+    )
     @classmethod
     def _coerce_string_list_fields(cls, value: Any) -> List[str]:
         return coerce_to_str_list(value)

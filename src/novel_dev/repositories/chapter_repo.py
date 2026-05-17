@@ -106,8 +106,28 @@ class ChapterRepository:
         if ch:
             if raw_draft is not None:
                 ch.raw_draft = raw_draft
+                # A rewritten draft invalidates all downstream artifacts from any prior run.
+                if polished_text is None:
+                    ch.polished_text = None
+                ch.fast_review_score = None
+                ch.fast_review_feedback = None
+                ch.final_review_score = None
+                ch.final_review_feedback = None
+                ch.quality_status = "unchecked"
+                ch.quality_reasons = None
+                ch.quality_checked_at = None
+                ch.world_state_ingested = False
             if polished_text is not None:
                 ch.polished_text = polished_text
+                # A rewritten polished text must be re-reviewed before archival.
+                ch.fast_review_score = None
+                ch.fast_review_feedback = None
+                ch.final_review_score = None
+                ch.final_review_feedback = None
+                ch.quality_status = "unchecked"
+                ch.quality_reasons = None
+                ch.quality_checked_at = None
+                ch.world_state_ingested = False
             await self.session.flush()
 
     async def update_scores(self, chapter_id: str, overall: int, breakdown: dict, feedback: dict) -> None:

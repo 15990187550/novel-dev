@@ -12,6 +12,7 @@ from novel_dev.db.models import (
     EntityRelationship,
     EntityVersion,
     Foreshadowing,
+    GenerationJob,
     KnowledgeDomain,
     KnowledgeDomainUsage,
     NovelDocument,
@@ -88,6 +89,7 @@ class NovelDeletionService:
         )
         await self.session.execute(delete(WorldStateReview).where(WorldStateReview.novel_id == novel_id))
         await self.session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
+        await self.session.execute(delete(GenerationJob).where(GenerationJob.novel_id == novel_id))
         await self.session.execute(delete(Entity).where(Entity.novel_id == novel_id))
         await self.session.execute(delete(EntityGroup).where(EntityGroup.novel_id == novel_id))
         await self.session.execute(delete(NovelState).where(NovelState.novel_id == novel_id))

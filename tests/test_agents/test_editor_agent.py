@@ -24,14 +24,30 @@ def test_clean_isolated_punctuation_paragraphs():
     assert cleaned == "林照撞进泥地。\n\n他撑着石壁起身。"
 
 
-def test_clean_text_integrity_fragments_repairs_semantic_truncation():
-    text = "追查，还是。\n\n密层在地下。烛火压得只剩豆大，照。\n\n他连站都站不。"
+def test_clean_text_integrity_fragments_drops_truncated_tails_without_inventing_content():
+    text = "追查，还是。\n\n密层在地下。烛火压得只剩豆大，照。\n\n他连站都站不。\n\n守门人没动，剑柄上的。\n\n他没走正门，绕。\n\n手指僵在半。"
 
     cleaned = EditorAgent._clean_text_integrity_fragments(text)
 
-    assert "追查，还是保全自身。" in cleaned
-    assert "烛火压得只剩豆大，照出一片昏黄。" in cleaned
-    assert "他连站都站不起来。" in cleaned
+    assert "追查。" in cleaned
+    assert "密层在地下。" in cleaned
+    assert "守门人没动。" in cleaned
+    assert "他没走正门。" in cleaned
+    assert "保全自身" not in cleaned
+    assert "照出一片昏黄" not in cleaned
+    assert "站不起来" not in cleaned
+    assert "铜环" not in cleaned
+    assert "偏殿" not in cleaned
+    assert "僵在半空" not in cleaned
+
+
+def test_clean_text_integrity_fragments_removes_markdown_section_separator():
+    text = "第一段动作。\n\n---\n\n第二段动作。"
+
+    cleaned = EditorAgent._clean_text_integrity_fragments(text)
+
+    assert "---" not in cleaned
+    assert cleaned == "第一段动作。\n\n第二段动作。"
 
 
 def test_editor_formats_cohesion_repair_task_prompt():
@@ -108,6 +124,47 @@ def test_editor_repair_task_keys_distinguish_constraints_and_success_criteria():
 
 
 @pytest.mark.asyncio
+async def test_polish_rewrites_high_score_beat_with_prose_hygiene_drift(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_hygiene",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "title": "山门晨课",
+                    "beats": [{"summary": "陆照在晨课中忍住伤势，选择继续站稳。"}],
+                }
+            },
+            "beat_scores": [{"beat_index": 0, "scores": {"humanity": 88, "readability": 86}}],
+        },
+        volume_id="v_hygiene",
+        chapter_id="c_hygiene",
+    )
+    await ChapterRepository(async_session).create("c_hygiene", "v_hygiene", 1, "Hygiene")
+    await ChapterRepository(async_session).update_text(
+        "c_hygiene",
+        raw_draft="阻力不需要另起一条线，它就压在当前这件事上。他觉得这力道搁前世够把自己送进ICU。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="陆照肩背一沉，喉间的血腥味被他硬压回去，只把脚跟重新钉在石阶上。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish("novel_edit_hygiene", "c_hygiene")
+
+    assert mock_client.acomplete.await_count == 1
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "正文卫生硬约束" in prompt
+    assert "prose_hygiene" in prompt
+
+    chapter = await ChapterRepository(async_session).get_by_id("c_hygiene")
+    assert "ICU" not in chapter.polished_text
+    assert "阻力不需要另起一条线" not in chapter.polished_text
+
+
+@pytest.mark.asyncio
 async def test_polish_low_score_beats(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -123,10 +180,10 @@ async def test_polish_low_score_beats(async_session):
         chapter_id="c1",
     )
     await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
-    await ChapterRepository(async_session).update_text("c1", raw_draft="Beat one\n\nBeat two")
+    await ChapterRepository(async_session).update_text("c1", raw_draft="第一段\n\n第二段")
 
     mock_client = AsyncMock()
-    mock_client.acomplete.return_value = LLMResponse(text="润色后的 Beat one")
+    mock_client.acomplete.return_value = LLMResponse(text="润色后的第一段")
 
     with patch("novel_dev.llm.llm_factory") as mock_factory:
         mock_factory.get.return_value = mock_client
@@ -134,8 +191,8 @@ async def test_polish_low_score_beats(async_session):
         await agent.polish("novel_edit", "c1")
 
     ch = await ChapterRepository(async_session).get_by_id("c1")
-    assert "润色后的 Beat one" in ch.polished_text
-    assert "Beat two" in ch.polished_text
+    assert "润色后的第一段" in ch.polished_text
+    assert "第二段" in ch.polished_text
     assert ch.status == "edited"
 
     state = await director.resume("novel_edit")
@@ -442,13 +499,13 @@ async def test_polish_preserves_high_readability(async_session):
         chapter_id="c2",
     )
     await ChapterRepository(async_session).create("c2", "v1", 2, "Test")
-    await ChapterRepository(async_session).update_text("c2", raw_draft="A readable beat")
+    await ChapterRepository(async_session).update_text("c2", raw_draft="这是一段可读的正文。")
 
     agent = EditorAgent(async_session)
     await agent.polish("novel_edit_high_readability", "c2")
 
     ch = await ChapterRepository(async_session).get_by_id("c2")
-    assert ch.polished_text == "A readable beat"
+    assert ch.polished_text == "这是一段可读的正文。"
     assert ch.status == "edited"
 
 

@@ -19,13 +19,19 @@ class BeatBoundaryService:
     )
     _FORBIDDEN_MATERIALS = [
         "不得执行后续 beat 的核心事件。",
-        "不得添加章节计划外的角色、物件、证据、威胁实体或背景因果。",
+        "不得添加章节计划外的重大角色、关键物件、关键证据、独立威胁实体或背景因果。",
+        "桥接时不得新增命名实体、新能力规则、新证据链、新阵营身份或新的长期因果解释。",
         "不得改变信息释放顺序。",
     ]
     _REVEAL_BOUNDARY = (
-        "只释放当前 beat 已规划的信息；风险必须来自既有目标、障碍、物件或伏笔，"
-        "不得提前泄露后续信息。"
+        "只释放当前 beat 已规划的信息；允许用无名动作、短台词、环境声响、灯火、脚步、视线和已有实体反应"
+        "补足当前目标所需的最小桥接细节；不得提前泄露后续核心信息。"
     )
+    _BRIDGE_DETAILS = [
+        "可用已有实体的短动作、视线、停顿、沉默或身体反应承接当前冲突。",
+        "可用当前场景中的声音、灯火、门窗、脚步、风声等环境细节制造轻微危险信号。",
+        "桥接细节必须服务当前 beat 的目标、阻力、选择或停点，不能变成新线索主线。",
+    ]
     _DEFAULT_ENDING_POLICY = "在当前 beat 目标/冲突完成最小推进后停止，不延伸到后续 beat。"
 
     @classmethod
@@ -42,6 +48,7 @@ class BeatBoundaryService:
                 beat_index=index,
                 must_cover=cls._must_cover(beat),
                 allowed_materials=cls._allowed_materials(chapter_plan, beat),
+                allowed_bridge_details=list(cls._BRIDGE_DETAILS),
                 forbidden_materials=list(cls._FORBIDDEN_MATERIALS),
                 reveal_boundary=cls._REVEAL_BOUNDARY,
                 ending_policy=cls._ending_policy(beat),

@@ -25,7 +25,6 @@ class ContinuityAuditService:
 
     DEAD_MARKERS = ("已死亡", "死亡", "身亡", "阵亡", "尸身", "尸体")
     LIVING_ACTION_MARKERS = ("醒来", "开口", "说出", "走来", "站起", "活着", "出手")
-    IDENTITY_DRIFT_MARKERS = ("魔门圣子", "魔教圣子", "血煞盟少主", "妖族少主")
 
     @classmethod
     def audit_chapter(cls, polished_text: str, chapter_context: dict[str, Any]) -> ContinuityAuditResult:
@@ -45,7 +44,8 @@ class ContinuityAuditService:
                     "detail": {"entity": name, "current_state": state[:240]},
                 })
             identity_role = cls._canonical_identity_role(entity)
-            drift_marker = cls._identity_drift_marker(text, name, identity_role)
+            forbidden_aliases = cls._entity_forbidden_aliases(entity)
+            drift_marker = cls._identity_drift_marker(text, name, identity_role, forbidden_aliases)
             if drift_marker:
                 blocking.append({
                     "code": "canonical_identity_drift",
@@ -134,19 +134,37 @@ class ContinuityAuditService:
         return str(canonical.get("identity_role") or "").strip()
 
     @classmethod
-    def _identity_drift_marker(cls, text: str, name: str, identity_role: str) -> str:
-        if not identity_role:
+    def _entity_forbidden_aliases(cls, entity: dict[str, Any]) -> list[str]:
+        memory = entity.get("memory_snapshot") if isinstance(entity.get("memory_snapshot"), dict) else {}
+        canonical = memory.get("canonical_profile") if isinstance(memory.get("canonical_profile"), dict) else {}
+        seen: set[str] = set()
+        aliases: list[str] = []
+        for source in (
+            entity.get("forbidden_aliases"),
+            memory.get("forbidden_aliases"),
+            canonical.get("forbidden_aliases"),
+        ):
+            values = source if isinstance(source, list) else [source] if isinstance(source, str) else []
+            for alias in values:
+                normalized = str(alias).strip()
+                if normalized and normalized not in seen:
+                    seen.add(normalized)
+                    aliases.append(normalized)
+        return aliases
+
+    @classmethod
+    def _identity_drift_marker(cls, text: str, name: str, identity_role: str, forbidden_aliases: list[str]) -> str:
+        if not identity_role or not forbidden_aliases:
             return ""
-        if any(marker in identity_role for marker in cls.IDENTITY_DRIFT_MARKERS):
-            return ""
+        markers = [alias for alias in forbidden_aliases if alias not in identity_role]
         start = 0
         while True:
             index = text.find(name, start)
             if index < 0:
                 return ""
             window = text[index:index + 80]
-            for marker in cls.IDENTITY_DRIFT_MARKERS:
-                if marker in window and marker not in identity_role:
+            for marker in markers:
+                if marker in window:
                     return marker
             start = index + len(name)
 

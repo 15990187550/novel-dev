@@ -404,8 +404,8 @@ class EntityClassificationService:
             return "家族"
         if any(keyword in text for keyword in ("盟友", "伙伴", "朋友", "同伴", "相助", "同行")):
             return "盟友"
-        if any(keyword in text for keyword in ("佛祖", "至尊", "大帝", "真仙", "古皇", "天尊")):
-            return "上古强者"
+        if any(keyword in text for keyword in ("强者", "先贤", "前辈", "领袖", "导师")):
+            return "重要人物"
         return "核心人物"
 
     @staticmethod
@@ -416,11 +416,11 @@ class EntityClassificationService:
             return "主修"
         if any(keyword in text for keyword in ("辅修", "辅助", "身法", "遁法", "御剑", "步法")):
             return "辅修"
-        if any(keyword in text for keyword in ("剑诀", "剑道", "剑经")):
-            return "剑道传承"
+        if any(keyword in text for keyword in ("专精", "流派", "技艺", "路径")):
+            return "专精方向"
         if any(keyword in text for keyword in ("炼体", "肉身")):
             return "炼体"
-        if any(keyword in text for keyword in ("经", "传承", "古经")):
+        if any(keyword in text for keyword in ("传承", "核心能力", "关键技能")):
             return "传承"
         return "核心功法"
 

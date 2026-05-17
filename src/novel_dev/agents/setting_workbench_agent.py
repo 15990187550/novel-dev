@@ -246,7 +246,7 @@ class SettingWorkbenchAgent:
                 "relationship create 的 source_id/target_id 必须引用已存在实体 ID，或同一批次中 entity create 的 after_snapshot.id。",
                 "如果无法确定实体 ID，不要生成 relationship change；只在实体 state 或设定 content 中描述关系，留待后续优化。",
                 "conflict_hints 每项使用对象，例如 {\"type\":\"source_gap\",\"message\":\"待确认内容\"}。",
-                "跨作品人物请采用原世界+人物的清晰组合，例如“完美世界石昊、吞噬星空罗峰”，用于表达联动对象和来源归属。",
+                "跨作品人物请采用“来源作品/规则域 + 人物名”（即原世界+人物）的清晰组合，用于表达联动对象和来源归属；示例只能使用用户资料或当前上下文已出现的名称。",
                 *required_section_lines,
                 f"会话标题：{title}",
                 f"目标分类：{', '.join(target_categories) if target_categories else '默认全量'}",

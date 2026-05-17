@@ -20,11 +20,16 @@ from novel_dev.schemas.context import BeatPlan
 import uuid
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.services.domain_activation_service import DomainActivationService
-from novel_dev.services.narrative_constraint_service import NarrativeConstraintBuilder
+from novel_dev.services.narrative_constraint_service import (
+    ActiveConstraintContext,
+    ExecutableNarrativeConstraint,
+    NarrativeConstraintBuilder,
+)
 from novel_dev.llm.models import LLMResponse
 from novel_dev.llm.orchestrator import OrchestratedTaskConfig
 from novel_dev.services.log_service import LogService
 from novel_dev.services.story_quality_service import StoryQualityService
+from novel_dev.services.quality_preflight_service import QualityPreflightService
 
 
 @pytest.fixture(autouse=True)
@@ -156,8 +161,47 @@ def test_extract_chapter_plan_adds_writability_status_and_writing_cards(async_se
     payload = VolumePlannerAgent(async_session)._extract_chapter_plan(chapter)
 
     assert payload["writability_status"]["passed"] is True
+    assert payload["quality_preflight_report"]["status"] in {"pass", "warn"}
     assert payload["writing_cards"][0]["objective"]
     assert payload["writing_cards"][0]["conflict"]
+
+
+def test_repair_quality_blocked_expanded_chapter_removes_template_blockers(async_session):
+    chapter = VolumeBeat(
+        chapter_id="vol_1_ch_3",
+        chapter_number=3,
+        title="道经初醒",
+        summary="陆照在藏经阁发现道经异动。",
+        target_word_count=1800,
+        target_mood="紧张",
+        key_entities=["陆照"],
+        beats=[
+            BeatPlan(
+                summary="陆照刚入局便遭遇现场规矩和旁人审视的阻力；阻力当场升级；陆照必须在继续追查与保全自身之间做出选择，失败代价是失去关键线索并暴露处境。",
+                target_mood="紧张",
+                key_entities=["陆照"],
+            ),
+            BeatPlan(
+                summary="陆照推进目标时被资源限制、身份压力或对手试探阻住；阻力当场升级；陆照必须在继续追查与保全自身之间做出选择，失败代价是失去关键线索并暴露处境。",
+                target_mood="紧张",
+                key_entities=["陆照"],
+            ),
+        ],
+    )
+    before = QualityPreflightService.evaluate_chapter_plan(chapter)
+    assert before.status == "block"
+
+    repaired = VolumePlannerAgent(async_session)._repair_quality_blocked_expanded_chapter(chapter)
+    after = QualityPreflightService.evaluate_chapter_plan(repaired)
+
+    assert after.status != "block"
+    repaired_text = "\n".join(beat.summary for beat in repaired.beats)
+    assert "资源限制、身份压力或对手试探" not in repaired_text
+    assert "现场规矩和旁人审视" not in repaired_text
+    assert "守门人" not in repaired_text
+    assert "证物" not in repaired_text
+    assert "追兵" not in repaired_text
+    assert "道经初醒" in repaired_text or "藏经阁发现道经异动" in repaired_text
 
 
 def test_reviewed_volume_plan_payload_includes_writability_summary(async_session):
@@ -201,6 +245,61 @@ def test_reviewed_volume_plan_payload_includes_writability_summary(async_session
 
     assert payload["review_status"]["writability_status"]["passed"] is False
     assert payload["review_status"]["writability_status"]["failed_chapter_numbers"] == [1]
+    assert payload["review_status"]["quality_preflight_status"]["status"] == "block"
+    assert payload["review_status"]["status"] == "needs_manual_review"
+
+
+def test_reviewed_volume_plan_preflight_uses_story_contract(async_session):
+    plan = VolumePlan(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="起卷",
+        total_chapters=1,
+        estimated_total_words=1800,
+        chapters=[
+            VolumeBeat(
+                chapter_id="ch_1",
+                chapter_number=1,
+                title="误称",
+                summary="林照被误称魔门圣子。",
+                target_word_count=1800,
+                target_mood="紧张",
+                key_entities=["林照"],
+                beats=[
+                    BeatPlan(
+                        summary="林照为查玉佩线索潜入药库，却被执事称作魔门圣子；他必须在追问和隐忍之间选择，失败会暴露行踪，结尾听见追兵逼近。",
+                        target_mood="紧张",
+                        key_entities=["林照"],
+                    )
+                ],
+            )
+        ],
+    )
+    score = VolumeScoreResult(
+        overall=90,
+        outline_fidelity=90,
+        character_plot_alignment=90,
+        hook_distribution=90,
+        foreshadowing_management=90,
+        chapter_hooks=90,
+        page_turning=90,
+        summary_feedback="ok",
+    )
+
+    payload = VolumePlannerAgent(async_session)._build_reviewed_volume_plan_payload(
+        plan,
+        score=score,
+        status="accepted",
+        reason="ok",
+        attempt=1,
+        story_contract={"forbidden_aliases": ["魔门圣子"]},
+    )
+
+    preflight = payload["review_status"]["quality_preflight_status"]
+    assert preflight["status"] == "block"
+    assert preflight["blocked_chapter_numbers"] == [1]
+    assert preflight["chapters"][0]["report"]["blocking_issues"][0]["code"] == "forbidden_story_contract_term"
 
 
 def test_build_revise_feedback_includes_writability_repairs(async_session):
@@ -301,6 +400,33 @@ def test_deterministic_repair_unwritable_chapter_adds_choice_cost(async_session)
     assert repaired_report.passed is True
     assert "必须" in repaired.beats[0].summary
     assert "代价" in repaired.beats[0].summary
+
+
+def test_deterministic_repair_unwritable_chapter_removes_repeated_generic_constraints(async_session):
+    agent = VolumePlannerAgent(async_session)
+    generic = "陆照必须在继续追查与保全自身之间做出选择，阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号。"
+    chapter = VolumeBeat(
+        chapter_id="vol_1_ch_1",
+        chapter_number=1,
+        title="山门初入",
+        summary="陆照入门。",
+        target_word_count=1600,
+        target_mood="tense",
+        key_entities=["陆照"],
+        beats=[
+            BeatPlan(summary=f"陆照通过入门考核；{generic}", target_mood="tense", key_entities=["陆照"]),
+            BeatPlan(summary=f"陆照被分到杂役处；{generic}", target_mood="tense", key_entities=["陆照"]),
+        ],
+    )
+    report = StoryQualityService.evaluate_chapter_writability(chapter)
+
+    repaired = agent._deterministic_repair_unwritable_chapter(chapter, report)
+
+    repaired_report = StoryQualityService.evaluate_chapter_writability(repaired)
+    summaries = [beat.summary for beat in repaired.beats]
+    assert repaired_report.passed is True
+    assert all("继续追查与保全自身" not in summary for summary in summaries)
+    assert len(set(summaries)) == len(summaries)
 
 
 @pytest.mark.asyncio
@@ -512,6 +638,93 @@ def test_narrative_constraints_do_not_pull_terminal_nodes_from_global_synopsis()
 
     sequence = next(item for item in context.executable_constraints if item.constraint_type == "sequence")
     assert sequence.terms == ["内天地", "外天地", "诸天万界"]
+
+
+def test_find_constraint_term_position_accepts_cultivation_alias_drift(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="陆照稳步修行。",
+        total_chapters=3,
+        estimated_total_words=9000,
+        chapters=[
+            {"chapter_number": 1, "title": "百日筑基", "summary": "陆照百日筑基，转入蓄气锻体。"},
+            {"chapter_number": 2, "title": "九窍祖窍", "summary": "陆照踏入开窍，依次开九窍并触及眉心祖窍。"},
+            {"chapter_number": 3, "title": "半步外景", "summary": "陆照完成天人交感、天人合一与归真返璞。"},
+        ],
+    )
+
+    assert agent._find_constraint_term_position("开窍", blueprint) == 1
+    assert agent._find_constraint_term_position("开启九窍", blueprint) == 1
+    assert agent._find_constraint_term_position("眉心祖窍", blueprint) == 1
+
+
+def test_sequence_validation_does_not_use_later_node_as_alias(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="陆照稳步修行。",
+        total_chapters=3,
+        estimated_total_words=9000,
+        chapters=[
+            {"chapter_number": 1, "title": "蓄气锻体", "summary": "陆照完成蓄气锻体。"},
+            {"chapter_number": 2, "title": "九窍祖窍", "summary": "陆照依次开九窍并触及眉心祖窍。"},
+            {"chapter_number": 3, "title": "开窍", "summary": "陆照才正式踏入开窍。"},
+        ],
+    )
+    context = ActiveConstraintContext(
+        volume_number=1,
+        executable_constraints=[
+            ExecutableNarrativeConstraint(
+                constraint_type="sequence",
+                title="境界从低到高",
+                terms=["蓄气锻体", "开窍", "九窍", "眉心祖窍"],
+            )
+        ],
+    )
+
+    violations = agent._validate_blueprint_constraints(blueprint, context)
+
+    assert violations == ["境界从低到高 必经节点顺序错误: 蓄气锻体 -> 开窍 -> 九窍 -> 眉心祖窍"]
+
+
+def test_deterministic_repair_blueprint_sequence_constraints_preserves_chapter_count(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="陆照稳步修行。",
+        total_chapters=3,
+        estimated_total_words=9000,
+        chapters=[
+            {"chapter_number": 1, "title": "蓄气锻体", "summary": "陆照完成蓄气锻体。"},
+            {"chapter_number": 2, "title": "九窍祖窍", "summary": "陆照依次开九窍并触及眉心祖窍。"},
+            {"chapter_number": 3, "title": "开窍", "summary": "陆照才正式踏入开窍。"},
+        ],
+    )
+    context = ActiveConstraintContext(
+        volume_number=1,
+        executable_constraints=[
+            ExecutableNarrativeConstraint(
+                constraint_type="sequence",
+                title="境界从低到高",
+                terms=["蓄气锻体", "开窍", "九窍", "眉心祖窍"],
+            )
+        ],
+    )
+
+    repaired = agent._deterministic_repair_blueprint_sequence_constraints(blueprint, context)
+
+    assert repaired.total_chapters == 3
+    assert len(repaired.chapters) == 3
+    assert agent._validate_blueprint_constraints(repaired, context) == []
+    assert "开窍" in repaired.chapters[1].summary
+    assert "眉心祖窍" in repaired.chapters[2].summary
 
 
 @pytest.mark.asyncio
@@ -1777,7 +1990,10 @@ async def test_plan_volume_passes_single_value_target_chapters(async_session):
 
     await agent.plan("n_target_single")
 
+    state = await director.resume("n_target_single")
     assert agent._generate_volume_plan.call_args.kwargs["target_chapters"] == 1
+    assert state.checkpoint_data["story_contract"]["protagonist_goal"] == "查明线索"
+    assert state.checkpoint_data["story_contract"]["core_conflict"] == "Conflict"
 
 
 @pytest.mark.asyncio

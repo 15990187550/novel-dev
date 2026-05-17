@@ -195,10 +195,11 @@ class WriterAgent:
                     None,
                     novel_id,
                     rewrite_plan,
+                    genre_template=genre_template,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-            self_check = self._self_check_beat(inner, beat, context, idx)
+            self_check = self._self_check_beat(inner, beat, context, idx, genre_template=genre_template)
             log_agent_detail(
                 novel_id,
                 "WriterAgent",
@@ -235,6 +236,7 @@ class WriterAgent:
                     self_check,
                     novel_id,
                     rewrite_plan,
+                    genre_template=genre_template,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -252,6 +254,7 @@ class WriterAgent:
                 checkpoint=checkpoint,
                 state=state,
                 chapter_id=chapter_id,
+                genre_template=genre_template,
             )
             inner, beat_text = await self._enforce_beat_word_budget(
                 beat=beat,
@@ -264,6 +267,20 @@ class WriterAgent:
                 is_last=is_last,
                 novel_id=novel_id,
                 rewrite_plan=rewrite_plan,
+                genre_template=genre_template,
+            )
+            inner, beat_text = await self._enforce_prose_hygiene(
+                beat=beat,
+                inner=inner,
+                context=context,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                novel_id=novel_id,
+                rewrite_plan=rewrite_plan,
+                genre_template=genre_template,
             )
             inner = self._trim_repeated_prefix_from_previous(last_beat_text, inner)
             beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
@@ -429,10 +446,11 @@ class WriterAgent:
                     None,
                     novel_id,
                     rewrite_plan,
+                    genre_template=genre_template,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-            self_check = self._self_check_beat(inner, beat, context, idx)
+            self_check = self._self_check_beat(inner, beat, context, idx, genre_template=genre_template)
             if self_check.needs_rewrite:
                 log_service.add_log(
                     novel_id,
@@ -452,6 +470,7 @@ class WriterAgent:
                     self_check,
                     novel_id,
                     rewrite_plan,
+                    genre_template=genre_template,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -469,6 +488,7 @@ class WriterAgent:
                 checkpoint={},
                 state=None,
                 chapter_id=chapter_id,
+                genre_template=genre_template,
             )
             inner, beat_text = await self._enforce_beat_word_budget(
                 beat=beat,
@@ -481,6 +501,20 @@ class WriterAgent:
                 is_last=is_last,
                 novel_id=novel_id,
                 rewrite_plan=rewrite_plan,
+                genre_template=genre_template,
+            )
+            inner, beat_text = await self._enforce_prose_hygiene(
+                beat=beat,
+                inner=inner,
+                context=context,
+                relay_history=relay_history,
+                last_beat_text=last_beat_text,
+                idx=idx,
+                total_beats=total_beats,
+                is_last=is_last,
+                novel_id=novel_id,
+                rewrite_plan=rewrite_plan,
+                genre_template=genre_template,
             )
             inner = self._trim_repeated_prefix_from_previous(last_beat_text, inner)
             beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
@@ -593,9 +627,21 @@ class WriterAgent:
             self._build_style_guide_block(context),
             self._build_writing_rules_block(is_last),
             genre_block,
-            ProseHygieneService.prompt_rules(context),
+            ProseHygieneService.prompt_rules(self._prose_hygiene_context(context, genre_template)),
         ]
         return "\n\n".join(p for p in parts if p)
+
+    @staticmethod
+    def _prose_hygiene_context(context: ChapterContext, genre_template=None) -> object:
+        if genre_template is None or not getattr(genre_template, "quality_config", None):
+            return context
+        return {
+            "genre_quality_config": dict(genre_template.quality_config or {}),
+            "worldview_summary": context.worldview_summary,
+            "story_contract": context.story_contract,
+            "style_config": context.style_profile,
+            "style_guide": context.style_profile,
+        }
 
     def _build_context_message(
         self, beat: BeatPlan, context: ChapterContext,
@@ -711,12 +757,24 @@ class WriterAgent:
                 card_lines.append(f"- 阻力/冲突: {writing_card.conflict}")
             if writing_card.turning_point:
                 card_lines.append(f"- 转折/选择: {writing_card.turning_point}")
+            if getattr(writing_card, "stake", ""):
+                card_lines.append(f"- 失败代价/赌注: {writing_card.stake}")
             if writing_card.required_entities:
                 card_lines.append("- 必须出现实体: " + "、".join(writing_card.required_entities))
             if writing_card.required_facts:
                 card_lines.append("- 必须遵守事实: " + "；".join(writing_card.required_facts[:4]))
             if writing_card.required_payoffs:
                 card_lines.append("- 本节拍需要兑现给读者的信息: " + "；".join(writing_card.required_payoffs[:4]))
+            if getattr(writing_card, "canonical_constraints", None):
+                card_lines.append("- 标准设定约束: " + "；".join(writing_card.canonical_constraints[:4]))
+            if getattr(writing_card, "continuity_requirements", None):
+                card_lines.append("- 连续性要求: " + "；".join(writing_card.continuity_requirements[:4]))
+            if getattr(writing_card, "causal_links", None):
+                card_lines.append("- 节拍因果承接: " + "；".join(writing_card.causal_links[:2]))
+            if getattr(writing_card, "readability_contract", None):
+                card_lines.append("- 读感合同: " + "；".join(writing_card.readability_contract[:4]))
+            if getattr(writing_card, "allowed_bridge_details", None):
+                card_lines.append("- 允许的最小桥接细节: " + "；".join(writing_card.allowed_bridge_details[:4]))
             if writing_card.forbidden_future_events:
                 card_lines.append("- 后续节拍保留内容: " + "；".join(writing_card.forbidden_future_events[:4]))
             if writing_card.ending_hook:
@@ -791,6 +849,7 @@ class WriterAgent:
 
         must_cover = WriterAgent._string_list(WriterAgent._get_plan_value(card, "must_cover", []))
         allowed_materials = WriterAgent._string_list(WriterAgent._get_plan_value(card, "allowed_materials", []))
+        allowed_bridge_details = WriterAgent._string_list(WriterAgent._get_plan_value(card, "allowed_bridge_details", []))
         forbidden_materials = WriterAgent._string_list(WriterAgent._get_plan_value(card, "forbidden_materials", []))
         reveal_boundary = str(WriterAgent._get_plan_value(card, "reveal_boundary", "") or "").strip()
         ending_policy = str(WriterAgent._get_plan_value(card, "ending_policy", "") or "").strip()
@@ -803,6 +862,8 @@ class WriterAgent:
             lines.append("- 必须覆盖: " + "；".join(must_cover[:6]))
         if allowed_materials:
             lines.append("- 必需实体/伏笔/材料: " + "、".join(allowed_materials[:10]))
+        if allowed_bridge_details:
+            lines.append("- 允许桥接: " + "；".join(allowed_bridge_details[:5]))
         if forbidden_materials:
             lines.append("- 禁止越界: " + "；".join(forbidden_materials[:6]))
         if reveal_boundary:
@@ -903,6 +964,7 @@ class WriterAgent:
         is_last: bool,
         novel_id: str,
         rewrite_plan: dict | None,
+        genre_template=None,
     ) -> tuple[str, str]:
         min_words, max_words = self._beat_word_budget(context, total_beats, beat)
         current = self._word_count(inner)
@@ -943,9 +1005,63 @@ class WriterAgent:
             None,
             novel_id,
             budget_plan,
+            genre_template=genre_template,
         )
         if self._word_count(rewritten) > max_words:
             rewritten = self._truncate_to_budget(rewritten, max_words)
+        return rewritten, f"<!--BEAT:{idx}-->\n{rewritten}\n<!--/BEAT:{idx}-->"
+
+    async def _enforce_prose_hygiene(
+        self,
+        *,
+        beat: BeatPlan,
+        inner: str,
+        context: ChapterContext,
+        relay_history: list,
+        last_beat_text: str,
+        idx: int,
+        total_beats: int,
+        is_last: bool,
+        novel_id: str,
+        rewrite_plan: dict | None,
+        genre_template=None,
+    ) -> tuple[str, str]:
+        hygiene_context = self._prose_hygiene_context(context, genre_template)
+        issues = ProseHygieneService.find_issues(inner, context=hygiene_context)
+        if not issues:
+            return inner, f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
+
+        hygiene_plan = dict(rewrite_plan or {})
+        prior_feedback = str(hygiene_plan.get("summary_feedback") or "").strip()
+        hygiene_feedback = (
+            "正文卫生检查未通过，请删除规划/元叙述语言和现代/外文漂移，只用场景化动作、对白、身体反应和后果承载信息："
+            + "；".join(issues[:8])
+        )
+        hygiene_plan["summary_feedback"] = f"{prior_feedback}\n{hygiene_feedback}".strip()
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"节拍 {idx + 1} 命中正文卫生问题，触发重写",
+            node="draft_prose_hygiene",
+            task="write",
+            status="failed",
+            level="warning",
+            metadata={"beat_index": idx, "issues": issues[:12], "source_preview": preview_text(inner, 300)},
+        )
+        rewritten = await self._rewrite_angle(
+            beat,
+            inner,
+            context,
+            relay_history,
+            last_beat_text,
+            idx,
+            total_beats,
+            is_last,
+            None,
+            novel_id,
+            hygiene_plan,
+            genre_template=genre_template,
+        )
         return rewritten, f"<!--BEAT:{idx}-->\n{rewritten}\n<!--/BEAT:{idx}-->"
 
     @staticmethod
@@ -1124,6 +1240,7 @@ class WriterAgent:
         checkpoint: dict,
         state,
         chapter_id: str,
+        genre_template=None,
     ) -> tuple[str, str]:
         result = await self.structure_guard.check_writer_beat(
             novel_id=novel_id,
@@ -1150,6 +1267,47 @@ class WriterAgent:
             level="warning",
             metadata=evidence,
         )
+        if self._should_skip_guard_rewrite(result, idx=idx, total_beats=total_beats):
+            fallback = self._build_conservative_guard_fallback(
+                beat,
+                context=context,
+                beat_idx=idx,
+                is_last=is_last,
+                guard_evidence=evidence,
+            )
+            fallback_retry = await self.structure_guard.check_writer_beat(
+                novel_id=novel_id,
+                chapter_plan=context.chapter_plan,
+                beat_index=idx,
+                beat=beat,
+                generated_text=fallback,
+                previous_text=last_beat_text,
+            )
+            checkpoint.setdefault("writer_guard_fallbacks", []).append({
+                "beat_index": idx,
+                "reason": "writer_initial_guard_failed_fast_fallback",
+                "source_issues": evidence.get("issues") or [],
+                "fallback_issues": (fallback_retry.evidence(beat_index=idx, mode="writer_fallback_retry") or {}).get("issues") or [],
+                "fallback_preview": preview_text(fallback, 300),
+            })
+            if fallback_retry.passed:
+                log_agent_detail(
+                    novel_id,
+                    "WriterAgent",
+                    f"节拍 {idx + 1} 首轮守卫判定重越界，跳过自由重写，使用已通过守卫的保守节拍兜底",
+                    node="writer_structure_guard_fallback",
+                    task="write",
+                    level="warning",
+                    metadata=checkpoint["writer_guard_fallbacks"][-1],
+                )
+                return fallback, f"<!--BEAT:{idx}-->\n{fallback}\n<!--/BEAT:{idx}-->"
+            await self._raise_writer_guard_failed(
+                novel_id=novel_id,
+                idx=idx,
+                evidence=fallback_retry.evidence(beat_index=idx, mode="writer_fallback_retry") or evidence,
+                checkpoint=checkpoint,
+                state=state,
+            )
         guard_rewrite_plan = dict(rewrite_plan or {})
         prior_feedback = str(guard_rewrite_plan.get("summary_feedback") or "").strip()
         guard_feedback = f"结构守卫反馈: {focus}"
@@ -1169,6 +1327,7 @@ class WriterAgent:
             None,
             novel_id,
             guard_rewrite_plan,
+            genre_template=genre_template,
         )
         retry = await self.structure_guard.check_writer_beat(
             novel_id=novel_id,
@@ -1227,23 +1386,40 @@ class WriterAgent:
         log_agent_detail(
             novel_id,
             "WriterAgent",
-            f"节拍 {idx + 1} 保守兜底仍未完全通过守卫，按当前节拍合同降级放行",
+            f"节拍 {idx + 1} 保守兜底仍未通过守卫，停止章节生成",
             node="writer_structure_guard_fallback",
             task="write",
-            level="warning",
+            status="failed",
+            level="error",
             metadata=checkpoint["writer_guard_fallbacks"][-1],
         )
-        return fallback, f"<!--BEAT:{idx}-->\n{fallback}\n<!--/BEAT:{idx}-->"
+        await self._raise_writer_guard_failed(
+            novel_id=novel_id,
+            idx=idx,
+            evidence=fallback_retry.evidence(beat_index=idx, mode="writer_fallback_retry") or retry_evidence,
+            checkpoint=checkpoint,
+            state=state,
+        )
 
+    async def _raise_writer_guard_failed(
+        self,
+        *,
+        novel_id: str,
+        idx: int,
+        evidence: dict,
+        checkpoint: dict,
+        state,
+    ) -> None:
+        checkpoint["chapter_structure_guard"] = evidence
         log_agent_detail(
             novel_id,
             "WriterAgent",
-            f"节拍 {idx + 1} 结构守卫重写后仍未通过，停止章节生成",
+            f"节拍 {idx + 1} 结构守卫未通过，停止章节生成",
             node="writer_structure_guard",
             task="write",
             status="failed",
             level="error",
-            metadata=retry_evidence,
+            metadata=evidence,
         )
         if state is not None:
             await self.state_repo.save_checkpoint(
@@ -1254,10 +1430,19 @@ class WriterAgent:
                 current_chapter_id=state.current_chapter_id,
             )
         error = RuntimeError("Writer beat structure guard failed")
-        setattr(error, "chapter_structure_guard", retry_evidence)
+        setattr(error, "chapter_structure_guard", evidence)
         setattr(error, "writer_guard_failures", list(checkpoint.get("writer_guard_failures") or []))
         setattr(error, "failed_phase", Phase.DRAFTING.value)
         raise error
+
+    @staticmethod
+    def _should_skip_guard_rewrite(result, *, idx: int, total_beats: int) -> bool:
+        issue_count = len(getattr(result, "issues", []) or [])
+        if getattr(result, "premature_future_beat", False) and getattr(result, "introduced_plan_external_fact", False):
+            return True
+        if idx == 0 and total_beats > 1 and getattr(result, "premature_future_beat", False) and issue_count >= 3:
+            return True
+        return False
 
     def _build_conservative_guard_fallback(
         self,
@@ -1280,15 +1465,19 @@ class WriterAgent:
                     writing_card.objective,
                     writing_card.conflict,
                     writing_card.turning_point,
+                    getattr(writing_card, "stake", ""),
                     writing_card.reader_takeaway,
+                    writing_card.ending_hook,
                 )
                 if part and part.strip()
             )
             clauses.extend(item.strip() for item in writing_card.required_facts[:3] if item and item.strip())
+            clauses.extend(item.strip() for item in writing_card.required_payoffs[:2] if item and item.strip())
+            clauses.extend(item.strip() for item in getattr(writing_card, "allowed_bridge_details", [])[:2] if item and item.strip())
         if beat_context:
             clauses.extend(item.strip() for item in beat_context.guardrails[:3] if item and item.strip())
         if not clauses:
-            clauses = ["当前节拍围绕既定目标推进"]
+            return ""
 
         deduped: list[str] = []
         seen: set[str] = set()
@@ -1308,51 +1497,54 @@ class WriterAgent:
             seen.add(normalized)
             deduped.append(normalized)
 
-        choice_terms = ("选择", "必须", "决定", "被迫", "代价", "隐忍", "压下", "观察", "判断")
-        conflict_terms = ("冲突", "阻力", "克扣", "嘲讽", "追", "逼", "杀", "围", "战", "异常", "危险", "敌", "狼")
-        action = deduped[0]
-        conflict = next((clause for clause in deduped if any(term in clause for term in conflict_terms)), "")
-        choice = next((clause for clause in deduped if any(term in clause for term in choice_terms)), "")
-        anchor = next(
-            (
-                clause
-                for clause in deduped
-                if "当前节拍" not in clause and "读者应" not in clause and len(clause) <= 36
-            ),
-            deduped[-1],
-        )
+        deduped = [self._sanitize_plan_clause(clause) for clause in deduped]
+        deduped = [clause for clause in deduped if clause]
+        if not deduped:
+            return ""
 
-        parts = [
-            action.rstrip("。！？!?") + "。",
-        ]
-        if conflict and conflict != action:
-            parts.append(conflict.rstrip("。！？!?") + "。")
-        if choice and choice not in {action, conflict}:
-            parts.append(choice.rstrip("。！？!?") + "。")
-
-        if any("观察" in item or "判断" in item for item in deduped + issues):
-            observers = []
-            if writing_card and writing_card.required_entities:
-                observers = [name for name in writing_card.required_entities[:3] if name and name not in "".join(parts)]
-            if observers:
-                parts.append(
-                    f"他把注意力压在{'、'.join(observers)}的动作和应变上，只记下当场可见的习惯与破绽，不把判断说破。"
-                )
-            else:
-                parts.append("他把注意力压在同伴的动作和应变上，只记下当场可见的习惯与破绽，不把判断说破。")
-
-        if any("保留实力" in item or "隐藏实力" in item for item in deduped + issues):
-            parts.append("他只把力量收在眼前这一线，够用就停，不让多余底牌提前露出来。")
-
-        stop_line = "这一拍只把当场目标压到纸面，后续试探、分配与新线索都留到下一步。"
-        if is_last:
-            stop_line = "这一拍的结果先落稳，新的危险与疑问压在下一步选择上。"
-        if any("战斗" in item or "围杀" in item or "头狼" in item for item in deduped + issues):
-            stop_line = f"{anchor.rstrip('。！？!?')}的胜负还扣在眼前这口气里，谁也没有把话题带到战局之外。"
-        parts.append(stop_line)
+        parts = [clause.rstrip("。！？!?") + "。" for clause in deduped[:6]]
         return "\n\n".join(part for part in parts if part.strip())
 
-    def _self_check_beat(self, inner: str, beat: BeatPlan, context: ChapterContext, beat_idx: int) -> BeatSelfCheck:
+    @staticmethod
+    def _sanitize_plan_clause(clause: str) -> str:
+        text = str(clause or "").strip("。！？!?；;，, ")
+        replacements = (
+            ("阻力不需要另起一条线，它就压在当前这件事上：", ""),
+            ("他的选择也只落在眼前：", ""),
+            ("停点收在既有风险上：", ""),
+            ("这一拍的结果先落稳，", ""),
+            ("这一拍只把当场目标压到纸面，", ""),
+            ("只作为这一拍的动作余波压住", "只留下眼前尚未散去的余波"),
+            ("这一拍", "眼前"),
+            ("当前节拍", "眼前"),
+            ("本节拍", "眼前"),
+            ("后续节拍", "之后"),
+            ("节拍", "场景"),
+            ("beat", "场景"),
+            ("Beat", "场景"),
+        )
+        for old, new in replacements:
+            text = text.replace(old, new)
+        return text.strip("。！？!?；;，, ")
+
+    @classmethod
+    def _pad_conservative_fallback(
+        cls,
+        parts: list[str],
+        target_floor: int,
+        writing_card,
+        anchor: str,
+    ) -> None:
+        return
+
+    def _self_check_beat(
+        self,
+        inner: str,
+        beat: BeatPlan,
+        context: ChapterContext,
+        beat_idx: int,
+        genre_template=None,
+    ) -> BeatSelfCheck:
         beat_context = self._beat_context(context, beat_idx)
         missing_entities = []
         missing_foreshadowings = []
@@ -1386,6 +1578,12 @@ class WriterAgent:
                 contradictions.append("节拍写作卡未兑现: " + "；".join(missing_payoffs[:4]))
 
         contradictions.extend(self._future_beat_leakage(inner, context, beat_idx))
+        hygiene_issues = ProseHygieneService.find_issues(
+            inner,
+            context=self._prose_hygiene_context(context, genre_template),
+        )
+        if hygiene_issues:
+            contradictions.extend(hygiene_issues[:6])
 
         needs_rewrite = bool(missing_entities or missing_foreshadowings or missing_payoffs or contradictions)
         return BeatSelfCheck(
@@ -1435,10 +1633,7 @@ class WriterAgent:
         "一个", "一种", "一下", "一些", "大量", "无法", "不能", "开始", "继续", "进行",
         "当前", "后续", "节拍", "情绪", "描写", "铺垫", "核心", "事件", "瞬间",
     }
-    _HIGH_SIGNAL_BEAT_TERMS = {
-        "古经", "识海", "残念", "灵光", "昏迷", "流光", "追兵", "秘籍", "系统",
-        "玉佩", "血脉", "入魔", "突破", "飞剑", "雷劫",
-    }
+    _HIGH_SIGNAL_BEAT_TERMS = set()
 
     @classmethod
     def _beat_boundary_terms(cls, text: str) -> set[str]:
@@ -1614,10 +1809,10 @@ class WriterAgent:
             "按触发点 -> 犹豫/识别 -> 选择代价来呈现,让转向来自场景压力和人物判断。\n"
             "- **对话信息释放**:关键事实先经过试探、保留、误判或代价,再让角色说出口或用行动承认,"
             "让人际关系在信息交换里自然升温或紧绷。\n"
-            "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或吐槽时,"
-            "默认写得克制、具体、生活化。比喻服务画面和情绪,抽象玄幻概念落到人物能触到、看见、承受的后果。\n"
-            "- **奇遇/异象写法**:选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
-            "- **现代吐槽**:现代记忆作为短促念头贴合角色处境,在不削弱当前场景压迫感的前提下使用。\n"
+            "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或强烈风格化时,"
+            "默认写得克制、具体、生活化。类型概念要落到人物能触到、看见、承受的后果。\n"
+            "- **异常事件写法**:选择最有辨识度的 1-2 个画面,落到身体反应、行动阻碍、具体后果和下一步因果钩子。\n"
+            "- **跨时代/跨语域表达**:只有来源资料、文风或类型模板允许时才使用；否则转写成贴合角色处境的短促念头。\n"
             "- **对话占比**目标 30%-50%,对话带潜台词、打断和回避,让人物关系在说话方式里显出来。\n"
             "- **句式节奏**:长短句交替,动作场景用短句推进,情绪/景物可用长句铺陈;"
             "相近句式连续出现时主动换成动作、短对白或具象物件。\n"
@@ -1644,8 +1839,15 @@ class WriterAgent:
         self_check: BeatSelfCheck | None = None,
         novel_id: str = "",
         rewrite_plan: dict | None = None,
+        genre_template=None,
     ) -> str:
-        system_prompt = self._build_system_prompt(context, is_last)
+        if genre_template is None and novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "WriterAgent",
+                "rewrite_beat",
+            )
+        system_prompt = self._build_system_prompt(context, is_last, genre_template=genre_template)
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
             idx, total, is_last, rewrite_plan,
@@ -1672,6 +1874,7 @@ class WriterAgent:
         user_content = (
             f"{context_msg}\n\n"
             f"{fix_block}"
+            f"{ProseHygieneService.issue_prompt_block(original_text, context=self._prose_hygiene_context(context, genre_template))}"
             f"### 当前文本\n{original_text}\n\n"
             "请在遵守上述约束的前提下重写，优先补足缺失信息并消除冲突。"
             "如果本次是结构守卫重写，宁可删减具体化发挥，也不要新增计划外剧情。"

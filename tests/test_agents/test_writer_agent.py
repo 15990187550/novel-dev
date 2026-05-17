@@ -337,7 +337,92 @@ async def test_write_uses_conservative_fallback_when_guard_retry_fails(async_ses
 
 
 @pytest.mark.asyncio
-async def test_write_degrades_to_conservative_fallback_when_fallback_guard_still_fails(async_session):
+async def test_write_skips_free_rewrite_and_uses_fast_fallback_on_severe_first_guard_failure(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="Test",
+        target_word_count=800,
+        beats=[
+            BeatPlan(summary="陆照初入外门，只写见闻与忐忑。", target_mood="压抑"),
+        ],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="外门院落"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    await director.save_checkpoint(
+        "novel_guard_fast_fallback",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"chapter_context": context.model_dump()},
+        volume_id="vol_guard",
+        chapter_id="ch_guard_fast_fallback",
+    )
+    await ChapterRepository(async_session).create("ch_guard_fast_fallback", "vol_guard", 1, "Test")
+
+    class FakeGuard:
+        def __init__(self):
+            self.calls = 0
+
+        async def check_writer_beat(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return ChapterStructureGuardResult(
+                    passed=False,
+                    completed_current_beat=False,
+                    premature_future_beat=True,
+                    introduced_plan_external_fact=True,
+                    changed_event_order=True,
+                    issues=["提前写到后续节拍", "新增计划外玉佩线索", "改变信息顺序"],
+                    suggested_rewrite_focus="停在初入外门，不要写任务与额外线索。",
+                )
+            assert "玉佩" not in kwargs["generated_text"]
+            assert "任务" not in kwargs["generated_text"]
+            return ChapterStructureGuardResult(passed=True)
+
+    guard = FakeGuard()
+    agent = WriterAgent(async_session, structure_guard=guard)
+    async def fake_generate_beat(*args, **kwargs):
+        return "陆照刚入外门就看见玉佩，又听见刘管事说明日任务，还顺手记下院中铜铃和门外脚步，心里转过许多不该在此时出现的念头。"
+
+    agent._generate_beat = AsyncMock(side_effect=fake_generate_beat)
+    agent._rewrite_angle = AsyncMock(side_effect=AssertionError("should not rewrite before fast fallback"))
+    agent._generate_relay = AsyncMock(return_value=type(
+        "Relay",
+        (),
+        {
+            "scene_state": "state",
+            "emotional_tone": "tense",
+            "new_info_revealed": "",
+            "open_threads": "",
+            "next_beat_hook": "",
+            "model_dump": lambda self: {
+                "scene_state": self.scene_state,
+                "emotional_tone": self.emotional_tone,
+                "new_info_revealed": self.new_info_revealed,
+                "open_threads": self.open_threads,
+                "next_beat_hook": self.next_beat_hook,
+            },
+        },
+    )())
+
+    await agent.write("novel_guard_fast_fallback", context, "ch_guard_fast_fallback")
+
+    agent._rewrite_angle.assert_not_awaited()
+    ch = await ChapterRepository(async_session).get_by_id("ch_guard_fast_fallback")
+    assert "玉佩" not in ch.raw_draft
+    assert "任务" not in ch.raw_draft
+    state = await director.resume("novel_guard_fast_fallback")
+    assert state.checkpoint_data["writer_guard_fallbacks"][0]["reason"] == "writer_initial_guard_failed_fast_fallback"
+
+
+@pytest.mark.asyncio
+async def test_write_stops_when_conservative_fallback_guard_still_fails(async_session):
     director = NovelDirector(session=async_session)
     chapter_plan = ChapterPlan(
         chapter_number=1,
@@ -426,14 +511,13 @@ async def test_write_degrades_to_conservative_fallback_when_fallback_guard_still
         },
     )())
 
-    await agent.write("novel_guard_fallback_degrade", context, "ch_guard_fallback_degrade")
+    with pytest.raises(RuntimeError, match="Writer beat structure guard failed"):
+        await agent.write("novel_guard_fallback_degrade", context, "ch_guard_fallback_degrade")
 
     ch = await ChapterRepository(async_session).get_by_id("ch_guard_fallback_degrade")
-    assert "陆照" in ch.raw_draft
-    assert "赵厉" in ch.raw_draft
-    assert "撤" in ch.raw_draft or "先" in ch.raw_draft
+    assert not ch.raw_draft
     state = await director.resume("novel_guard_fallback_degrade")
-    assert state.current_phase == Phase.REVIEWING.value
+    assert state.current_phase == Phase.DRAFTING.value
     assert state.checkpoint_data["writer_guard_fallbacks"][0]["reason"] == "writer_retry_and_fallback_guard_failed"
 
 
@@ -464,6 +548,9 @@ def test_conservative_guard_fallback_prefers_current_beat_contract(async_session
                 "turning_point": "陆照压住真实实力，只在关键一线补位。",
                 "required_entities": ["陆照", "李大牛", "王明月"],
                 "required_facts": ["三人合力设伏围杀头狼", "陆照刻意保留实力", "暗中观察李大牛与王明月的战斗习惯"],
+                "canonical_constraints": ["主角长期目标: 查清家族覆灭真相"],
+                "continuity_requirements": ["优先承接故事契约关键词: 玉佩"],
+                "causal_links": ["beat 1 -> beat 2: 围杀头狼 触发/压向 战后分配报酬"],
                 "forbidden_future_events": ["战后分配报酬", "试探彼此信任"],
                 "reader_takeaway": "这一拍必须让读者看见战斗中的配合、保留与观察。",
             },
@@ -497,8 +584,45 @@ def test_conservative_guard_fallback_prefers_current_beat_contract(async_session
     assert "围" in fallback or "头狼" in fallback
     assert "保留实力" in fallback
     assert "观察" in fallback
+    assert "主角长期目标" not in fallback
+    assert "故事契约关键词" not in fallback
+    assert "beat 1 -> beat 2" not in fallback
+    assert "这一拍" not in fallback
+    assert "阻力不需要另起一条线" not in fallback
+    assert "他的选择也只落在眼前" not in fallback
+    assert "停点收在既有风险上" not in fallback
     assert "战后分配报酬" not in fallback
     assert "试探彼此信任" not in fallback
+
+
+def test_writer_self_check_blocks_meta_plan_language_and_modern_drift(async_session):
+    agent = WriterAgent(async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="山门晨课",
+        target_word_count=1200,
+        beats=[BeatPlan(summary="陆照在晨课中忍住伤势，选择继续站稳。", target_mood="压抑")],
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="山门"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+
+    check = agent._self_check_beat(
+        "阻力不需要另起一条线，它就压在当前这件事上。他觉得这力道搁前世够把自己送进ICU。",
+        chapter_plan.beats[0],
+        context,
+        0,
+    )
+
+    assert check.needs_rewrite is True
+    assert any("规划/元叙述" in issue for issue in check.contradictions)
+    assert any("ICU" in issue or "外文" in issue for issue in check.contradictions)
 
 
 def test_trim_repeated_prefix_from_previous_removes_cross_beat_duplicate(async_session):

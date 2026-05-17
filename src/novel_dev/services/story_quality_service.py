@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
 from novel_dev.schemas.context import BeatWritingCard, ChapterPlan
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat
+from novel_dev.services.quality_preflight_service import QualityPreflightService
 
 
 class SettingQualityReport(BaseModel):
@@ -39,14 +40,27 @@ class ChapterWritableCheck(BaseModel):
     weak_beats: list[int] = Field(default_factory=list)
 
 
+class ChapterPlanSanityReport(BaseModel):
+    passed: bool
+    repeated_generic_constraints: list[int] = Field(default_factory=list)
+    missing_fields_by_beat: dict[int, list[str]] = Field(default_factory=dict)
+    repair_suggestions: list[str] = Field(default_factory=list)
+
+
 class StoryQualityService:
     """Deterministic preflight checks that keep weak inputs out of prose generation."""
 
     CONFLICT_TERMS = ("冲突", "对抗", "vs", "VS", "敌", "仇", "阻", "追", "逼", "威胁", "争", "夺", "杀", "发现", "暴露")
     CHOICE_TERMS = ("选择", "决定", "必须", "宁可", "只得", "被迫", "代价", "赌注", "否则")
-    HOOK_TERMS = ("悬念", "反转", "追兵", "逼近", "发现", "暴露", "异动", "裂开", "传来", "出现", "留下")
+    HOOK_TERMS = ("悬念", "反转", "逼近", "发现", "暴露", "异动", "裂开", "传来", "出现", "留下")
     PAYOFF_TERMS = ("发现", "拿到", "得到", "搜查", "密函", "线索", "真相", "危险信号", "内应", "暴露", "确认")
     ABSTRACT_CONFLICTS = ("正邪对立", "善恶之争", "命运", "成长", "人性", "宿命")
+    GENERIC_REPAIR_MARKERS = (
+        "必须在继续行动与保全自身之间做出选择",
+        "阻力当场升级",
+        "失败代价是失去关键线索并暴露处境",
+        "结尾留下新的危险信号",
+    )
 
     @classmethod
     def evaluate_setting_payload(cls, payload: dict[str, Any]) -> SettingQualityReport:
@@ -156,10 +170,19 @@ class StoryQualityService:
                     missing.append("选择/代价")
                 blocking.append(f"节拍 {index + 1} 缺少{'、'.join(missing)}，当前摘要不可直接写正文。")
 
+        repeated_generic_indexes = cls._generic_repair_clause_indexes([beat.summary for beat in chapter.beats])
+        if repeated_generic_indexes:
+            for index in repeated_generic_indexes:
+                if index not in weak_beats:
+                    weak_beats.append(index)
+            blocking.append(
+                "多个节拍重复使用通用硬约束，当前章节计划不可直接写正文，需拆成每个 beat 的具体目标、阻力、选择、代价和停点。"
+            )
+
         last_summary = chapter.beats[-1].summary
         if not cls._has_hook(last_summary):
             warnings.append("最后一个 beat 缺少章末钩子。")
-            suggestions.append("在最后一个 beat 增加悬念、反转、追兵逼近、秘密暴露或赌注升级。")
+            suggestions.append("在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。")
 
         if weak_beats:
             suggestions.append("将弱 beat 改写为：角色目标 + 具体阻力 + 当场选择 + 失败代价 + 停点。")
@@ -169,7 +192,7 @@ class StoryQualityService:
             blocking_issues=blocking,
             warning_issues=warnings,
             repair_suggestions=suggestions,
-            weak_beats=weak_beats,
+            weak_beats=sorted(set(weak_beats)),
         )
 
     @classmethod
@@ -177,23 +200,63 @@ class StoryQualityService:
         total = max(1, len(chapter_plan.beats))
         default_words = max(1, round((chapter_plan.target_word_count or 0) / total)) if chapter_plan.target_word_count else 800
         cards: list[BeatWritingCard] = []
+        contract = QualityPreflightService.build_chapter_contract(chapter_plan)
         for index, beat in enumerate(chapter_plan.beats):
             next_summary = chapter_plan.beats[index + 1].summary if index + 1 < len(chapter_plan.beats) else ""
             next_forbidden = cls._first_clause(next_summary) if next_summary else ""
             cards.append(BeatWritingCard(
                 beat_index=index,
+                source_summary=beat.summary,
                 objective=cls._first_clause(beat.summary),
                 conflict=cls._extract_conflict(beat.summary),
                 turning_point=cls._extract_turning_point(beat.summary),
+                stake=cls._extract_stake(beat.summary),
                 required_entities=list(beat.key_entities),
-                required_facts=[beat.summary],
+                required_facts=cls._extract_required_facts(beat.summary),
                 required_payoffs=cls._extract_required_payoffs(beat.summary, list(beat.foreshadowings_to_embed), is_last=index == len(chapter_plan.beats) - 1),
+                canonical_constraints=contract.get("canonical_constraints", []),
+                continuity_requirements=contract.get("continuity_requirements", []),
+                readability_contract=contract.get("readability_contract", []),
+                causal_links=cls._links_for_beat(contract.get("causal_links", []), index),
+                allowed_bridge_details=cls._allowed_bridge_details(beat.summary, list(beat.key_entities)),
                 forbidden_future_events=[next_forbidden] if next_forbidden else [],
                 ending_hook=cls._extract_hook(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
                 reader_takeaway=cls._reader_takeaway(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
                 target_word_count=beat.target_word_count or default_words,
             ))
         return cards
+
+    @classmethod
+    def build_chapter_plan_sanity_report(cls, chapter_plan: ChapterPlan) -> ChapterPlanSanityReport:
+        cards = cls.build_writing_cards(chapter_plan)
+        missing_by_beat: dict[int, list[str]] = {}
+        for card in cards:
+            missing = []
+            if not card.objective:
+                missing.append("objective")
+            if not card.conflict:
+                missing.append("conflict")
+            if not card.turning_point:
+                missing.append("turning_point")
+            if not card.stake:
+                missing.append("stake")
+            if card.beat_index == len(cards) - 1 and not card.ending_hook:
+                missing.append("ending_hook")
+            if missing:
+                missing_by_beat[card.beat_index] = missing
+
+        repeated = cls._generic_repair_clause_indexes([beat.summary for beat in chapter_plan.beats])
+        suggestions = []
+        if repeated:
+            suggestions.append("删除重复通用硬约束，将其拆为各 beat 的具体目标、阻力、选择、代价和停点。")
+        if missing_by_beat:
+            suggestions.append("补齐写作卡缺失字段后再进入正文生成。")
+        return ChapterPlanSanityReport(
+            passed=not repeated and not missing_by_beat,
+            repeated_generic_constraints=repeated,
+            missing_fields_by_beat=missing_by_beat,
+            repair_suggestions=suggestions,
+        )
 
     @staticmethod
     def _has_content(value: Any) -> bool:
@@ -241,10 +304,10 @@ class StoryQualityService:
     STRUCTURAL_TURN_PATTERNS: dict[str, tuple[str, ...]] = {
         "loss_or_fall": ("覆灭", "失去", "沦为", "废", "重伤", "败亡", "被逐", "陷害"),
         "alliance_or_betrayal": ("结盟", "联手", "联盟", "背叛", "破裂", "拔剑指向", "护他", "押上身份"),
-        "clue_or_reveal": ("发现", "得知", "确认", "揭开", "揭露", "真相", "证据", "血书", "线索", "浮出水面"),
+        "clue_or_reveal": ("发现", "得知", "确认", "揭开", "揭露", "真相", "证据", "线索", "浮出水面"),
         "threat_escalation": ("刺杀", "围杀", "追捕", "追杀", "陷阱", "被迫逃", "逃入", "逃亡", "拿下"),
-        "power_shift": ("突破", "暴露实力", "实力暴涨", "获得", "功法", "禁器", "反噬", "失控"),
-        "identity_or_world_change": ("身世", "血脉", "宿主", "封印", "邪物", "宗门根基", "天穹", "崩塌"),
+        "power_shift": ("能力变化", "暴露实力", "实力变化", "获得", "关键资源", "反噬", "失控"),
+        "identity_or_world_change": ("身世", "身份", "宿主", "封印", "异常物", "秩序根基", "世界边界", "崩塌"),
         "choice_or_sacrifice": ("必须选择", "选择", "放弃", "代价", "以凡人之躯", "自残", "牺牲"),
     }
 
@@ -293,6 +356,17 @@ class StoryQualityService:
         return next((clause for clause in clauses if cls._has_choice_or_cost(clause)), clauses[-1] if clauses else "")
 
     @classmethod
+    def _extract_stake(cls, text: str) -> str:
+        clauses = cls._split_clauses(text)
+        return next(
+            (
+                clause for clause in clauses
+                if any(term in clause for term in ("代价", "失败", "否则", "暴露", "失去", "错过", "被逐", "受罚"))
+            ),
+            "",
+        )
+
+    @classmethod
     def _extract_hook(cls, text: str, *, is_last: bool) -> str:
         clauses = cls._split_clauses(text)
         hook = next((clause for clause in reversed(clauses) if cls._has_hook(clause)), "")
@@ -301,16 +375,84 @@ class StoryQualityService:
         return clauses[-1] if is_last and clauses else ""
 
     @classmethod
+    def _extract_required_facts(cls, text: str) -> list[str]:
+        clauses = [
+            clause for clause in cls._split_clauses(text)
+            if not cls._is_generic_repair_clause(clause)
+        ]
+        selected = []
+        for clause in clauses:
+            if cls._has_conflict(clause) or cls._has_choice_or_cost(clause) or cls._has_hook(clause):
+                selected.append(cls._shorten_contract_clause(clause))
+        if not selected and clauses:
+            selected.append(cls._shorten_contract_clause(clauses[0]))
+        return cls._dedupe_text(selected)[:4]
+
+    @classmethod
     def _extract_required_payoffs(cls, text: str, foreshadowings: list[str], *, is_last: bool) -> list[str]:
-        clauses = cls._split_clauses(text)
-        payoffs = [clause for clause in clauses if any(term in clause for term in cls.PAYOFF_TERMS)]
+        clauses = [
+            clause for clause in cls._split_clauses(text)
+            if not cls._is_generic_repair_clause(clause)
+        ]
+        payoffs = [
+            cls._shorten_contract_clause(clause)
+            for clause in clauses
+            if any(term in clause for term in cls.PAYOFF_TERMS)
+        ]
         if is_last and clauses and not payoffs:
-            payoffs.append(clauses[-1])
+            hook = cls._extract_hook(text, is_last=True)
+            if hook and not cls._is_generic_repair_clause(hook):
+                payoffs.append(cls._shorten_contract_clause(hook))
         for item in foreshadowings:
             cleaned = coerce_to_text(item).strip()
             if cleaned:
-                payoffs.append(cleaned)
+                payoffs.append(cls._shorten_contract_clause(cleaned))
         return cls._dedupe_text(payoffs)[:5]
+
+    @classmethod
+    def _allowed_bridge_details(cls, text: str, key_entities: list[str]) -> list[str]:
+        details = [
+            "可使用已有人物的短动作、视线、停顿、沉默或身体反应承接当前冲突。",
+            "可使用当前场景中的声音、灯火、门窗、脚步、风声等环境细节制造轻微危险信号。",
+        ]
+        if key_entities:
+            details.append("桥接细节优先落在已列实体上: " + "、".join(key_entities[:4]))
+        if cls._has_choice_or_cost(text):
+            details.append("选择必须通过当场动作或一句短对话落地，不能只用旁白总结。")
+        return details
+
+    @classmethod
+    def strip_generic_repair_clauses(cls, text: str) -> str:
+        clauses = cls._split_clauses(text)
+        kept = [clause for clause in clauses if not cls._is_generic_repair_clause(clause)]
+        if not kept:
+            return coerce_to_text(text).strip().rstrip("。！？!?；;")
+        return "；".join(kept).strip().rstrip("。！？!?；;")
+
+    @classmethod
+    def _generic_repair_clause_indexes(cls, summaries: list[str]) -> list[int]:
+        indexes = []
+        for index, summary in enumerate(summaries):
+            if any(cls._is_generic_repair_clause(clause) for clause in cls._split_clauses(summary)):
+                indexes.append(index)
+        return indexes if len(indexes) >= 2 else []
+
+    @classmethod
+    def _is_generic_repair_clause(cls, text: str) -> bool:
+        normalized = coerce_to_text(text)
+        marker_count = sum(1 for marker in cls.GENERIC_REPAIR_MARKERS if marker in normalized)
+        return marker_count >= 1 or (
+            "继续追查" in normalized
+            and "保全自身" in normalized
+            and ("危险信号" in normalized or "失败代价" in normalized)
+        )
+
+    @staticmethod
+    def _shorten_contract_clause(text: str, limit: int = 80) -> str:
+        cleaned = coerce_to_text(text).strip().strip("。！？!?；;，, ")
+        if len(cleaned) <= limit:
+            return cleaned
+        return cleaned[:limit].rstrip("，,；;、 ") + "..."
 
     @classmethod
     def _reader_takeaway(cls, text: str, *, is_last: bool) -> str:
@@ -323,6 +465,15 @@ class StoryQualityService:
         if turning_point:
             return f"读者应看清本节拍的选择、代价或局势变化：{turning_point}"
         return "读者应看清本节拍的目标、阻力和推进结果。"
+
+    @staticmethod
+    def _links_for_beat(links: list[str], beat_index: int) -> list[str]:
+        prefix_before = f"beat {beat_index} ->"
+        prefix_after = f"beat {beat_index + 1} ->"
+        return [
+            link for link in links
+            if link.startswith(prefix_before) or link.startswith(prefix_after)
+        ][:2]
 
     @staticmethod
     def _dedupe_text(items: list[str]) -> list[str]:

@@ -43,6 +43,7 @@ class BeatBoundaryCard(BaseModel):
     beat_index: int
     must_cover: list[str] = Field(default_factory=list)
     allowed_materials: list[str] = Field(default_factory=list)
+    allowed_bridge_details: list[str] = Field(default_factory=list)
     forbidden_materials: list[str] = Field(default_factory=list)
     reveal_boundary: str = ""
     ending_policy: str = ""

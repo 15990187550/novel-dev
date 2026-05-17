@@ -79,6 +79,60 @@ async def test_update_quality_gate_fields(async_session):
 
 
 @pytest.mark.asyncio
+async def test_update_text_clears_stale_quality_gate_on_new_polished_text(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_polish_reset", "v1", 5, "Rewrite")
+    await repo.update_text("c_polish_reset", raw_draft="旧草稿", polished_text="旧成稿")
+    await repo.update_fast_review("c_polish_reset", 50, {"notes": ["old"]})
+    await repo.update_quality_gate(
+        "c_polish_reset",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "beat_cohesion"}]},
+        final_review_score=68,
+        final_review_feedback={"summary_feedback": "旧问题"},
+        world_state_ingested=True,
+    )
+
+    await repo.update_text("c_polish_reset", polished_text="新成稿")
+
+    ch = await repo.get_by_id("c_polish_reset")
+    assert ch.polished_text == "新成稿"
+    assert ch.quality_status == "unchecked"
+    assert ch.quality_reasons is None
+    assert ch.fast_review_score is None
+    assert ch.fast_review_feedback is None
+    assert ch.final_review_score is None
+    assert ch.final_review_feedback is None
+    assert ch.world_state_ingested is False
+
+
+@pytest.mark.asyncio
+async def test_update_text_clears_stale_polished_and_gate_on_new_raw_draft(async_session):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_draft_reset", "v1", 6, "Rewrite Draft")
+    await repo.update_text("c_draft_reset", raw_draft="旧草稿", polished_text="旧成稿")
+    await repo.update_quality_gate(
+        "c_draft_reset",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "consistency"}]},
+        final_review_score=70,
+        final_review_feedback={"summary_feedback": "旧成稿问题"},
+        world_state_ingested=True,
+    )
+
+    await repo.update_text("c_draft_reset", raw_draft="新草稿")
+
+    ch = await repo.get_by_id("c_draft_reset")
+    assert ch.raw_draft == "新草稿"
+    assert ch.polished_text is None
+    assert ch.quality_status == "unchecked"
+    assert ch.quality_reasons is None
+    assert ch.final_review_score is None
+    assert ch.final_review_feedback is None
+    assert ch.world_state_ingested is False
+
+
+@pytest.mark.asyncio
 async def test_ensure_from_plan_creates_chapter_record(async_session):
     repo = ChapterRepository(async_session)
     plan = VolumeBeat(

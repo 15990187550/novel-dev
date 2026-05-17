@@ -38,6 +38,7 @@ from novel_dev.services.narrative_constraint_service import ActiveConstraintCont
 from novel_dev.services.domain_activation_service import DomainActivationService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
+from novel_dev.services.quality_preflight_service import QualityPreflightService
 
 
 class VolumeChapterSkeleton(BaseModel):
@@ -345,6 +346,8 @@ class VolumePlannerAgent:
 
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)
+        preflight_story_contract = self._story_contract_for_preflight(checkpoint, synopsis, volume_number)
+        checkpoint["story_contract"] = preflight_story_contract
         target_chapters = self._infer_exact_target_chapters(synopsis, volume_number)
         log_agent_detail(
             novel_id,
@@ -398,16 +401,20 @@ class VolumePlannerAgent:
                     "summary_feedback": score.summary_feedback,
                 },
             )
-            if self._is_acceptable(score):
+            quality_blocked = self._volume_plan_quality_blocked(
+                volume_plan,
+                story_contract=preflight_story_contract,
+            )
+            if self._is_acceptable(score) and not quality_blocked:
                 log_service.add_log(novel_id, "VolumePlannerAgent", f"评分通过，overall={score.overall}")
                 break
             if skip_full_revise:
-                log_service.add_log(
-                    novel_id,
-                    "VolumePlannerAgent",
-                    "大卷纲已跳过自动整卷修订，请在工作台继续细化章节。",
-                    level="warning",
+                message = (
+                    "卷纲存在章节前置质量阻断，请在工作台继续细化章节。"
+                    if quality_blocked
+                    else "大卷纲已跳过自动整卷修订，请在工作台继续细化章节。"
                 )
+                log_service.add_log(novel_id, "VolumePlannerAgent", message, level="warning")
                 break
             attempt += 1
             checkpoint["volume_plan_attempt_count"] = attempt
@@ -422,7 +429,7 @@ class VolumePlannerAgent:
                 metadata={
                     "attempt": attempt,
                     "overall": score.overall,
-                    "reason": self._build_revise_feedback(score, volume_plan),
+                    "reason": self._build_revise_feedback(score, volume_plan, story_contract=preflight_story_contract),
                 },
             )
             if attempt >= 3:
@@ -433,6 +440,7 @@ class VolumePlannerAgent:
                     status="revise_failed",
                     reason="已达最大自动修订次数，请在大纲工作台人工调整。",
                     attempt=attempt,
+                    story_contract=preflight_story_contract,
                 )
                 checkpoint.pop("current_chapter_plan", None)
                 await self.director.save_checkpoint(
@@ -446,7 +454,7 @@ class VolumePlannerAgent:
             try:
                 volume_plan = await self._revise_volume_plan(
                     volume_plan,
-                    self._build_revise_feedback(score, volume_plan),
+                    self._build_revise_feedback(score, volume_plan, story_contract=preflight_story_contract),
                     plan_context,
                     novel_id,
                 )
@@ -458,6 +466,7 @@ class VolumePlannerAgent:
                     status="revise_failed",
                     reason=f"自动修订失败: {exc}",
                     attempt=attempt,
+                    story_contract=preflight_story_contract,
                 )
                 checkpoint.pop("current_chapter_plan", None)
                 await self.director.save_checkpoint(
@@ -475,6 +484,7 @@ class VolumePlannerAgent:
             status="accepted" if self._is_acceptable(score) else "needs_manual_review",
             reason="卷纲评分通过。" if self._is_acceptable(score) else "大卷纲已跳过自动整卷修订，请在大纲工作台继续细化章节。",
             attempt=attempt + 1,
+            story_contract=preflight_story_contract,
         )
         checkpoint["current_chapter_plan"] = self._extract_chapter_plan(volume_plan.chapters[0])
         checkpoint["volume_plan_attempt_count"] = 0
@@ -576,7 +586,13 @@ class VolumePlannerAgent:
                 return False
         return True
 
-    def _build_revise_feedback(self, score, plan: VolumePlan | None = None) -> str:
+    def _build_revise_feedback(
+        self,
+        score,
+        plan: VolumePlan | None = None,
+        *,
+        story_contract: dict[str, Any] | None = None,
+    ) -> str:
         failing = []
         for dim, floor in self.KEY_DIM_THRESHOLDS.items():
             val = getattr(score, dim, 100)
@@ -602,6 +618,17 @@ class VolumePlannerAgent:
                     suggestions = report.get("repair_suggestions") or []
                     for item in suggestions[:2]:
                         lines.append(f"- 修复方式: {item}")
+            preflight = self._build_volume_quality_preflight_summary(plan, story_contract=story_contract)
+            if preflight.get("status") in {"block", "warn"}:
+                lines.append("章节前置质量检查发现风险，修订时必须把质量问题前移到计划层解决:")
+                for chapter in preflight.get("chapters", []):
+                    report = chapter.get("report") or {}
+                    issues = (report.get("blocking_issues") or []) + (report.get("warning_issues") or [])
+                    if issues:
+                        issue_text = "；".join(str(item.get("message") or item.get("code")) for item in issues[:3] if isinstance(item, dict))
+                        lines.append(
+                            f"- 第 {chapter.get('chapter_number')} 章《{chapter.get('title')}》: {issue_text}"
+                        )
         lines.append(
             "请针对以上未达标维度逐项修正:"
             "爽点分布不足就增加每 2-3 章的小高潮与钩子;"
@@ -618,17 +645,41 @@ class VolumePlannerAgent:
         status: str,
         reason: str,
         attempt: int,
+        story_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload = plan.model_dump()
         writability = self._build_volume_writability_summary(plan)
+        preflight = self._build_volume_quality_preflight_summary(plan, story_contract=story_contract)
+        effective_status = status
+        effective_reason = reason
+        if status == "accepted" and (
+            not writability.get("passed", True) or preflight.get("status") == "block"
+        ):
+            effective_status = "needs_manual_review"
+            effective_reason = (
+                "卷纲评分通过，但章节可写性或前置质量检查仍有阻断问题，请先修正计划层质量。"
+            )
         payload["review_status"] = {
-            "status": status,
-            "reason": reason,
+            "status": effective_status,
+            "reason": effective_reason,
             "attempt": attempt,
             "score": score.model_dump(),
             "writability_status": writability,
+            "quality_preflight_status": preflight,
         }
         return payload
+
+    def _volume_plan_quality_blocked(
+        self,
+        plan: VolumePlan,
+        *,
+        story_contract: dict[str, Any] | None = None,
+    ) -> bool:
+        writability = self._build_volume_writability_summary(plan)
+        if not writability.get("passed", True):
+            return True
+        preflight = self._build_volume_quality_preflight_summary(plan, story_contract=story_contract)
+        return preflight.get("status") == "block"
 
     def _build_volume_writability_summary(self, plan: VolumePlan) -> dict[str, Any]:
         chapter_reports = []
@@ -648,6 +699,31 @@ class VolumePlannerAgent:
             "failed_chapter_numbers": failed_numbers,
             "chapters": chapter_reports,
         }
+
+    def _build_volume_quality_preflight_summary(
+        self,
+        plan: VolumePlan,
+        *,
+        story_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return QualityPreflightService.summarize_volume_plan(plan, story_contract=story_contract)
+
+    @staticmethod
+    def _story_contract_for_preflight(
+        checkpoint: dict,
+        synopsis: SynopsisData,
+        volume_number: int,
+    ) -> dict[str, Any]:
+        existing = checkpoint.get("story_contract")
+        if isinstance(existing, dict):
+            return existing
+        return StoryContractService.build_from_snapshot({
+            "checkpoint": {
+                **checkpoint,
+                "synopsis_data": synopsis.model_dump(mode="json"),
+                "current_volume_number": volume_number,
+            }
+        })
 
     def _infer_volume_number(self, checkpoint: dict, state) -> int:
         if state.current_volume_id and state.current_volume_id.startswith("vol_"):
@@ -1183,6 +1259,13 @@ class VolumePlannerAgent:
         )
         remaining = self._validate_blueprint_constraints(repaired, constraint_context)
         if remaining:
+            repaired = self._deterministic_repair_blueprint_sequence_constraints(
+                repaired,
+                constraint_context,
+                novel_id=novel_id,
+            )
+            remaining = self._validate_blueprint_constraints(repaired, constraint_context)
+        if remaining:
             raise ValueError("generate_volume_plan violates setting constraints after repair: " + "；".join(remaining[:8]))
         log_service.add_log(
             novel_id,
@@ -1196,6 +1279,77 @@ class VolumePlannerAgent:
         )
         return repaired
 
+    def _deterministic_repair_blueprint_sequence_constraints(
+        self,
+        blueprint: VolumePlanBlueprint,
+        constraint_context: ActiveConstraintContext,
+        *,
+        novel_id: str = "",
+    ) -> VolumePlanBlueprint:
+        if not blueprint.chapters:
+            return blueprint
+        payload = blueprint.model_dump()
+        chapters = payload.get("chapters") or []
+        repaired_titles: list[str] = []
+        changed = False
+        for constraint in constraint_context.executable_constraints:
+            if constraint.priority != "hard" or constraint.constraint_type != "sequence" or len(constraint.terms) < 2:
+                continue
+            positions = [
+                self._find_constraint_term_position(
+                    term,
+                    VolumePlanBlueprint.model_validate(payload),
+                    excluded_aliases=self._sequence_excluded_aliases(term, constraint.terms),
+                )
+                for term in constraint.terms
+            ]
+            if all(position >= 0 for position in positions) and positions == sorted(positions):
+                continue
+            for index, term in enumerate(constraint.terms):
+                target_index = min(index, len(chapters) - 1)
+                chapter = chapters[target_index]
+                summary = coerce_to_text(chapter.get("summary")).strip()
+                if term in f"{chapter.get('title', '')}\n{summary}":
+                    continue
+                suffix = f"本章按设定链推进至{term}节点"
+                chapter["summary"] = self._append_summary_clause(summary, suffix)
+                changed = True
+            repaired_titles.append(constraint.title)
+        if not changed:
+            return blueprint
+        repaired = VolumePlanBlueprint.model_validate(payload)
+        log_service.add_log(
+            novel_id,
+            "VolumePlannerAgent",
+            "卷纲设定顺序已确定性补齐: " + "、".join(repaired_titles[:6]),
+            level="warning",
+            event="agent.progress",
+            status="degraded",
+            node="volume_constraint_validation",
+            task="repair_volume_plan_sequence_constraints",
+            metadata={
+                "constraints": repaired_titles,
+                "chapter_count": len(repaired.chapters),
+            },
+        )
+        return repaired
+
+    def _sequence_excluded_aliases(self, term: str, terms: list[str]) -> set[str]:
+        excluded_aliases: set[str] = set()
+        for item in terms:
+            if item == term:
+                continue
+            excluded_aliases.add(item)
+            excluded_aliases.update(self.constraint_builder._term_aliases(item))
+        return excluded_aliases
+
+    @staticmethod
+    def _append_summary_clause(summary: str, clause: str) -> str:
+        cleaned = summary.strip().rstrip("。！？!?；;")
+        if not cleaned:
+            return clause.rstrip("。！？!?；;") + "。"
+        return f"{cleaned}；{clause.rstrip('。！？!?；;')}。"
+
     def _validate_blueprint_constraints(
         self,
         blueprint: VolumePlanBlueprint,
@@ -1208,7 +1362,11 @@ class VolumePlannerAgent:
             positions: list[int] = []
             missing: list[str] = []
             for term in constraint.terms:
-                position = self._find_constraint_term_position(term, blueprint)
+                position = self._find_constraint_term_position(
+                    term,
+                    blueprint,
+                    excluded_aliases=self._sequence_excluded_aliases(term, constraint.terms),
+                )
                 if position < 0:
                     missing.append(term)
                 else:
@@ -1220,8 +1378,19 @@ class VolumePlannerAgent:
                 violations.append(f"{constraint.title} 必经节点顺序错误: {' -> '.join(constraint.terms)}")
         return violations
 
-    def _find_constraint_term_position(self, term: str, blueprint: VolumePlanBlueprint) -> int:
-        candidates = [term, *self.constraint_builder._term_aliases(term)]
+    def _find_constraint_term_position(
+        self,
+        term: str,
+        blueprint: VolumePlanBlueprint,
+        *,
+        excluded_aliases: set[str] | None = None,
+    ) -> int:
+        excluded_aliases = excluded_aliases or set()
+        candidates = [
+            candidate
+            for candidate in [term, *self.constraint_builder._term_aliases(term)]
+            if candidate == term or candidate not in excluded_aliases
+        ]
         for index, chapter in enumerate(blueprint.chapters):
             chapter_text = f"{chapter.title}\n{chapter.summary}"
             if any(candidate and candidate in chapter_text for candidate in candidates):
@@ -1374,6 +1543,13 @@ class VolumePlannerAgent:
         )
         remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
         if remaining_hard:
+            repaired = self._deterministic_repair_blueprint_sequence_constraints(
+                repaired,
+                constraint_context,
+                novel_id=novel_id,
+            )
+            remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
+        if remaining_hard:
             raise ValueError("generate_volume_plan violates setting constraints after semantic repair: " + "；".join(remaining_hard[:8]))
         second_judgement = await self._judge_blueprint_semantic_conflicts(
             blueprint=repaired,
@@ -1477,15 +1653,69 @@ class VolumePlannerAgent:
             )
             completed_batch = self._complete_expanded_batch(batch_result, batch)
             for chapter in completed_batch:
-                chapters.append(await self._repair_unwritable_expanded_chapter(
+                writable_chapter = await self._repair_unwritable_expanded_chapter(
                     chapter,
                     blueprint=blueprint,
                     synopsis=synopsis,
                     constraint_block=constraint_block,
                     novel_id=novel_id,
-                ))
+                )
+                chapters.append(self._repair_quality_blocked_expanded_chapter(writable_chapter, novel_id=novel_id))
             await flow_control.raise_if_cancelled(novel_id)
         return chapters
+
+    def _repair_quality_blocked_expanded_chapter(self, chapter: VolumeBeat, *, novel_id: str = "") -> VolumeBeat:
+        report = QualityPreflightService.evaluate_chapter_plan(chapter)
+        if report.status != "block":
+            return chapter
+
+        blocked_indexes = {
+            issue.beat_index
+            for issue in report.blocking_issues
+            if issue.beat_index is not None and issue.beat_index >= 0
+        }
+        if not blocked_indexes:
+            return chapter
+
+        repaired = self._deterministic_repair_preflight_blocked_chapter(chapter, blocked_indexes)
+        repaired_report = QualityPreflightService.evaluate_chapter_plan(repaired)
+        log_agent_detail(
+            novel_id,
+            "VolumePlannerAgent",
+            f"章节前置质量阻断确定性修复：第 {chapter.chapter_number} 章",
+            node="volume_quality_preflight_repair",
+            task="repair_chapter_quality_preflight",
+            status="succeeded" if repaired_report.status != "block" else "degraded",
+            metadata={
+                "chapter_number": chapter.chapter_number,
+                "before": report.model_dump(),
+                "after": repaired_report.model_dump(),
+            },
+        )
+        return repaired
+
+    def _deterministic_repair_preflight_blocked_chapter(
+        self,
+        chapter: VolumeBeat,
+        blocked_indexes: set[int],
+    ) -> VolumeBeat:
+        payload = chapter.model_dump()
+        total_beats = max(1, len(chapter.beats))
+        beats = []
+        for index, beat in enumerate(chapter.beats):
+            beat_payload = beat.model_dump()
+            if index in blocked_indexes:
+                beat_payload["summary"] = self._concretize_beat_summary(
+                    beat.summary,
+                    actor=(beat.key_entities or chapter.key_entities or ["主角"])[0],
+                    chapter_title=chapter.title,
+                    chapter_summary=chapter.summary,
+                    index=index,
+                    total_beats=total_beats,
+                )
+            beats.append(beat_payload)
+        payload["beats"] = beats
+        return VolumeBeat.model_validate(payload)
 
     async def _repair_unwritable_expanded_chapter(
         self,
@@ -1589,18 +1819,94 @@ class VolumePlannerAgent:
         payload = chapter.model_dump()
         beats = []
         weak_indexes = set(report.weak_beats or [])
+        total_beats = max(1, len(chapter.beats))
         for index, beat in enumerate(chapter.beats):
             beat_payload = beat.model_dump()
             if index in weak_indexes:
-                summary = beat.summary.strip().rstrip("。！？!?")
                 actor = (beat.key_entities or chapter.key_entities or ["主角"])[0]
-                beat_payload["summary"] = (
-                    f"{summary}；{actor}必须在继续追查与保全自身之间做出选择，"
-                    "阻力当场升级，失败代价是失去关键线索并暴露处境，结尾留下新的危险信号。"
+                beat_payload["summary"] = self._concretize_beat_summary(
+                    beat.summary,
+                    actor=actor,
+                    chapter_title=chapter.title,
+                    chapter_summary=chapter.summary,
+                    index=index,
+                    total_beats=total_beats,
                 )
             beats.append(beat_payload)
         payload["beats"] = beats
         return VolumeBeat.model_validate(payload)
+
+    def _concretize_beat_summary(
+        self,
+        summary: str,
+        *,
+        actor: str,
+        chapter_title: str,
+        chapter_summary: str,
+        index: int,
+        total_beats: int,
+    ) -> str:
+        cleaned = StoryQualityService.strip_generic_repair_clauses(summary).strip().rstrip("。！？!?；;")
+        for marker in QualityPreflightService.ABSTRACT_READABILITY_TERMS:
+            cleaned = cleaned.replace(marker, "").strip("；;，,。 ")
+        if not cleaned:
+            cleaned = self._chapter_specific_objective(actor, chapter_title, chapter_summary)
+        clauses = [cleaned]
+        if not StoryQualityService._has_conflict(cleaned):
+            clauses.append(self._deterministic_conflict_clause(actor, chapter_title, chapter_summary, index, total_beats))
+        if not StoryQualityService._has_choice_or_cost(cleaned):
+            clauses.append(self._deterministic_choice_clause(actor, chapter_title, chapter_summary, index, total_beats))
+        if not self._has_explicit_stake(cleaned):
+            clauses.append(self._deterministic_stake_clause(actor, chapter_title, chapter_summary, index, total_beats))
+        if index == total_beats - 1 and not StoryQualityService._has_hook(cleaned):
+            clauses.append(self._deterministic_hook_clause(actor, chapter_title, chapter_summary))
+        return "；".join(clause.strip("；;，,。 ") for clause in clauses if clause.strip()).rstrip("。！？!?；;") + "。"
+
+    @staticmethod
+    def _has_explicit_stake(text: str) -> bool:
+        return any(term in coerce_to_text(text) for term in QualityPreflightService.STAKE_TERMS)
+
+    @staticmethod
+    def _chapter_anchor(chapter_title: str, chapter_summary: str, fallback: str = "当前目标") -> str:
+        anchor = (chapter_summary or chapter_title or fallback).strip().rstrip("。！？!?；;")
+        if len(anchor) > 42:
+            anchor = anchor[:42].rstrip("，,；;、 ")
+        return anchor or fallback
+
+    @classmethod
+    def _chapter_specific_objective(cls, actor: str, chapter_title: str, chapter_summary: str) -> str:
+        anchor = cls._chapter_anchor(chapter_title, chapter_summary)
+        return f"{actor}围绕“{anchor}”推进当场目标"
+
+    @classmethod
+    def _deterministic_conflict_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
+        anchor = cls._chapter_anchor(chapter_title, chapter_summary)
+        if index == 0:
+            return f"{actor}刚开始推进“{anchor}”，当场阻力便迫使目标无法照旧推进"
+        if index == total_beats - 1:
+            return f"{actor}推进“{anchor}”接近阶段停点时，未解决的阻力再次压回眼前"
+        return f"{actor}推进“{anchor}”时发现原计划受阻，对手或环境压力逼他立刻调整行动"
+
+    @classmethod
+    def _deterministic_choice_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
+        anchor = cls._chapter_anchor(chapter_title, chapter_summary)
+        if index == 0:
+            return f"{actor}必须在继续推进“{anchor}”与先处理眼前阻力之间选择，失败代价是开局主动权被夺"
+        if index == total_beats - 1:
+            return f"{actor}必须决定如何收束“{anchor}”的当场结果，失败代价是阶段目标中断"
+        return f"{actor}必须在立刻推进与暂时收束之间选择，失败代价是“{anchor}”的关键窗口被错过"
+
+    @classmethod
+    def _deterministic_stake_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
+        anchor = cls._chapter_anchor(chapter_title, chapter_summary)
+        if index == total_beats - 1:
+            return f"失败代价是“{anchor}”无法形成可承接的阶段结果，后续目标缺少落点"
+        return f"失败代价是“{anchor}”当场停滞，{actor}失去继续推进的窗口"
+
+    @classmethod
+    def _deterministic_hook_clause(cls, actor: str, chapter_title: str, chapter_summary: str) -> str:
+        anchor = cls._chapter_anchor(chapter_title, chapter_summary, fallback="下一步目标")
+        return f"结尾留下与“{anchor}”直接相关的未解变化，让{actor}必须在下一章继续处理"
 
     def _complete_expanded_batch(
         self,
@@ -1678,7 +1984,10 @@ class VolumePlannerAgent:
             "8. 必须遵守 ActiveConstraintContext，不要把只能伏笔的高阶内容写成本批正面冲突。\n"
             "9. 境界、功法层级、势力层级等专有层级名称必须逐字来自整卷骨架、整体大纲或 ActiveConstraintContext；"
             "不得自行补写不存在的层级编号或通用修仙境界。\n"
-            "10. 不要输出 Markdown，不要解释。\n\n"
+            "10. 每个 beat 的 summary 必须用本章具体事件写清：角色当场目标、可见阻力、必须做出的选择、失败代价和停点；"
+            "禁止使用“资源限制、身份压力或对手试探”“现场规矩和旁人审视”“推进当前目标”“当前事件”等模板句。\n"
+            "11. 选择与代价必须依附本章证物、人物动作、短对话或环境变化，不能只写抽象判断。\n"
+            "12. 不要输出 Markdown，不要解释。\n\n"
             f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
             f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
             f"{constraint_block}\n\n"
@@ -1876,8 +2185,15 @@ class VolumePlannerAgent:
         chapter_plan["beats"] = beats
         writable = StoryQualityService.evaluate_chapter_writability(volume_beat)
         chapter_plan["writability_status"] = writable.model_dump()
+        chapter_plan["quality_preflight_report"] = (
+            QualityPreflightService.evaluate_chapter_plan(chapter_plan).model_dump()
+        )
+        chapter_plan_model = ChapterPlan.model_validate(chapter_plan)
+        chapter_plan["chapter_plan_sanity_report"] = (
+            StoryQualityService.build_chapter_plan_sanity_report(chapter_plan_model).model_dump()
+        )
         chapter_plan["writing_cards"] = [
             card.model_dump()
-            for card in StoryQualityService.build_writing_cards(ChapterPlan.model_validate(chapter_plan))
+            for card in StoryQualityService.build_writing_cards(chapter_plan_model)
         ]
         return chapter_plan

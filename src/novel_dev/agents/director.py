@@ -47,6 +47,7 @@ CHAPTER_SCOPED_CHECKPOINT_KEYS = {
     "per_dim_issues",
     "editor_feedback",
     "fast_review_feedback",
+    "chapter_run",
 }
 
 

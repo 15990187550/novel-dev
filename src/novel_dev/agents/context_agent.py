@@ -26,6 +26,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.beat_boundary_service import BeatBoundaryService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.quality_preflight_service import QualityPreflightService
 
 logger = logging.getLogger(__name__)
 
@@ -68,13 +69,27 @@ class ContextAgent:
             raise ValueError("current_chapter_plan missing in checkpoint_data")
 
         chapter_plan = ChapterPlan.model_validate(chapter_plan_data)
-        context = await self.assemble_for_chapter(
-            novel_id,
-            chapter_id,
-            chapter_plan,
-            volume_id=state.current_volume_id,
-            checkpoint=checkpoint,
-        )
+        try:
+            context = await self.assemble_for_chapter(
+                novel_id,
+                chapter_id,
+                chapter_plan,
+                volume_id=state.current_volume_id,
+                checkpoint=checkpoint,
+            )
+        except ValueError:
+            preflight = checkpoint.get("chapter_quality_preflight")
+            if isinstance(preflight, dict) and preflight.get("status") == "block":
+                checkpoint["context_failure_stage"] = "quality_preflight"
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase(state.current_phase),
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
+                await self.session.commit()
+            raise
         checkpoint["chapter_context"] = context.model_dump()
         checkpoint["drafting_progress"] = {
             "beat_index": 0,
@@ -133,6 +148,15 @@ class ContextAgent:
         )
 
         chapter_plan = self._attach_beat_boundary_cards(chapter_plan)
+        story_contract = checkpoint.get("story_contract") if isinstance(checkpoint.get("story_contract"), dict) else {}
+        chapter_plan = self._run_quality_preflight(
+            novel_id,
+            chapter_plan,
+            checkpoint,
+            story_contract=story_contract,
+            active_entity_payloads=[],
+            node="context_quality_preflight_early",
+        )
         key_entity_names = await self._expand_context_entity_names(novel_id, chapter_plan, checkpoint)
         active_entities = await self._load_active_entities(key_entity_names, novel_id)
         log_service.add_log(
@@ -293,6 +317,16 @@ class ContextAgent:
                 metadata={"query": query_text, "chapters": [self._similar_doc_log_item(doc) for doc in similar_chapters]},
             )
 
+        active_entity_payloads = [entity.model_dump() for entity in active_entities]
+        chapter_plan = self._run_quality_preflight(
+            novel_id,
+            chapter_plan,
+            checkpoint,
+            story_contract=story_contract,
+            active_entity_payloads=active_entity_payloads,
+            node="context_quality_preflight",
+        )
+
         guardrails = self._build_guardrails(chapter_plan, active_entities, location_context, checkpoint)
 
         beat_contexts = self._build_beat_contexts(
@@ -318,8 +352,12 @@ class ContextAgent:
             similar_chapters=similar_chapters,
             guardrails=guardrails,
             beat_contexts=beat_contexts,
-            writing_cards=self._build_writing_cards(chapter_plan),
-            story_contract=checkpoint.get("story_contract") if isinstance(checkpoint.get("story_contract"), dict) else {},
+            writing_cards=self._build_writing_cards(
+                chapter_plan,
+                story_contract=story_contract,
+                active_entities=active_entity_payloads,
+            ),
+            story_contract=story_contract,
         )
         context_source_metadata = {
             "query": query_text,
@@ -378,6 +416,40 @@ class ContextAgent:
             caller_checkpoint["chapter_context"] = context.model_dump()
 
         return context
+
+    def _run_quality_preflight(
+        self,
+        novel_id: str,
+        chapter_plan: ChapterPlan,
+        checkpoint: dict,
+        *,
+        story_contract: dict[str, Any],
+        active_entity_payloads: list[dict[str, Any]],
+        node: str,
+    ) -> ChapterPlan:
+        preflight_report = QualityPreflightService.evaluate_chapter_plan(
+            chapter_plan,
+            story_contract=story_contract,
+            active_entities=active_entity_payloads,
+        )
+        updated_plan = chapter_plan.model_copy(update={"quality_preflight_report": preflight_report.model_dump()})
+        log_agent_detail(
+            novel_id,
+            "ContextAgent",
+            f"章节前置质量检查完成：{preflight_report.status}",
+            node=node,
+            task="assemble",
+            status="succeeded" if preflight_report.status != "block" else "blocked",
+            level="warning" if preflight_report.status != "pass" else "info",
+            metadata=preflight_report.model_dump(),
+        )
+        checkpoint["chapter_quality_preflight"] = preflight_report.model_dump()
+        if preflight_report.status == "block":
+            raise ValueError(
+                "Chapter quality preflight blocked context assembly: "
+                + "；".join(issue.message for issue in preflight_report.blocking_issues[:4])
+            )
+        return updated_plan
 
     def _build_context_debug_snapshot(
         self,
@@ -442,8 +514,31 @@ class ContextAgent:
             ],
         }
 
-    def _build_writing_cards(self, chapter_plan: ChapterPlan):
-        return StoryQualityService.build_writing_cards(chapter_plan)
+    def _build_writing_cards(
+        self,
+        chapter_plan: ChapterPlan,
+        *,
+        story_contract: dict[str, Any] | None = None,
+        active_entities: list[dict[str, Any]] | None = None,
+    ):
+        cards = StoryQualityService.build_writing_cards(chapter_plan)
+        contract = QualityPreflightService.build_chapter_contract(
+            chapter_plan,
+            story_contract=story_contract,
+            active_entities=active_entities,
+        )
+        return [
+            card.model_copy(update={
+                "canonical_constraints": contract.get("canonical_constraints", []),
+                "continuity_requirements": contract.get("continuity_requirements", []),
+                "readability_contract": contract.get("readability_contract", []),
+                "causal_links": StoryQualityService._links_for_beat(
+                    contract.get("causal_links", []),
+                    card.beat_index,
+                ),
+            })
+            for card in cards
+        ]
 
     def _attach_beat_boundary_cards(self, chapter_plan: ChapterPlan) -> ChapterPlan:
         cards = BeatBoundaryService.build_cards(chapter_plan.model_dump())
@@ -1368,10 +1463,17 @@ class ContextAgent:
         checkpoint: dict,
     ) -> List[str]:
         guardrails = []
+        preflight = chapter_plan.quality_preflight_report if isinstance(chapter_plan.quality_preflight_report, dict) else {}
+        preflight_guardrails = []
+        for item in preflight.get("canonical_constraints") or []:
+            preflight_guardrails.append(f"标准设定约束：{item}")
+        for item in preflight.get("continuity_requirements") or []:
+            preflight_guardrails.append(f"连续性要求：{item}")
         if location_context.current:
             guardrails.append(f"当前主要场景是「{location_context.current}」，不要无铺垫切换地点。")
         if checkpoint.get("current_time_tick") is not None:
             guardrails.append(f"当前时间 tick 为 {checkpoint['current_time_tick']}，不要跳过章节计划直接推进时间线。")
+        guardrails.extend(preflight_guardrails[:4])
         for entity in active_entities[:8]:
             if entity.current_state:
                 guardrails.append(f"{entity.name} 的当前状态必须延续：{entity.current_state[:180]}")

@@ -19,6 +19,7 @@ from novel_dev.services.archive_service import ArchiveService
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
+from novel_dev.services.chapter_run_state_service import ChapterRunStateService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.quality_gate_service import QUALITY_BLOCK
 
@@ -100,9 +101,19 @@ class ChapterRewriteService:
 
         start_index = REWRITE_STAGES.index(start_stage)
         completed_stages = REWRITE_STAGES[:start_index] if resume_from_stage else []
-        checkpoint = dict(resume_checkpoint or {})
+        checkpoint = dict(state.checkpoint_data or {})
+        if isinstance(resume_checkpoint, dict):
+            checkpoint.update(resume_checkpoint)
         embedding_service = self._embedding_service()
         chapter_plan = ChapterPlan.model_validate(chapter_plan_data)
+        ChapterRunStateService.ensure(
+            checkpoint,
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            phase=ChapterRunStateService.phase_for_stage(start_stage),
+            run_id=job_id,
+            chapter=existing,
+        )
 
         current_stage = start_stage
         score_overall: int | None = existing.score_overall if existing else None
@@ -120,7 +131,7 @@ class ChapterRewriteService:
                     chapter_id,
                     chapter_plan,
                     volume_id=volume_id,
-                    checkpoint=state.checkpoint_data or {},
+                    checkpoint=checkpoint,
                 )
                 checkpoint["chapter_context"] = context.model_dump()
                 checkpoint["drafting_progress"] = {
@@ -135,11 +146,12 @@ class ChapterRewriteService:
                 current_stage = REWRITE_STAGE_DRAFT
                 context_data = await self._ensure_context_data(novel_id, chapter_id, chapter_plan, volume_id, checkpoint, state)
                 chapter_context = self._chapter_context_from_checkpoint(context_data)
-                _metadata, checkpoint = await WriterAgent(self.session, embedding_service).write_standalone(
+                _metadata, writer_checkpoint = await WriterAgent(self.session, embedding_service).write_standalone(
                     novel_id,
                     chapter_context,
                     chapter_id,
                 )
+                checkpoint.update(writer_checkpoint)
                 completed_stages.append(REWRITE_STAGE_DRAFT)
                 await self._record_progress(job_id, job_repo, novel_id, chapter_id, completed_stages, checkpoint)
 
@@ -221,6 +233,13 @@ class ChapterRewriteService:
             checkpoint.pop("edit_attempt_count", None)
             await self.session.rollback()
             failed_chapter = await self.chapter_repo.get_by_id(chapter_id)
+            ChapterRunStateService.mark_stage(
+                checkpoint,
+                stage=current_stage,
+                status="failed",
+                chapter=failed_chapter,
+                error=str(exc),
+            )
             result = ChapterRewriteResult(
                 novel_id=novel_id,
                 chapter_id=chapter_id,
@@ -272,6 +291,21 @@ class ChapterRewriteService:
         completed_stages: list[str],
         checkpoint: dict,
     ) -> None:
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        run = ChapterRunStateService.ensure(
+            checkpoint,
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            phase=ChapterRunStateService.phase_for_stage(completed_stages[-1] if completed_stages else REWRITE_STAGE_CONTEXT),
+            run_id=job_id,
+            chapter=chapter,
+        )
+        for stage in completed_stages:
+            if stage not in run.get("completed_stages", []):
+                run.setdefault("completed_stages", []).append(stage)
+        next_stage = next((stage for stage in REWRITE_STAGES if stage not in completed_stages), REWRITE_STAGE_LIBRARIAN_ARCHIVE)
+        run["stage"] = next_stage
+        checkpoint["chapter_run"] = run
         if not job_id or not job_repo:
             return
         await job_repo.update_result_payload(
@@ -303,7 +337,7 @@ class ChapterRewriteService:
             chapter_id,
             chapter_plan,
             volume_id=volume_id,
-            checkpoint=state.checkpoint_data or {},
+            checkpoint=checkpoint,
         )
         checkpoint["chapter_context"] = context.model_dump()
         return checkpoint["chapter_context"]

@@ -15,6 +15,13 @@ app = FastAPI()
 app.include_router(router)
 
 
+def executable_beat_summary() -> str:
+    return (
+        "林风为追查旧案潜入药库，却被执事当场拦住；"
+        "他必须在继续搜证和立刻撤离之间选择，失败会暴露身份，结尾听见追兵逼近。"
+    )
+
+
 @pytest.mark.asyncio
 async def test_prepare_context_and_generate_draft(async_session, mock_llm_factory):
     async def override():
@@ -28,7 +35,7 @@ async def test_prepare_context_and_generate_draft(async_session, mock_llm_factor
             chapter_number=1,
             title="API Test",
             target_word_count=3000,
-            beats=[BeatPlan(summary="Beat 1", target_mood="tense", key_entities=["林风"])],
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense", key_entities=["林风"])],
         )
         await director.save_checkpoint(
             "n_api",

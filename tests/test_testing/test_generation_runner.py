@@ -393,7 +393,20 @@ async def test_prepare_resume_state_can_reset_only_current_failed_chapter(
         {
             "current_chapter_plan": chapter_plan,
             "chapter_context": {"chapter_plan": chapter_plan, "notes": ["stale"]},
+            "drafting_progress": {"beat_index": 2},
+            "draft_metadata": {"total_words": 999},
+            "relay_history": [{"scene_state": "stale"}],
+            "critique_feedback": {"overall": 42},
+            "beat_scores": [{"beat_index": 0}],
+            "edit_attempt_count": 2,
+            "final_polish_issues": {"source": "stale"},
+            "fast_review_result": {"word_count_ok": False},
             "quality_gate": {"status": "block"},
+            "quality_gate_repair_attempt_count": 1,
+            "quality_issues": [{"code": "stale"}],
+            "repair_tasks": [{"task_id": "stale"}],
+            "chapter_run": {"stage": "stale"},
+            "chapter_structure_guard": {"mode": "stale"},
             "flow_control": {"cancel_requested": True},
         },
         current_volume_id="vol-1",
@@ -434,7 +447,20 @@ async def test_prepare_resume_state_can_reset_only_current_failed_chapter(
     assert state.current_phase == "context_preparation"
     assert state.current_chapter_id == "vol_1_ch_1"
     assert "chapter_context" not in state.checkpoint_data
+    assert "drafting_progress" not in state.checkpoint_data
+    assert "draft_metadata" not in state.checkpoint_data
+    assert "relay_history" not in state.checkpoint_data
+    assert "critique_feedback" not in state.checkpoint_data
+    assert "beat_scores" not in state.checkpoint_data
+    assert "edit_attempt_count" not in state.checkpoint_data
+    assert "final_polish_issues" not in state.checkpoint_data
+    assert "fast_review_result" not in state.checkpoint_data
     assert "quality_gate" not in state.checkpoint_data
+    assert "quality_gate_repair_attempt_count" not in state.checkpoint_data
+    assert "quality_issues" not in state.checkpoint_data
+    assert "repair_tasks" not in state.checkpoint_data
+    assert "chapter_run" not in state.checkpoint_data
+    assert "chapter_structure_guard" not in state.checkpoint_data
     assert "flow_control" not in state.checkpoint_data
     assert reset_chapter.status == "pending"
     assert reset_chapter.raw_draft is None
@@ -1525,7 +1551,17 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
         payload for method, path, payload in calls
         if method == "POST" and path == "/api/novels/novel-test/documents/upload"
     ]
+    paths = [path for method, path, _payload in calls if method == "POST"]
+    first_upload_index = paths.index("/api/novels/novel-test/documents/upload")
+    session_index = paths.index("/api/novels/novel-test/settings/sessions")
+    setting_session_payload = next(
+        payload for method, path, payload in calls
+        if method == "POST" and path == "/api/novels/novel-test/settings/sessions"
+    )
     assert [payload["filename"] for payload in upload_payloads] == ["世界观.md", "原文.txt"]
+    assert first_upload_index < session_index
+    assert "世界观.md" in setting_session_payload["initial_idea"]
+    assert fixture.initial_setting_idea not in setting_session_payload["initial_idea"]
     assert ("POST", "/api/novels/novel-test/settings/consolidations", {"selected_pending_ids": []}) in calls
     assert artifacts["acceptance_scope"] == "real-longform-volume1"
     assert artifacts["generated_setting_approvable_change_count"] == "1"

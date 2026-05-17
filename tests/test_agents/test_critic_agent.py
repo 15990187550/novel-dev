@@ -320,3 +320,44 @@ async def test_review_max_attempts_exceeded(async_session):
         agent = CriticAgent(async_session)
         with pytest.raises(RuntimeError, match="Max draft attempts exceeded"):
             await agent.review("novel_crit_max", "c1")
+
+
+@pytest.mark.asyncio
+async def test_review_max_attempts_forces_editing_for_real_longform(async_session):
+    director = NovelDirector(session=async_session)
+    context = _make_context()
+    await director.save_checkpoint(
+        "novel_crit_max_longform",
+        phase=Phase.REVIEWING,
+        checkpoint_data={
+            "chapter_context": context.model_dump(),
+            "draft_attempt_count": 2,
+            "acceptance_scope": "real-longform-volume1",
+        },
+        volume_id="v1",
+        chapter_id="c1",
+    )
+    await ChapterRepository(async_session).create("c1", "v1", 1, "Test")
+
+    score_result = ScoreResult(
+        overall=55,
+        dimensions=[DimensionScore(name="plot_tension", score=50, comment="") for _ in range(5)],
+        summary_feedback="差",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = [
+        LLMResponse(text=score_result.model_dump_json()),
+        LLMResponse(text='[]'),
+    ]
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        result = await agent.review("novel_crit_max_longform", "c1")
+
+    assert result.overall == 55
+    state = await director.resume("novel_crit_max_longform")
+    assert state.current_phase == Phase.EDITING.value
+    assert state.checkpoint_data["draft_attempt_count"] == 3
+    assert state.checkpoint_data["critic_forced_editing"]["overall"] == 55
+    assert state.checkpoint_data["draft_rewrite_plan"]["rewrite_all"] is True

@@ -39,28 +39,6 @@ class ProseHygieneService:
         "这一拍的结果先落稳",
         "把当场目标压到纸面",
     )
-    MODERN_DRIFT_PATTERNS = (
-        "ICU",
-        "KPI",
-        "CPU",
-        "APP",
-        "bug",
-        "debug",
-        "高考",
-        "查成绩",
-        "医院急救",
-        "急诊室",
-        "互联网",
-        "网页",
-        "按钮",
-        "界面",
-        "系统提示",
-        "职场霸凌",
-        "法律责任",
-        "PUA",
-        "KTV",
-        "社畜",
-    )
     MODERN_AUTHORIZATION_MARKERS = (
         "现代",
         "当代",
@@ -75,7 +53,6 @@ class ProseHygieneService:
         "公司",
         "系统流",
         "游戏",
-        "APP",
         "AI",
     )
     _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
@@ -98,7 +75,7 @@ class ProseHygieneService:
             return []
         issues = [
             HygieneIssue(f"正文出现未授权现代术语: {pattern}", "modern_drift")
-            for pattern in cls.MODERN_DRIFT_PATTERNS
+            for pattern in cls._modern_drift_patterns(context)
             if pattern in text
         ]
         latin_words = []
@@ -127,7 +104,7 @@ class ProseHygieneService:
         modern_line = (
             "- 当前设定/风格允许现代或科技语汇时，现代词必须符合角色时代、职业和场景语境；不得把工程字段或规划术语混入正文。\n"
             if modern_authorized
-            else f"- 禁止未授权现代/外文漂移: {'、'.join(cls.MODERN_DRIFT_PATTERNS[:12])}；如必须表达前世记忆，转成贴合角色处境的中文短念头。\n"
+            else f"- 禁止未授权现代/外文漂移: {cls._modern_drift_rule_text(context)}；如必须表达前世记忆，转成贴合角色处境的中文短念头。\n"
         )
         return (
             "### 正文卫生硬约束\n"
@@ -157,6 +134,20 @@ class ProseHygieneService:
             return value if isinstance(value, dict) else {}
         value = getattr(context, "genre_quality_config", None)
         return value if isinstance(value, dict) else {}
+
+    @classmethod
+    def _modern_drift_patterns(cls, context: object | None = None) -> tuple[str, ...]:
+        value = cls._genre_quality_config(context).get("modern_drift_patterns") or ()
+        if not isinstance(value, (list, tuple, set)):
+            return ()
+        return tuple(str(item) for item in value if str(item).strip())
+
+    @classmethod
+    def _modern_drift_rule_text(cls, context: object | None = None) -> str:
+        patterns = cls._modern_drift_patterns(context)
+        if patterns:
+            return "、".join(patterns[:12])
+        return "与当前设定时代、职业、技术水平或文风不匹配的现代/外文词"
 
     @classmethod
     def _modern_terms_authorized(cls, context: object | None) -> bool:

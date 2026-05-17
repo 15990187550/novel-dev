@@ -13,7 +13,11 @@ async def test_assemble_with_embedding_service_includes_relevant_docs(async_sess
         checkpoint_data={
             "current_chapter_plan": {
                 "chapter_number": 1, "title": "第一章", "target_word_count": 3000,
-                "beats": [{"summary": "主角进入学院", "target_mood": "好奇", "key_entities": ["主角"]}],
+                "beats": [{
+                    "summary": "主角为查清学院密令进入学院，却被门卫盘问；他必须在隐藏身份和交出信物之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "好奇",
+                    "key_entities": ["主角"],
+                }],
             },
             "current_time_tick": 1,
         },
@@ -42,7 +46,11 @@ async def test_assemble_without_embedding_service_has_empty_relevant_docs(async_
         checkpoint_data={
             "current_chapter_plan": {
                 "chapter_number": 1, "title": "第一章", "target_word_count": 3000,
-                "beats": [{"summary": "主角进入学院", "target_mood": "好奇", "key_entities": ["主角"]}],
+                "beats": [{
+                    "summary": "主角为查清学院密令进入学院，却被门卫盘问；他必须在隐藏身份和交出信物之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "好奇",
+                    "key_entities": ["主角"],
+                }],
             },
             "current_time_tick": 1,
         },

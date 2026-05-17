@@ -23,6 +23,7 @@ def test_build_cards_from_chapter_plan_beats():
     assert len(cards) == 2
     assert cards[0].beat_index == 0
     assert "主角在雨夜发现旧信" in cards[0].must_cover
+    assert any("桥接" in item or "短动作" in item for item in cards[0].allowed_bridge_details)
     assert any("后续 beat" in item for item in cards[0].forbidden_materials)
     assert "门外脚步停住" in cards[0].ending_policy
 

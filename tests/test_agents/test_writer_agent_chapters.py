@@ -8,6 +8,8 @@ from novel_dev.schemas.context import ChapterContext, ChapterPlan, BeatPlan, Loc
 from novel_dev.schemas.similar_document import SimilarDocument
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
+from novel_dev.genres.defaults import default_genre
+from novel_dev.genres.models import ResolvedGenreTemplate
 
 
 @pytest.mark.asyncio
@@ -362,3 +364,87 @@ async def test_write_standalone_without_novel_id_passes_no_genre_template(async_
         await agent.write_standalone("", context, "ch_empty_genre")
 
     assert captured["genre_template"] is None
+
+
+@pytest.mark.asyncio
+async def test_rewrite_angle_injects_genre_template_and_quality_config(async_session):
+    captured = {}
+
+    async def fake_rewrite(messages, config=None):
+        captured["system"] = messages[0].content
+        captured["user"] = messages[1].content
+        return LLMResponse(text="重写后的正文保留当前目标，删除不合类型的表达。")
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = fake_rewrite
+
+    agent = WriterAgent(async_session)
+    beat = BeatPlan(summary="主角在压力下做出选择。", target_mood="紧张", target_word_count=300)
+    context = ChapterContext(
+        chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="测试场景"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        story_contract={},
+    )
+    genre_template = ResolvedGenreTemplate(
+        genre=default_genre(),
+        prompt_blocks={
+            "setting_rules": ["重写也必须遵守当前类型的来源边界。"],
+            "forbidden_rules": ["不引入类型模板外的具体事实。"],
+        },
+        quality_config={
+            "modern_terms_policy": "block",
+            "modern_drift_patterns": ["KPI"],
+        },
+    )
+
+    with patch("novel_dev.llm.llm_factory.get", return_value=mock_client), patch(
+        "novel_dev.llm.llm_factory._resolve_config",
+        return_value={},
+    ):
+        await agent._rewrite_angle(
+            beat,
+            "他把这次危机称作 KPI 复盘。",
+            context,
+            idx=0,
+            total=1,
+            is_last=True,
+            novel_id="novel_writer_rewrite_genre",
+            genre_template=genre_template,
+        )
+
+    assert "重写也必须遵守当前类型的来源边界" in captured["system"]
+    assert "不引入类型模板外的具体事实" in captured["system"]
+    assert "KPI" in captured["system"] or "KPI" in captured["user"]
+
+
+def test_writer_self_check_uses_genre_quality_config_for_modern_terms(async_session):
+    agent = WriterAgent(async_session)
+    beat = BeatPlan(summary="主角在工作压力下做出选择。", target_mood="紧张")
+    context = ChapterContext(
+        chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="办公室"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    genre_template = ResolvedGenreTemplate(
+        genre=default_genre(),
+        quality_config={"modern_terms_policy": "allow", "modern_drift_patterns": ["KPI"]},
+    )
+
+    check = agent._self_check_beat(
+        "他打开项目面板，盯着 KPI 变化，终于决定把风险摊开说清楚。",
+        beat,
+        context,
+        0,
+        genre_template=genre_template,
+    )
+
+    assert not any("KPI" in issue for issue in check.contradictions)

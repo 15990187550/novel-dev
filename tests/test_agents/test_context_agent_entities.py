@@ -21,7 +21,11 @@ async def test_assemble_with_embedding_service_includes_related_entities(async_s
         checkpoint_data={
             "current_chapter_plan": {
                 "chapter_number": 1, "title": "第一章", "target_word_count": 3000,
-                "beats": [{"summary": "主角进入学院", "target_mood": "好奇", "key_entities": ["主角"]}],
+                "beats": [{
+                    "summary": "主角为查清学院密令进入学院，却被门卫盘问；他必须在隐藏身份和交出信物之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "好奇",
+                    "key_entities": ["主角"],
+                }],
             },
             "current_time_tick": 1,
         },
@@ -57,7 +61,11 @@ async def test_assemble_excludes_active_entities_from_related(async_session, moc
         checkpoint_data={
             "current_chapter_plan": {
                 "chapter_number": 1, "title": "第一章", "target_word_count": 3000,
-                "beats": [{"summary": "主角与林风相遇", "target_mood": "好奇", "key_entities": ["林风"]}],
+                "beats": [{
+                    "summary": "主角为查清学院密令与林风相遇，却被门卫盘问；他必须在隐藏身份和交出信物之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "好奇",
+                    "key_entities": ["林风"],
+                }],
             },
             "current_time_tick": 1,
         },
@@ -96,7 +104,11 @@ async def test_assemble_without_embedding_service_has_empty_related_entities(asy
         checkpoint_data={
             "current_chapter_plan": {
                 "chapter_number": 1, "title": "第一章", "target_word_count": 3000,
-                "beats": [{"summary": "主角进入学院", "target_mood": "好奇", "key_entities": []}],
+                "beats": [{
+                    "summary": "主角为查清学院密令进入学院，却被门卫盘问；他必须在隐藏身份和交出信物之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "好奇",
+                    "key_entities": [],
+                }],
             },
             "current_time_tick": 1,
         },
@@ -125,7 +137,11 @@ async def test_assemble_carries_story_contract_from_checkpoint(async_session, mo
                 "chapter_number": 1,
                 "title": "第一章",
                 "target_word_count": 3000,
-                "beats": [{"summary": "陆照握住父亲玉佩入局", "target_mood": "压抑", "key_entities": []}],
+                "beats": [{
+                    "summary": "陆照为查清灭门真相握住父亲玉佩入局，却发现宗门暗线逼近；他必须在隐瞒玉佩和追问线索之间选择，失败会暴露目标，结尾听见追兵逼近。",
+                    "target_mood": "压抑",
+                    "key_entities": [],
+                }],
             },
         },
     )
@@ -147,7 +163,11 @@ async def test_assemble_formats_structured_entity_memory(async_session, mock_llm
                 "chapter_number": 8,
                 "title": "旧案再起",
                 "target_word_count": 3000,
-                "beats": [{"summary": "林照握着父亲玉佩追查旧案", "target_mood": "压抑", "key_entities": ["林照"]}],
+                "beats": [{
+                    "summary": "林照握着父亲玉佩追查旧案，却被黑水城眼线盯上；他必须在继续追问和保护证人之间选择，失败会失去线索，结尾听见追兵逼近。",
+                    "target_mood": "压抑",
+                    "key_entities": ["林照"],
+                }],
             },
         },
     )
@@ -197,7 +217,11 @@ async def test_assemble_includes_recent_active_entity_even_when_plan_omits_key_e
                 "chapter_number": 12,
                 "title": "旧债回声",
                 "target_word_count": 3000,
-                "beats": [{"summary": "陆照回到黑水城，听见有人提起旧债", "target_mood": "压抑", "key_entities": []}],
+                "beats": [{
+                    "summary": "陆照回到黑水城听见有人提起旧债，却被暗处眼线盯上；他必须在追问旧债和隐藏身份之间选择，失败会暴露行踪，结尾听见追兵逼近。",
+                    "target_mood": "压抑",
+                    "key_entities": [],
+                }],
             },
             "current_volume_plan": {
                 "chapters": [
@@ -238,7 +262,11 @@ async def test_assemble_includes_relationship_neighbors_for_planned_entities(asy
                 "chapter_number": 6,
                 "title": "同盟裂痕",
                 "target_word_count": 3000,
-                "beats": [{"summary": "陆照怀疑盟约被人动过手脚", "target_mood": "紧张", "key_entities": ["陆照"]}],
+                "beats": [{
+                    "summary": "陆照怀疑盟约被人动过手脚，却发现盟友苏清寒刚刚失联；他必须在公开质问和暗中查证之间选择，失败会暴露盟约破绽，结尾听见追兵逼近。",
+                    "target_mood": "紧张",
+                    "key_entities": ["陆照"],
+                }],
             },
         },
     )
@@ -280,7 +308,7 @@ async def test_assemble_logs_specific_context_sources(async_session, mock_llm_fa
                 "chapter_number": 1, "title": "照见旧碑", "target_word_count": 3000,
                 "beats": [
                     {
-                        "summary": "陆照触发旧碑因果纹",
+                        "summary": "陆照触发旧碑因果纹，却引来守碑长老试探；他必须在继续触碰旧碑和暂时退开之间选择，失败会暴露道印，结尾旧碑传来异响。",
                         "target_mood": "mysterious",
                         "key_entities": ["陆照"],
                         "foreshadowings_to_embed": ["旧碑暗纹"],

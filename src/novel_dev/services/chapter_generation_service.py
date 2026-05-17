@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 import uuid
 
 from pydantic import BaseModel, Field
@@ -15,6 +16,7 @@ from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.global_consistency_audit_service import GlobalConsistencyAuditResult, GlobalConsistencyAuditService
 from novel_dev.services.chapter_run_trace_service import ChapterRunTraceService
+from novel_dev.services.chapter_run_state_service import CHAPTER_RUN_STAGES, ChapterRunStateService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
 from novel_dev.services.quality_issue_service import QualityIssueService
@@ -47,6 +49,7 @@ CHAPTER_SCOPED_CHECKPOINT_KEYS = {
     "per_dim_issues",
     "editor_feedback",
     "fast_review_feedback",
+    "chapter_run",
 }
 
 
@@ -64,6 +67,9 @@ class AutoRunChaptersResult(BaseModel):
     failed_phase: str | None = None
     failed_chapter_id: str | None = None
     error: str | None = None
+    can_resume: bool = False
+    resume_stage: str | None = None
+    chapter_run: dict = Field(default_factory=dict)
 
 
 class AutoRunConflictError(RuntimeError):
@@ -89,6 +95,13 @@ class ChapterGenerationService:
         self.director = NovelDirector(session)
         self.chapter_repo = ChapterRepository(session)
         self.flow_control = FlowControlService(session)
+
+    @staticmethod
+    def _chapter_run_payload(state) -> dict:
+        if not state:
+            return {}
+        checkpoint = dict(state.checkpoint_data or {})
+        return ChapterRunStateService.get(checkpoint)
 
     async def auto_run(
         self,
@@ -133,6 +146,9 @@ class ChapterGenerationService:
                         completed_chapters=completed,
                         stopped_reason="volume_plan_not_ready",
                         error=readiness.message,
+                        can_resume=bool(state.current_chapter_id),
+                        resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase),
+                        chapter_run=self._chapter_run_payload(state),
                     )
                     await self._release_lock(novel_id, token, result)
                     return result
@@ -160,6 +176,9 @@ class ChapterGenerationService:
                 current_chapter_id=state.current_chapter_id if state else None,
                 completed_chapters=completed,
                 stopped_reason="flow_cancelled",
+                can_resume=bool(state and state.current_chapter_id),
+                resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase if state else None),
+                chapter_run=self._chapter_run_payload(state),
             )
             await self._release_lock(novel_id, token, result)
             return result
@@ -174,6 +193,9 @@ class ChapterGenerationService:
                 failed_phase=state.current_phase if state else None,
                 failed_chapter_id=exc.chapter_id,
                 error=str(exc),
+                can_resume=True,
+                resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase if state else None),
+                chapter_run=self._chapter_run_payload(state),
             )
             if state is not None:
                 checkpoint = dict(state.checkpoint_data or {})
@@ -208,6 +230,9 @@ class ChapterGenerationService:
                 failed_phase=Phase.LIBRARIAN.value,
                 failed_chapter_id=exc.chapter_id,
                 error=str(exc),
+                can_resume=True,
+                resume_stage=ChapterRunStateService.stage_from_phase(Phase.LIBRARIAN.value),
+                chapter_run=self._chapter_run_payload(state),
             )
             await self._release_lock(novel_id, token, result)
             return result
@@ -227,6 +252,9 @@ class ChapterGenerationService:
                 failed_phase=getattr(exc, "failed_phase", None) or (state.current_phase if state else None),
                 failed_chapter_id=state.current_chapter_id if state else None,
                 error=error_message,
+                can_resume=bool(state and state.current_chapter_id),
+                resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase if state else None),
+                chapter_run=self._chapter_run_payload(state),
             )
             await self._release_lock(novel_id, token, result)
             raise AutoRunFailedError(result) from exc
@@ -238,6 +266,9 @@ class ChapterGenerationService:
             current_chapter_id=state.current_chapter_id if state else None,
             completed_chapters=completed,
             stopped_reason=stopped_reason,
+            can_resume=bool(state and state.current_chapter_id and stopped_reason != "novel_completed"),
+            resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase if state else None),
+            chapter_run=self._chapter_run_payload(state),
         )
         await self._release_lock(novel_id, token, result)
         return result
@@ -259,6 +290,16 @@ class ChapterGenerationService:
             "max_chapters": max_chapters,
             "stop_at_volume_end": stop_at_volume_end,
         }
+        if state.current_chapter_id:
+            chapter = await self.chapter_repo.get_by_id(state.current_chapter_id)
+            ChapterRunStateService.ensure(
+                checkpoint,
+                novel_id=novel_id,
+                chapter_id=state.current_chapter_id,
+                phase=state.current_phase,
+                run_id=token,
+                chapter=chapter,
+            )
         await self.director.save_checkpoint(
             novel_id,
             Phase(state.current_phase),
@@ -325,6 +366,7 @@ class ChapterGenerationService:
         state = await self._sync_current_chapter_checkpoint(state)
         start_chapter_id = state.current_chapter_id
         await self._ensure_current_chapter(state)
+        state = await self._ensure_chapter_run_state(state, start_chapter_id)
 
         for _ in range(20):
             await self.flow_control.raise_if_cancelled(novel_id)
@@ -332,6 +374,8 @@ class ChapterGenerationService:
             if not state:
                 raise ValueError(f"Novel state not found for {novel_id}")
 
+            phase_before = state.current_phase
+            await self._mark_stage_started(state, start_chapter_id)
             if state.current_phase == Phase.CONTEXT_PREPARATION.value:
                 embedding_service = self._embedding_service()
                 await ContextAgent(self.session, embedding_service).assemble(novel_id, start_chapter_id)
@@ -357,6 +401,13 @@ class ChapterGenerationService:
                 raise ValueError(f"Cannot auto-run from phase {state.current_phase}")
 
             updated = await self.director.resume(novel_id)
+            if updated:
+                await self._mark_stage_after_step(
+                    novel_id,
+                    start_chapter_id,
+                    previous_phase=phase_before,
+                    updated=updated,
+                )
             await self._raise_if_quality_blocked(start_chapter_id)
             if updated and updated.current_chapter_id != start_chapter_id:
                 return start_chapter_id
@@ -369,9 +420,25 @@ class ChapterGenerationService:
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         if chapter and getattr(chapter, "quality_status", "unchecked") == "block":
             state = await self.director.resume(chapter.novel_id or "")
+            checkpoint = dict(state.checkpoint_data or {}) if state else {}
+            if not ChapterRunStateService.quality_gate_matches_current_polished(checkpoint, chapter):
+                return
+            if self._is_stale_quality_block(state, chapter_id):
+                return
             if self._is_repairable_quality_block(state, chapter_id):
                 return
             raise QualityGateBlockedError(chapter_id, chapter.quality_reasons)
+
+    @staticmethod
+    def _is_stale_quality_block(state, chapter_id: str) -> bool:
+        if state is None or state.current_chapter_id != chapter_id:
+            return False
+        return state.current_phase in {
+            Phase.CONTEXT_PREPARATION.value,
+            Phase.DRAFTING.value,
+            Phase.REVIEWING.value,
+            Phase.EDITING.value,
+        }
 
     @staticmethod
     def _is_repairable_quality_block(state, chapter_id: str) -> bool:
@@ -493,19 +560,78 @@ class ChapterGenerationService:
         current_plan = checkpoint.get("current_chapter_plan")
         if isinstance(current_plan, dict) and current_plan.get("chapter_id") == current_chapter_id:
             return state
+        matching_plan = None
+        compatible_current_plan = False
+        if isinstance(current_plan, dict):
+            current_identity = self._chapter_identity(str(current_chapter_id))
+            current_plan_identity = self._chapter_identity(str(current_plan.get("chapter_id") or ""))
+            current_volume_id = str(state.current_volume_id or "").strip()
+            if (
+                current_identity != (None, None)
+                and current_plan_identity == current_identity
+                and self._volume_ids_compatible(
+                    current_volume_id,
+                    str(current_plan.get("volume_id") or ""),
+                )
+            ):
+                matching_plan = current_plan
+                compatible_current_plan = True
 
         volume_plan = checkpoint.get("current_volume_plan") or {}
         chapters = volume_plan.get("chapters") or []
-        matching_plan = next(
-            (
-                chapter
-                for chapter in chapters
-                if isinstance(chapter, dict) and chapter.get("chapter_id") == current_chapter_id
-            ),
-            None,
-        )
+        if matching_plan is None:
+            matching_plan = next(
+                (
+                    chapter
+                    for chapter in chapters
+                    if isinstance(chapter, dict) and chapter.get("chapter_id") == current_chapter_id
+                ),
+                None,
+            )
+        if not matching_plan:
+            current_identity = self._chapter_identity(str(current_chapter_id))
+            current_volume_id = str(state.current_volume_id or "").strip()
+            matching_plan = next(
+                (
+                    chapter
+                    for chapter in chapters
+                    if isinstance(chapter, dict)
+                    and self._chapter_identity(str(chapter.get("chapter_id") or "")) == current_identity
+                    and self._volume_ids_compatible(current_volume_id, str(chapter.get("volume_id") or ""))
+                ),
+                None,
+            )
         if not matching_plan:
             raise ValueError(f"current_chapter_plan does not match current_chapter_id {current_chapter_id}")
+
+        if compatible_current_plan:
+            normalized_plan = dict(matching_plan)
+            normalized_plan["chapter_id"] = current_chapter_id
+            if state.current_volume_id:
+                normalized_plan["volume_id"] = state.current_volume_id
+            checkpoint["current_chapter_plan"] = normalized_plan
+            log_agent_detail(
+                state.novel_id,
+                "ChapterGenerationService",
+                f"章节计划兼容当前章节：{current_chapter_id}",
+                node="chapter_state_sync",
+                task="auto_run",
+                status="succeeded",
+                metadata={
+                    "current_chapter_id": current_chapter_id,
+                    "current_plan_id": current_plan.get("chapter_id") if isinstance(current_plan, dict) else None,
+                    "current_phase": state.current_phase,
+                    "normalized_plan_id": current_chapter_id,
+                    "preserved_checkpoint_keys": sorted(key for key in CHAPTER_SCOPED_CHECKPOINT_KEYS if key in checkpoint),
+                },
+            )
+            return await self.director.save_checkpoint(
+                state.novel_id,
+                Phase(state.current_phase),
+                checkpoint,
+                volume_id=state.current_volume_id,
+                chapter_id=current_chapter_id,
+            )
 
         previous_plan_id = current_plan.get("chapter_id") if isinstance(current_plan, dict) else None
         checkpoint["current_chapter_plan"] = matching_plan
@@ -538,6 +664,25 @@ class ChapterGenerationService:
             chapter_id=current_chapter_id,
         )
 
+    @staticmethod
+    def _chapter_identity(chapter_id: str) -> tuple[int | None, int | None]:
+        match = re.search(r"vol_(\d+)_ch_(\d+)", chapter_id)
+        if not match:
+            return (None, None)
+        return (int(match.group(1)), int(match.group(2)))
+
+    @staticmethod
+    def _volume_ids_compatible(left: str, right: str) -> bool:
+        if not left or not right:
+            return True
+        if left == right:
+            return True
+        left_match = re.search(r"vol_(\d+)", left)
+        right_match = re.search(r"vol_(\d+)", right)
+        if not left_match or not right_match:
+            return False
+        return int(left_match.group(1)) == int(right_match.group(1))
+
     async def _ensure_current_chapter(self, state) -> None:
         checkpoint = dict(state.checkpoint_data or {})
         chapter_plan = checkpoint.get("current_chapter_plan")
@@ -548,6 +693,99 @@ class ChapterGenerationService:
             state.current_volume_id,
             chapter_plan,
         )
+
+    async def _ensure_chapter_run_state(self, state, chapter_id: str):
+        checkpoint = dict(state.checkpoint_data or {})
+        lock = checkpoint.get("auto_run_lock") if isinstance(checkpoint.get("auto_run_lock"), dict) else {}
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        ChapterRunStateService.ensure(
+            checkpoint,
+            novel_id=state.novel_id,
+            chapter_id=chapter_id,
+            phase=state.current_phase,
+            run_id=lock.get("token"),
+            chapter=chapter,
+        )
+        return await self.director.save_checkpoint(
+            state.novel_id,
+            Phase(state.current_phase),
+            checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=chapter_id,
+        )
+
+    async def _mark_stage_started(self, state, chapter_id: str) -> None:
+        checkpoint = dict(state.checkpoint_data or {})
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        run = ChapterRunStateService.ensure(
+            checkpoint,
+            novel_id=state.novel_id,
+            chapter_id=chapter_id,
+            phase=state.current_phase,
+            chapter=chapter,
+        )
+        stage = ChapterRunStateService.stage_from_phase(state.current_phase)
+        attempts = dict(run.get("attempts") or {})
+        attempts[stage] = int(attempts.get(stage, 0) or 0) + 1
+        run["attempts"] = attempts
+        run["stage"] = stage
+        checkpoint["chapter_run"] = run
+        await self.director.save_checkpoint(
+            state.novel_id,
+            Phase(state.current_phase),
+            checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=chapter_id,
+        )
+        await self.session.commit()
+
+    async def _mark_stage_after_step(self, novel_id: str, chapter_id: str, *, previous_phase: str, updated) -> None:
+        if updated.current_chapter_id != chapter_id:
+            return
+        checkpoint = dict(updated.checkpoint_data or {})
+        previous_stage = ChapterRunStateService.stage_from_phase(previous_phase)
+        current_stage = ChapterRunStateService.stage_from_phase(updated.current_phase)
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        previous_index = self._stage_index(previous_stage)
+        current_index = self._stage_index(current_stage)
+        completed_current_stage = (
+            current_index > previous_index
+            or (previous_phase == Phase.LIBRARIAN.value and updated.current_phase == Phase.COMPLETED.value)
+        )
+        if completed_current_stage:
+            run = ChapterRunStateService.mark_stage(
+                checkpoint,
+                stage=previous_stage,
+                status="succeeded",
+                chapter=chapter,
+            )
+            run["stage"] = current_stage
+            checkpoint["chapter_run"] = run
+        else:
+            run = ChapterRunStateService.ensure(
+                checkpoint,
+                novel_id=novel_id,
+                chapter_id=chapter_id,
+                phase=updated.current_phase,
+                chapter=chapter,
+            )
+            run["stage"] = current_stage
+            checkpoint["chapter_run"] = run
+        await self.director.save_checkpoint(
+            novel_id,
+            Phase(updated.current_phase),
+            checkpoint,
+            volume_id=updated.current_volume_id,
+            chapter_id=updated.current_chapter_id,
+        )
+        await self.session.commit()
+
+    @staticmethod
+    def _stage_index(stage: str) -> int:
+        try:
+            return CHAPTER_RUN_STAGES.index(stage)
+        except ValueError:
+            return -1
 
     def _embedding_service(self):
         embedder = llm_factory.get_embedder()

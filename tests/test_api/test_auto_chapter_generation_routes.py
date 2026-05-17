@@ -18,12 +18,21 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.chapter_generation_service import ChapterGenerationService, QualityGateBlockedError
 from novel_dev.services.chapter_generation_service import AutoRunChaptersResult, AutoRunFailedError
+from novel_dev.services.chapter_run_state_service import ChapterRunStateService
 from novel_dev.services.chapter_run_trace_service import ChapterRunTraceService
+from novel_dev.services.chapter_rewrite_service import ChapterRewriteFailedError, ChapterRewriteService
 from novel_dev.services.generation_job_service import CHAPTER_REWRITE_JOB
 
 
 app = FastAPI()
 app.include_router(router)
+
+
+def executable_beat_summary(index: int = 1) -> str:
+    return (
+        f"第{index}节，陆照为追查旧案潜入药库，却被执事当场拦住；"
+        "他必须在继续搜证和立刻撤离之间选择，失败会暴露玉佩，结尾听见追兵逼近。"
+    )
 
 
 def build_test_volume(volume_id: str, chapter_prefix: str, count: int = 2) -> VolumePlan:
@@ -35,7 +44,7 @@ def build_test_volume(volume_id: str, chapter_prefix: str, count: int = 2) -> Vo
             summary=f"第{index}章",
             target_word_count=80,
             target_mood="tense",
-            beats=[BeatPlan(summary=f"B{index}", target_mood="tense")],
+            beats=[BeatPlan(summary=executable_beat_summary(index), target_mood="tense")],
         )
         for index in range(1, count + 1)
     ]
@@ -103,7 +112,7 @@ async def test_auto_run_route_creates_queued_generation_job(async_session, monke
                 summary="第一章",
                 target_word_count=80,
                 target_mood="tense",
-                beats=[BeatPlan(summary="B1", target_mood="tense")],
+                beats=[BeatPlan(summary=executable_beat_summary(1), target_mood="tense")],
             ),
             VolumeBeat(
                 chapter_id="ch_auto_2",
@@ -112,7 +121,7 @@ async def test_auto_run_route_creates_queued_generation_job(async_session, monke
                 summary="第二章",
                 target_word_count=80,
                 target_mood="tense",
-                beats=[BeatPlan(summary="B2", target_mood="tense")],
+                beats=[BeatPlan(summary=executable_beat_summary(2), target_mood="tense")],
             ),
         ]
         plan = VolumePlan(
@@ -400,6 +409,107 @@ async def test_rewrite_background_job_resumes_context_failure_without_existing_c
     assert rewritten.status == "archived"
     assert rewritten.raw_draft
     assert rewritten.polished_text
+
+
+@pytest.mark.asyncio
+async def test_rewrite_context_preflight_failure_keeps_resume_checkpoint(async_session):
+    weak_chapter = VolumeBeat(
+        chapter_id="ch_rewrite_preflight_block_1",
+        chapter_number=1,
+        title="弱计划",
+        summary="陆照醒来了解世界。",
+        target_word_count=1200,
+        target_mood="calm",
+        beats=[BeatPlan(summary="陆照醒来了解世界。", target_mood="calm", key_entities=["陆照"])],
+    )
+    plan = VolumePlan(
+        volume_id="vol_rewrite_preflight_block",
+        volume_number=1,
+        title="弱卷",
+        summary="弱卷纲",
+        total_chapters=1,
+        estimated_total_words=1200,
+        chapters=[weak_chapter],
+        review_status={"status": "accepted"},
+    )
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_rewrite_preflight_block",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": weak_chapter.model_dump(),
+            "story_contract": {"must_carry_forward": ["玉佩"]},
+        },
+        volume_id="vol_rewrite_preflight_block",
+        chapter_id="ch_rewrite_preflight_block_1",
+    )
+    await async_session.commit()
+
+    with pytest.raises(ChapterRewriteFailedError) as exc_info:
+        await ChapterRewriteService(async_session).rewrite(
+            "n_rewrite_preflight_block",
+            "ch_rewrite_preflight_block_1",
+            resume_checkpoint={"resume_marker": "kept"},
+        )
+
+    result = exc_info.value.result
+    assert result.failed_stage == "context"
+    assert result.resume_from_stage == "context"
+    assert result.rewrite_checkpoint["resume_marker"] == "kept"
+    assert result.rewrite_checkpoint["story_contract"]["must_carry_forward"] == ["玉佩"]
+    assert result.rewrite_checkpoint["chapter_quality_preflight"]["status"] == "block"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_draft_stage_preserves_resume_checkpoint_on_later_failure(async_session, monkeypatch):
+    plan = build_test_volume("vol_rewrite_draft_preserve", "ch_rewrite_draft_preserve", count=1)
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_rewrite_draft_preserve",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "story_contract": {"must_carry_forward": ["玉佩"]},
+        },
+        volume_id="vol_rewrite_draft_preserve",
+        chapter_id="ch_rewrite_draft_preserve_1",
+    )
+    await async_session.commit()
+
+    async def fake_write_standalone(self, novel_id, chapter_context, chapter_id, rewrite_plan=None):
+        return object(), {
+            "chapter_context": chapter_context.model_dump(),
+            "draft_metadata": {"total_words": 120, "beat_coverage": []},
+            "relay_history": [],
+        }
+
+    async def fail_review_standalone(self, novel_id, chapter_id, chapter_context):
+        raise RuntimeError("review exploded")
+
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_rewrite_service.WriterAgent.write_standalone",
+        fake_write_standalone,
+    )
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_rewrite_service.CriticAgent.review_standalone",
+        fail_review_standalone,
+    )
+
+    with pytest.raises(ChapterRewriteFailedError) as exc_info:
+        await ChapterRewriteService(async_session).rewrite(
+            "n_rewrite_draft_preserve",
+            "ch_rewrite_draft_preserve_1",
+            resume_checkpoint={"resume_marker": "kept_after_draft"},
+        )
+
+    checkpoint = exc_info.value.result.rewrite_checkpoint
+    assert exc_info.value.result.failed_stage == "review"
+    assert checkpoint["resume_marker"] == "kept_after_draft"
+    assert checkpoint["story_contract"]["must_carry_forward"] == ["玉佩"]
+    assert checkpoint["draft_metadata"]["total_words"] == 120
+    assert checkpoint["chapter_run"]["last_error"]["stage"] == "review"
 
 
 @pytest.mark.asyncio
@@ -1016,6 +1126,85 @@ async def test_generation_job_refreshes_heartbeat_while_work_is_running(async_se
 
 
 @pytest.mark.asyncio
+async def test_sync_current_chapter_checkpoint_tolerates_zero_padded_volume_ids(async_session):
+    director = NovelDirector(session=async_session)
+    state = await director.save_checkpoint(
+        "n_auto_sync_zero_pad",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "current_volume_plan": {
+                "volume_id": "vol_001",
+                "chapters": [
+                    {
+                        "chapter_id": "vol_001_ch_1",
+                        "volume_id": "vol_001",
+                        "chapter_number": 1,
+                        "title": "Chapter 1",
+                    },
+                    {
+                        "chapter_id": "vol_001_ch_2",
+                        "volume_id": "vol_001",
+                        "chapter_number": 2,
+                        "title": "Chapter 2",
+                    },
+                ],
+            },
+            "current_chapter_plan": {
+                "chapter_id": "vol_001_ch_1",
+                "volume_id": "vol_001",
+                "chapter_number": 1,
+                "title": "Chapter 1",
+            },
+            "chapter_context": {"ready": True},
+        },
+        volume_id="vol_001",
+        chapter_id="vol_1_ch_1",
+    )
+
+    service = ChapterGenerationService(async_session)
+    synced = await service._sync_current_chapter_checkpoint(state)
+
+    checkpoint = synced.checkpoint_data
+    assert synced.current_phase == Phase.DRAFTING.value
+    assert synced.current_chapter_id == "vol_1_ch_1"
+    assert checkpoint["current_chapter_plan"]["chapter_id"] == "vol_1_ch_1"
+    assert checkpoint["current_chapter_plan"]["chapter_number"] == 1
+    assert checkpoint["chapter_context"] == {"ready": True}
+
+
+@pytest.mark.asyncio
+async def test_sync_current_chapter_checkpoint_accepts_current_plan_with_zero_padded_chapter_id(async_session):
+    director = NovelDirector(session=async_session)
+    state = await director.save_checkpoint(
+        "n_auto_sync_zero_pad_current_plan",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "current_volume_plan": {
+                "volume_id": "vol_001",
+                "chapters": [],
+            },
+            "current_chapter_plan": {
+                "chapter_id": "vol_001_ch_1",
+                "chapter_number": 1,
+                "title": "Chapter 1",
+            },
+            "chapter_context": {"ready": True},
+        },
+        volume_id="vol_001",
+        chapter_id="vol_1_ch_1",
+    )
+
+    service = ChapterGenerationService(async_session)
+    synced = await service._sync_current_chapter_checkpoint(state)
+
+    checkpoint = synced.checkpoint_data
+    assert synced.current_phase == Phase.CONTEXT_PREPARATION.value
+    assert synced.current_chapter_id == "vol_1_ch_1"
+    assert checkpoint["current_chapter_plan"]["chapter_id"] == "vol_1_ch_1"
+    assert checkpoint["chapter_context"] == {"ready": True}
+
+
+@pytest.mark.asyncio
 async def test_auto_run_stops_at_volume_end(async_session):
     plan = build_test_volume("vol_end", "ch_end")
     director = NovelDirector(session=async_session)
@@ -1078,6 +1267,105 @@ async def test_auto_run_stops_when_volume_plan_not_accepted(async_session):
     assert result.stopped_reason == "volume_plan_not_ready"
     assert result.error is not None
     assert "needs_manual_review" in result.error
+
+
+@pytest.mark.asyncio
+async def test_auto_run_allows_longform_needs_manual_review_when_writable(async_session):
+    plan = build_test_volume("vol_longform_ready", "ch_longform_ready", count=1)
+    plan_payload = plan.model_dump()
+    plan_payload["review_status"] = {
+        "status": "needs_manual_review",
+        "reason": "整卷评分未达标，但章节可写",
+        "writability_status": {
+            "passed": True,
+            "failed_chapter_numbers": [],
+        },
+        "quality_preflight_status": {
+            "status": "pass",
+            "passed": True,
+            "blocked_chapter_numbers": [],
+            "warned_chapter_numbers": [],
+        },
+        "manual_generation_override": {
+            "approved": True,
+            "reason": "test accepts the manual-review risk for a writable isolated chapter",
+        },
+    }
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_longform_ready",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "current_volume_plan": plan_payload,
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+        },
+        volume_id="vol_longform_ready",
+        chapter_id="ch_longform_ready_1",
+    )
+
+    service = ChapterGenerationService(async_session)
+    result = await service.auto_run("n_auto_longform_ready", max_chapters=1)
+
+    assert result.stopped_reason != "volume_plan_not_ready"
+    assert result.completed_chapters == ["ch_longform_ready_1"]
+
+
+@pytest.mark.asyncio
+async def test_raise_if_quality_blocked_ignores_stale_block_during_drafting(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_stale_block",
+        phase=Phase.DRAFTING,
+        checkpoint_data={"current_chapter_plan": {"chapter_id": "ch_stale_block_1", "title": "Chapter 1"}},
+        volume_id="vol_stale_block",
+        chapter_id="ch_stale_block_1",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("ch_stale_block_1", "vol_stale_block", 1, "Chapter 1", novel_id="n_auto_stale_block")
+    await repo.update_quality_gate(
+        "ch_stale_block_1",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "beat_cohesion"}]},
+    )
+
+    service = ChapterGenerationService(async_session)
+    await service._raise_if_quality_blocked("ch_stale_block_1")
+
+
+@pytest.mark.asyncio
+async def test_raise_if_quality_blocked_ignores_block_for_stale_polished_hash(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_stale_hash_block",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "current_chapter_plan": {"chapter_id": "ch_stale_hash_block_1", "title": "Chapter 1"},
+            "chapter_run": {
+                "novel_id": "n_auto_stale_hash_block",
+                "chapter_id": "ch_stale_hash_block_1",
+                "stage": "edit_fast_review",
+                "completed_stages": ["context", "draft", "review"],
+                "attempts": {},
+                "artifact_versions": {
+                    "polished_text_hash": ChapterRunStateService.text_hash("旧成稿"),
+                },
+            },
+        },
+        volume_id="vol_stale_hash_block",
+        chapter_id="ch_stale_hash_block_1",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("ch_stale_hash_block_1", "vol_stale_hash_block", 1, "Chapter 1", novel_id="n_auto_stale_hash_block")
+    await repo.update_text("ch_stale_hash_block_1", raw_draft="草稿", polished_text="新成稿")
+    await repo.update_quality_gate(
+        "ch_stale_hash_block_1",
+        quality_status="block",
+        quality_reasons={"status": "block", "blocking_items": [{"code": "beat_cohesion"}]},
+    )
+
+    service = ChapterGenerationService(async_session)
+    await service._raise_if_quality_blocked("ch_stale_hash_block_1")
 
 
 @pytest.mark.asyncio
@@ -1609,7 +1897,7 @@ async def test_auto_run_continues_from_drafting_phase(async_session):
         chapter_number=1,
         title="Mid Draft",
         target_word_count=80,
-        beats=[BeatPlan(summary="B1", target_mood="tense")],
+        beats=[BeatPlan(summary=executable_beat_summary(1), target_mood="tense")],
     )
     context = ChapterContext(
         chapter_plan=chapter_plan,
@@ -1651,6 +1939,8 @@ async def test_auto_run_continues_from_drafting_phase(async_session):
     assert refreshed.result_payload["stopped_reason"] == "max_chapters_reached"
     assert refreshed.result_payload["current_phase"] == Phase.CONTEXT_PREPARATION.value
     assert refreshed.result_payload["current_chapter_id"] == "ch_mid_2"
+    assert refreshed.result_payload["resume_stage"] == "context"
+    assert refreshed.result_payload["chapter_run"] == {}
 
     chapter = await ChapterRepository(async_session).get_by_id("ch_mid_1")
     assert chapter.status == "archived"
