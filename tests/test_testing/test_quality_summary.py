@@ -87,6 +87,35 @@ def test_quality_summary_passes_clean_snapshot():
     assert report.issues == []
 
 
+def test_quality_summary_fails_on_manual_review_required_quality_status():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-manual-review",
+            "checkpoint": {},
+            "chapters": [
+                {
+                    "chapter_id": "ch_1",
+                    "quality_status": "manual_review_required",
+                    "quality_reasons": {
+                        "warning_items": [
+                            {
+                                "code": "language_style",
+                                "message": "语言风格需要人工复核。",
+                            }
+                        ]
+                    },
+                    "final_review_score": 72,
+                }
+            ],
+        },
+        run_id="quality-manual-review",
+    )
+
+    assert report.status == "failed"
+    assert [issue.id for issue in report.issues] == ["CHAPTER-QUALITY-001"]
+    assert "quality_status=manual_review_required" in report.issues[0].evidence
+
+
 def test_quality_summary_records_longform_scale_and_import_metrics():
     report = build_quality_summary_report(
         {

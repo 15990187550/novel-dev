@@ -23,9 +23,7 @@ from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
-from novel_dev.agents.volume_planner import VolumePlannerAgent
 from novel_dev.agents.director import Phase
-from novel_dev.schemas.outline import VolumeBeat
 from novel_dev.testing.generation_contracts import (
     build_volume_plan_contract_evidence,
     detect_chapter_text,
@@ -47,14 +45,14 @@ API_GENERATION_STAGES = (
     "create_novel",
     "upload_source_materials",
     "approve_source_materials",
-    "upload_seed_setting",
-    "approve_seed_setting",
     "create_setting_session",
     "advance_setting_session",
     "generate_setting_review_batch",
     "apply_generated_settings",
     "consolidate_settings",
     "apply_consolidated_settings",
+    "upload_seed_setting",
+    "approve_seed_setting",
     "brainstorm",
     "volume_plan",
     "auto_run_chapters",
@@ -65,6 +63,8 @@ API_SMOKE_TIMEOUT_SECONDS = 600
 GENERATION_JOB_POLL_INTERVAL_SECONDS = 2
 GENERATION_JOB_MAX_POLLS = 900
 ACCEPTANCE_TARGET_WORD_COUNT_FLOOR = 1000
+QUALITY_GATE_STOP_STATUSES = frozenset({"block", "manual_review_required"})
+LONGFORM_GENERATION_JOB_MAX_POLLS_PER_CHAPTER = 90
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,6 +307,10 @@ def _build_quality_gate_evidence(
         ]
     )
     return evidence
+
+
+def _quality_status_stops_archive(status: str | None) -> bool:
+    return str(status or "").strip() in QUALITY_GATE_STOP_STATUSES
 
 
 async def run_generation_acceptance(options: GenerationRunOptions) -> TestRunReport:
@@ -952,23 +956,22 @@ async def _run_api_smoke_flow(
         if should_stop_after("generate_setting_review_batch"):
             return artifacts, issues
 
-        if longform_volume1:
-            async def apply_generated_settings() -> None:
-                review_batch_id = artifacts.get("review_batch_id")
-                if not review_batch_id:
-                    raise RuntimeError("generate_setting_review_batch did not return review_batch_id")
-                await _approve_review_batch_non_conflict_changes(
-                    client,
-                    novel_id,
-                    review_batch_id,
-                    artifacts,
-                    artifact_prefix="generated_setting",
-                )
+        async def apply_generated_settings() -> None:
+            review_batch_id = artifacts.get("review_batch_id")
+            if not review_batch_id:
+                raise RuntimeError("generate_setting_review_batch did not return review_batch_id")
+            await _approve_review_batch_non_conflict_changes(
+                client,
+                novel_id,
+                review_batch_id,
+                artifacts,
+                artifact_prefix="generated_setting",
+            )
 
-            if not await run_stage("apply_generated_settings", apply_generated_settings):
-                return artifacts, issues
-            if should_stop_after("apply_generated_settings"):
-                return artifacts, issues
+        if not await run_stage("apply_generated_settings", apply_generated_settings):
+            return artifacts, issues
+        if should_stop_after("apply_generated_settings"):
+            return artifacts, issues
 
         if longform_volume1:
             async def consolidate_settings() -> None:
@@ -1119,7 +1122,10 @@ async def _run_api_smoke_flow(
             artifacts["chapter_auto_run_job_id"] = job_id
             max_polls = GENERATION_JOB_MAX_POLLS
             if longform_volume1:
-                max_polls = max(max_polls, max_chapters * 900)
+                max_polls = max(
+                    max_polls,
+                    max_chapters * LONGFORM_GENERATION_JOB_MAX_POLLS_PER_CHAPTER,
+                )
             job = await _poll_generation_job(
                 client,
                 novel_id,
@@ -1189,7 +1195,7 @@ async def _run_api_smoke_flow(
                 )
 
             if archived_count < 1:
-                if quality.status == "block":
+                if _quality_status_stops_archive(quality.status):
                     evidence = _build_quality_gate_evidence(
                         chapter_id=chapter_id,
                         job_id=job_id,
@@ -1998,21 +2004,20 @@ async def _prepare_longform_volume_plan_contract(
             for number, chapter_id in existing_chapter_rows.all()
             if number and chapter_id
         }
-        if len(source_chapters) < target_chapter_count:
-            source_chapters = _expand_longform_chapter_plan(
-                source_chapters,
-                target_count=target_chapter_count,
-                fixed_prefix_count=fixed_prefix_count,
-                volume_id=_infer_longform_chapter_id_prefix(
-                    [{"chapter_id": item} for item in existing_chapter_ids_by_number.values()] or source_chapters,
-                    default=str(volume_plan.get("volume_id") or state.current_volume_id or "vol_1"),
-                ),
+        if len(source_chapters) != target_chapter_count:
+            comparator = "fewer" if len(source_chapters) < target_chapter_count else "more"
+            raise ContractValidationError(
+                "volume_plan_contract",
+                f"volume_plan produced {comparator} chapters than target",
+                [
+                    f"target_chapter_count={target_chapter_count}",
+                    f"actual_chapter_count={len(source_chapters)}",
+                    f"fixed_prefix_count={fixed_prefix_count}",
+                    *build_volume_plan_contract_evidence(volume_plan, checkpoint),
+                ],
             )
-        elif len(source_chapters) > target_chapter_count:
-            source_chapters = source_chapters[:target_chapter_count]
 
         normalized_chapters = []
-        volume_planner = VolumePlannerAgent(session)
         for chapter_payload in source_chapters:
             chapter_payload = dict(chapter_payload)
             chapter_number = _coerce_int(chapter_payload.get("chapter_number"))
@@ -2028,14 +2033,6 @@ async def _prepare_longform_volume_plan_contract(
                     beat_payload["target_word_count"] = beat_target
                     normalized_beats.append(beat_payload)
                 chapter_payload["beats"] = normalized_beats
-            try:
-                repaired_chapter = volume_planner._repair_quality_blocked_expanded_chapter(
-                    VolumeBeat.model_validate(chapter_payload),
-                    novel_id=novel_id,
-                )
-                chapter_payload = repaired_chapter.model_dump()
-            except Exception:
-                pass
             normalized_chapters.append(chapter_payload)
 
         volume_plan["chapters"] = normalized_chapters
@@ -2097,74 +2094,6 @@ def _target_volume_chapter_range(options: GenerationRunOptions) -> tuple[int, in
         start += base + (1 if volume_number <= remainder else 0)
     end = start + options.resolved_target_volume_chapters() - 1
     return start, end
-
-
-def _expand_longform_chapter_plan(
-    chapters: list[dict[str, Any]],
-    *,
-    target_count: int,
-    fixed_prefix_count: int = 0,
-    volume_id: str,
-) -> list[dict[str, Any]]:
-    if target_count <= 0 or not chapters:
-        return chapters
-
-    fixed_prefix_count = max(0, min(fixed_prefix_count, len(chapters), target_count))
-    fixed_prefix = [dict(chapter) for chapter in chapters[:fixed_prefix_count]]
-    remaining_sources = [dict(chapter) for chapter in chapters[fixed_prefix_count:]]
-    remaining_target = target_count - fixed_prefix_count
-    if remaining_target <= 0 or not remaining_sources:
-        return fixed_prefix[:target_count]
-
-    source_indexes = [
-        min(
-            len(remaining_sources) - 1,
-            int(offset * len(remaining_sources) / remaining_target),
-        )
-        for offset in range(remaining_target)
-    ]
-    total_parts_by_source: dict[int, int] = {}
-    for source_index in source_indexes:
-        total_parts_by_source[source_index] = total_parts_by_source.get(source_index, 0) + 1
-    seen_parts_by_source: dict[int, int] = {}
-
-    expanded = fixed_prefix
-    phase_labels = ("铺垫", "试探", "升级", "兑现", "余波")
-    for offset, source_index in enumerate(source_indexes, start=1):
-        chapter_number = fixed_prefix_count + offset
-        source = dict(remaining_sources[source_index])
-        seen_parts_by_source[source_index] = seen_parts_by_source.get(source_index, 0) + 1
-        part_index = seen_parts_by_source[source_index]
-        part_total = total_parts_by_source[source_index]
-        phase = phase_labels[min(part_index - 1, len(phase_labels) - 1)]
-
-        title = str(source.get("title") or f"第{chapter_number}章").strip()
-        if part_total > 1:
-            title = f"{title}·{phase}"
-
-        summary = str(source.get("summary") or title).strip()
-        if part_total > 1:
-            summary = (
-                f"{summary} 本章作为该情节节点的{phase}段推进，"
-                "只完成当前小目标，保留后续冲突、线索或反转给下一章。"
-            )
-
-        payload = dict(source)
-        payload["chapter_id"] = f"{volume_id}_ch_{chapter_number}"
-        payload["chapter_number"] = chapter_number
-        payload["title"] = title
-        payload["summary"] = summary
-        expanded.append(payload)
-
-    return expanded
-
-
-def _infer_longform_chapter_id_prefix(chapters: list[dict[str, Any]], *, default: str) -> str:
-    for chapter in chapters:
-        chapter_id = str(chapter.get("chapter_id") or "")
-        if "_ch_" in chapter_id:
-            return chapter_id.rsplit("_ch_", 1)[0]
-    return default
 
 
 def _first_string(data: dict[str, Any], *keys: str) -> str | None:

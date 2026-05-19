@@ -7,6 +7,8 @@ from novel_dev.llm.exceptions import LLMRateLimitError, LLMTimeoutError
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.testing import generation_runner
 from novel_dev.testing.generation_runner import (
+    API_GENERATION_STAGES,
+    ContractValidationError,
     GenerationRunOptions,
     classify_exception,
     run_generation_acceptance,
@@ -102,6 +104,21 @@ def test_create_novel_payload_includes_default_genre_for_longform_runner():
     assert payload["title"] == "正式小说"
     assert payload["primary_category_slug"] == "xuanhuan"
     assert payload["secondary_category_slug"] == "zhutian"
+
+
+def test_generation_stage_order_matches_actual_seed_setting_flow():
+    assert API_GENERATION_STAGES.index("upload_seed_setting") > API_GENERATION_STAGES.index(
+        "generate_setting_review_batch"
+    )
+    assert API_GENERATION_STAGES.index("approve_seed_setting") > API_GENERATION_STAGES.index(
+        "upload_seed_setting"
+    )
+
+
+def test_runner_treats_manual_review_required_as_quality_stop():
+    assert generation_runner._quality_status_stops_archive("manual_review_required") is True
+    assert generation_runner._quality_status_stops_archive("block") is True
+    assert generation_runner._quality_status_stops_archive("warn") is False
 
 
 def test_report_summary_includes_genre_resolution():
@@ -296,7 +313,7 @@ async def test_prepare_longform_volume_plan_contract_sets_chapter_targets(async_
 
 
 @pytest.mark.asyncio
-async def test_prepare_longform_volume_plan_contract_expands_short_volume_plan(
+async def test_prepare_longform_volume_plan_contract_rejects_short_volume_plan(
     async_session,
 ):
     await NovelStateRepository(async_session).save_checkpoint(
@@ -345,34 +362,30 @@ async def test_prepare_longform_volume_plan_contract_expands_short_volume_plan(
     old_session_maker = generation_runner.async_session_maker
     generation_runner.async_session_maker = fake_session_maker
     try:
-        await generation_runner._prepare_longform_volume_plan_contract(
-            "novel-longform-expand",
-            GenerationRunOptions(
-                acceptance_scope="real-longform-volume1",
-                source_dir="/tmp/novel",
-                target_volumes=1,
-                target_chapters=5,
-                target_word_count=5000,
-                target_volume_number=1,
-                target_volume_chapters=5,
-            ),
-        )
+        with pytest.raises(ContractValidationError, match="fewer chapters than target"):
+            await generation_runner._prepare_longform_volume_plan_contract(
+                "novel-longform-expand",
+                GenerationRunOptions(
+                    acceptance_scope="real-longform-volume1",
+                    source_dir="/tmp/novel",
+                    target_volumes=1,
+                    target_chapters=5,
+                    target_word_count=5000,
+                    target_volume_number=1,
+                    target_volume_chapters=5,
+                ),
+            )
     finally:
         generation_runner.async_session_maker = old_session_maker
 
     state = await NovelStateRepository(async_session).get_state("novel-longform-expand")
     chapters = state.checkpoint_data["current_volume_plan"]["chapters"]
-    assert len(chapters) == 5
-    assert state.checkpoint_data["current_volume_plan"]["total_chapters"] == 5
+    assert len(chapters) == 2
+    assert state.checkpoint_data["current_volume_plan"]["total_chapters"] == 2
     assert [chapter["chapter_id"] for chapter in chapters] == [
         "vol_1_ch_1",
         "vol_1_ch_2",
-        "vol_1_ch_3",
-        "vol_1_ch_4",
-        "vol_1_ch_5",
     ]
-    assert all(chapter["target_word_count"] == 1000 for chapter in chapters)
-    assert any("只完成当前小目标" in chapter["summary"] for chapter in chapters)
 
 
 @pytest.mark.asyncio
@@ -1237,6 +1250,17 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
                     path,
                     {"archived_chapter_count": 1, "total_word_count": 1200},
                 )
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test":
+                return self._response(
+                    "GET",
+                    path,
+                    {
+                        "batch": {"id": "batch-test", "status": "pending"},
+                        "changes": [
+                            {"id": "change-1", "target_type": "setting_card", "status": "pending"},
+                        ],
+                    },
+                )
             raise AssertionError(f"Unexpected GET request: {path}")
 
         async def post(self, path, json=None, params=None):
@@ -1261,6 +1285,12 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
                 )
             if path.endswith("/generate"):
                 return self._response("POST", path, {"id": "batch-test"})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test/approve":
+                return self._response(
+                    "POST",
+                    path,
+                    {"batch": {"id": "batch-test", "status": "approved"}, "changes": []},
+                )
             if path == "/api/novels/novel-test/documents/upload":
                 return self._response("POST", path, {"pending_id": "pending-test"})
             if path == "/api/novels/novel-test/documents/pending/approve":
@@ -1366,6 +1396,11 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
     assert artifacts["quality_status"] == "pass"
     assert artifacts["archived_chapter_count"] == "1"
     assert artifacts["exported_path"] == "./novel_output/novel-test/novel.md"
+    assert ("POST", "/api/novels/novel-test/settings/review_batches/batch-test/approve", {
+        "change_ids": ["change-1"],
+        "approve_all": False,
+    }) in calls
+    assert artifacts["generated_setting_batch_status"] == "approved"
 
 
 @pytest.mark.asyncio
@@ -1711,6 +1746,12 @@ async def test_api_smoke_flow_reports_quality_gate_when_text_exists_without_arch
             calls.append(("GET", path, None))
             if path == "/healthz":
                 return self._response("GET", path, {"ok": True})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test":
+                return self._response(
+                    "GET",
+                    path,
+                    {"batch": {"id": "batch-test", "status": "approved"}, "changes": []},
+                )
             if path == "/api/novels/novel-test/generation_jobs/job-test":
                 job_polls += 1
                 status = "running" if job_polls == 1 else "succeeded"
@@ -1873,6 +1914,12 @@ async def test_api_smoke_flow_real_e2e_export_reports_export_contract_without_ar
             calls.append(("GET", path, None))
             if path == "/healthz":
                 return self._response("GET", path, {"ok": True})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test":
+                return self._response(
+                    "GET",
+                    path,
+                    {"batch": {"id": "batch-test", "status": "approved"}, "changes": []},
+                )
             if path == "/api/novels/novel-test/generation_jobs/job-test":
                 job_polls += 1
                 status = "running" if job_polls == 1 else "succeeded"
@@ -2038,6 +2085,12 @@ async def test_api_smoke_flow_real_e2e_export_runs_export_when_archive_exists(
             calls.append(("GET", path, None))
             if path == "/healthz":
                 return self._response("GET", path, {"ok": True})
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test":
+                return self._response(
+                    "GET",
+                    path,
+                    {"batch": {"id": "batch-test", "status": "approved"}, "changes": []},
+                )
             if path == "/api/novels/novel-test/generation_jobs/job-test":
                 job_polls += 1
                 status = "running" if job_polls == 1 else "succeeded"

@@ -9,7 +9,11 @@ from novel_dev.schemas.quality import QualityIssue
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
-from novel_dev.testing.generation_runner import make_run_id, validate_run_id
+from novel_dev.testing.generation_runner import (
+    QUALITY_GATE_STOP_STATUSES,
+    make_run_id,
+    validate_run_id,
+)
 from novel_dev.testing.report import Detail, Issue, ReportWriter, TestRunReport
 
 
@@ -102,7 +106,9 @@ def build_quality_summary_report(
         _add_chapter_quality_detail(report, checkpoint, chapter)
         quality_status = str(chapter.get("quality_status") or "unchecked")
         final_score = chapter.get("final_review_score")
-        if quality_status == "block" or (isinstance(final_score, (int, float)) and final_score < 60):
+        if quality_status in QUALITY_GATE_STOP_STATUSES or (
+            isinstance(final_score, (int, float)) and final_score < 60
+        ):
             chapter_id = str(chapter.get("chapter_id") or chapter.get("id") or "unknown")
             target_mismatch = _target_word_count_mismatch(checkpoint, chapter)
             evidence = [
