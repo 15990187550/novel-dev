@@ -80,3 +80,23 @@ async def test_archive_service_rejects_chapter_from_other_novel(async_session, t
         await svc.archive_chapter_only("n_request", "c_other_novel")
 
     assert not (tmp_path / "novels" / "n_request").exists()
+
+
+@pytest.mark.asyncio
+async def test_archive_service_rejects_manual_review_required_chapter(async_session, tmp_path):
+    repo = ChapterRepository(async_session)
+    await repo.create("c_manual_review_archive", "v1", 1, "Manual Review", novel_id="n_manual_review")
+    await repo.update_text("c_manual_review_archive", polished_text="text")
+    await repo.update_quality_gate(
+        "c_manual_review_archive",
+        quality_status="manual_review_required",
+        quality_reasons={"status": "manual_review_required"},
+        world_state_ingested=False,
+    )
+
+    svc = ArchiveService(async_session, str(tmp_path))
+
+    with pytest.raises(ValueError, match="quality gate blocked archive"):
+        await svc.archive_chapter_only("n_manual_review", "c_manual_review_archive")
+
+    assert not (tmp_path / "novels" / "n_manual_review").exists()

@@ -11,7 +11,13 @@ from novel_dev.schemas.review import FastReviewReport
 QUALITY_UNCHECKED = "unchecked"
 QUALITY_PASS = "pass"
 QUALITY_WARN = "warn"
+QUALITY_MANUAL_REVIEW_REQUIRED = "manual_review_required"
 QUALITY_BLOCK = "block"
+QUALITY_STOP_STATUSES = frozenset({QUALITY_BLOCK, QUALITY_MANUAL_REVIEW_REQUIRED})
+
+
+def quality_gate_stops_librarian(status: str | None) -> bool:
+    return str(status or QUALITY_UNCHECKED) in QUALITY_STOP_STATUSES
 
 
 @dataclass
@@ -139,10 +145,15 @@ class QualityGateService:
                 summary="存在阻断级质量问题，停止归档和世界状态入库。",
             )
         if warnings:
+            status = QUALITY_MANUAL_REVIEW_REQUIRED if cls._requires_manual_review(warnings) else QUALITY_WARN
             return QualityGateResult(
-                status=QUALITY_WARN,
+                status=status,
                 warning_items=cls._dedupe(warnings),
-                summary="存在可接受告警，允许归档但需要展示诊断。",
+                summary=(
+                    "存在需要人工确认的质量问题，停止自动归档。"
+                    if status == QUALITY_MANUAL_REVIEW_REQUIRED
+                    else "存在可接受告警，允许归档但需要展示诊断。"
+                ),
             )
         return QualityGateResult(status=QUALITY_PASS, summary="质量门禁通过。")
 
@@ -228,6 +239,11 @@ class QualityGateService:
             return QUALITY_WARN
         drift_ratio = abs(actual - target) / target
         return QUALITY_BLOCK if drift_ratio > 0.6 else QUALITY_WARN
+
+    @staticmethod
+    def _requires_manual_review(warnings: list[dict[str, Any]]) -> bool:
+        manual_review_codes = {"final_review_score", "language_style", "required_payoff"}
+        return any(str(item.get("code")) in manual_review_codes for item in warnings if isinstance(item, dict))
 
     @staticmethod
     def _note_is_blocking(note: str) -> bool:

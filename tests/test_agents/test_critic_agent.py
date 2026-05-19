@@ -6,6 +6,7 @@ from novel_dev.agents.critic_agent import CriticAgent
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.schemas.context import ChapterPlan, BeatPlan, ChapterContext, LocationContext
 from novel_dev.repositories.chapter_repo import ChapterRepository
+from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.schemas.review import ScoreResult, DimensionScore
 from novel_dev.llm.models import LLMResponse
 
@@ -95,6 +96,49 @@ async def test_generate_score_prompt_requires_flagging_english_terms(async_sessi
     assert "自然中文表达" in prompt
     assert "读者体验" in prompt
     assert "snooze" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_score_prompt_includes_resolved_genre_rules(async_session):
+    await NovelStateRepository(async_session).save_checkpoint(
+        "novel_crit_genre",
+        Phase.REVIEWING.value,
+        {
+            "genre": {
+                "primary_slug": "lishi",
+                "primary_name": "历史",
+                "secondary_slug": "political_war",
+                "secondary_name": "权谋争霸",
+            }
+        },
+        None,
+        None,
+    )
+    score_result = ScoreResult(
+        overall=88,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment=""),
+            DimensionScore(name="characterization", score=85, comment=""),
+            DimensionScore(name="readability", score=85, comment=""),
+            DimensionScore(name="consistency", score=85, comment=""),
+            DimensionScore(name="humanity", score=85, comment=""),
+            DimensionScore(name="hook_strength", score=85, comment=""),
+        ],
+        summary_feedback="ok",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score("他在衙署前停步。", _make_context().model_dump(), "novel_crit_genre")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "类型模板约束" in prompt
+    assert "时代制度" in prompt
+    assert "交通通信" in prompt
+    assert "现代行政黑话" in prompt
 
 
 @pytest.mark.asyncio

@@ -1055,6 +1055,7 @@ class VolumePlannerAgent:
             synopsis,
             world_snapshot=world_snapshot,
             constraint_block=constraint_block,
+            genre_prompt_block=genre_prompt_block,
             novel_id=novel_id,
         )
         result = VolumePlan(
@@ -1625,6 +1626,7 @@ class VolumePlannerAgent:
         world_snapshot: Optional[dict],
         novel_id: str,
         constraint_block: str = "",
+        genre_prompt_block: str = "",
     ) -> list[VolumeBeat]:
         chapters: list[VolumeBeat] = []
         skeletons = blueprint.chapters
@@ -1641,6 +1643,7 @@ class VolumePlannerAgent:
                 batch,
                 world_snapshot=world_snapshot,
                 constraint_block=constraint_block,
+                genre_prompt_block=genre_prompt_block,
             )
             await self._release_connection_before_external_call()
             batch_result = await call_and_parse_model(
@@ -1952,6 +1955,7 @@ class VolumePlannerAgent:
         *,
         world_snapshot: Optional[dict],
         constraint_block: str = "",
+        genre_prompt_block: str = "",
     ) -> str:
         batch_payload = [
             {
@@ -1970,6 +1974,7 @@ class VolumePlannerAgent:
                 f"未回收伏笔:\n{world_snapshot.get('foreshadowings', '无')}\n"
                 f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
             )
+        genre_block = f"\n\n### 类型模板约束\n{genre_prompt_block}" if genre_prompt_block.strip() else ""
         return (
             "你是一位小说分卷规划专家。请根据给定的卷纲骨架，补全一批章节的详细 VolumeBeatExpansion 数组。"
             "只返回合法 JSON 数组，每一项补全章节细节即可。\n"
@@ -1991,6 +1996,7 @@ class VolumePlannerAgent:
             f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
             f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
             f"{constraint_block}\n\n"
+            f"{genre_block}\n\n"
             f"### 本批待扩展章节\n{json.dumps(batch_payload, ensure_ascii=False)}"
             f"{world_block}"
         )

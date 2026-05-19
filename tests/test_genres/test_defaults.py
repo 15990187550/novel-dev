@@ -30,6 +30,21 @@ def test_builtin_templates_have_global_and_genre_layers():
     assert ("secondary", "workplace_business", "*", "*") in keys
 
 
+def test_builtin_templates_cover_all_enabled_primary_categories():
+    primary_slugs = {
+        category.slug
+        for category in BUILTIN_CATEGORIES
+        if category.enabled and category.level == 1 and category.slug != "general"
+    }
+    templated_primary_slugs = {
+        template.category_slug
+        for template in BUILTIN_TEMPLATES
+        if template.enabled and template.scope == "primary"
+    }
+
+    assert primary_slugs <= templated_primary_slugs
+
+
 def test_genre_template_rejects_invalid_category_slug():
     with pytest.raises(ValueError):
         GenreTemplate(scope="primary", category_slug="Bad-Slug")

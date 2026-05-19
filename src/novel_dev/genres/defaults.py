@@ -95,6 +95,87 @@ BUILTIN_TEMPLATES: tuple[GenreTemplate, ...] = (
         },
     ),
     GenreTemplate(
+        scope="primary",
+        category_slug="xianxia",
+        prompt_blocks={
+            "setting_rules": ["修行体系、师承、宗门、散修边界、因果代价和资源获取方式必须与导入资料一致。"],
+            "structure_rules": ["突破、试炼、机缘和斗法要有前置铺垫、明确代价和角色选择，不把境界提升当作无成本解法。"],
+            "forbidden_rules": ["未获资料授权时，不把现代制度、互联网语汇或现实职场逻辑作为默认推进方式。"],
+        },
+        quality_config={
+            "modern_terms_policy": "block",
+            "required_setting_dimensions": ["cultivation_system", "sect_order", "karma_cost"],
+            "dimension_weights": {"setting_consistency": 1.2, "plot_cohesion": 1.1},
+        },
+    ),
+    GenreTemplate(
+        scope="primary",
+        category_slug="dushi",
+        prompt_blocks={
+            "setting_rules": ["现实生活、职业关系、家庭关系、金钱成本、法律和公共规则应保持可信。"],
+            "prose_rules": ["表达可使用现代生活语汇，但信息推进要依附人物行动和现实场景。"],
+            "forbidden_rules": ["除非导入资料授权，不用宗门、境界突破或法宝资源解决现实冲突。"],
+        },
+        quality_config={
+            "modern_terms_policy": "allow",
+            "required_setting_dimensions": ["career_status", "family_or_social_pressure", "real_world_constraints"],
+            "forbidden_drift_patterns": ["未授权宗门体系", "未授权境界突破", "未授权法宝资源"],
+        },
+    ),
+    GenreTemplate(
+        scope="primary",
+        category_slug="kehuan",
+        prompt_blocks={
+            "setting_rules": ["技术能力、能源、算力、工程限制、社会制度和风险成本必须自洽。"],
+            "structure_rules": ["技术突破、灾变升级和探索发现要有可追溯因果，不用万能装置跳过角色选择。"],
+            "forbidden_rules": ["未获资料授权时，不把修炼境界、宗门斗争或神秘血脉作为默认解释。"],
+        },
+        quality_config={
+            "modern_terms_policy": "allow",
+            "required_setting_dimensions": ["technology_boundary", "resource_constraint", "social_system"],
+            "forbidden_drift_patterns": ["未授权修炼境界", "未授权宗门斗争"],
+        },
+    ),
+    GenreTemplate(
+        scope="primary",
+        category_slug="xuanyi",
+        prompt_blocks={
+            "setting_rules": ["案件、疑点、线索、动机和信息披露边界必须公平，关键判断能回看前文找到依据。"],
+            "structure_rules": ["误导、反转和解答要逐步递进，不用未铺垫线索直接翻盘。"],
+            "quality_rules": ["检查线索链、嫌疑变化、动机可信度和解答边界。"],
+        },
+        quality_config={
+            "required_setting_dimensions": ["clue_chain", "suspect_map", "disclosure_boundary"],
+            "blocking_rules": {"unforeshadowed_solution": True},
+        },
+    ),
+    GenreTemplate(
+        scope="primary",
+        category_slug="lishi",
+        prompt_blocks={
+            "setting_rules": ["时代制度、官职军制、交通通信、财政粮草和社会身份边界要保持可信。"],
+            "structure_rules": ["权谋、战事和制度变化必须受资源、时间、身份和舆论成本约束。"],
+            "forbidden_rules": ["未获资料授权时，不用现代行政黑话、互联网语汇或超凡能力解决历史冲突。"],
+        },
+        quality_config={
+            "modern_terms_policy": "block",
+            "required_setting_dimensions": ["period_order", "political_constraint", "logistics_cost"],
+        },
+    ),
+    GenreTemplate(
+        scope="primary",
+        category_slug="qihuan",
+        prompt_blocks={
+            "setting_rules": ["魔法、神术、种族、信仰和地理规则要有清晰边界和代价。"],
+            "structure_rules": ["冒险、学院、战争和史诗线应体现规则限制、盟友关系和选择后果。"],
+            "forbidden_rules": ["未获资料授权时，不把东方修炼境界、宗门体系或现实职场梗作为默认结构。"],
+        },
+        quality_config={
+            "required_setting_dimensions": ["magic_rules", "faction_order", "geography_boundary"],
+            "forbidden_drift_patterns": ["未授权东方修炼境界", "未授权宗门体系"],
+        },
+    ),
+    GenreTemplate(
         scope="secondary",
         category_slug="zhutian",
         parent_slug="xuanhuan",

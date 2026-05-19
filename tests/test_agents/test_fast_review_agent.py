@@ -889,6 +889,60 @@ async def test_fast_review_warns_word_count_only_at_edit_limit(async_session):
 
 
 @pytest.mark.asyncio
+async def test_fast_review_holds_manual_review_required_at_edit_limit(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_manual_review",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 2,
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 4},
+                "writing_cards": [
+                    {"beat_index": 0, "required_payoffs": ["林照读出残信上的禁字"]}
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_manual_review",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_manual_review", "v1", 1, "Manual Review")
+    await repo.update_text("c_manual_review", raw_draft="甲乙丙。", polished_text="甲乙丙。")
+
+    final_score = ScoreResult(
+        overall=82,
+        dimensions=[DimensionScore(name="readability", score=82, comment="基本顺畅")],
+        summary_feedback="成稿可读，但缺少计划承诺的线索兑现。",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_manual_review", "c_manual_review")
+
+    chapter = await repo.get_by_id("c_manual_review")
+    assert chapter.quality_status == "manual_review_required"
+    assert any(item["code"] == "required_payoff" for item in chapter.quality_reasons["warning_items"])
+    assert chapter.world_state_ingested is False
+
+    state = await director.resume("novel_fr_manual_review")
+    assert state.current_phase == Phase.FAST_REVIEWING.value
+    assert state.checkpoint_data["quality_gate"]["status"] == "manual_review_required"
+
+
+@pytest.mark.asyncio
 async def test_fast_review_real_contract_skips_strict_word_count_gate(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(

@@ -13,7 +13,12 @@ from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.genre_template_service import GenreTemplateService
-from novel_dev.services.quality_gate_service import QUALITY_BLOCK, QUALITY_UNCHECKED, QualityGateService
+from novel_dev.services.quality_gate_service import (
+    QUALITY_BLOCK,
+    QUALITY_MANUAL_REVIEW_REQUIRED,
+    QUALITY_UNCHECKED,
+    QualityGateService,
+)
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
@@ -575,6 +580,24 @@ class FastReviewAgent:
                 await self.director.save_checkpoint(
                     novel_id,
                     phase=Phase.EDITING,
+                    checkpoint_data=checkpoint,
+                    volume_id=state.current_volume_id,
+                    chapter_id=state.current_chapter_id,
+                )
+            elif gate.status == QUALITY_MANUAL_REVIEW_REQUIRED:
+                log_agent_detail(
+                    novel_id,
+                    "FastReviewAgent",
+                    "质量门禁需要人工确认，停止进入 librarian",
+                    node="quality_gate_decision",
+                    task="review",
+                    status="failed",
+                    level="warning",
+                    metadata=gate.model_dump(),
+                )
+                await self.director.save_checkpoint(
+                    novel_id,
+                    phase=Phase.FAST_REVIEWING,
                     checkpoint_data=checkpoint,
                     volume_id=state.current_volume_id,
                     chapter_id=state.current_chapter_id,

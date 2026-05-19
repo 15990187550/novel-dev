@@ -137,9 +137,10 @@ async def test_end_to_end_pipeline_single_chapter(async_session, tmp_path, monke
             chapter_plan = ChapterPlan(
                 chapter_number=1,
                 title="第一章",
-                target_word_count=40,
+                target_word_count=93,
                 beats=[BeatPlan(summary="主角在青云宗后山意外觉醒体内隐藏的上古血脉，周身灵气狂暴涌动，引发天地异象", target_mood="tense")],
             )
+            cp["current_chapter_plan"] = chapter_plan.model_dump()
             cp["chapter_context"] = ChapterContext(
                 chapter_plan=chapter_plan,
                 style_profile={},
@@ -250,7 +251,7 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
             "volume_number": 1,
             "title": "第一卷",
             "total_chapters": 2,
-            "chapters": [
+                "chapters": [
                 {
                     "chapter_id": chapter_1_id,
                     "chapter_number": 1,
@@ -263,8 +264,9 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
                     "title": "第二章",
                     "summary": "突破",
                 },
-            ],
-        }
+                ],
+                "review_status": {"status": "accepted", "reason": "test accepted"},
+            }
 
         chapter_plan_1 = ChapterPlan(
             chapter_number=1,
@@ -317,7 +319,7 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
             chapter_plan_2 = ChapterPlan(
                 chapter_number=2,
                 title="第二章",
-                target_word_count=3000,
+                target_word_count=93,
                 beats=[BeatPlan(summary="突破", target_mood="epic")],
             )
             context_2 = ChapterContext(
@@ -330,6 +332,7 @@ async def test_end_to_end_pipeline_multi_chapter(async_session, tmp_path, monkey
                 pending_foreshadowings=[],
             )
             cp = dict(state.checkpoint_data or {})
+            cp["current_chapter_plan"] = chapter_plan_2.model_dump()
             cp["chapter_context"] = context_2.model_dump()
             await director.save_checkpoint(
                 novel_id,

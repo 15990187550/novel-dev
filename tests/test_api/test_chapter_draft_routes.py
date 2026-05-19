@@ -22,6 +22,20 @@ def executable_beat_summary() -> str:
     )
 
 
+def accepted_volume_plan(chapter_plan: dict, *, status: str = "accepted") -> dict:
+    return {
+        "volume_id": "v1",
+        "volume_number": 1,
+        "title": "第一卷",
+        "chapters": [chapter_plan],
+        "review_status": {
+            "status": status,
+            "writability_status": {"passed": True},
+            "quality_preflight_status": {"status": "pass"},
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_prepare_context_and_generate_draft(async_session, mock_llm_factory):
     async def override():
@@ -37,10 +51,15 @@ async def test_prepare_context_and_generate_draft(async_session, mock_llm_factor
             target_word_count=3000,
             beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense", key_entities=["林风"])],
         )
+        chapter_plan_payload = chapter_plan.model_dump()
+        chapter_plan_payload["chapter_id"] = "c1"
         await director.save_checkpoint(
             "n_api",
             phase=Phase.CONTEXT_PREPARATION,
-            checkpoint_data={"current_chapter_plan": chapter_plan.model_dump()},
+            checkpoint_data={
+                "current_chapter_plan": chapter_plan_payload,
+                "current_volume_plan": accepted_volume_plan(chapter_plan_payload),
+            },
             volume_id="v1",
             chapter_id="c1",
         )
@@ -61,6 +80,124 @@ async def test_prepare_context_and_generate_draft(async_session, mock_llm_factor
             resp3 = await client.get("/api/novels/n_api/chapters/c1/draft")
             assert resp3.status_code == 200
             assert resp3.json()["status"] == "drafted"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_prepare_context_rejects_unaccepted_volume_plan(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        director = NovelDirector(session=async_session)
+        chapter_plan = ChapterPlan(
+            chapter_number=1,
+            title="Needs Review",
+            target_word_count=3000,
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
+        )
+        chapter_plan_payload = chapter_plan.model_dump()
+        chapter_plan_payload["chapter_id"] = "c1"
+        await director.save_checkpoint(
+            "n_unaccepted_context",
+            phase=Phase.CONTEXT_PREPARATION,
+            checkpoint_data={
+                "current_chapter_plan": chapter_plan_payload,
+                "current_volume_plan": accepted_volume_plan(chapter_plan_payload, status="needs_manual_review"),
+            },
+            volume_id="v1",
+            chapter_id="c1",
+        )
+        await ChapterRepository(async_session).create("c1", "v1", 1, "Needs Review", novel_id="n_unaccepted_context")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/novels/n_unaccepted_context/chapters/c1/context")
+
+        assert resp.status_code == 400
+        assert "Volume plan is not accepted" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_prepare_context_rejects_non_current_chapter_id(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        director = NovelDirector(session=async_session)
+        chapter_plan = ChapterPlan(
+            chapter_number=1,
+            title="Current",
+            target_word_count=3000,
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
+        )
+        chapter_plan_payload = chapter_plan.model_dump()
+        chapter_plan_payload["chapter_id"] = "c1"
+        await director.save_checkpoint(
+            "n_wrong_context",
+            phase=Phase.CONTEXT_PREPARATION,
+            checkpoint_data={
+                "current_chapter_plan": chapter_plan_payload,
+                "current_volume_plan": accepted_volume_plan(chapter_plan_payload),
+            },
+            volume_id="v1",
+            chapter_id="c1",
+        )
+        await ChapterRepository(async_session).create("c1", "v1", 1, "Current", novel_id="n_wrong_context")
+        await ChapterRepository(async_session).create("c2", "v1", 2, "Wrong", novel_id="n_wrong_context")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/novels/n_wrong_context/chapters/c2/context")
+
+        assert resp.status_code == 400
+        assert "current chapter" in resp.json()["detail"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_draft_rejects_non_current_chapter_id(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        director = NovelDirector(session=async_session)
+        chapter_plan = ChapterPlan(
+            chapter_number=1,
+            title="Current Draft",
+            target_word_count=3000,
+            beats=[BeatPlan(summary=executable_beat_summary(), target_mood="tense")],
+        )
+        chapter_plan_payload = chapter_plan.model_dump()
+        chapter_plan_payload["chapter_id"] = "c1"
+        await director.save_checkpoint(
+            "n_wrong_draft",
+            phase=Phase.CONTEXT_PREPARATION,
+            checkpoint_data={
+                "current_chapter_plan": chapter_plan_payload,
+                "current_volume_plan": accepted_volume_plan(chapter_plan_payload),
+            },
+            volume_id="v1",
+            chapter_id="c1",
+        )
+        await ChapterRepository(async_session).create("c1", "v1", 1, "Current Draft", novel_id="n_wrong_draft")
+        await ChapterRepository(async_session).create("c2", "v1", 2, "Wrong Draft", novel_id="n_wrong_draft")
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            context_resp = await client.post("/api/novels/n_wrong_draft/chapters/c1/context")
+            assert context_resp.status_code == 200
+            draft_resp = await client.post("/api/novels/n_wrong_draft/chapters/c2/draft")
+
+        assert draft_resp.status_code == 400
+        assert "current chapter" in draft_resp.json()["detail"]
     finally:
         app.dependency_overrides.clear()
 

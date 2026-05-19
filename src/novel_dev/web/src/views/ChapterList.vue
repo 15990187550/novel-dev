@@ -189,11 +189,12 @@ const jobStatusLabel = computed(() => ({
 }[store.autoRunJob?.status] || store.autoRunJob?.status || '-'))
 
 function statusType(s) { return { pending: 'info', drafted: 'primary', edited: 'success', archived: 'danger' }[s] || 'info' }
-function qualityType(s) { return { pass: 'success', warn: 'warning', block: 'danger', unchecked: 'info' }[s] || 'info' }
+function qualityType(s) { return { pass: 'success', warn: 'warning', manual_review_required: 'warning', block: 'danger', unchecked: 'info' }[s] || 'info' }
 function qualityLabel(s) {
   return {
     pass: '通过',
     warn: '告警',
+    manual_review_required: '待人工确认',
     block: '阻断',
     unchecked: '未检查',
   }[s] || '未检查'

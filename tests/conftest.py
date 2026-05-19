@@ -119,7 +119,11 @@ def mock_llm_factory(monkeypatch):
             )
         elif agent == "WriterAgent":
             mock_client.acomplete.return_value = LLMResponse(
-                text="这是一个很长的节拍正文内容，字数足够多，情节跌宕起伏，引人入胜，余味悠长。"
+                text=(
+                    "这是一个很长的节拍正文内容，陆照必须在继续搜证和立刻撤离之间选择，"
+                    "失败会暴露玉佩，结尾听见追兵逼近。石阶冷光压住他的呼吸，"
+                    "他把线索藏进袖中，仍向药库深处迈出一步，情节跌宕起伏，引人入胜。"
+                )
             )
         elif agent == "CriticAgent" and task == "score_chapter":
             mock_client.acomplete.return_value = LLMResponse(text=ScoreResult(
@@ -138,7 +142,13 @@ def mock_llm_factory(monkeypatch):
                 text='[{"beat_index": 0, "scores": {"plot_tension": 80, "humanity": 80}}]'
             )
         elif agent == "EditorAgent":
-            mock_client.acomplete.return_value = LLMResponse(text="润色后的正文内容，情节更紧凑，人物更鲜明，场景更细腻，读感更顺畅有力自然。")
+            mock_client.acomplete.return_value = LLMResponse(
+                text=(
+                    "润色后的正文内容，陆照必须在继续搜证和立刻撤离之间选择，"
+                    "失败会暴露玉佩，结尾听见追兵逼近。石阶冷光压住他的呼吸，"
+                    "他把线索藏进袖中，仍向药库深处迈出一步，情节更紧凑，人物更鲜明，读感更顺畅有力自然。"
+                )
+            )
         elif agent == "ChapterStructureGuardService":
             from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardResult
 

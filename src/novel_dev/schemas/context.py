@@ -222,8 +222,11 @@ class ChapterContext(BaseModel):
     beat_contexts: List[BeatContext] = Field(default_factory=list)
     writing_cards: List[BeatWritingCard] = Field(default_factory=list)
     story_contract: dict[str, Any] = Field(default_factory=dict)
+    genre_quality_config: dict[str, Any] = Field(default_factory=dict)
+    genre_prompt_block: str = ""
+    genre_template_warnings: List[str] = Field(default_factory=list)
 
-    @field_validator("worldview_summary", "previous_chapter_summary", mode="before")
+    @field_validator("worldview_summary", "previous_chapter_summary", "genre_prompt_block", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)

@@ -1149,6 +1149,39 @@ async def test_expand_volume_plan_batch_backfills_missing_skeleton_fields(async_
     assert chapters[0].target_word_count == 3200
 
 
+def test_build_volume_plan_batch_prompt_includes_genre_rules(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=1,
+        estimated_total_words=3000,
+        chapters=[{"chapter_number": 1, "title": "旧案重启", "summary": "主角发现旧案线索。"}],
+    )
+    synopsis = SynopsisData(
+        title="测试",
+        logline="主角追查旧案。",
+        core_conflict="真相与秩序冲突",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+
+    prompt = agent._build_volume_plan_batch_prompt(
+        blueprint,
+        synopsis,
+        blueprint.chapters,
+        world_snapshot=None,
+        genre_prompt_block="### 类型模板约束\n案件、疑点、线索、动机和信息披露边界必须公平。",
+    )
+
+    assert "类型模板约束" in prompt
+    assert "信息披露边界必须公平" in prompt
+    assert "每个 beat" in prompt
+
+
 @pytest.mark.asyncio
 async def test_complete_expanded_batch_reorders_by_skeleton_and_rejects_invalid_numbers(async_session):
     agent = VolumePlannerAgent(async_session)

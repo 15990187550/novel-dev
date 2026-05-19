@@ -524,6 +524,15 @@ class EditorAgent:
         if chapter_plan:
             import json
             plan_block = f"### 章节计划\n{json.dumps(chapter_plan, ensure_ascii=False)}\n\n"
+        genre_prompt = ""
+        if isinstance(chapter_context, dict):
+            genre_prompt = str(chapter_context.get("genre_prompt_block") or "").strip()
+        genre_block = f"### 类型模板约束\n{genre_prompt}\n\n" if genre_prompt else ""
+        genre_quality_config = chapter_context.get("genre_quality_config") if isinstance(chapter_context, dict) else None
+        genre_quality_block = ""
+        if genre_quality_config:
+            import json
+            genre_quality_block = f"### 类型质量配置\n{json.dumps(genre_quality_config, ensure_ascii=False)}\n\n"
 
         prompt_parts = [
             "你是一位小说编辑。请在保留叙事事实和原对话意图的前提下,针对以下问题定点改写本段。"
@@ -550,6 +559,8 @@ class EditorAgent:
             "5. 若问题建议里出现新增反转、陌生人物、额外物件或后续危险示例,请只吸收其读感目标,并改用原文/计划已经出现的素材完成同等效果。\n",
             style_block,
             plan_block,
+            genre_block,
+            genre_quality_block,
         ]
         if low_dims:
             prompt_parts.append(f"## 低分维度\n{', '.join(low_dims)}\n")

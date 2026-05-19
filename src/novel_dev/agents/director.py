@@ -237,6 +237,7 @@ class NovelDirector:
         from novel_dev.agents.librarian import LibrarianAgent
         from novel_dev.services.archive_service import ArchiveService
         from novel_dev.repositories.chapter_repo import ChapterRepository
+        from novel_dev.services.quality_gate_service import quality_gate_stops_librarian
 
         chapter_id = state.current_chapter_id
         if not chapter_id:
@@ -247,7 +248,7 @@ class NovelDirector:
         if not ch or not ch.polished_text:
             log_service.add_log(state.novel_id, "NovelDirector", "章节精修文本缺失", level="error")
             raise ValueError("Chapter polished text missing")
-        if getattr(ch, "quality_status", "unchecked") == "block":
+        if quality_gate_stops_librarian(getattr(ch, "quality_status", "unchecked")):
             log_service.add_log(
                 state.novel_id,
                 "NovelDirector",

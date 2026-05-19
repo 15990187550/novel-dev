@@ -532,6 +532,35 @@ async def test_rewrite_beat_prompt_requires_cleaning_english_terms(async_session
 
 
 @pytest.mark.asyncio
+async def test_rewrite_beat_prompt_includes_context_genre_rules(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="他收起账册，先核对合同条款。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "他收起账册。",
+            {"readability": 62},
+            [{"dim": "readability", "problem": "信息推进太薄", "suggestion": "补具体行动"}],
+            [],
+            {
+                "style_profile": {},
+                "genre_prompt_block": "### 类型模板约束\n- 现实组织、合同、资金、法律、职位关系和商业因果应保持可信。",
+                "genre_quality_config": {
+                    "modern_terms_policy": "allow",
+                    "required_setting_dimensions": ["career_status", "business_stakes"],
+                },
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "类型模板约束" in prompt
+    assert "现实组织、合同、资金" in prompt
+    assert "career_status" in prompt
+
+
+@pytest.mark.asyncio
 async def test_rewrite_beat_prompt_targets_low_ai_flavor_patterns(async_session):
     mock_client = AsyncMock()
     mock_client.acomplete.return_value = LLMResponse(text="陆照扶着石壁坐稳，先去看掌心。")

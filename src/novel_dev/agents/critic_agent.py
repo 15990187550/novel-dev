@@ -9,6 +9,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 
 
@@ -288,7 +289,9 @@ class CriticAgent:
                 for e in context_data.get("active_entities", [])
             ],
             "pending_foreshadowings": context_data.get("pending_foreshadowings", []),
+            "genre_quality_config": context_data.get("genre_quality_config", {}),
         }
+        genre_block = await self._build_genre_review_block(novel_id, context_data)
         prompt = (
             "你是一位严格的小说评审编辑。请根据以下章节草稿和章节上下文,"
             "按 rubric 给 6 个维度打分(0-100),并输出**可操作的具体问题**,"
@@ -312,8 +315,9 @@ class CriticAgent:
             "### readability(可读性)\n"
             "- 85-100: 句式多变,场景/对话/心理节奏合理,无冗余\n"
             "- 70-84: 可读但有长句堆砌、重复用词、比喻密度略高\n"
-            "- 50-69: 大量书面语/AI 腔,段落结构雷同,比喻密度失控,类型概念连环复读,"
-            "感官平均用力,或出现未授权英文/拼音/网络缩写/UI 术语原文\n"
+            "- 50-69: 大量书面语/AI 腔,段落结构雷同,比喻密度失控,抽象"
+            "玄幻词或类型概念连环复读,感官平均用力、模板化奇遇、现代"
+            "吐槽突兀,或出现未授权英文/拼音/网络缩写/UI 术语原文\n"
             "- <50: 生硬、难以连读\n\n"
             "### consistency(设定一致性)\n"
             "- 85-100: 与 worldview/entities/前章完全一致\n"
@@ -347,6 +351,7 @@ class CriticAgent:
             "取值优先使用 setting_generation / brainstorm / volume_plan / drafting / editing。"
             "例如设定承接断裂填 volume_plan,正文新增计划外事实填 editing。\n"
             "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
+            f"{genre_block}"
             f"### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
             f"### 草稿\n{raw_draft}\n\n"
             "请评分:"
@@ -354,6 +359,37 @@ class CriticAgent:
         return await call_and_parse_model(
             "CriticAgent", "score_chapter", prompt, ScoreResult, novel_id=novel_id
         )
+
+    async def _build_genre_review_block(self, novel_id: str, context_data: dict) -> str:
+        genre_block = str(context_data.get("genre_prompt_block") or "").strip()
+        quality_config = context_data.get("genre_quality_config")
+        warnings = context_data.get("genre_template_warnings") or []
+        if novel_id:
+            genre_template = await GenreTemplateService(self.session).resolve(
+                novel_id,
+                "CriticAgent",
+                "score_chapter",
+            )
+            resolved_block = genre_template.render_prompt_block(
+                "setting_rules",
+                "structure_rules",
+                "quality_rules",
+                "forbidden_rules",
+            ).strip()
+            if resolved_block:
+                genre_block = resolved_block
+            quality_config = genre_template.quality_config or quality_config
+            warnings = genre_template.warnings or warnings
+        if not genre_block and not quality_config:
+            return ""
+        parts = ["## 类型模板约束"]
+        if genre_block:
+            parts.append(genre_block)
+        if quality_config:
+            parts.append("### 类型质量配置\n" + json.dumps(quality_config, ensure_ascii=False))
+        if warnings:
+            parts.append("### 模板诊断\n" + json.dumps(warnings, ensure_ascii=False))
+        return "\n".join(parts) + "\n\n"
 
     async def review_standalone(
         self,

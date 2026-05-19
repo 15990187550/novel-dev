@@ -18,7 +18,7 @@ from novel_dev.services.global_consistency_audit_service import GlobalConsistenc
 from novel_dev.services.chapter_run_trace_service import ChapterRunTraceService
 from novel_dev.services.chapter_run_state_service import CHAPTER_RUN_STAGES, ChapterRunStateService
 from novel_dev.services.log_service import log_service
-from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
+from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService, quality_gate_stops_librarian
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.volume_plan_guard_service import evaluate_volume_plan_readiness
 from novel_dev.services.world_state_review_service import WorldStateReviewRequiredError
@@ -418,7 +418,7 @@ class ChapterGenerationService:
 
     async def _raise_if_quality_blocked(self, chapter_id: str) -> None:
         chapter = await self.chapter_repo.get_by_id(chapter_id)
-        if chapter and getattr(chapter, "quality_status", "unchecked") == "block":
+        if chapter and quality_gate_stops_librarian(getattr(chapter, "quality_status", "unchecked")):
             state = await self.director.resume(chapter.novel_id or "")
             checkpoint = dict(state.checkpoint_data or {}) if state else {}
             if not ChapterRunStateService.quality_gate_matches_current_polished(checkpoint, chapter):

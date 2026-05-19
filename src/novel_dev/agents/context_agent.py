@@ -25,6 +25,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.beat_boundary_service import BeatBoundaryService
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.quality_preflight_service import QualityPreflightService
 
@@ -328,6 +329,17 @@ class ContextAgent:
         )
 
         guardrails = self._build_guardrails(chapter_plan, active_entities, location_context, checkpoint)
+        genre_template = await GenreTemplateService(self.session).resolve(
+            novel_id,
+            "ContextAgent",
+            "assemble",
+        )
+        genre_prompt_block = genre_template.render_prompt_block(
+            "setting_rules",
+            "structure_rules",
+            "quality_rules",
+            "forbidden_rules",
+        )
 
         beat_contexts = self._build_beat_contexts(
             chapter_plan,
@@ -358,6 +370,9 @@ class ContextAgent:
                 active_entities=active_entity_payloads,
             ),
             story_contract=story_contract,
+            genre_quality_config=genre_template.quality_config,
+            genre_prompt_block=genre_prompt_block,
+            genre_template_warnings=genre_template.warnings,
         )
         context_source_metadata = {
             "query": query_text,
@@ -371,6 +386,9 @@ class ContextAgent:
             "worldview": self._document_row_log_item(worldview_doc) if worldview_doc else None,
             "has_style_profile": bool(style_profile),
             "has_previous_chapter_summary": bool(prev_summary),
+            "genre": genre_template.genre.model_dump(),
+            "genre_matched_templates": genre_template.matched_templates,
+            "genre_template_warnings": genre_template.warnings,
             "guardrails": guardrails,
             "beat_contexts": [
                 {

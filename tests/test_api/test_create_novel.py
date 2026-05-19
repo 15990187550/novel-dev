@@ -59,6 +59,8 @@ async def test_create_novel(async_session):
             assert data["genre"]["primary_slug"] == "xuanhuan"
             assert data["genre"]["secondary_slug"] == "zhutian"
             assert data["checkpoint_data"]["novel_title"] == "测试小说"
+            assert data["checkpoint_data"]["genre_template"]["genre"]["primary_slug"] == "xuanhuan"
+            assert data["checkpoint_data"]["genre_template"]["matched_templates"]
             assert data["checkpoint_data"]["synopsis_data"]["title"] == "测试小说"
             assert data["checkpoint_data"]["synopsis_data"]["estimated_volumes"] == 1
             assert data["current_volume_id"] is None

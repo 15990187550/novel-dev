@@ -20,6 +20,33 @@
           {{ item.message }}
         </div>
       </div>
+      <div v-if="isManualReviewRequired" class="mt-4 space-y-3 border-t border-amber-200 pt-3 dark:border-amber-800">
+        <el-input
+          v-model="manualReviewNote"
+          type="textarea"
+          :rows="2"
+          placeholder="人工确认备注"
+        />
+        <div class="flex flex-wrap gap-2">
+          <el-button
+            type="primary"
+            size="small"
+            :loading="manualReviewAction === 'approve'"
+            @click="resolveManualReview('approve')"
+          >
+            确认放行
+          </el-button>
+          <el-button
+            type="warning"
+            size="small"
+            plain
+            :loading="manualReviewAction === 'return_to_editing'"
+            @click="resolveManualReview('return_to_editing')"
+          >
+            退回精修
+          </el-button>
+        </div>
+      </div>
     </div>
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
       <div class="bg-white dark:bg-gray-800 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-700">
@@ -38,7 +65,7 @@
 import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getChapterQuality, getChapterText } from '@/api.js'
+import { getChapterQuality, getChapterText, resolveChapterQualityManualReview } from '@/api.js'
 import { useNovelStore } from '@/stores/novel.js'
 
 const route = useRoute()
@@ -46,10 +73,13 @@ const store = useNovelStore()
 const chapter = ref(null)
 const quality = ref(null)
 const loading = ref(true)
+const manualReviewNote = ref('')
+const manualReviewAction = ref('')
 const qualityItems = computed(() => [
   ...((quality.value?.quality_reasons?.blocking_items) || []),
   ...((quality.value?.quality_reasons?.warning_items) || []),
 ])
+const isManualReviewRequired = computed(() => quality.value?.quality_status === 'manual_review_required')
 
 async function fetchIfReady() {
   if (!store.novelId) return
@@ -68,16 +98,32 @@ async function fetchIfReady() {
   finally { loading.value = false }
 }
 
+async function resolveManualReview(action) {
+  if (!store.novelId || !route.params.chapterId) return
+  manualReviewAction.value = action
+  try {
+    quality.value = await resolveChapterQualityManualReview(store.novelId, route.params.chapterId, {
+      action,
+      note: manualReviewNote.value,
+    })
+    await store.refreshState()
+    ElMessage.success(action === 'approve' ? '已确认放行' : '已退回精修')
+  } finally {
+    manualReviewAction.value = ''
+  }
+}
+
 onMounted(fetchIfReady)
 watch(() => store.novelId, fetchIfReady)
 
 function wc(t) { return t ? t.replace(/\s/g, '').length : 0 }
 function statusType(s) { return { pending: 'info', drafted: 'primary', edited: 'success', archived: 'danger' }[s] || 'info' }
-function qualityType(s) { return { pass: 'success', warn: 'warning', block: 'danger', unchecked: 'info' }[s] || 'info' }
+function qualityType(s) { return { pass: 'success', warn: 'warning', manual_review_required: 'warning', block: 'danger', unchecked: 'info' }[s] || 'info' }
 function qualityLabel(s) {
   return {
     pass: '通过',
     warn: '告警',
+    manual_review_required: '待人工确认',
     block: '阻断',
     unchecked: '未检查',
   }[s] || '未检查'

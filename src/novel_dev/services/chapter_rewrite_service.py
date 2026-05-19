@@ -21,7 +21,7 @@ from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.chapter_run_state_service import ChapterRunStateService
 from novel_dev.services.log_service import log_service
-from novel_dev.services.quality_gate_service import QUALITY_BLOCK
+from novel_dev.services.quality_gate_service import QUALITY_BLOCK, quality_gate_stops_librarian
 
 
 REWRITE_STAGE_CONTEXT = "context"
@@ -181,7 +181,7 @@ class ChapterRewriteService:
                     report = await FastReviewAgent(self.session).review_standalone(novel_id, chapter_id, checkpoint)
                     checkpoint["fast_review_feedback"] = report.model_dump()
                     quality_gate = checkpoint.get("quality_gate") if isinstance(checkpoint.get("quality_gate"), dict) else {}
-                    if quality_gate.get("status") == QUALITY_BLOCK:
+                    if quality_gate_stops_librarian(quality_gate.get("status")):
                         if self._can_retry_continuity_block(checkpoint, attempt):
                             checkpoint["continuity_rewrite_plan"] = ContinuityAuditService.build_rewrite_plan(
                                 checkpoint.get("continuity_audit") or {}

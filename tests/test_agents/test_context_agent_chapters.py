@@ -82,6 +82,43 @@ async def test_similar_chapters_empty_when_no_embedding_service(async_session):
 
 
 @pytest.mark.asyncio
+async def test_assemble_attaches_resolved_genre_quality_config(async_session):
+    director = NovelDirector(session=async_session)
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="分类上下文",
+        target_word_count=1600,
+        beats=[BeatPlan(
+            summary="主角为保住合同进入会议室，却被负责人当场质疑；他必须在公开证据和暂时退让之间选择，失败会失去客户，结尾发现新风险逼近。",
+            target_mood="tense",
+        )],
+    )
+    await director.save_checkpoint(
+        "n_test_ctx_genre",
+        phase=Phase.CONTEXT_PREPARATION,
+        checkpoint_data={
+            "genre": {
+                "primary_slug": "dushi",
+                "primary_name": "都市",
+                "secondary_slug": "workplace_business",
+                "secondary_name": "职场商战",
+            },
+            "current_chapter_plan": chapter_plan.model_dump(),
+        },
+        volume_id="vol_1",
+        chapter_id="ch_1",
+    )
+
+    context = await ContextAgent(async_session, embedding_service=None).assemble("n_test_ctx_genre", "ch_1")
+    state = await NovelStateRepository(async_session).get_state("n_test_ctx_genre")
+
+    assert context.genre_quality_config["modern_terms_policy"] == "allow"
+    assert "现实生活" in context.genre_prompt_block
+    assert state.checkpoint_data["chapter_context"]["genre_quality_config"]["modern_terms_policy"] == "allow"
+    assert "现实组织" in state.checkpoint_data["chapter_context"]["genre_prompt_block"]
+
+
+@pytest.mark.asyncio
 async def test_assemble_persists_beat_boundary_cards_in_checkpoint(async_session, monkeypatch):
     plan = ChapterPlan(
         chapter_number=1,

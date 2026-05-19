@@ -16,7 +16,7 @@ def test_evaluate_fast_review_real_contract_downgrades_word_count_drift_to_warn(
         report,
         target_word_count=1000,
         polished_word_count=1800,
-        final_review_score=72,
+        final_review_score=82,
         acceptance_scope="real-contract",
     )
 
@@ -39,7 +39,7 @@ def test_evaluate_fast_review_real_longform_downgrades_word_count_drift_to_warn(
         report,
         target_word_count=1667,
         polished_word_count=5410,
-        final_review_score=72,
+        final_review_score=82,
         acceptance_scope="real-longform-volume1",
     )
 
@@ -158,8 +158,31 @@ def test_evaluate_fast_review_warns_when_required_payoff_missing():
         acceptance_scope="real-contract",
     )
 
-    assert gate.status == "warn"
+    assert gate.status == "manual_review_required"
     assert any(item["code"] == "required_payoff" for item in gate.warning_items)
+
+
+def test_evaluate_fast_review_requires_manual_review_for_low_final_score():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=72,
+        polished_text="林照离开试炼林，夜色重新安静下来。",
+        acceptance_scope="real-contract",
+    )
+
+    assert gate.status == "manual_review_required"
+    assert any(item["code"] == "final_review_score" for item in gate.warning_items)
 
 
 def test_quality_gate_converts_blocking_and_warning_items_to_standard_issues():

@@ -2,6 +2,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.services.quality_gate_service import quality_gate_stops_librarian
 from novel_dev.storage.markdown_sync import MarkdownSync
 from novel_dev.storage.paths import StoragePaths
 
@@ -41,7 +42,7 @@ class ArchiveService:
             raise ValueError("Chapter has no polished text to archive")
         if ch.novel_id != novel_id:
             raise ValueError("Chapter not found for novel")
-        if getattr(ch, "quality_status", "unchecked") == "block":
+        if quality_gate_stops_librarian(getattr(ch, "quality_status", "unchecked")):
             raise ValueError("Chapter quality gate blocked archive")
         if ch.status == "archived":
             raise ValueError("Chapter is already archived")

@@ -33,6 +33,8 @@ export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).th
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
 export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/text`).then(r => r.data)
 export const getChapterQuality = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/quality`).then(r => r.data)
+export const resolveChapterQualityManualReview = (nid, cid, payload) =>
+  api.post(`/novels/${nid}/chapters/${cid}/quality/manual_review`, payload).then(r => r.data)
 export const getEntities = (id, params = {}) => api.get(`/novels/${id}/entities`, { params }).then(r => r.data)
 export const searchEntities = (id, params) => api.get(`/novels/${id}/entities/search`, { params }).then(r => r.data)
 export const updateEntity = (id, entityId, payload) =>

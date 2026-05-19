@@ -19,6 +19,7 @@ from novel_dev.storage.markdown_sync import MarkdownSync
 from novel_dev.storage.paths import StoragePaths
 from novel_dev.config import Settings
 from novel_dev.services.extraction_service import ExtractionService
+from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.export.brainstorm import render_brainstorm_prompt
@@ -40,6 +41,13 @@ from novel_dev.schemas.brainstorm_workspace import (
 from novel_dev.services.brainstorm_workspace_service import BrainstormWorkspaceService
 from novel_dev.services.flow_control_service import FlowCancelledError, FlowControlService
 from novel_dev.services.chapter_generation_service import AutoRunChaptersRequest
+from novel_dev.services.quality_gate_service import (
+    QUALITY_MANUAL_REVIEW_REQUIRED,
+    QUALITY_UNCHECKED,
+    QUALITY_WARN,
+    quality_gate_stops_librarian,
+)
+from novel_dev.services.volume_plan_guard_service import ensure_volume_plan_accepted
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.generation_job_service import (
     CHAPTER_AUTO_RUN_JOB,
@@ -220,6 +228,11 @@ class UpdateNovelRequest(BaseModel):
 class ChapterRewriteRequest(BaseModel):
     resume: bool = False
     failed_job_id: Optional[str] = None
+
+
+class ChapterQualityManualReviewRequest(BaseModel):
+    action: str = Field(pattern="^(approve|return_to_editing)$")
+    note: str = ""
 
 
 class EntityClassificationUpdateRequest(BaseModel):
@@ -571,6 +584,51 @@ async def get_session():
         yield session
 
 
+async def _load_generation_state_for_chapter(
+    session: AsyncSession,
+    novel_id: str,
+    chapter_id: str,
+    *,
+    require_accepted_volume_plan: bool,
+    require_context: bool = False,
+):
+    state = await NovelStateRepository(session).get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    checkpoint = dict(state.checkpoint_data or {})
+    if require_accepted_volume_plan:
+        try:
+            ensure_volume_plan_accepted(checkpoint)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not state.current_chapter_id:
+        raise HTTPException(status_code=400, detail="Current chapter is not selected")
+    if chapter_id != state.current_chapter_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requested chapter_id {chapter_id} does not match current chapter {state.current_chapter_id}",
+        )
+
+    current_plan = checkpoint.get("current_chapter_plan")
+    if isinstance(current_plan, dict):
+        plan_chapter_id = current_plan.get("chapter_id")
+        if plan_chapter_id and plan_chapter_id != chapter_id:
+            raise HTTPException(
+                status_code=400,
+                detail=f"current_chapter_plan does not match current chapter {chapter_id}",
+            )
+
+    if require_context and not NovelDirector._chapter_context_matches_current_plan(checkpoint):
+        raise HTTPException(
+            status_code=400,
+            detail="Chapter context is stale for current chapter. Call POST /chapters/{cid}/context first.",
+        )
+
+    return state, checkpoint
+
+
 @router.get("/api/novels")
 async def list_novels(session: AsyncSession = Depends(get_session)):
     result = await session.execute(
@@ -627,6 +685,21 @@ def _checkpoint_with_genre(checkpoint_data: dict[str, Any] | None) -> dict[str, 
     checkpoint = dict(checkpoint_data or {})
     checkpoint["genre"] = _get_checkpoint_genre(checkpoint)
     return checkpoint
+
+
+def _serialize_genre_template_summary(template) -> dict[str, Any]:
+    quality_config = template.quality_config or {}
+    return {
+        "genre": template.genre.model_dump(),
+        "matched_templates": list(template.matched_templates),
+        "warnings": list(template.warnings),
+        "quality_config_summary": {
+            "modern_terms_policy": quality_config.get("modern_terms_policy"),
+            "foreign_terms_policy": quality_config.get("foreign_terms_policy"),
+            "blocking_rules": dict(quality_config.get("blocking_rules") or {}),
+            "required_setting_dimensions": list(quality_config.get("required_setting_dimensions") or []),
+        },
+    }
 
 
 async def _resolve_create_genre(session: AsyncSession, primary_slug: str, secondary_slug: str):
@@ -736,6 +809,14 @@ async def create_novel(req: CreateNovelRequest, session: AsyncSession = Depends(
     )
     session.add(state)
     await session.commit()
+
+    genre_template = await GenreTemplateService(session).resolve(state.novel_id, "*", "*")
+    checkpoint_data = dict(state.checkpoint_data or {})
+    checkpoint_data["genre_template"] = _serialize_genre_template_summary(genre_template)
+    state.checkpoint_data = checkpoint_data
+    await session.commit()
+    await session.refresh(state)
+
     checkpoint = _checkpoint_with_genre(state.checkpoint_data)
 
     return {
@@ -1345,6 +1426,87 @@ async def get_chapter_quality(novel_id: str, chapter_id: str, session: AsyncSess
         "fast_review_score": ch.fast_review_score,
         "fast_review_feedback": ch.fast_review_feedback or {},
         "world_state_ingested": ch.world_state_ingested,
+    }
+
+
+@router.post("/api/novels/{novel_id}/chapters/{chapter_id}/quality/manual_review")
+async def resolve_chapter_quality_manual_review(
+    novel_id: str,
+    chapter_id: str,
+    req: ChapterQualityManualReviewRequest,
+    session: AsyncSession = Depends(get_session),
+):
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    repo = ChapterRepository(session)
+    ch = await repo.get_by_id(chapter_id)
+    if not ch or ch.novel_id not in {None, novel_id}:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+    if ch.quality_status != QUALITY_MANUAL_REVIEW_REQUIRED:
+        raise HTTPException(status_code=409, detail="Chapter quality status is not manual_review_required")
+
+    audit = {
+        "action": req.action,
+        "note": str(req.note or "").strip(),
+        "reviewed_at": datetime.utcnow().isoformat() + "Z",
+    }
+    checkpoint = dict(state.checkpoint_data or {})
+    quality_reasons = dict(ch.quality_reasons or {})
+    quality_reasons["manual_review"] = audit
+
+    if req.action == "approve":
+        quality_reasons["status"] = QUALITY_WARN
+        await repo.update_quality_gate(
+            chapter_id,
+            quality_status=QUALITY_WARN,
+            quality_reasons=quality_reasons,
+            world_state_ingested=False,
+        )
+        if state.current_chapter_id == chapter_id:
+            quality_gate = dict(checkpoint.get("quality_gate") or quality_reasons)
+            quality_gate["status"] = QUALITY_WARN
+            quality_gate["manual_review"] = audit
+            checkpoint["quality_gate"] = quality_gate
+            checkpoint["manual_review_decision"] = audit
+            state = await state_repo.save_checkpoint(
+                novel_id,
+                current_phase=Phase.LIBRARIAN.value,
+                checkpoint_data=checkpoint,
+                current_volume_id=state.current_volume_id,
+                current_chapter_id=state.current_chapter_id,
+            )
+    else:
+        quality_reasons["status"] = QUALITY_UNCHECKED
+        await repo.update_quality_gate(
+            chapter_id,
+            quality_status=QUALITY_UNCHECKED,
+            quality_reasons=quality_reasons,
+            world_state_ingested=False,
+        )
+        if state.current_chapter_id == chapter_id:
+            for key in ("quality_gate", "quality_issues", "quality_issue_summary", "repair_tasks", "continuity_audit"):
+                checkpoint.pop(key, None)
+            checkpoint["manual_review_decision"] = audit
+            state = await state_repo.save_checkpoint(
+                novel_id,
+                current_phase=Phase.EDITING.value,
+                checkpoint_data=checkpoint,
+                current_volume_id=state.current_volume_id,
+                current_chapter_id=state.current_chapter_id,
+            )
+
+    await session.commit()
+    refreshed = await repo.get_by_id(chapter_id)
+    return {
+        "novel_id": novel_id,
+        "chapter_id": chapter_id,
+        "current_phase": state.current_phase,
+        "quality_status": refreshed.quality_status,
+        "quality_reasons": refreshed.quality_reasons or {},
+        "quality_checked_at": refreshed.quality_checked_at.isoformat() if refreshed.quality_checked_at else None,
     }
 
 
@@ -1994,6 +2156,12 @@ async def prepare_chapter_context(
     session: AsyncSession = Depends(get_session),
 ):
     await FlowControlService(session).clear_stop(novel_id)
+    await _load_generation_state_for_chapter(
+        session,
+        novel_id,
+        chapter_id,
+        require_accepted_volume_plan=True,
+    )
     embedder = llm_factory.get_embedder()
     embedding_service = EmbeddingService(session, embedder)
     agent = ContextAgent(session, embedding_service)
@@ -2019,15 +2187,22 @@ async def generate_chapter_draft(
     session: AsyncSession = Depends(get_session),
 ):
     await FlowControlService(session).clear_stop(novel_id)
-    state_repo = NovelStateRepository(session)
-    state = await state_repo.get_state(novel_id)
-    if not state:
-        raise HTTPException(status_code=404, detail="Novel state not found")
-
-    checkpoint = state.checkpoint_data or {}
+    _state, checkpoint = await _load_generation_state_for_chapter(
+        session,
+        novel_id,
+        chapter_id,
+        require_accepted_volume_plan=False,
+    )
     context_data = checkpoint.get("chapter_context")
     if not context_data:
         raise HTTPException(status_code=400, detail="Chapter context not prepared. Call POST /context first.")
+    await _load_generation_state_for_chapter(
+        session,
+        novel_id,
+        chapter_id,
+        require_accepted_volume_plan=True,
+        require_context=True,
+    )
 
     context = ChapterContext.model_validate(context_data)
     embedder = llm_factory.get_embedder()
@@ -2270,7 +2445,7 @@ async def _build_chapter_rewrite_resume_payload(
 def _infer_chapter_rewrite_resume_stage(chapter: Chapter | None) -> str:
     if not chapter:
         return "context"
-    if getattr(chapter, "quality_status", "unchecked") == "block":
+    if quality_gate_stops_librarian(getattr(chapter, "quality_status", "unchecked")):
         return "edit_fast_review"
     if chapter.polished_text and chapter.score_overall is not None and chapter.fast_review_feedback is not None:
         return "librarian_archive"
