@@ -19,6 +19,8 @@ from novel_dev.schemas.outline import SynopsisData, SynopsisVolumeOutline, Volum
 from novel_dev.schemas.context import BeatPlan
 import uuid
 from novel_dev.repositories.document_repo import DocumentRepository
+from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
+from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.domain_activation_service import DomainActivationService
 from novel_dev.services.narrative_constraint_service import (
     ActiveConstraintContext,
@@ -1842,6 +1844,75 @@ async def test_plan_volume_missing_synopsis(async_session):
     agent = VolumePlannerAgent(async_session)
     with pytest.raises(ValueError, match="synopsis_data missing"):
         await agent.plan("n_no_syn")
+
+
+@pytest.mark.asyncio
+async def test_plan_volume_blocks_when_pending_settings_are_unapproved(async_session):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="Test",
+        logline="Logline",
+        core_conflict="Conflict",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+    await director.save_checkpoint(
+        "n_pending_settings",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+    await PendingExtractionRepository(async_session).create(
+        pe_id="pe_pending_settings",
+        novel_id="n_pending_settings",
+        extraction_type="setting",
+        raw_result={"character_profiles": []},
+        source_filename="brainstorm-character.md",
+        status="pending",
+    )
+    await async_session.commit()
+
+    agent = VolumePlannerAgent(async_session)
+    agent._generate_volume_plan = AsyncMock(side_effect=AssertionError("should not call LLM"))
+
+    with pytest.raises(ValueError, match="Setting review is not complete"):
+        await agent.plan("n_pending_settings")
+
+
+@pytest.mark.asyncio
+async def test_plan_volume_blocks_when_ai_setting_review_batch_is_pending(async_session):
+    director = NovelDirector(session=async_session)
+    synopsis = SynopsisData(
+        title="Test",
+        logline="Logline",
+        core_conflict="Conflict",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+    await director.save_checkpoint(
+        "n_pending_setting_batch",
+        phase=Phase.VOLUME_PLANNING,
+        checkpoint_data={"synopsis_data": synopsis.model_dump()},
+        volume_id=None,
+        chapter_id=None,
+    )
+    await SettingWorkbenchRepository(async_session).create_review_batch(
+        novel_id="n_pending_setting_batch",
+        source_type="ai_session",
+        status="pending",
+        summary="待审核设定",
+        input_snapshot={},
+    )
+    await async_session.commit()
+
+    agent = VolumePlannerAgent(async_session)
+    agent._generate_volume_plan = AsyncMock(side_effect=AssertionError("should not call LLM"))
+
+    with pytest.raises(ValueError, match="setting_review_batch"):
+        await agent.plan("n_pending_setting_batch")
 
 
 @pytest.mark.asyncio

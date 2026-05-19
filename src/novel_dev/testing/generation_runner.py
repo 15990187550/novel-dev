@@ -960,7 +960,7 @@ async def _run_api_smoke_flow(
             review_batch_id = artifacts.get("review_batch_id")
             if not review_batch_id:
                 raise RuntimeError("generate_setting_review_batch did not return review_batch_id")
-            await _approve_review_batch_non_conflict_changes(
+            await _apply_review_batch_non_conflict_changes(
                 client,
                 novel_id,
                 review_batch_id,
@@ -1324,6 +1324,49 @@ async def _approve_review_batch_non_conflict_changes(
         client.post(
             f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/approve",
             json={"change_ids": approvable_ids, "approve_all": False},
+        )
+    )
+    artifacts[f"{artifact_prefix}_approved_change_ids"] = ",".join(approvable_ids)
+    artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(result) or "unknown"
+
+
+async def _apply_review_batch_non_conflict_changes(
+    client: httpx.AsyncClient,
+    novel_id: str,
+    batch_id: str,
+    artifacts: dict[str, str],
+    *,
+    artifact_prefix: str,
+) -> None:
+    detail = await _request_json(
+        client.get(f"/api/novels/{novel_id}/settings/review_batches/{batch_id}")
+    )
+    raw_changes = detail.get("changes")
+    changes = [item for item in raw_changes if isinstance(item, dict)] if isinstance(raw_changes, list) else []
+    approvable_ids = [
+        str(change["id"])
+        for change in changes
+        if change.get("id")
+        and change.get("target_type") != "conflict"
+        and str(change.get("status") or "pending") == "pending"
+    ]
+    conflict_count = sum(1 for change in changes if change.get("target_type") == "conflict")
+    artifacts[f"{artifact_prefix}_change_count"] = str(len(changes))
+    artifacts[f"{artifact_prefix}_approvable_change_count"] = str(len(approvable_ids))
+    artifacts[f"{artifact_prefix}_conflict_change_count"] = str(conflict_count)
+    if not approvable_ids:
+        artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(detail) or "no_approvable_changes"
+        return
+
+    result = await _request_json(
+        client.post(
+            f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
+            json={
+                "decisions": [
+                    {"change_id": change_id, "decision": "approve"}
+                    for change_id in approvable_ids
+                ]
+            },
         )
     )
     artifacts[f"{artifact_prefix}_approved_change_ids"] = ",".join(approvable_ids)

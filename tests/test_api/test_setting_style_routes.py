@@ -469,6 +469,55 @@ async def test_approve_wrong_novel(async_session):
 
 
 @pytest.mark.asyncio
+async def test_approve_missing_pending_returns_404(async_session):
+    async def override():
+        yield async_session
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/pending/approve",
+                json={"pending_id": "pe_missing"},
+            )
+
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_approve_processing_pending_returns_409(async_session):
+    async def override():
+        yield async_session
+
+    repo = PendingExtractionRepository(async_session)
+    await repo.create(
+        pe_id="pe_processing_approve",
+        novel_id="n1",
+        source_filename="setting.txt",
+        extraction_type="processing",
+        raw_result={},
+        status="processing",
+    )
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = override
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                "/api/novels/n1/documents/pending/approve",
+                json={"pending_id": "pe_processing_approve"},
+            )
+
+            assert resp.status_code == 409
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
 async def test_delete_failed_pending_record(async_session):
     async def override():
         yield async_session

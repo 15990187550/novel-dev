@@ -10,6 +10,17 @@ app = FastAPI()
 app.include_router(router)
 
 
+def test_setting_review_apply_route_is_registered_once():
+    matches = [
+        route
+        for route in app.routes
+        if getattr(route, "path", "") == "/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply"
+        and "POST" in getattr(route, "methods", set())
+    ]
+
+    assert len(matches) == 1
+
+
 @pytest.fixture
 def test_client(async_session):
     async def override():

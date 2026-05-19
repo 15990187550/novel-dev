@@ -1897,10 +1897,11 @@ async def approve_pending_document(novel_id: str, req: ApproveRequest, session: 
     repo = PendingExtractionRepository(session)
     pe = await repo.get_by_id(req.pending_id)
     if not pe:
-        await session.commit()
-        return
+        raise HTTPException(status_code=404, detail="Pending extraction not found")
     if pe.novel_id != novel_id:
         raise HTTPException(status_code=403, detail="Pending extraction does not belong to this novel")
+    if pe.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Pending extraction is not pending: status={pe.status}")
     try:
         docs = await svc.approve_pending(req.pending_id, field_resolutions=[r.model_dump() for r in req.field_resolutions])
     except RuntimeError as exc:
@@ -3123,33 +3124,6 @@ async def approve_setting_review_batch(
         "batch": _serialize_setting_review_batch(updated),
         "changes": [_serialize_setting_review_change(change) for change in changes],
     }
-
-
-@router.post(
-    "/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
-    response_model=SettingReviewApplyResponse,
-)
-async def apply_setting_review_batch(
-    novel_id: str,
-    batch_id: str,
-    req: SettingReviewApplyRequest,
-    session: AsyncSession = Depends(get_session),
-):
-    service = SettingWorkbenchService(session)
-    batch = await service.repo.get_review_batch(batch_id)
-    if batch is None or batch.novel_id != novel_id:
-        raise HTTPException(status_code=404, detail="Setting review batch not found")
-    try:
-        result = await service.apply_review_decisions(
-            novel_id,
-            batch_id,
-            [decision.model_dump(exclude_none=True) for decision in req.decisions],
-        )
-    except ValueError as exc:
-        await session.rollback()
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    await session.commit()
-    return result
 
 
 @router.post(

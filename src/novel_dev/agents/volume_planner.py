@@ -36,6 +36,7 @@ from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.narrative_constraint_service import ActiveConstraintContext, NarrativeConstraintBuilder
 from novel_dev.services.domain_activation_service import DomainActivationService
+from novel_dev.services.setting_readiness_service import SettingReadinessService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
 from novel_dev.services.quality_preflight_service import QualityPreflightService
@@ -343,6 +344,9 @@ class VolumePlannerAgent:
             raise ValueError("synopsis_data missing in checkpoint_data")
 
         synopsis = SynopsisData.model_validate(synopsis_data)
+        setting_readiness = await SettingReadinessService(self.session).evaluate_for_outline_generation(novel_id)
+        if not setting_readiness.ready:
+            raise ValueError(setting_readiness.message)
 
         if volume_number is None:
             volume_number = self._infer_volume_number(checkpoint, state)

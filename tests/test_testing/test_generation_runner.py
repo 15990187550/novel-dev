@@ -1285,11 +1285,11 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
                 )
             if path.endswith("/generate"):
                 return self._response("POST", path, {"id": "batch-test"})
-            if path == "/api/novels/novel-test/settings/review_batches/batch-test/approve":
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test/apply":
                 return self._response(
                     "POST",
                     path,
-                    {"batch": {"id": "batch-test", "status": "approved"}, "changes": []},
+                    {"status": "approved", "applied": 1, "rejected": 0, "failed": 0},
                 )
             if path == "/api/novels/novel-test/documents/upload":
                 return self._response("POST", path, {"pending_id": "pending-test"})
@@ -1396,9 +1396,8 @@ async def test_api_smoke_flow_runs_auto_chapter_before_export(monkeypatch):
     assert artifacts["quality_status"] == "pass"
     assert artifacts["archived_chapter_count"] == "1"
     assert artifacts["exported_path"] == "./novel_output/novel-test/novel.md"
-    assert ("POST", "/api/novels/novel-test/settings/review_batches/batch-test/approve", {
-        "change_ids": ["change-1"],
-        "approve_all": False,
+    assert ("POST", "/api/novels/novel-test/settings/review_batches/batch-test/apply", {
+        "decisions": [{"change_id": "change-1", "decision": "approve"}],
     }) in calls
     assert artifacts["generated_setting_batch_status"] == "approved"
 
@@ -1510,12 +1509,12 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
                 )
             if path.endswith("/generate"):
                 return self._response("POST", path, {"id": "batch-test"})
-            if path == "/api/novels/novel-test/settings/review_batches/batch-test/approve":
-                assert payload == {"change_ids": ["change-1"], "approve_all": False}
+            if path == "/api/novels/novel-test/settings/review_batches/batch-test/apply":
+                assert payload == {"decisions": [{"change_id": "change-1", "decision": "approve"}]}
                 return self._response(
                     "POST",
                     path,
-                    {"batch": {"id": "batch-test", "status": "partially_approved"}, "changes": []},
+                    {"status": "partially_approved", "applied": 1, "rejected": 0, "failed": 0},
                 )
             if path == "/api/novels/novel-test/documents/upload":
                 return self._response("POST", path, {"id": f"pending-{payload['filename']}"})
