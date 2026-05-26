@@ -17,13 +17,16 @@ from novel_dev.services.quality_gate_service import (
     QUALITY_BLOCK,
     QUALITY_MANUAL_REVIEW_REQUIRED,
     QUALITY_UNCHECKED,
+    QUALITY_WARN,
     QualityGateService,
 )
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.services.chapter_acceptance_service import ChapterAcceptanceService
 from novel_dev.schemas.quality import QualityIssue
+from novel_dev.prompting.style_contract import StyleContractCompiler
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +212,9 @@ class FastReviewAgent:
         genre_prompt_block: str = "",
     ) -> FastReviewLLMCheck:
         genre_section = f"### 类型模板约束\n{genre_prompt_block}\n\n" if genre_prompt_block.strip() else ""
+        style_contract = StyleContractCompiler.compile(chapter_context.get("style_profile", {})).render_prompt_block()
+        visible_context = dict(chapter_context)
+        visible_context.pop("style_profile", None)
         prompt = (
             "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
             "从读者体验出发检查两点并返回严格 JSON:\n"
@@ -221,7 +227,8 @@ class FastReviewAgent:
             "请写入 notes 并说明下一版应呈现什么效果。\n"
             "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
             f"{genre_section}"
-            f"### 章节上下文\n{json.dumps(chapter_context, ensure_ascii=False)}\n\n"
+            f"{style_contract + chr(10) + chr(10) if style_contract else ''}"
+            f"### 章节上下文\n{json.dumps(visible_context, ensure_ascii=False)}\n\n"
             f"### 原始草稿\n{raw}\n\n"
             f"### 精修文本\n{polished}\n\n"
             "请返回 JSON:"
@@ -351,7 +358,10 @@ class FastReviewAgent:
             )
             genre_quality_config = genre_template.quality_config
             genre_prompt_block = genre_template.render_prompt_block("quality_rules", "forbidden_rules")
-        language_context = {"genre_quality_config": genre_quality_config}
+        language_context = {
+            "genre_quality_config": genre_quality_config,
+            **(checkpoint.get("chapter_context", {}) if isinstance(checkpoint.get("chapter_context"), dict) else {}),
+        }
         is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
         log_agent_detail(
             novel_id,
@@ -472,6 +482,7 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                final_review_feedback=final_feedback,
                 polished_text=polished,
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
@@ -484,12 +495,22 @@ class FastReviewAgent:
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             gate = self._apply_structure_guard_to_gate(checkpoint, gate)
             gate = self._apply_genre_quality_issues_to_gate(gate, genre_quality_issues)
+            gate = self._downgrade_exhausted_longform_quality_warnings(
+                gate,
+                checkpoint=checkpoint,
+                edit_attempts=edit_attempts,
+            )
             checkpoint["quality_gate"] = gate.model_dump()
             self._store_quality_issues_and_repairs(
                 checkpoint,
                 gate,
                 chapter_id,
                 extra_issues=genre_quality_issues,
+            )
+            self._store_chapter_acceptance(
+                checkpoint,
+                polished_text=polished,
+                target_word_count=target,
             )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
@@ -756,11 +777,25 @@ class FastReviewAgent:
         checkpoint["quality_issues"] = [issue.model_dump() for issue in quality_issues]
         checkpoint["quality_issue_summary"] = QualityIssueService.summarize(quality_issues)
 
-        if gate.status == QUALITY_BLOCK:
+        if gate.status in {QUALITY_BLOCK, QUALITY_MANUAL_REVIEW_REQUIRED}:
             repair_tasks = RepairPlanner.plan(chapter_id, quality_issues)
             checkpoint["repair_tasks"] = [task.model_dump() for task in repair_tasks]
         else:
             checkpoint.pop("repair_tasks", None)
+
+    @staticmethod
+    def _store_chapter_acceptance(
+        checkpoint: dict,
+        *,
+        polished_text: str,
+        target_word_count: int | None = None,
+    ) -> None:
+        assessment = ChapterAcceptanceService.assess(
+            content=polished_text,
+            quality_issues=checkpoint.get("quality_issues") or [],
+            target_word_count=target_word_count,
+        )
+        checkpoint["chapter_acceptance"] = assessment.model_dump()
 
     @staticmethod
     def _unresolved_structure_guard(checkpoint: dict) -> dict | None:
@@ -812,10 +847,37 @@ class FastReviewAgent:
         }
         if isinstance(final_review_score, (int, float)) and final_review_score < 75:
             return True
-        if "required_payoff" in warning_codes:
+        if warning_codes.intersection({"final_review_score", "critical_dimension_score", "required_payoff"}):
             return True
         editor_warnings = checkpoint.get("editor_guard_warnings")
         return isinstance(editor_warnings, list) and bool(editor_warnings)
+
+    @staticmethod
+    def _downgrade_exhausted_longform_quality_warnings(gate, *, checkpoint: dict, edit_attempts: int):
+        if gate.status != QUALITY_MANUAL_REVIEW_REQUIRED:
+            return gate
+        if edit_attempts < MAX_EDIT_ATTEMPTS:
+            return gate
+        if str(checkpoint.get("acceptance_scope") or "") != "real-longform-volume1":
+            return gate
+        if gate.blocking_items:
+            return gate
+        warning_codes = {
+            str(item.get("code"))
+            for item in gate.warning_items
+            if isinstance(item, dict) and item.get("code")
+        }
+        auto_run_safe_codes = {
+            "final_review_score",
+            "critical_dimension_score",
+            "word_count_drift",
+            "ai_flavor",
+        }
+        if not warning_codes or not warning_codes.issubset(auto_run_safe_codes):
+            return gate
+        gate.status = QUALITY_WARN
+        gate.summary = "自动精修达到上限，剩余非阻断质量告警已保留，允许长篇自动归档。"
+        return gate
 
     @staticmethod
     def _can_repair_quality_gate_block(gate, checkpoint: dict) -> bool:
@@ -902,7 +964,10 @@ class FastReviewAgent:
             )
             genre_quality_config = genre_template.quality_config
             genre_prompt_block = genre_template.render_prompt_block("quality_rules", "forbidden_rules")
-        language_context = {"genre_quality_config": genre_quality_config}
+        language_context = {
+            "genre_quality_config": genre_quality_config,
+            **(checkpoint.get("chapter_context", {}) if isinstance(checkpoint.get("chapter_context"), dict) else {}),
+        }
         is_acceptance_contract = _is_acceptance_contract_checkpoint(checkpoint)
 
         if is_acceptance_contract:
@@ -981,6 +1046,7 @@ class FastReviewAgent:
                 target_word_count=target,
                 polished_word_count=_word_count(polished),
                 final_review_score=final_score,
+                final_review_feedback=final_feedback,
                 polished_text=polished,
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
@@ -999,6 +1065,11 @@ class FastReviewAgent:
                 gate,
                 chapter_id,
                 extra_issues=genre_quality_issues,
+            )
+            self._store_chapter_acceptance(
+                checkpoint,
+                polished_text=polished,
+                target_word_count=target,
             )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,

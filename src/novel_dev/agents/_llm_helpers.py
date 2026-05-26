@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import hashlib
 import json
 import re
 import time
@@ -443,10 +444,17 @@ def _preview_text(value: str | None, limit: int = 300) -> str:
 
 
 def _prompt_metadata(prompt: str, *, limit: int = 300) -> dict[str, Any]:
+    prompt_text = prompt or ""
+    digest = hashlib.sha256(prompt_text.encode("utf-8")).hexdigest()
     return {
-        "prompt_chars": len(prompt or ""),
-        "prompt": prompt or "",
-        "prompt_preview": _preview_text(prompt, limit),
+        "prompt_chars": len(prompt_text),
+        "prompt": prompt_text,
+        "prompt_preview": _preview_text(prompt_text, limit),
+        "prompt_snapshot": {
+            "id": f"prompt_{digest[:12]}",
+            "sha256": digest,
+            "chars": len(prompt_text),
+        },
     }
 
 
@@ -1123,6 +1131,7 @@ async def orchestrated_call_and_parse_model(
         tools=tools,
         task_config=task_config,
         subtask_orchestrator=subtask_orchestrator,
+        payload_normalizer=_get_structured_normalizer(agent_name, task),
     )
     last_error: Exception | None = None
     current_prompt = prompt

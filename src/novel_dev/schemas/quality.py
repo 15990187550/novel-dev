@@ -58,12 +58,16 @@ class RepairTask(BaseModel):
         "cohesion_repair",
         "hook_repair",
         "character_repair",
+        "scene_pressure_repair",
         "integrity_repair",
         "continuity_repair",
     ]
     scope: Literal["chapter", "beat", "paragraph"]
     beat_index: int | None = None
     allowed_materials: list[str] = Field(default_factory=list)
+    problem: str = ""
+    evidence: list[str] = Field(default_factory=list)
+    suggestion: str = ""
     constraints: list[str] = Field(default_factory=list)
     success_criteria: list[str] = Field(default_factory=list)
     attempt: int = 0

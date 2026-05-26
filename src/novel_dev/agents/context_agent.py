@@ -370,6 +370,16 @@ class ContextAgent:
                 active_entities=active_entity_payloads,
             ),
             story_contract=story_contract,
+            scene_fuel=self._build_scene_fuel(
+                self._scene_fuel_inputs_from_context(
+                    location_context,
+                    active_entities,
+                    timeline_events,
+                    pending_foreshadowings,
+                ),
+                chapter_plan,
+            ),
+            narrative_source=self._narrative_source_from_checkpoint(checkpoint),
             genre_quality_config=genre_template.quality_config,
             genre_prompt_block=genre_prompt_block,
             genre_template_warnings=genre_template.warnings,
@@ -1144,6 +1154,157 @@ class ContextAgent:
                 "最多查询 3 类最缺的细节；目录摘要足够时不要调用工具，不要全量查询。"
             ),
         }
+
+    def _build_scene_fuel(self, scene_inputs: dict, chapter_plan: ChapterPlan) -> dict[str, list[str]]:
+        location_items = [
+            item for item in scene_inputs.get("locations", [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        entity_items = [
+            item for item in scene_inputs.get("entity_states", [])
+            if isinstance(item, dict) and str(item.get("name") or "").strip()
+        ]
+        timeline_items = [
+            item for item in scene_inputs.get("timeline_events", [])
+            if isinstance(item, dict) and str(item.get("narrative") or "").strip()
+        ]
+        foreshadowing_items = [
+            item for item in scene_inputs.get("foreshadowings", [])
+            if isinstance(item, dict) and str(item.get("content") or "").strip()
+        ]
+
+        plot_fuel: list[str] = []
+        for beat in chapter_plan.beats[:3]:
+            if beat.summary:
+                plot_fuel.append(beat.summary.strip())
+        for item in timeline_items[:2]:
+            plot_fuel.append(str(item.get("narrative")).strip())
+        for item in foreshadowing_items[:3]:
+            plot_fuel.append(str(item.get("content")).strip())
+
+        character_pressure: list[str] = []
+        character_like = [
+            item for item in entity_items
+            if str(item.get("type") or "").strip() in {"character", "人物", "person"} or len(entity_items) <= 3
+        ]
+        if len(character_like) >= 2:
+            names = "、".join(str(item.get("name")).strip() for item in character_like[:3])
+            states = "；".join(
+                f"{item.get('name')}: {str(item.get('state') or '').strip()}"
+                for item in character_like[:3]
+                if str(item.get("state") or "").strip()
+            )
+            character_pressure.append(f"{names}同场在场，压力来自彼此站位、隐瞒和判断。")
+            if states:
+                character_pressure.append(states)
+        elif character_like:
+            item = character_like[0]
+            character_pressure.append(f"{item.get('name')}: {str(item.get('state') or '').strip()}")
+
+        world_fragment: list[str] = []
+        for item in location_items[:2]:
+            name = str(item.get("name") or "").strip()
+            narrative = str(item.get("narrative") or "").strip()
+            world_fragment.append(f"{name}: {narrative}" if narrative else name)
+        for item in entity_items:
+            if str(item.get("type") or "").strip() not in {"character", "人物", "person"}:
+                state = str(item.get("state") or "").strip()
+                if state:
+                    world_fragment.append(f"{item.get('name')}: {state}")
+        for item in foreshadowing_items[:2]:
+            world_fragment.append(str(item.get("content")).strip())
+
+        technique_hint = [
+            "优先把信息变化落在物件、站位、动作阻碍或环境反应上。",
+            "人物关系压力可用沉默、试探、避让、半句未尽或动作变化承载，不把对话当硬指标。",
+            "停点从已出现的风险、线索、关系变化或选择后果中自然生长。",
+        ]
+        continuity_momentum: list[str] = []
+        for item in timeline_items[:2]:
+            continuity_momentum.append("前情余压: " + str(item.get("narrative")).strip())
+        if chapter_plan.beats:
+            continuity_momentum.append("当前章信息变化: " + str(chapter_plan.beats[0].summary).strip())
+        if len(chapter_plan.beats) > 1:
+            continuity_momentum.append("后续压力: " + str(chapter_plan.beats[1].summary).strip())
+
+        freshness_guard = [
+            "上一章已经使用过的开场、外部威胁压近、昏迷苏醒、异象爆发或总结式收束，本章优先换成关系试探、物件变化、行动受限或信息差。",
+            "相似章节只借节奏，不复刻同一奇观、同一对话功能或同一章末危险信号。",
+        ]
+
+        return {
+            "plot_fuel": self._unique_names(plot_fuel)[:6],
+            "character_pressure": self._unique_names(character_pressure)[:5],
+            "world_fragment": self._unique_names(world_fragment)[:6],
+            "technique_hint": technique_hint,
+            "continuity_momentum": self._unique_names(continuity_momentum)[:5],
+            "freshness_guard": freshness_guard,
+        }
+
+    @staticmethod
+    def _scene_fuel_inputs_from_context(
+        location_context: LocationContext,
+        active_entities: list,
+        timeline_events: list[dict],
+        pending_foreshadowings: list,
+    ) -> dict:
+        locations = []
+        if location_context and location_context.current:
+            locations.append({
+                "name": location_context.current,
+                "narrative": location_context.narrative or "",
+            })
+        entity_states = [
+            {
+                "name": getattr(entity, "name", ""),
+                "type": getattr(entity, "type", ""),
+                "state": getattr(entity, "current_state", ""),
+            }
+            for entity in active_entities
+        ]
+        foreshadowings = [
+            {
+                "id": getattr(item, "id", ""),
+                "content": getattr(item, "content", ""),
+            }
+            for item in pending_foreshadowings
+        ]
+        return {
+            "locations": locations,
+            "entity_states": entity_states,
+            "timeline_events": timeline_events,
+            "foreshadowings": foreshadowings,
+        }
+
+    @staticmethod
+    def _narrative_source_from_checkpoint(checkpoint: dict) -> str:
+        if not isinstance(checkpoint, dict):
+            return ""
+        for key in (
+            "expanded_story",
+            "compressed_story",
+            "full_story",
+            "narrative_source",
+            "story_source",
+            "synopsis",
+        ):
+            text = ContextAgent._narrative_source_text(checkpoint.get(key))
+            if text:
+                return text[:5000]
+        return ""
+
+    @staticmethod
+    def _narrative_source_text(value) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        if isinstance(value, dict):
+            for key in ("plot", "story", "summary", "content", "text", "narrative"):
+                text = ContextAgent._narrative_source_text(value.get(key))
+                if text:
+                    return text
+        return ""
 
     def _build_scene_context_required_terms(
         self,

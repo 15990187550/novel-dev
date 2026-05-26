@@ -1590,6 +1590,44 @@ async def test_auto_run_persists_writer_guard_failure_diagnostics(async_session,
 
 
 @pytest.mark.asyncio
+async def test_auto_run_failure_result_exposes_contiguous_cached_steps(async_session, monkeypatch):
+    plan = build_test_volume("vol_resume_cache", "ch_resume_cache")
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "n_auto_resume_cache",
+        phase=Phase.DRAFTING,
+        checkpoint_data={
+            "current_volume_plan": plan.model_dump(),
+            "current_chapter_plan": plan.chapters[0].model_dump(),
+            "chapter_context": {"chapter_plan": plan.chapters[0].model_dump()},
+            "draft_metadata": {"raw_draft_chars": 2400},
+            "fast_review_feedback": {"overall_score": 82},
+        },
+        volume_id="vol_resume_cache",
+        chapter_id="ch_resume_cache_1",
+    )
+    await async_session.commit()
+
+    async def fail_run(self, novel_id):
+        error = RuntimeError("editor failed")
+        setattr(error, "failed_phase", Phase.EDITING.value)
+        raise error
+
+    monkeypatch.setattr(ChapterGenerationService, "_run_current_chapter", fail_run)
+
+    service = ChapterGenerationService(async_session)
+    with pytest.raises(AutoRunFailedError) as exc_info:
+        await service.auto_run("n_auto_resume_cache", max_chapters=1)
+
+    result = exc_info.value.result
+    assert result.failed_step == Phase.EDITING.value
+    assert result.cached_steps == ["context_preparation", "drafting"]
+    assert result.partial_result["context_preparation"]["available"] is True
+    assert result.partial_result["drafting"]["available"] is True
+    assert "fast_reviewing" not in result.partial_result
+
+
+@pytest.mark.asyncio
 async def test_auto_run_job_releases_lock_after_flush_error(async_session, monkeypatch):
     plan = build_test_volume("vol_flush_fail", "ch_flush_fail")
     director = NovelDirector(session=async_session)

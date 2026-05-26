@@ -162,6 +162,57 @@ def test_evaluate_fast_review_warns_when_required_payoff_missing():
     assert any(item["code"] == "required_payoff" for item in gate.warning_items)
 
 
+def test_evaluate_fast_review_accepts_abstract_required_payoff_when_semantically_covered():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text=(
+            "他重新引气入脉，原本浑浊如雾的真气被绞紧、淬炼，"
+            "凝成一丝近乎实质的细流，澄澈远超往日。"
+        ),
+        required_payoffs=["真气品质提升"],
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "pass"
+    assert not any(item["code"] == "required_payoff" for item in gate.warning_items)
+
+
+def test_evaluate_fast_review_keeps_abstract_required_payoff_missing_without_progress_marker():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="他闭目调息，真气沿着经脉缓慢运转，屋内很快安静下来。",
+        required_payoffs=["真气品质提升"],
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "manual_review_required"
+    assert any(item["code"] == "required_payoff" for item in gate.warning_items)
+
+
 def test_evaluate_fast_review_requires_manual_review_for_low_final_score():
     report = FastReviewReport(
         word_count_ok=True,
@@ -183,6 +234,58 @@ def test_evaluate_fast_review_requires_manual_review_for_low_final_score():
 
     assert gate.status == "manual_review_required"
     assert any(item["code"] == "final_review_score" for item in gate.warning_items)
+
+
+def test_evaluate_fast_review_requires_repair_for_sub_publishable_final_score():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=78,
+        polished_text="林照吹灭油灯，识海中的碎片仍在黑暗里缓缓转动。",
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "manual_review_required"
+    assert any(item["code"] == "final_review_score" for item in gate.warning_items)
+
+
+def test_evaluate_fast_review_requires_repair_for_weak_critical_dimension():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=84,
+        final_review_feedback={
+            "breakdown": {
+                "hook_strength": {"score": 72, "comment": "章末只是计划预告"},
+                "plot_tension": {"score": 81, "comment": "基本推进"},
+            }
+        },
+        polished_text="林照吹灭油灯，决定明早再去后山查看。",
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "manual_review_required"
+    assert any(item["code"] == "critical_dimension_score" for item in gate.warning_items)
 
 
 def test_quality_gate_converts_blocking_and_warning_items_to_standard_issues():

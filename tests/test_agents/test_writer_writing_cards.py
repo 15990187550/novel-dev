@@ -23,7 +23,7 @@ def test_writer_context_message_prefers_writing_card_details():
                 required_payoffs=["陆照拿到寒露丹", "追兵确认他还在药库"],
                 forbidden_future_events=["宗门试炼开始"],
                 ending_hook="门外响起追兵脚步。",
-                reader_takeaway="读者应明确感到陆照暂时得手，但下一刻会被堵在门内。",
+                reader_takeaway="陆照暂时得手，但下一刻会被堵在门内。",
                 target_word_count=1000,
             )
         ],
@@ -43,6 +43,7 @@ def test_writer_context_message_prefers_writing_card_details():
     assert "陆照要偷到寒露丹救妹妹" in message
     assert "守库执事发现药架异响" in message
     assert "陆照拿到寒露丹" in message
-    assert "读者应明确感到陆照暂时得手" in message
+    assert "正文完成效果: 陆照暂时得手" in message
+    assert "读者读完应获得" not in message
     assert "宗门试炼开始" in message
     assert "门外响起追兵脚步" in message

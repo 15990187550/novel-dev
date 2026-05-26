@@ -13,12 +13,13 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
 
 
-def split_beats(raw_draft: str) -> Tuple[List[str], bool]:
+def split_beats(raw_draft: str, *, whole_chapter: bool = False) -> Tuple[List[str], bool]:
     """按 Writer 的锚点切 beat;无锚点时回退到 \\n\\n 切分。
     返回 (beats, anchored)。"""
     if not raw_draft:
@@ -26,6 +27,8 @@ def split_beats(raw_draft: str) -> Tuple[List[str], bool]:
     matches = BEAT_ANCHOR_RE.findall(raw_draft)
     if matches:
         return [m[1].strip() for m in matches], True
+    if whole_chapter:
+        return [raw_draft.strip()], False
     return raw_draft.split("\n\n"), False
 
 
@@ -86,7 +89,9 @@ class EditorAgent:
         chapter_context = checkpoint.get("chapter_context", {})
         repair_tasks = checkpoint.get("repair_tasks") or []
         raw_draft = ch.raw_draft or ""
-        beats, _ = split_beats(raw_draft)
+        whole_chapter_edit = self._uses_whole_chapter_editing(checkpoint)
+        beats, anchored = split_beats(raw_draft, whole_chapter=whole_chapter_edit)
+        whole_chapter_unit = whole_chapter_edit and not anchored
 
         # 章末钩子弱 -> 强制改最后一个 beat,即便它本身 beat-level 分数不低
         hook_score = None
@@ -112,6 +117,8 @@ class EditorAgent:
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
         self._merge_final_polish_issues(checkpoint, issues_by_beat, whole_chapter_issues)
+        if whole_chapter_unit:
+            self._move_beat_scoped_issues_to_whole_chapter(issues_by_beat, whole_chapter_issues)
         continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
         whole_chapter_issues.extend(continuity_issues)
 
@@ -121,18 +128,23 @@ class EditorAgent:
         flow_control = FlowControlService(self.session)
         for idx, beat_text in enumerate(beats):
             await flow_control.raise_if_cancelled(novel_id)
-            score_entry = beat_scores[idx] if idx < len(beat_scores) else {}
+            logical_beat_index = None if whole_chapter_unit else idx
+            score_entry = self._score_entry_for_edit_unit(beat_scores, idx, whole_chapter_unit)
             scores = score_entry.get("scores", {})
             beat_level_issues = score_entry.get("issues", []) or []
-            chapter_issues = issues_by_beat.get(idx, [])
-            beat_repair_tasks = self._repair_tasks_for_beat(repair_tasks, idx)
+            chapter_issues = [] if whole_chapter_unit else issues_by_beat.get(idx, [])
+            beat_repair_tasks = (
+                self._repair_tasks_for_whole_chapter(repair_tasks)
+                if whole_chapter_unit
+                else self._repair_tasks_for_beat(repair_tasks, idx)
+            )
             self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
             all_issues = (
                 chapter_issues
                 + beat_level_issues
                 + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
             )
-            hygiene_issues = self._prose_hygiene_issues(beat_text, idx, chapter_context)
+            hygiene_issues = self._prose_hygiene_issues(beat_text, logical_beat_index, chapter_context)
             all_issues += hygiene_issues
 
             # 章末钩子弱时强制改最后一个 beat,并注入一条章末改写指引
@@ -142,10 +154,16 @@ class EditorAgent:
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
                     "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
-                    "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
+                    "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
                 }]
 
-            needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last or force_continuity_rewrite
+            needs_rewrite = (
+                any(s < 70 for s in scores.values())
+                or bool(all_issues)
+                or (whole_chapter_unit and bool(whole_chapter_issues))
+                or is_forced_last
+                or force_continuity_rewrite
+            )
             if needs_rewrite:
                 log_agent_detail(
                     novel_id,
@@ -155,7 +173,8 @@ class EditorAgent:
                     task="polish",
                     status="started",
                     metadata={
-                        "beat_index": idx,
+                        "beat_index": logical_beat_index,
+                        "edit_unit": "whole_chapter" if whole_chapter_unit else "beat",
                         "source_chars": len(beat_text),
                         "scores": scores,
                         "low_dimensions": [dim for dim, score in scores.items() if score < 70],
@@ -170,26 +189,27 @@ class EditorAgent:
                     f"改写第 {idx + 1} 个节拍",
                     node="polish_beat",
                     task="polish_beat",
-                    metadata={"beat_index": idx, "source_words": len(beat_text)},
+                    metadata={"beat_index": logical_beat_index, "source_words": len(beat_text)},
                 ):
                     polished = await self._rewrite_beat(
                         beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                     )
-                polished = await self._guard_editor_beat(
-                    novel_id=novel_id,
-                    chapter_context=chapter_context,
-                    beat_index=idx,
-                    source_text=beat_text,
-                    polished_text=polished,
-                    checkpoint=checkpoint,
-                    retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
-                        source_text=beat_text,
-                        scores=scores,
-                        guard_evidence=evidence,
-                        whole_chapter_issues=whole_chapter_issues,
+                if not whole_chapter_unit:
+                    polished = await self._guard_editor_beat(
+                        novel_id=novel_id,
                         chapter_context=chapter_context,
-                    ),
-                )
+                        beat_index=idx,
+                        source_text=beat_text,
+                        polished_text=polished,
+                        checkpoint=checkpoint,
+                        retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
+                            source_text=beat_text,
+                            scores=scores,
+                            guard_evidence=evidence,
+                            whole_chapter_issues=whole_chapter_issues,
+                            chapter_context=chapter_context,
+                        ),
+                    )
                 polished = self._clean_text_integrity_fragments(polished)
                 log_agent_detail(
                     novel_id,
@@ -198,7 +218,7 @@ class EditorAgent:
                     node="polish_beat_result",
                     task="polish",
                     metadata={
-                        "beat_index": idx,
+                        "beat_index": logical_beat_index,
                         "source_chars": len(beat_text),
                         "polished_chars": len(polished),
                         "preview": preview_text(polished, 300),
@@ -212,7 +232,7 @@ class EditorAgent:
                     node="polish_beat_decision",
                     task="polish",
                     metadata={
-                        "beat_index": idx,
+                        "beat_index": logical_beat_index,
                         "source_chars": len(beat_text),
                         "scores": scores,
                         "issue_count": len(all_issues),
@@ -225,7 +245,7 @@ class EditorAgent:
                 self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
                 checkpoint.setdefault("repair_history", []).append(
                     self._build_repair_history_entry(
-                        idx,
+                        logical_beat_index,
                         beat_repair_tasks,
                         beat_text,
                         polished,
@@ -284,7 +304,9 @@ class EditorAgent:
         chapter_context = checkpoint.get("chapter_context", {})
         repair_tasks = checkpoint.get("repair_tasks") or []
         raw_draft = ch.raw_draft or ""
-        beats, _ = split_beats(raw_draft)
+        whole_chapter_edit = self._uses_whole_chapter_editing(checkpoint)
+        beats, anchored = split_beats(raw_draft, whole_chapter=whole_chapter_edit)
+        whole_chapter_unit = whole_chapter_edit and not anchored
 
         hook_score = None
         breakdown = critique.get("breakdown") or {}
@@ -308,6 +330,8 @@ class EditorAgent:
             else:
                 issues_by_beat.setdefault(bi, []).append(issue)
         self._merge_final_polish_issues(checkpoint, issues_by_beat, whole_chapter_issues)
+        if whole_chapter_unit:
+            self._move_beat_scoped_issues_to_whole_chapter(issues_by_beat, whole_chapter_issues)
         continuity_issues, force_continuity_rewrite = self._continuity_rewrite_issues(checkpoint)
         whole_chapter_issues.extend(continuity_issues)
 
@@ -317,18 +341,23 @@ class EditorAgent:
         flow_control = FlowControlService(self.session)
         for idx, beat_text in enumerate(beats):
             await flow_control.raise_if_cancelled(novel_id)
-            score_entry = beat_scores[idx] if idx < len(beat_scores) else {}
+            logical_beat_index = None if whole_chapter_unit else idx
+            score_entry = self._score_entry_for_edit_unit(beat_scores, idx, whole_chapter_unit)
             scores = score_entry.get("scores", {})
             beat_level_issues = score_entry.get("issues", []) or []
-            chapter_issues = issues_by_beat.get(idx, [])
-            beat_repair_tasks = self._repair_tasks_for_beat(repair_tasks, idx)
+            chapter_issues = [] if whole_chapter_unit else issues_by_beat.get(idx, [])
+            beat_repair_tasks = (
+                self._repair_tasks_for_whole_chapter(repair_tasks)
+                if whole_chapter_unit
+                else self._repair_tasks_for_beat(repair_tasks, idx)
+            )
             self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
             all_issues = (
                 chapter_issues
                 + beat_level_issues
                 + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
             )
-            hygiene_issues = self._prose_hygiene_issues(beat_text, idx, chapter_context)
+            hygiene_issues = self._prose_hygiene_issues(beat_text, logical_beat_index, chapter_context)
             all_issues += hygiene_issues
             is_forced_last = force_last_beat_rewrite and idx == last_idx
             if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
@@ -336,28 +365,29 @@ class EditorAgent:
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
                     "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
-                    "suggestion": "改写章末,只能用当前节拍已存在的事实给出明确悬念、反转、赌注升级、情绪爆点或呼应已埋伏笔",
+                    "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
                 }]
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last or force_continuity_rewrite
             if needs_rewrite:
                 polished = await self._rewrite_beat(
                     beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
                 )
-                polished = await self._guard_editor_beat(
-                    novel_id=novel_id,
-                    chapter_context=chapter_context,
-                    beat_index=idx,
-                    source_text=beat_text,
-                    polished_text=polished,
-                    checkpoint=checkpoint,
-                    retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
-                        source_text=beat_text,
-                        scores=scores,
-                        guard_evidence=evidence,
-                        whole_chapter_issues=whole_chapter_issues,
+                if not whole_chapter_unit:
+                    polished = await self._guard_editor_beat(
+                        novel_id=novel_id,
                         chapter_context=chapter_context,
-                    ),
-                )
+                        beat_index=idx,
+                        source_text=beat_text,
+                        polished_text=polished,
+                        checkpoint=checkpoint,
+                        retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
+                            source_text=beat_text,
+                            scores=scores,
+                            guard_evidence=evidence,
+                            whole_chapter_issues=whole_chapter_issues,
+                            chapter_context=chapter_context,
+                        ),
+                    )
                 polished = self._clean_text_integrity_fragments(polished)
             else:
                 polished = beat_text
@@ -367,7 +397,7 @@ class EditorAgent:
                 self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
                 checkpoint.setdefault("repair_history", []).append(
                     self._build_repair_history_entry(
-                        idx,
+                        logical_beat_index,
                         beat_repair_tasks,
                         beat_text,
                         polished,
@@ -516,8 +546,8 @@ class EditorAgent:
         style_profile = chapter_context.get("style_profile", {})
         style_block = ""
         if style_profile:
-            import json
-            style_block = f"### 作品风格约束\n{json.dumps(style_profile, ensure_ascii=False, indent=2)}\n\n"
+            style_contract = StyleContractCompiler.compile(style_profile).render_prompt_block()
+            style_block = f"### 作品风格约束\n{style_contract or str(style_profile)}\n\n"
 
         chapter_plan = chapter_context.get("chapter_plan", {})
         plan_block = ""
@@ -533,18 +563,24 @@ class EditorAgent:
         if genre_quality_config:
             import json
             genre_quality_block = f"### 类型质量配置\n{json.dumps(genre_quality_config, ensure_ascii=False)}\n\n"
+        strategy_block = self._soft_strategy_block(chapter_context)
 
         prompt_parts = [
             "你是一位小说编辑。请在保留叙事事实和原对话意图的前提下,针对以下问题定点改写本段。"
             "只返回改写后的正文，以正文形式呈现。\n",
             "## 改写方向\n"
+            "0. 反模板判断:不要为了满足形式要求机械添加对话、动作、感官或悬念; "
+            "先判断当前场景最自然的表达方式。\n"
+            "0.1 最小有效修法:先判断问题属于张力、人物、人味、钩子、节奏还是语体，再从策略池里选一两种最贴合原段的修法。\n"
             "1. 局部修补模式:优先修改与问题直接相关的句群,保持原事件集合、人物集合、地点集合和信息释放顺序。\n"
             "2. 读感推进:让当场目标、可见阻力、角色策略/态度变化和具体停点更清楚。\n"
-            "3. 对话层次:关键信息通过试探、保留、误判或代价逐步浮出,让角色关系在说话方式里变化。\n"
-            "4. 章末牵引:使用已有物件、风险、情绪余波和已埋伏笔强化停点,让读者感到当场后果和下一步疑问。\n"
-            "   写法顺序为:先点住本段已经出现的具体物/伤/话/选择,再写人物必须承受的代价或迟疑,最后落在一个未完成动作或已知风险的逼近感。\n"
+            "3. 关系压力:关键信息可以通过试探、保留、误判、代价、沉默、避让或动作变化逐步浮出;"
+            "对话不是必需形式。\n"
+            "4. 章末牵引:先判断这一段最自然的牵引来源,可以是信息差、关系变化、行动压力、情绪余波、环境异常或人物选择。"
+            "让读者的关注点发生推进,但不要机械制造危险、异象或反转。\n"
             "5. 自然中文表达:英文、拼音、网络缩写和 UI 术语原文转写为贴合角色处境的中文说法。\n"
-            "6. 情绪呈现:把直述心理改成动作、对话潜台词、身体反应或环境反衬,让读者自己感到人物变化。\n"
+            "6. 情绪呈现:先判断情绪是否由作者替人物说出;如果是,改成更贴近当场处境的表达,"
+            "可以是动作、沉默、物件、身体反应、环境反衬或一句话。\n"
             "7. 低 AI 味修整:处理比喻过密、类型概念连环复读、感官平均用力、奇观堆叠、模板化异常事件演出。\n"
             "8. 异常事件段落:保留最有辨识度的画面,把抽象光影落到身体反应、行动阻碍或具体后果。\n"
             "9. 跨语域表达:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
@@ -552,7 +588,7 @@ class EditorAgent:
             ProseHygieneService.prompt_rules(chapter_context),
             "## 事实边界\n"
             "1. 使用计划和原段已经给出的事实强化表达,保留事件先后顺序和人物已完成动作。\n"
-            "2. 使用已有悬念增强章末钩子:放大当前风险、未完成选择、情绪余波或已埋伏笔。\n"
+            "2. 章末或停点只从已有物件、风险、情绪余波、人物关系、未完成选择或已埋伏笔中寻找自然牵引。\n"
             "3. 有限留白:当计划内信息不足以制造新反转时,用停顿、视线、动作未完成或既有风险的措辞强化。\n"
             "4. 正文只升级已有事实:新线索、新证据、新物件、新威胁、新动机、黑影、追兵、身份背景、额外线索和额外台词"
             "交给章节计划或后续节拍;本段用已给目标、阻力、选择和代价增强读感。\n",
@@ -561,6 +597,7 @@ class EditorAgent:
             plan_block,
             genre_block,
             genre_quality_block,
+            strategy_block,
         ]
         if low_dims:
             prompt_parts.append(f"## 低分维度\n{', '.join(low_dims)}\n")
@@ -576,6 +613,44 @@ class EditorAgent:
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
         return response.text.strip()
 
+    @staticmethod
+    def _soft_strategy_block(chapter_context: dict | None) -> str:
+        if not isinstance(chapter_context, dict):
+            return ""
+        cards = chapter_context.get("writing_cards") or []
+        if not isinstance(cards, list):
+            return ""
+        labels = [
+            ("scene_pressure_lenses", "场景压力"),
+            ("relationship_subtext_lenses", "关系潜台词"),
+            ("prose_texture_lenses", "文字质感"),
+            ("freshness_lenses", "新鲜度"),
+        ]
+        lines: list[str] = []
+        for card in cards[:2]:
+            if not isinstance(card, dict):
+                try:
+                    card = card.model_dump()
+                except Exception:
+                    continue
+            beat_index = card.get("beat_index")
+            prefix = f"beat {beat_index}: " if beat_index is not None else ""
+            for key, label in labels:
+                values = card.get(key) or []
+                if not isinstance(values, list):
+                    continue
+                cleaned = [str(item).strip() for item in values if str(item).strip()]
+                if cleaned:
+                    lines.append(f"- {prefix}{label}: " + "；".join(cleaned[:3]))
+        if not lines:
+            return ""
+        return (
+            "## 可选叙事策略池\n"
+            "这些策略不是逐项硬性完成；只选最贴合原段问题的一两种，服务局部修复，不新增计划外事实。\n"
+            + "\n".join(lines)
+            + "\n"
+        )
+
     @classmethod
     def _format_issue_for_prompt(cls, issue: dict) -> str:
         dim = issue.get("dim")
@@ -584,7 +659,7 @@ class EditorAgent:
         return f"- [{dim}] 问题: {problem}\n  建议: {suggestion}"
 
     @staticmethod
-    def _prose_hygiene_issues(text: str, beat_index: int, chapter_context: dict | None = None) -> list[dict]:
+    def _prose_hygiene_issues(text: str, beat_index: int | None, chapter_context: dict | None = None) -> list[dict]:
         issues = ProseHygieneService.find_issues(text, context=chapter_context)
         if not issues:
             return []
@@ -594,6 +669,48 @@ class EditorAgent:
             "problem": "；".join(issues[:8]),
             "suggestion": "删除规划/元叙述语言、现代/外文漂移和工程字段痕迹，改成当前场景里的动作、对白、身体反应、物件变化或直接后果。",
         }]
+
+    @staticmethod
+    def _uses_whole_chapter_editing(checkpoint: dict) -> bool:
+        drafting_mode = str(checkpoint.get("drafting_mode") or "").strip().lower()
+        if drafting_mode == "whole_chapter":
+            return True
+        draft_metadata = checkpoint.get("draft_metadata")
+        if not isinstance(draft_metadata, dict):
+            return False
+        beat_coverage = draft_metadata.get("beat_coverage")
+        if not isinstance(beat_coverage, list):
+            return False
+        return any(
+            isinstance(item, dict) and item.get("beat_index") is None
+            for item in beat_coverage
+        )
+
+    @staticmethod
+    def _score_entry_for_edit_unit(beat_scores: list, beat_index: int, whole_chapter_unit: bool) -> dict:
+        if not isinstance(beat_scores, list):
+            return {}
+        if whole_chapter_unit:
+            for item in beat_scores:
+                if isinstance(item, dict) and item.get("beat_index") is None:
+                    return item
+            return beat_scores[0] if beat_scores and isinstance(beat_scores[0], dict) else {}
+        return beat_scores[beat_index] if beat_index < len(beat_scores) and isinstance(beat_scores[beat_index], dict) else {}
+
+    @staticmethod
+    def _move_beat_scoped_issues_to_whole_chapter(
+        issues_by_beat: dict[int, list],
+        whole_chapter_issues: list,
+    ) -> None:
+        for issues in issues_by_beat.values():
+            whole_chapter_issues.extend(issue for issue in issues if isinstance(issue, dict))
+        issues_by_beat.clear()
+
+    @staticmethod
+    def _repair_tasks_for_whole_chapter(tasks: list[dict]) -> list[dict]:
+        if not isinstance(tasks, list):
+            return []
+        return [task for task in tasks if EditorAgent._is_valid_repair_task(task)]
 
     @staticmethod
     def _repair_tasks_for_beat(tasks: list[dict], beat_index: int) -> list[dict]:
@@ -684,6 +801,9 @@ class EditorAgent:
 
         task_type = task.get("task_type") or "repair_task"
         issue_codes = EditorAgent._stringify_repair_field(task.get("issue_codes"))
+        problem = str(task.get("problem") or "").strip()
+        evidence = EditorAgent._stringify_repair_field(task.get("evidence"))
+        suggestion = str(task.get("suggestion") or "").strip()
         constraints = EditorAgent._stringify_repair_field(task.get("constraints"))
         success_criteria = EditorAgent._stringify_repair_field(task.get("success_criteria"))
 
@@ -697,6 +817,9 @@ class EditorAgent:
             "你是一位小说编辑，请根据质量修复任务改写原文。",
             f"任务类型: {task_type}",
             f"问题码: {issue_codes or '无'}",
+            f"问题描述: {problem or '无'}",
+            f"证据: {evidence or '无'}",
+            f"评审建议: {suggestion or '无'}",
             f"约束: {constraints or '无'}",
             f"成功标准: {success_criteria or '无'}",
             f"章节标题: {title or '未提供'}",
@@ -720,6 +843,8 @@ class EditorAgent:
         issue_codes = cls._stringify_repair_field(task.get("issue_codes"))
         constraints = cls._stringify_repair_field(task.get("constraints"))
         success_criteria = cls._stringify_repair_field(task.get("success_criteria"))
+        evidence = cls._stringify_repair_field(task.get("evidence"))
+        suggestion = str(task.get("suggestion") or "").strip()
         schema_fields = []
         for field in ("task_id", "chapter_id", "scope", "allowed_materials"):
             value = cls._stringify_repair_field(task.get(field))
@@ -736,18 +861,20 @@ class EditorAgent:
             problem_parts.append(f"问题码：{issue_codes}")
         if constraints:
             problem_parts.append(f"约束：{constraints}")
+        if evidence:
+            problem_parts.append(f"证据：{evidence}")
         if schema_fields:
             problem_parts.extend(schema_fields)
         return {
             "dim": task_type,
             "problem": "质量修复任务：" + "；".join(problem_parts),
-            "suggestion": success_criteria or "按质量修复任务完成定点修复。",
+            "suggestion": success_criteria or suggestion or "按质量修复任务完成定点修复。",
         }
 
     @classmethod
     def _build_repair_history_entry(
         cls,
-        beat_index: int,
+        beat_index: int | None,
         tasks: list[dict],
         source_text: str,
         polished_text: str,
@@ -791,7 +918,7 @@ class EditorAgent:
         dim = str(issue.get("dim") or "")
         risky_markers = (
             "新反转", "新的反转", "加入新", "新增", "黑影", "追兵", "有人正朝",
-            "密信被", "信纸在融化", "禁地深处亮起", "额外", "陌生人", "新人物",
+            "具体新证据", "具体新物件", "具体新地点", "额外", "陌生人", "新人物",
             "新线索", "新证据", "新物件", "新威胁", "例如：", "比如：",
         )
         if dim == "hook_strength" or any(marker in suggestion for marker in risky_markers):
@@ -800,7 +927,7 @@ class EditorAgent:
                 base += "。"
             return (
                 f"{base}执行时只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔; "
-                "通过当场后果、人物迟疑、身体反应、未完成动作和已知风险逼近来强化钩子。"
+                "先判断这一段最自然的牵引来源,可以来自信息差、关系变化、行动压力、情绪余波、环境异常或人物选择。"
             )
         if dim in {"editing_boundary", "consistency", "quality_gate", "required_payoff"}:
             base = suggestion or "回到当前节拍已有事实完成修补。"
@@ -878,12 +1005,30 @@ class EditorAgent:
                 continue
             detail = warning.get("detail") if isinstance(warning.get("detail"), dict) else {}
             missing = detail.get("missing") if isinstance(detail.get("missing"), list) else []
-            whole_chapter_issues.append({
+            issue = {
                 "dim": warning.get("code") or "quality_gate",
                 "problem": warning.get("message") or "成稿质量门禁仍有告警。",
                 "suggestion": "围绕当前节拍已有事实补足读者需要看见的兑现、余波和停点。"
                 + (f" 重点兑现: {'；'.join(str(item) for item in missing[:3])}" if missing else ""),
-            })
+            }
+            whole_chapter_issues.append(issue)
+            if str(warning.get("code") or "") in {"required_payoff", "final_review_score"}:
+                beat_idx = EditorAgent._final_polish_target_beat_index(checkpoint)
+                if beat_idx is not None:
+                    issues_by_beat.setdefault(beat_idx, []).append(issue)
+
+    @staticmethod
+    def _final_polish_target_beat_index(checkpoint: dict) -> int | None:
+        chapter_context = checkpoint.get("chapter_context")
+        if not isinstance(chapter_context, dict):
+            return None
+        chapter_plan = chapter_context.get("chapter_plan")
+        if not isinstance(chapter_plan, dict):
+            return None
+        beats = chapter_plan.get("beats")
+        if not isinstance(beats, list) or not beats:
+            return None
+        return len(beats) - 1
 
     @staticmethod
     def _clean_isolated_punctuation_paragraphs(text: str) -> str:

@@ -116,6 +116,27 @@ def test_quality_summary_fails_on_manual_review_required_quality_status():
     assert "quality_status=manual_review_required" in report.issues[0].evidence
 
 
+def test_quality_summary_fails_on_sub_publishable_passed_chapter():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-sub-publishable",
+            "checkpoint": {},
+            "chapters": [
+                {
+                    "chapter_id": "ch_1",
+                    "quality_status": "pass",
+                    "final_review_score": 78,
+                }
+            ],
+        },
+        run_id="quality-sub-publishable",
+    )
+
+    assert report.status == "failed"
+    assert [issue.id for issue in report.issues] == ["CHAPTER-QUALITY-001"]
+    assert "final_review_score=78" in report.issues[0].evidence
+
+
 def test_quality_summary_records_longform_scale_and_import_metrics():
     report = build_quality_summary_report(
         {
@@ -443,7 +464,7 @@ def test_quality_summary_records_passed_chapter_quality_details():
                 {
                     "chapter_id": "ch_1",
                     "quality_status": "pass",
-                    "final_review_score": 75,
+                    "final_review_score": 84,
                     "quality_reasons": {},
                 },
                 {

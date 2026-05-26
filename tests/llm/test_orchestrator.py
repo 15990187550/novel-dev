@@ -76,6 +76,31 @@ async def test_orchestrator_executes_whitelisted_readonly_tool_and_returns_struc
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_applies_payload_normalizer_before_schema_validation():
+    class DriftClient:
+        async def acomplete(self, messages, config):
+            return LLMResponse(text="", structured_payload={"name": "ok"})
+
+    def normalize(payload, _error):
+        return {"value": payload["name"]} if isinstance(payload, dict) and "name" in payload else payload
+
+    orchestrator = OrchestratedLLM(
+        client=DriftClient(),
+        base_config=TaskConfig(provider="test", model="test"),
+        response_schema=Payload,
+        response_tool_name="emit_payload",
+        tools=[],
+        task_config=OrchestratedTaskConfig(tool_allowlist=[]),
+        payload_normalizer=normalize,
+    )
+
+    result = await orchestrator.run("prompt", agent_name="NormalizeAgent", task="demo", novel_id="novel-normalize")
+
+    assert result == Payload(value="ok")
+    assert any(entry.get("node") == "llm_normalize" for entry in LogService._buffers["novel-normalize"])
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_skips_tool_calls_over_limit_after_executing_allowed_subset():
     async def read_state(args):
         return {"state": args["novel_id"]}

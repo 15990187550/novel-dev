@@ -114,9 +114,17 @@ def _parse_json_array_from_text(text: str) -> Any:
     try:
         parsed, _ = decoder.raw_decode(text[start:])
     except json.JSONDecodeError:
-        try:
-            parsed, _ = decoder.raw_decode(_escape_raw_control_chars_in_json_strings(text[start:]))
-        except json.JSONDecodeError:
+        repaired_control_chars = _escape_raw_control_chars_in_json_strings(text[start:])
+        for candidate in (
+            repaired_control_chars,
+            _escape_unescaped_inner_quotes_in_json_strings(repaired_control_chars),
+        ):
+            try:
+                parsed, _ = decoder.raw_decode(candidate)
+                break
+            except json.JSONDecodeError:
+                parsed = None
+        if parsed is None:
             return None
     return parsed
 
@@ -164,6 +172,39 @@ def _escape_raw_control_chars_in_json_strings(text: str) -> str:
             continue
         if in_string and ch == "\t":
             result.append("\\t")
+            continue
+        result.append(ch)
+    return "".join(result)
+
+
+def _escape_unescaped_inner_quotes_in_json_strings(text: str) -> str:
+    result: list[str] = []
+    in_string = False
+    escape_next = False
+    length = len(text)
+    for index, ch in enumerate(text):
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+            continue
+        if ch == "\\":
+            result.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            if not in_string:
+                in_string = True
+                result.append(ch)
+                continue
+            next_index = index + 1
+            while next_index < length and text[next_index].isspace():
+                next_index += 1
+            next_char = text[next_index] if next_index < length else ""
+            if next_char in {":", ",", "}", "]", ""}:
+                in_string = False
+                result.append(ch)
+            else:
+                result.append('\\"')
             continue
         result.append(ch)
     return "".join(result)
@@ -424,6 +465,8 @@ def _normalize_change(item: Any, default_target_type: str | None = None) -> dict
     if target_id is not None:
         normalized["target_id"] = str(target_id)
     for ref_field in ("source_ref", "target_ref"):
+        if target_type == "relationship" and operation == "create":
+            continue
         if item.get(ref_field):
             normalized[ref_field] = str(item[ref_field])
     return normalized
@@ -540,10 +583,8 @@ def _normalize_relationship_snapshot(snapshot: dict[str, Any]) -> dict[str, Any]
     normalized = dict(snapshot)
     if "relation_type" not in normalized and normalized.get("relation"):
         normalized["relation_type"] = normalized.get("relation")
-    if "source_ref" not in normalized and normalized.get("source_name"):
-        normalized["source_ref"] = normalized.get("source_name")
-    if "target_ref" not in normalized and normalized.get("target_name"):
-        normalized["target_ref"] = normalized.get("target_name")
+    normalized.pop("source_ref", None)
+    normalized.pop("target_ref", None)
     return normalized
 
 

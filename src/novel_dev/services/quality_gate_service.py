@@ -14,6 +14,9 @@ QUALITY_WARN = "warn"
 QUALITY_MANUAL_REVIEW_REQUIRED = "manual_review_required"
 QUALITY_BLOCK = "block"
 QUALITY_STOP_STATUSES = frozenset({QUALITY_BLOCK, QUALITY_MANUAL_REVIEW_REQUIRED})
+PUBLISHABLE_FINAL_REVIEW_SCORE = 82
+CRITICAL_DIMENSION_MIN_SCORE = 75
+CRITICAL_REVIEW_DIMENSIONS = frozenset({"plot_tension", "hook_strength", "humanity"})
 
 
 def quality_gate_stops_librarian(status: str | None) -> bool:
@@ -39,6 +42,60 @@ class QualityGateResult:
 class QualityGateService:
     """Classify chapter quality into pass/warn/block from structured checks."""
 
+    _ABSTRACT_PAYOFF_INTENT_MARKERS = (
+        "提升",
+        "提高",
+        "增强",
+        "强化",
+        "变强",
+        "改善",
+        "精进",
+        "进步",
+        "突破",
+        "升级",
+        "恢复",
+        "稳固",
+        "凝练",
+        "凝炼",
+        "凝实",
+    )
+    _PAYOFF_PROGRESS_EVIDENCE_MARKERS = _ABSTRACT_PAYOFF_INTENT_MARKERS + (
+        "淬炼",
+        "凝成",
+        "凝为",
+        "纯粹",
+        "澄澈",
+        "清澈",
+        "远超",
+        "胜过",
+        "胜于",
+        "压过",
+        "近乎实质",
+        "更强",
+        "更稳",
+        "更纯",
+        "更清",
+        "更深",
+        "更高",
+        "更实",
+    )
+    _PAYOFF_TARGET_FILLER_TERMS = frozenset({
+        "品质",
+        "程度",
+        "状态",
+        "变化",
+        "效果",
+        "结果",
+        "能力",
+        "力量",
+        "层次",
+        "水平",
+        "质量",
+        "表现",
+        "新的",
+        "新",
+    })
+
     _QUALITY_ISSUE_CLASSIFICATIONS = {
         "beat_cohesion": ("structure", "beat", "guided"),
         "text_integrity": ("structure", "paragraph", "auto"),
@@ -47,6 +104,7 @@ class QualityGateService:
         "language_style": ("style", "chapter", "guided"),
         "required_payoff": ("plot", "chapter", "guided"),
         "final_review_score": ("prose", "chapter", "guided"),
+        "critical_dimension_score": ("plot", "chapter", "guided"),
         "review_note": ("structure", "chapter", "manual"),
         "consistency": ("continuity", "chapter", "guided"),
         "continuity_audit": ("continuity", "chapter", "guided"),
@@ -63,6 +121,7 @@ class QualityGateService:
         "language_style": "统一叙述语体，移除未授权外文、现代术语和破坏世界观的表达。",
         "required_payoff": "回到章节计划补写缺失线索、钩子或回收点，确保读者能在正文中明确感知。",
         "final_review_score": "针对低分维度重修章节，优先处理情节推进、人物动机和语言完成度。",
+        "critical_dimension_score": "针对低分关键维度定点重修，优先修复章末钩子、冲突升级和人物在场反应。",
         "review_note": "人工核查评审备注，判断是否需要结构重排、补写或删除问题段落。",
         "consistency": "对照上下文、实体状态和时间线修复冲突，再同步相关世界状态。",
         "continuity_audit": "对照连续性审计结果修正文中冲突，并同步实体、时间线或故事契约状态。",
@@ -79,6 +138,7 @@ class QualityGateService:
         target_word_count: int | None = None,
         polished_word_count: int | None = None,
         final_review_score: int | None = None,
+        final_review_feedback: dict | None = None,
         polished_text: str | None = None,
         required_payoffs: list[str] | None = None,
         acceptance_scope: str | None = None,
@@ -94,8 +154,18 @@ class QualityGateService:
         if final_review_score is not None:
             if final_review_score < 60:
                 blocking.append(cls._item("final_review_score", f"成稿评分过低: {final_review_score}"))
-            elif final_review_score < 75:
-                warnings.append(cls._item("final_review_score", f"成稿评分偏低: {final_review_score}"))
+            elif final_review_score < PUBLISHABLE_FINAL_REVIEW_SCORE:
+                warnings.append(cls._item(
+                    "final_review_score",
+                    f"成稿未达到自动归档质量线: {final_review_score}",
+                    {
+                        "score": final_review_score,
+                        "required": PUBLISHABLE_FINAL_REVIEW_SCORE,
+                    },
+                ))
+
+        critical_dimension_warnings = cls._critical_dimension_warnings(final_review_feedback)
+        warnings.extend(critical_dimension_warnings)
 
         if not report.word_count_ok:
             severity = cls._word_count_severity(
@@ -242,8 +312,36 @@ class QualityGateService:
 
     @staticmethod
     def _requires_manual_review(warnings: list[dict[str, Any]]) -> bool:
-        manual_review_codes = {"final_review_score", "language_style", "required_payoff"}
+        manual_review_codes = {"final_review_score", "critical_dimension_score", "language_style", "required_payoff"}
         return any(str(item.get("code")) in manual_review_codes for item in warnings if isinstance(item, dict))
+
+    @classmethod
+    def _critical_dimension_warnings(cls, final_review_feedback: dict | None) -> list[dict[str, Any]]:
+        if not isinstance(final_review_feedback, dict):
+            return []
+        breakdown = final_review_feedback.get("breakdown")
+        if not isinstance(breakdown, dict):
+            return []
+        warnings: list[dict[str, Any]] = []
+        for dim in sorted(CRITICAL_REVIEW_DIMENSIONS):
+            value = breakdown.get(dim)
+            score = value.get("score") if isinstance(value, dict) else value
+            if not isinstance(score, (int, float)):
+                continue
+            if score >= CRITICAL_DIMENSION_MIN_SCORE:
+                continue
+            comment = value.get("comment") if isinstance(value, dict) else ""
+            warnings.append(cls._item(
+                "critical_dimension_score",
+                f"关键维度 {dim} 低于质量线: {score}",
+                {
+                    "dimension": dim,
+                    "score": score,
+                    "required": CRITICAL_DIMENSION_MIN_SCORE,
+                    "comment": comment,
+                },
+            ))
+        return warnings
 
     @staticmethod
     def _note_is_blocking(note: str) -> bool:
@@ -298,9 +396,43 @@ class QualityGateService:
                 continue
             if normalized_payoff in normalized_text:
                 continue
+            if cls._abstract_payoff_covered(normalized_payoff, normalized_text):
+                continue
             if cls._text_overlap(normalized_payoff, normalized_text) < 0.55:
                 missing.append(str(payoff))
         return missing
+
+    @classmethod
+    def _abstract_payoff_covered(cls, normalized_payoff: str, normalized_text: str) -> bool:
+        if not any(marker in normalized_payoff for marker in cls._ABSTRACT_PAYOFF_INTENT_MARKERS):
+            return False
+        target_terms = cls._payoff_target_terms(normalized_payoff)
+        if not target_terms:
+            return False
+        for term in target_terms:
+            start = 0
+            while True:
+                index = normalized_text.find(term, start)
+                if index < 0:
+                    break
+                window = normalized_text[max(0, index - 40): index + len(term) + 80]
+                if any(marker in window for marker in cls._PAYOFF_PROGRESS_EVIDENCE_MARKERS):
+                    return True
+                start = index + len(term)
+        return False
+
+    @classmethod
+    def _payoff_target_terms(cls, normalized_payoff: str) -> list[str]:
+        candidate = normalized_payoff
+        for marker in sorted(cls._ABSTRACT_PAYOFF_INTENT_MARKERS, key=len, reverse=True):
+            candidate = candidate.replace(marker, "")
+        for filler in sorted(cls._PAYOFF_TARGET_FILLER_TERMS, key=len, reverse=True):
+            candidate = candidate.replace(filler, "")
+        terms = [term for term in re.findall(r"[\u4e00-\u9fff]{2,}", candidate) if term not in cls._PAYOFF_TARGET_FILLER_TERMS]
+        if terms:
+            return terms[:3]
+        compact = "".join(ch for ch in candidate if "\u4e00" <= ch <= "\u9fff")
+        return [compact] if len(compact) >= 2 and compact not in cls._PAYOFF_TARGET_FILLER_TERMS else []
 
     @staticmethod
     def _normalize_for_match(text: str) -> str:

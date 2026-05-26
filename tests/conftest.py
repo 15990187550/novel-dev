@@ -80,7 +80,7 @@ def mock_llm_factory(monkeypatch):
                         relationship_shifts=["主角成长"],
                         foreshadowing_setup=["伏笔"],
                         foreshadowing_payoff=["回收"],
-                        target_chapter_range=f"{(i - 1) * 30 + 1}-{i * 30}",
+                        target_chapter_range=f"{i}-{i}",
                     ).model_dump_json()
                     for i in range(1, 4)
                 ) + "]"

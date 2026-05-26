@@ -41,6 +41,9 @@ def test_plan_maps_supported_issue_codes_to_repair_task_types():
         _issue("dead_entity_acted", category="continuity"),
         _issue("canonical_identity_drift", category="continuity"),
         _issue("story_contract_terms_missing", category="continuity"),
+        _issue("plot_tension", category="plot"),
+        _issue("humanity"),
+        _issue("critical_dimension_score", category="plot"),
     ]
 
     tasks = RepairPlanner.plan("ch-1", issues)
@@ -62,6 +65,9 @@ def test_plan_maps_supported_issue_codes_to_repair_task_types():
         "dead_entity_acted": "continuity_repair",
         "canonical_identity_drift": "continuity_repair",
         "story_contract_terms_missing": "continuity_repair",
+        "plot_tension": "scene_pressure_repair",
+        "humanity": "character_repair",
+        "critical_dimension_score": "scene_pressure_repair",
     }
 
 
@@ -141,3 +147,41 @@ def test_task_ids_do_not_collide_for_pure_cjk_chapter_ids():
     assert first[0].task_id != second[0].task_id
     assert first[0].task_id.startswith("repair-chapter-")
     assert second[0].task_id.startswith("repair-chapter-")
+
+
+def test_plan_specializes_critical_dimension_score_by_dimension_evidence():
+    issues = [
+        _issue(
+            "critical_dimension_score",
+            category="plot",
+            repairability="guided",
+        ).model_copy(update={
+            "evidence": [
+                "关键维度 hook_strength 低于质量线: 65",
+                "dimension=hook_strength",
+                "comment=章末只是场景收束，没有形成下一章牵引",
+            ],
+            "suggestion": "针对低分关键维度定点重修，优先修复章末钩子。",
+        }),
+        _issue(
+            "critical_dimension_score",
+            category="plot",
+            repairability="guided",
+        ).model_copy(update={
+            "evidence": [
+                "关键维度 humanity 低于质量线: 70",
+                "dimension=humanity",
+                "comment=情绪被作者总结，缺少人物在场反应",
+            ],
+            "suggestion": "针对低分关键维度定点重修，优先修复人物在场反应。",
+        }),
+    ]
+
+    tasks = RepairPlanner.plan("ch-critical", issues)
+
+    assert [task.task_type for task in tasks] == ["hook_repair", "character_repair"]
+    joined = "\n".join("\n".join(task.constraints + task.success_criteria) for task in tasks)
+    assert "章末只是场景收束" in joined
+    assert "情绪被作者总结" in joined
+    assert "必须加对话" not in joined
+    assert "必须出现" not in joined

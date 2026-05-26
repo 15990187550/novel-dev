@@ -12,7 +12,7 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.review import DimensionIssue, DimensionScore, ScoreResult
-from novel_dev.services.quality_gate_service import QUALITY_UNCHECKED, QualityGateResult
+from novel_dev.services.quality_gate_service import QUALITY_UNCHECKED, QUALITY_WARN, QualityGateResult
 
 
 def test_build_genre_quality_issues_converts_type_drift_items():
@@ -31,6 +31,39 @@ def test_build_genre_quality_issues_converts_type_drift_items():
     assert any("宗门" in item for item in issues[0].evidence)
 
 
+@pytest.mark.asyncio
+async def test_fast_review_llm_check_uses_compiled_style_contract(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+    chapter_context = {
+        "chapter_plan": {"target_word_count": 1000},
+        "style_profile": {
+            "style_guide": "克制、具体。",
+            "character_rules": ["情绪用动作和停顿呈现。"],
+            "anti_ai_rules": ["不要作者总结。"],
+        },
+    }
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await FastReviewAgent(async_session)._llm_check_consistency_and_cohesion(
+            "林照把残信压进袖口。",
+            "林照意识到麻烦来了。",
+            chapter_context,
+            novel_id="novel_fr_style",
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "### 写法合同" in prompt
+    assert "#### 角色表达" in prompt
+    assert "情绪用动作和停顿呈现" in prompt
+    assert "#### 反AI风险" in prompt
+    assert "不要作者总结" in prompt
+    assert '"style_guide"' not in prompt
+
+
 def test_find_language_style_issues_allows_authorized_modern_terms():
     issues = _find_language_style_issues(
         "他用 KPI 和 APP 复盘项目。",
@@ -45,6 +78,43 @@ def test_find_language_style_issues_allows_authorized_modern_terms():
     )
 
     assert any("英文/外文" in issue for issue in unauthorized_issues)
+
+
+def test_find_language_style_issues_allows_contextual_system_terms():
+    issues = _find_language_style_issues(
+        "赵元腕间光幕跳出新的系统提示。",
+        context={
+            "genre_quality_config": {
+                "modern_terms_policy": "contextual",
+                "modern_drift_patterns": ["系统提示"],
+                "contextual_modern_term_rules": [
+                    {"terms": ["系统提示"], "context_markers": ["系统"]}
+                ],
+            },
+            "active_entities": [
+                {"name": "系统", "type": "concept", "current_state": "属性面板显示危险。"},
+                {"name": "赵元", "type": "character", "current_state": "系统宿主。"},
+            ],
+        },
+    )
+
+    assert not any("系统提示" in issue for issue in issues)
+
+    unrelated_issues = _find_language_style_issues(
+        "陆照走进药圃，脑中跳出系统提示。",
+        context={
+            "genre_quality_config": {
+                "modern_terms_policy": "contextual",
+                "modern_drift_patterns": ["系统提示"],
+                "contextual_modern_term_rules": [
+                    {"terms": ["系统提示"], "context_markers": ["系统"]}
+                ],
+            },
+            "active_entities": [{"name": "药圃", "type": "location"}],
+        },
+    )
+
+    assert any("系统提示" in issue for issue in unrelated_issues)
 
 
 @pytest.mark.asyncio
@@ -77,6 +147,55 @@ async def test_fast_review_pass(async_session):
     assert report.notes == []
 
     state = await director.resume("novel_fr_pass")
+    assert state.current_phase == Phase.LIBRARIAN.value
+
+
+@pytest.mark.asyncio
+async def test_fast_review_passes_contextual_system_terms_from_chapter_context(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_system_context",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 16},
+                "genre_quality_config": {
+                    "modern_terms_policy": "contextual",
+                    "modern_drift_patterns": ["系统提示"],
+                    "contextual_modern_term_rules": [
+                        {"terms": ["系统提示"], "context_markers": ["系统"]}
+                    ],
+                },
+                "active_entities": [
+                    {"name": "系统", "type": "item", "current_state": "属性面板显示危险。"},
+                    {"name": "赵元", "type": "character", "current_state": "系统宿主。"},
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_system_context",
+    )
+    await ChapterRepository(async_session).create("c_system_context", "v1", 1, "Test")
+    await ChapterRepository(async_session).update_text(
+        "c_system_context",
+        raw_draft="赵元腕间光幕跳出新的系统提示。",
+        polished_text="赵元腕间光幕跳出新的系统提示。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_system_context", "c_system_context")
+
+    assert report.language_style_ok is True
+    assert not any("系统提示" in note for note in report.notes)
+
+    state = await director.resume("novel_fr_system_context")
     assert state.current_phase == Phase.LIBRARIAN.value
 
 
@@ -249,7 +368,7 @@ async def test_fast_review_fails_plan_language_in_polished_text(async_session):
     await ChapterRepository(async_session).update_text(
         "c_plan_language",
         raw_draft="陆照站在石阶上，压住肩背伤势。",
-        polished_text="阻力不需要另起一条线，它就压在当前这件事上。陆照站在石阶上。",
+        polished_text="陆照按当前计划只能权衡是否继续。陆照站在石阶上。",
     )
 
     mock_client = AsyncMock()
@@ -473,6 +592,30 @@ def test_store_quality_issues_clears_stale_repair_tasks_for_non_block_gate():
     assert checkpoint["quality_issues"][0]["code"] == "ai_flavor"
 
 
+def test_store_chapter_acceptance_records_parallel_repairable_diagnostic():
+    checkpoint = {
+        "quality_issues": [
+            {
+                "code": "hook_strength",
+                "severity": "warn",
+                "message": "结尾只停在总结判断。",
+                "suggestion": "改成既有残信带来的当场后果。",
+            }
+        ]
+    }
+
+    FastReviewAgent._store_chapter_acceptance(
+        checkpoint,
+        polished_text="林照收起残信。他终于意识到麻烦来了。",
+        target_word_count=1200,
+    )
+
+    assert checkpoint["chapter_acceptance"]["status"] == "repairable"
+    assert checkpoint["chapter_acceptance"]["continue_policy"] == "repair_once"
+    assert checkpoint["chapter_acceptance"]["repair_directives"][0]["target"] == "ending"
+    assert "残信" in checkpoint["chapter_acceptance"]["repair_directives"][0]["instruction"]
+
+
 def test_store_quality_issues_ignores_resolved_structure_guard_for_warn_gate():
     guard = {
         "beat_index": 1,
@@ -501,6 +644,44 @@ def test_store_quality_issues_ignores_resolved_structure_guard_for_warn_gate():
     issue_codes = {issue["code"] for issue in checkpoint["quality_issues"]}
     assert issue_codes == {"ai_flavor"}
     assert "plan_boundary_violation" not in checkpoint["quality_issue_summary"]["by_code"]
+
+
+def test_store_quality_issues_creates_repair_tasks_for_manual_review_key_dimensions():
+    checkpoint = {}
+    gate = QualityGateResult(
+        status="manual_review_required",
+        warning_items=[
+            {
+                "code": "critical_dimension_score",
+                "message": "关键维度 hook_strength 低于质量线: 65",
+                "detail": {
+                    "dimension": "hook_strength",
+                    "score": 65,
+                    "required": 75,
+                    "comment": "章末只是场景收束，没有形成下一章牵引",
+                },
+            },
+            {
+                "code": "language_style",
+                "message": "存在未授权外文、现代术语或风格问题",
+                "detail": {"examples": ["视网膜"]},
+            },
+        ],
+        summary="存在需要人工确认的质量问题",
+    )
+
+    FastReviewAgent._store_quality_issues_and_repairs(checkpoint, gate, "c_manual_quality")
+
+    assert checkpoint["quality_issue_summary"]["by_code"]["critical_dimension_score"] == 1
+    assert checkpoint["repair_tasks"]
+    task_types = {task["task_type"] for task in checkpoint["repair_tasks"]}
+    assert {"hook_repair", "prose_polish"} <= task_types
+    joined = "\n".join(
+        "\n".join(task.get("constraints", []) + task.get("success_criteria", []))
+        for task in checkpoint["repair_tasks"]
+    )
+    assert "章末只是场景收束" in joined
+    assert "视网膜" in joined
 
 
 def test_store_quality_issues_manual_block_ignores_resolved_structure_guard():
@@ -844,6 +1025,77 @@ async def test_fast_review_returns_to_editing_for_low_final_score_before_edit_li
     assert final_polish["beat_issues"][0]["beat_index"] == 0
     assert "残信出现后没有当场后果" in final_polish["beat_issues"][0]["issues"][0]["problem"]
     assert any(item["code"] == "required_payoff" for item in final_polish["quality_gate_warnings"])
+    acceptance = state.checkpoint_data["chapter_acceptance"]
+    assert acceptance["status"] == "repairable"
+    assert acceptance["continue_policy"] == "repair_once"
+    assert any(item["target"] == "ending" for item in acceptance["repair_directives"])
+
+
+@pytest.mark.asyncio
+async def test_fast_review_returns_to_editing_for_sub_publishable_final_score_before_edit_limit(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_publishable_threshold",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "edit_attempt_count": 1,
+            "chapter_context": {
+                "chapter_plan": {
+                    "target_word_count": 4,
+                    "beats": [{"summary": "林照确认残页线索", "target_mood": "tense"}],
+                }
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_publishable_threshold",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_publishable_threshold", "v1", 1, "Publishable Threshold")
+    await repo.update_text("c_publishable_threshold", raw_draft="甲乙丙。", polished_text="甲乙丙。")
+
+    final_score = ScoreResult(
+        overall=78,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=78, comment="冲突重复"),
+            DimensionScore(name="hook_strength", score=72, comment="章末钩子偏弱"),
+        ],
+        summary_feedback="成稿可读，但章末只是计划预告，冲突升级不足。",
+        per_dim_issues=[
+            DimensionIssue(
+                dim="hook_strength",
+                beat_idx=0,
+                problem="章末停在明早再查，下一步过于可预测。",
+                suggestion="用已有物件和风险余波形成未完成动作。",
+            )
+        ],
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_publishable_threshold", "c_publishable_threshold")
+
+    chapter = await repo.get_by_id("c_publishable_threshold")
+    assert chapter.quality_status == QUALITY_UNCHECKED
+    assert chapter.final_review_score == 78
+
+    state = await director.resume("novel_fr_publishable_threshold")
+    assert state.current_phase == Phase.EDITING.value
+    final_polish = state.checkpoint_data["final_polish_issues"]
+    assert any(item["code"] == "final_review_score" for item in final_polish["quality_gate_warnings"])
+    assert final_polish["beat_issues"][0]["issues"][0]["dim"] == "hook_strength"
 
 
 @pytest.mark.asyncio
@@ -940,6 +1192,62 @@ async def test_fast_review_holds_manual_review_required_at_edit_limit(async_sess
     state = await director.resume("novel_fr_manual_review")
     assert state.current_phase == Phase.FAST_REVIEWING.value
     assert state.checkpoint_data["quality_gate"]["status"] == "manual_review_required"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_longform_downgrades_exhausted_nonblocking_quality_warnings(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_longform_warn",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "acceptance_scope": "real-longform-volume1",
+            "edit_attempt_count": 2,
+            "chapter_context": {
+                "chapter_plan": {
+                    "target_word_count": 4,
+                    "beats": [{"summary": "林照确认残页线索"}],
+                },
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_longform_warn",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_longform_warn", "v1", 1, "Longform Warn")
+    await repo.update_text("c_longform_warn", raw_draft="甲乙丙。", polished_text="甲乙丙。")
+
+    final_score = ScoreResult(
+        overall=78,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=78, comment="可读"),
+            DimensionScore(name="hook_strength", score=70, comment="章末钩子偏弱"),
+        ],
+        summary_feedback="已自动精修，仍有非阻断读感告警。",
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        await FastReviewAgent(async_session).review("novel_fr_longform_warn", "c_longform_warn")
+
+    chapter = await repo.get_by_id("c_longform_warn")
+    assert chapter.quality_status == QUALITY_WARN
+    assert any(item["code"] == "critical_dimension_score" for item in chapter.quality_reasons["warning_items"])
+
+    state = await director.resume("novel_fr_longform_warn")
+    assert state.current_phase == Phase.LIBRARIAN.value
+    assert state.checkpoint_data["quality_gate"]["status"] == QUALITY_WARN
 
 
 @pytest.mark.asyncio

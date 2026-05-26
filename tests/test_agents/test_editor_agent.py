@@ -78,6 +78,65 @@ def test_editor_formats_cohesion_repair_task_prompt():
     assert "严禁新增章节计划外的人物、物件、线索、威胁、地点或事件" in prompt
 
 
+def test_editor_repair_task_prompt_includes_evidence_without_mechanical_requirements():
+    prompt = EditorAgent._build_repair_task_prompt(
+        "林照垂眼，心中暗惊。他终于意识到麻烦来了。",
+        {
+            "task_type": "character_repair",
+            "issue_codes": ["humanity"],
+            "evidence": ["情绪由作者总结，没有落到人物动作和关系压力上"],
+            "problem": "人味不足，角色反应停在概括层",
+            "suggestion": "把反应落回当前场景已有动作、停顿、视线或身体变化。",
+            "constraints": ["不新增人物或台词功能"],
+            "success_criteria": ["读者能从行为读出压力，而不是由作者替角色总结"],
+        },
+        {
+            "chapter_plan": {
+                "title": "药圃夜声",
+                "summary": "林照在药圃发现异常，但不能惊动巡夜弟子。",
+            }
+        },
+    )
+
+    assert "人味不足" in prompt
+    assert "情绪由作者总结" in prompt
+    assert "把反应落回当前场景已有动作" in prompt
+    assert "不新增人物或台词功能" in prompt
+    assert "必须加对话" not in prompt
+    assert "必须出现" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_uses_compiled_style_contract_instead_of_raw_json(async_session):
+    agent = EditorAgent(async_session)
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="林照把残信压进袖口，没抬头。")
+
+    with patch("novel_dev.llm.llm_factory.get", return_value=mock_client):
+        await agent._rewrite_beat(
+            "林照意识到麻烦来了。",
+            {"humanity": 60},
+            [{"dim": "humanity", "problem": "人味不足", "suggestion": "改成动作承载。"}],
+            [],
+            {
+                "style_profile": {
+                    "style_guide": "克制、具体。",
+                    "character_rules": ["情绪用动作和停顿呈现。"],
+                    "anti_ai_rules": ["不要作者总结。"],
+                }
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "### 写法合同" in prompt
+    assert "#### 角色表达" in prompt
+    assert "情绪用动作和停顿呈现" in prompt
+    assert "#### 反AI风险" in prompt
+    assert "不要作者总结" in prompt
+    assert '"style_guide"' not in prompt
+    assert '"character_rules"' not in prompt
+
+
 def test_editor_selects_repair_tasks_for_beat():
     tasks = [
         {"task_type": "chapter_cohesion", "beat_index": None, "issue_codes": ["chapter_gap"]},
@@ -342,6 +401,118 @@ async def test_polish_chapter_level_repair_task_rewrites_all_beats_and_records_h
         and entry["issue_codes"] == ["chapter_transition"]
         for entry in state.checkpoint_data["repair_history"]
     )
+
+
+@pytest.mark.asyncio
+async def test_polish_whole_chapter_draft_without_anchors_edits_once(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_whole_chapter",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "drafting_mode": "whole_chapter",
+            "draft_metadata": {
+                "total_words": 42,
+                "beat_coverage": [{"beat_index": None, "word_count": 42}],
+            },
+            "chapter_context": {
+                "chapter_plan": {
+                    "title": "同门试探",
+                    "beats": [
+                        {"summary": "王顺拦路试探"},
+                        {"summary": "陆照被迫应招"},
+                        {"summary": "围观弟子察觉异常"},
+                    ],
+                }
+            },
+            "beat_scores": [{"beat_index": None, "scores": {"humanity": 62}}],
+            "repair_tasks": [
+                {
+                    "task_type": "cohesion_repair",
+                    "beat_index": None,
+                    "issue_codes": ["beat_cohesion"],
+                    "success_criteria": ["只整体修复一次，不按自然段重复扩写"],
+                }
+            ],
+        },
+        volume_id="v_whole",
+        chapter_id="c_whole",
+    )
+    await ChapterRepository(async_session).create("c_whole", "v_whole", 3, "Whole Chapter")
+    raw_draft = "王顺拦住去路。\n\n陆照被迫应招。\n\n围观弟子低声议论。"
+    await ChapterRepository(async_session).update_text("c_whole", raw_draft=raw_draft)
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="王顺拦住去路，陆照被迫应招，围观弟子低声议论。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        agent._guard_editor_beat = AsyncMock(side_effect=AssertionError("whole chapter edit must not use beat guard"))
+        await agent.polish("novel_edit_whole_chapter", "c_whole")
+
+    assert mock_client.acomplete.await_count == 1
+    chapter = await ChapterRepository(async_session).get_by_id("c_whole")
+    assert chapter.polished_text == "王顺拦住去路，陆照被迫应招，围观弟子低声议论。"
+
+    state = await director.resume("novel_edit_whole_chapter")
+    assert state.current_phase == Phase.FAST_REVIEWING.value
+    assert state.checkpoint_data["repair_tasks"] == []
+    assert len(state.checkpoint_data["repair_history"]) == 1
+    assert state.checkpoint_data["repair_history"][0]["beat_index"] is None
+
+
+@pytest.mark.asyncio
+async def test_polish_whole_chapter_final_gate_warnings_trigger_rewrite(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_whole_chapter_gate_warning",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "drafting_mode": "whole_chapter",
+            "draft_metadata": {
+                "total_words": 42,
+                "beat_coverage": [{"beat_index": None, "word_count": 42}],
+            },
+            "chapter_context": {
+                "chapter_plan": {
+                    "title": "同门试探",
+                    "beats": [
+                        {"summary": "王顺拦路试探"},
+                        {"summary": "陆照被迫应招"},
+                        {"summary": "围观弟子察觉异常"},
+                    ],
+                }
+            },
+            "beat_scores": [{"beat_index": None, "scores": {"humanity": 82}}],
+            "final_polish_issues": {
+                "global_issues": [],
+                "quality_gate_warnings": [
+                    {
+                        "code": "required_payoff",
+                        "message": "章节计划要求的线索或章末钩子未充分兑现",
+                        "detail": {"missing": ["陆照暴露异常并错过同门试探线索"]},
+                    }
+                ],
+            },
+        },
+        volume_id="v_whole_gate",
+        chapter_id="c_whole_gate",
+    )
+    await ChapterRepository(async_session).create("c_whole_gate", "v_whole_gate", 3, "Whole Chapter Gate")
+    raw_draft = "王顺拦住去路。\n\n陆照被迫应招。\n\n围观弟子低声议论。"
+    await ChapterRepository(async_session).update_text("c_whole_gate", raw_draft=raw_draft)
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="王顺拦住去路，陆照被迫应招，粥碗声停在他身后。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish("novel_edit_whole_chapter_gate_warning", "c_whole_gate")
+
+    assert mock_client.acomplete.await_count == 1
+    chapter = await ChapterRepository(async_session).get_by_id("c_whole_gate")
+    assert chapter.polished_text == "王顺拦住去路，陆照被迫应招，粥碗声停在他身后。"
 
 
 @pytest.mark.asyncio
@@ -623,13 +794,57 @@ async def test_rewrite_beat_prompt_forbids_plan_external_additions(async_session
     assert "局部修补模式" in prompt
     assert "原事件集合" in prompt
     assert "信息释放顺序" in prompt
-    assert "使用已有悬念" in prompt
-    assert "已有物件、风险、情绪余波" in prompt
+    assert "不要为了满足形式要求机械添加对话、动作、感官或悬念" in prompt
+    assert "让读者的关注点发生推进" in prompt
+    assert "已有物件、风险、情绪余波、人物关系" in prompt
     assert "有限留白" in prompt
     assert "计划和原段已经给出的事实" in prompt
     assert "正文只升级已有事实" in prompt
     assert "黑影、追兵、身份背景、额外线索" in prompt
     assert "只吸收其读感目标" in prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_prompt_uses_soft_strategy_pool_without_checklist(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="陆照把密函往袖底压了半寸，没接执事的话。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "陆照意识到麻烦来了。",
+            {"humanity": 60, "plot_tension": 62},
+            [
+                {
+                    "dim": "humanity",
+                    "problem": "人物反应停在作者总结",
+                    "suggestion": "从软策略池里选择最贴近原段的一种修法。",
+                }
+            ],
+            [],
+            {
+                "style_profile": {},
+                "writing_cards": [
+                    {
+                        "beat_index": 0,
+                        "scene_pressure_lenses": ["可选: 让压力落在门口距离、搜身风险和密函藏处。"],
+                        "relationship_subtext_lenses": ["可选: 用执事的停顿、视线和陆照的避让承载试探。"],
+                        "prose_texture_lenses": ["优先把抽象压力落到手心、门缝冷光和药灰味。"],
+                        "freshness_lenses": ["避免复用上一章的昏迷式收束，改用关系压力停点。"],
+                    }
+                ],
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "可选叙事策略池" in prompt
+    assert "这些策略不是逐项硬性完成" in prompt
+    assert "门口距离、搜身风险" in prompt
+    assert "执事的停顿、视线" in prompt
+    assert "最小有效修法" in prompt
+    assert "必须短对话" not in prompt
+    assert "必须出现异变" not in prompt
 
 
 @pytest.mark.asyncio
@@ -663,7 +878,8 @@ async def test_rewrite_beat_bounds_risky_hook_suggestions(async_session):
     prompt = mock_client.acomplete.call_args.args[0][0].content
     assert "加入新的反转" in prompt
     assert "只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔" in prompt
-    assert "当场后果、人物迟疑、身体反应、未完成动作和已知风险逼近" in prompt
+    assert "先判断这一段最自然的牵引来源" in prompt
+    assert "信息差、关系变化、行动压力、情绪余波、环境异常或人物选择" in prompt
 
 
 @pytest.mark.asyncio
@@ -717,6 +933,59 @@ async def test_polish_uses_final_polish_issues_for_targeted_repair(async_session
 
     state = await director.resume("novel_edit_final_polish")
     assert "final_polish_issues" not in state.checkpoint_data
+
+
+@pytest.mark.asyncio
+async def test_polish_treats_quality_gate_required_payoff_as_actionable_repair(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_edit_required_payoff",
+        phase=Phase.EDITING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {
+                    "chapter_number": 2,
+                    "title": "异样感知",
+                    "target_word_count": 1000,
+                    "beats": [{"summary": "陆照试探残页感知并决定明早去后山查看"}],
+                }
+            },
+            "beat_scores": [{"beat_index": 0, "scores": {"plot_tension": 82, "hook_strength": 80}}],
+            "final_polish_issues": {
+                "source": "final_review",
+                "global_issues": [
+                    {"dim": "plot_tension", "problem": f"全章问题 {idx}", "suggestion": "压缩重复试探"}
+                    for idx in range(5)
+                ],
+                "quality_gate_warnings": [
+                    {
+                        "code": "required_payoff",
+                        "message": "章节计划要求的线索或章末钩子未充分兑现",
+                        "detail": {"missing": ["感知范围远超当前修为"]},
+                    }
+                ],
+            },
+        },
+        volume_id="v_required_payoff",
+        chapter_id="c_required_payoff",
+    )
+    await ChapterRepository(async_session).create("c_required_payoff", "v_required_payoff", 2, "Required Payoff")
+    await ChapterRepository(async_session).update_text(
+        "c_required_payoff",
+        raw_draft="陆照按住残页，感知在屋内转了一圈，最后把残页藏回枕下。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="陆照按住残页，听见远处滴水声清晰得反常，才把残页藏回枕下。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        await EditorAgent(async_session).polish("novel_edit_required_payoff", "c_required_payoff")
+
+    assert mock_client.acomplete.called
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "感知范围远超当前修为" in prompt
+    assert "章节计划要求的线索或章末钩子未充分兑现" in prompt
 
 
 @pytest.mark.asyncio

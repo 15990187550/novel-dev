@@ -32,12 +32,11 @@ class ProseHygieneService:
         "beat ",
         "Beat ",
         "chapter_plan",
-        "阻力不需要另起一条线",
-        "他的选择也只落在眼前",
-        "停点收在既有风险上",
-        "只作为这一拍的动作余波",
-        "这一拍的结果先落稳",
-        "把当场目标压到纸面",
+        "当前计划",
+        "只能权衡",
+        "只能先权衡",
+        "只能守住",
+        "只能继续守住",
     )
     MODERN_AUTHORIZATION_MARKERS = (
         "现代",
@@ -140,7 +139,12 @@ class ProseHygieneService:
         value = cls._genre_quality_config(context).get("modern_drift_patterns") or ()
         if not isinstance(value, (list, tuple, set)):
             return ()
-        return tuple(str(item) for item in value if str(item).strip())
+        authorized = cls._contextual_authorized_modern_terms(context)
+        return tuple(
+            str(item)
+            for item in value
+            if str(item).strip() and str(item).strip() not in authorized
+        )
 
     @classmethod
     def _modern_drift_rule_text(cls, context: object | None = None) -> str:
@@ -156,13 +160,6 @@ class ProseHygieneService:
             return True
         if policy == "block":
             return False
-        if context is None:
-            return False
-        text = cls._context_text(context)
-        if not text:
-            return False
-        if any(marker in text for marker in cls.MODERN_AUTHORIZATION_MARKERS):
-            return True
         return False
 
     @classmethod
@@ -187,3 +184,42 @@ class ProseHygieneService:
             if hasattr(context, attr):
                 attrs.append(str(getattr(context, attr)))
         return "\n".join(attrs)
+
+    @classmethod
+    def _contextual_authorized_modern_terms(cls, context: object | None) -> set[str]:
+        if cls._genre_quality_config(context).get("modern_terms_policy") != "contextual":
+            return set()
+        text = cls._contextual_marker_text(context)
+        if not text:
+            return set()
+        authorized: set[str] = set()
+        for rule in cls._contextual_modern_term_rules(context):
+            terms = rule.get("terms")
+            markers = rule.get("context_markers")
+            if not isinstance(terms, list) or not isinstance(markers, list):
+                continue
+            if not any(str(marker).strip() and str(marker).strip() in text for marker in markers):
+                continue
+            authorized.update(str(term).strip() for term in terms if str(term).strip())
+        return authorized
+
+    @classmethod
+    def _full_context_text(cls, context: object | None) -> str:
+        if context is None:
+            return ""
+        if isinstance(context, dict):
+            return str(context)
+        return str(context)
+
+    @classmethod
+    def _contextual_marker_text(cls, context: object | None) -> str:
+        if context is None:
+            return ""
+        if not isinstance(context, dict):
+            return str(context)
+        return str({key: value for key, value in context.items() if key != "genre_quality_config"})
+
+    @classmethod
+    def _contextual_modern_term_rules(cls, context: object | None) -> list[dict]:
+        value = cls._genre_quality_config(context).get("contextual_modern_term_rules") or []
+        return value if isinstance(value, list) else []

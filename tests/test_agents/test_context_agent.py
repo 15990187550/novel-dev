@@ -235,6 +235,69 @@ def test_context_agent_limits_scene_context_required_terms(async_session):
     assert catalog["required_terms"] == ["青云宗", "林照", "古血玉"]
 
 
+def test_context_agent_builds_scene_fuel_from_context_sources(async_session):
+    agent = ContextAgent(async_session)
+    plan = ChapterPlan(
+        chapter_number=12,
+        title="追踪术",
+        target_word_count=1800,
+        beats=[
+            BeatPlan(
+                summary="陆照夺到密函后被执事堵在药库门口；他必须决定是否暴露玉佩残光。",
+                target_mood="紧张",
+                key_entities=["陆照", "执事", "密函"],
+                foreshadowings_to_embed=["密函边角有血色符痕"],
+            ),
+            BeatPlan(
+                summary="陆照脱身后发现符痕发亮，追踪术已经启动。",
+                target_mood="压迫",
+                key_entities=["陆照", "密函"],
+            ),
+        ],
+    )
+
+    fuel = agent._build_scene_fuel(
+        {
+            "locations": [{"name": "药库", "narrative": "门缝里有冷光和药灰味"}],
+            "entity_states": [
+                {"name": "陆照", "type": "character", "state": "握着密函，左掌藏着玉佩残光"},
+                {"name": "执事", "type": "character", "state": "守在门口，怀疑陆照偷药"},
+                {"name": "密函", "type": "item", "state": "边角有血色符痕"},
+            ],
+            "timeline_events": [{"tick": 11, "narrative": "陆照刚从药柜暗格取出密函"}],
+            "foreshadowings": [{"id": "fs_blood", "content": "密函边角有血色符痕"}],
+        },
+        plan,
+    )
+
+    assert fuel["plot_fuel"]
+    assert any("密函" in item for item in fuel["plot_fuel"])
+    assert any("陆照" in item and "执事" in item for item in fuel["character_pressure"])
+    assert any("药库" in item for item in fuel["world_fragment"])
+    assert fuel["technique_hint"]
+    assert any("陆照刚从药柜暗格取出密函" in item for item in fuel["continuity_momentum"])
+    assert any("陆照脱身后发现符痕发亮" in item for item in fuel["continuity_momentum"])
+    assert fuel["freshness_guard"]
+    assert "上一章" in "\n".join(fuel["freshness_guard"])
+    assert "必须短对话" not in "\n".join(sum(fuel.values(), []))
+
+
+def test_context_agent_extracts_narrative_source_from_checkpoint(async_session):
+    agent = ContextAgent(async_session)
+
+    source = agent._narrative_source_from_checkpoint(
+        {
+            "expanded_story": {
+                "plot": "少年从边城遗迹起步，逐步发现诸天旧约背后的代价，并在师门、王朝与异界裂隙之间选择自己的道。",
+            },
+            "synopsis": "旧简介不应覆盖更完整的扩写故事。",
+        }
+    )
+
+    assert source.startswith("少年从边城遗迹起步")
+    assert "旧简介" not in source
+
+
 @pytest.mark.asyncio
 async def test_load_location_context_uses_orchestrated_scene_tools_when_configured(async_session, monkeypatch):
     from novel_dev.db.models import Entity, EntityVersion, NovelState

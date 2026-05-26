@@ -53,13 +53,26 @@ class StoryQualityService:
     CONFLICT_TERMS = ("冲突", "对抗", "vs", "VS", "敌", "仇", "阻", "追", "逼", "威胁", "争", "夺", "杀", "发现", "暴露")
     CHOICE_TERMS = ("选择", "决定", "必须", "宁可", "只得", "被迫", "代价", "赌注", "否则")
     HOOK_TERMS = ("悬念", "反转", "逼近", "发现", "暴露", "异动", "裂开", "传来", "出现", "留下")
-    PAYOFF_TERMS = ("发现", "拿到", "得到", "搜查", "密函", "线索", "真相", "危险信号", "内应", "暴露", "确认")
+    PAYOFF_TERMS = ("发现", "拿到", "得到", "搜查", "线索", "真相", "危险信号", "内应", "暴露", "确认")
     ABSTRACT_CONFLICTS = ("正邪对立", "善恶之争", "命运", "成长", "人性", "宿命")
     GENERIC_REPAIR_MARKERS = (
         "必须在继续行动与保全自身之间做出选择",
         "阻力当场升级",
         "失败代价是失去关键线索并暴露处境",
         "结尾留下新的危险信号",
+    )
+    META_PLAN_MARKERS = (
+        "读者应",
+        "本节拍的选择、代价或局势变化",
+        "原计划受阻",
+        "原定路线被迫改道",
+        "对手或环境压力逼",
+        "继续追查",
+        "暂时避险",
+        "后续追查中断",
+        "线索无法收束",
+        "下一步追查失去落点",
+        "下一章继续处理",
     )
 
     @classmethod
@@ -223,6 +236,17 @@ class StoryQualityService:
                 ending_hook=cls._extract_hook(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
                 reader_takeaway=cls._reader_takeaway(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
                 target_word_count=beat.target_word_count or default_words,
+                chapter_role=cls._chapter_role(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
+                chapter_purpose=cls._chapter_purpose(beat.summary, next_summary, is_last=index == len(chapter_plan.beats) - 1),
+                suspense_mode=cls._suspense_mode(beat.summary),
+                foreshadowing_operation=cls._foreshadowing_operation(beat),
+                reveal_delta=cls._reveal_delta(beat.summary, list(beat.foreshadowings_to_embed)),
+                emotional_shift=cls._emotional_shift(beat.target_mood, chapter_plan.beats[index + 1].target_mood if index + 1 < len(chapter_plan.beats) else ""),
+                next_chapter_pressure=cls._first_clause(next_summary) if next_summary else "",
+                scene_pressure_lenses=cls._scene_pressure_lenses(beat.summary),
+                relationship_subtext_lenses=cls._relationship_subtext_lenses(beat.summary, list(beat.key_entities)),
+                prose_texture_lenses=cls._prose_texture_lenses(beat.summary, beat.target_mood),
+                freshness_lenses=cls._freshness_lenses(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
             ))
         return cards
 
@@ -347,17 +371,17 @@ class StoryQualityService:
 
     @classmethod
     def _extract_conflict(cls, text: str) -> str:
-        clauses = cls._split_clauses(text)
+        clauses = cls._contract_clauses(text)
         return next((clause for clause in clauses if cls._has_conflict(clause)), "")
 
     @classmethod
     def _extract_turning_point(cls, text: str) -> str:
-        clauses = cls._split_clauses(text)
+        clauses = cls._contract_clauses(text)
         return next((clause for clause in clauses if cls._has_choice_or_cost(clause)), clauses[-1] if clauses else "")
 
     @classmethod
     def _extract_stake(cls, text: str) -> str:
-        clauses = cls._split_clauses(text)
+        clauses = cls._contract_clauses(text)
         return next(
             (
                 clause for clause in clauses
@@ -368,7 +392,7 @@ class StoryQualityService:
 
     @classmethod
     def _extract_hook(cls, text: str, *, is_last: bool) -> str:
-        clauses = cls._split_clauses(text)
+        clauses = cls._contract_clauses(text)
         hook = next((clause for clause in reversed(clauses) if cls._has_hook(clause)), "")
         if hook:
             return hook
@@ -376,24 +400,12 @@ class StoryQualityService:
 
     @classmethod
     def _extract_required_facts(cls, text: str) -> list[str]:
-        clauses = [
-            clause for clause in cls._split_clauses(text)
-            if not cls._is_generic_repair_clause(clause)
-        ]
-        selected = []
-        for clause in clauses:
-            if cls._has_conflict(clause) or cls._has_choice_or_cost(clause) or cls._has_hook(clause):
-                selected.append(cls._shorten_contract_clause(clause))
-        if not selected and clauses:
-            selected.append(cls._shorten_contract_clause(clauses[0]))
-        return cls._dedupe_text(selected)[:4]
+        clauses = cls._contract_clauses(text)
+        return cls._dedupe_text(cls._shorten_contract_clause(clause) for clause in clauses)[:4]
 
     @classmethod
     def _extract_required_payoffs(cls, text: str, foreshadowings: list[str], *, is_last: bool) -> list[str]:
-        clauses = [
-            clause for clause in cls._split_clauses(text)
-            if not cls._is_generic_repair_clause(clause)
-        ]
+        clauses = cls._contract_clauses(text)
         payoffs = [
             cls._shorten_contract_clause(clause)
             for clause in clauses
@@ -459,12 +471,172 @@ class StoryQualityService:
         hook = cls._extract_hook(text, is_last=is_last)
         if is_last:
             if hook:
-                return f"读者应明确获得本章线索兑现，并被这一停点牵引到下一章：{hook}"
-            return "读者应明确知道本章当场冲突的结果，并感到新的问题正在逼近。"
+                return f"本章当场结果落到正文里，并以这个停点牵引后续：{hook}"
+            return "本章当场冲突有明确结果，并留下新的问题或压力。"
         turning_point = cls._extract_turning_point(text)
         if turning_point:
-            return f"读者应看清本节拍的选择、代价或局势变化：{turning_point}"
-        return "读者应看清本节拍的目标、阻力和推进结果。"
+            return f"本节拍呈现清楚的选择、代价或局势变化：{turning_point}"
+        return "本节拍呈现清楚的目标、阻力和推进结果。"
+
+    @classmethod
+    def _chapter_role(cls, text: str, *, is_last: bool) -> str:
+        if is_last:
+            return "章末牵引"
+        if cls._has_conflict(text):
+            return "冲突推进"
+        if cls._has_hook(text) or any(term in text for term in ("发现", "确认", "得知", "暴露")):
+            return "信息揭示"
+        if cls._has_choice_or_cost(text):
+            return "选择转折"
+        return "承接铺垫"
+
+    @classmethod
+    def _chapter_purpose(cls, text: str, next_summary: str, *, is_last: bool) -> str:
+        current = cls._shorten_contract_clause(cls._first_clause(text) or text)
+        if next_summary:
+            nxt = cls._shorten_contract_clause(cls._first_clause(next_summary))
+            return f"{current}，并压向后续：{nxt}" if nxt else current
+        if is_last:
+            hook = cls._extract_hook(text, is_last=True)
+            return f"收束本章当场结果，并留下后续压力：{hook}" if hook else "收束本章当场结果，并保留后续压力。"
+        return current
+
+    @classmethod
+    def _suspense_mode(cls, text: str) -> str:
+        if any(term in text for term in ("追", "堵", "围", "逼", "迟疑", "搜身", "启动")):
+            return "行动压力"
+        if any(term in text for term in ("发现", "确认", "说明", "得知", "真相", "线索")):
+            return "信息差"
+        if any(term in text for term in ("恶化", "危险", "盯上", "暴露", "失去")):
+            return "风险逼近"
+        if any(term in text for term in ("不服", "怀疑", "试探", "背叛", "结盟")):
+            return "关系压力"
+        return "情绪余波"
+
+    @classmethod
+    def _foreshadowing_operation(cls, beat) -> str:
+        foreshadowings = [item for item in getattr(beat, "foreshadowings_to_embed", []) if str(item).strip()]
+        if foreshadowings:
+            return "嵌入/强化: " + "；".join(cls._shorten_contract_clause(item) for item in foreshadowings[:3])
+        hook = cls._extract_hook(getattr(beat, "summary", ""), is_last=True)
+        if hook:
+            return "沿当前停点保留后续牵引: " + cls._shorten_contract_clause(hook)
+        return "不额外制造伏笔，优先兑现当前场景因果。"
+
+    @classmethod
+    def _reveal_delta(cls, text: str, foreshadowings: list[str]) -> str:
+        clauses = cls._contract_clauses(text)
+        reveal_clauses = [
+            clause for clause in clauses
+            if any(term in clause for term in ("发现", "确认", "说明", "得知", "暴露", "变亮", "启动", "线索"))
+        ]
+        reveal_clauses.extend(str(item).strip() for item in foreshadowings if str(item).strip())
+        if reveal_clauses:
+            return "；".join(cls._shorten_contract_clause(item) for item in cls._dedupe_text(reveal_clauses)[:3])
+        return cls._shorten_contract_clause(cls._first_clause(text) or text)
+
+    @staticmethod
+    def _emotional_shift(current_mood: str, next_mood: str) -> str:
+        current = coerce_to_text(current_mood).strip()
+        nxt = coerce_to_text(next_mood).strip()
+        if current and nxt and current != nxt:
+            return f"{current} -> {nxt}"
+        return current or nxt
+
+    @classmethod
+    def _scene_pressure_lenses(cls, text: str) -> list[str]:
+        clauses = cls._contract_clauses(text)
+        conflict = cls._extract_conflict(text)
+        stake = cls._extract_stake(text)
+        lenses = []
+        if conflict:
+            lenses.append(f"可选: 让压力落在当前阻力的距离、动作限制或暴露风险上：{cls._shorten_contract_clause(conflict)}。")
+        if stake:
+            lenses.append(f"可选: 把代价写成角色当场会失去、暴露或错过的具体后果：{cls._shorten_contract_clause(stake)}。")
+        if clauses:
+            lenses.append(f"优先: 用已有动作和物件推进局势，不另起新危机：{cls._shorten_contract_clause(clauses[0])}。")
+        return cls._dedupe_text(lenses)[:3]
+
+    @classmethod
+    def _relationship_subtext_lenses(cls, text: str, key_entities: list[str]) -> list[str]:
+        entities = [str(item).strip() for item in key_entities if str(item).strip()]
+        lenses = []
+        if len(entities) >= 2:
+            lenses.append(f"可选: 用{entities[0]}与{entities[1]}的站位、停顿、视线、避让或未说完的反应承载试探。")
+        elif entities:
+            lenses.append(f"可选: 让{entities[0]}的保留、迟疑或动作变化显出关系压力。")
+        if any(term in text for term in ("怀疑", "试探", "不服", "背叛", "结盟", "堵")):
+            lenses.append("可选: 信息先经过误判、保留或代价再浮出；对话只是工具，不是硬指标。")
+        return cls._dedupe_text(lenses)[:3]
+
+    @classmethod
+    def _prose_texture_lenses(cls, text: str, target_mood: str) -> list[str]:
+        clauses = cls._contract_clauses(text)
+        mood = coerce_to_text(target_mood).strip()
+        lenses = []
+        if mood:
+            lenses.append(f"优先: 把{mood}落到身体反应、手边物件、空间阻隔或行动受限上。")
+        if clauses:
+            lenses.append(f"可以: 从这一句里挑一个可触摸的细节放大，而不是铺满抽象感受：{cls._shorten_contract_clause(clauses[0])}。")
+        lenses.append("可选: 长句只用于承接情绪，关键动作和风险变化用短句推进。")
+        return cls._dedupe_text(lenses)[:3]
+
+    @classmethod
+    def _freshness_lenses(cls, text: str, *, is_last: bool) -> list[str]:
+        mode = cls._suspense_mode(text)
+        lenses = [f"避免复用上一章同类停点；本段优先从{mode}里找新的表现角度。"]
+        if is_last:
+            lenses.append("章末可低声量收束；用信息变化、关系变化、行动压力或选择余波推进关注点，不机械加异象。")
+        else:
+            lenses.append("节拍结尾停在当前目标、阻力或选择的余波上，不提前展开后续核心事件。")
+        return lenses
+
+    @classmethod
+    def _contract_clauses(cls, text: str) -> list[str]:
+        clauses = []
+        for clause in cls._split_clauses(text):
+            cleaned = cls._clean_contract_clause(clause)
+            if not cleaned:
+                continue
+            if cls._is_generic_repair_clause(cleaned) or cls._is_meta_plan_clause(cleaned):
+                continue
+            clauses.append(cleaned)
+        return cls._dedupe_text(clauses)
+
+    @classmethod
+    def _clean_contract_clause(cls, text: str) -> str:
+        cleaned = coerce_to_text(text).strip().strip("。！？!?；;，, ")
+        if not cleaned:
+            return ""
+        replacements = (
+            ("失败代价是", ""),
+            ("结尾听见", "听见"),
+            ("结尾发现", "发现"),
+            ("结尾出现", "出现"),
+            ("结尾传来", "传来"),
+            ("必须决定是否", "判断是否"),
+            ("必须决定", "决定"),
+            ("必须权衡", "权衡"),
+            ("必须在", "在"),
+            ("读者应明确获得", ""),
+            ("读者应看清", ""),
+        )
+        for old, new in replacements:
+            cleaned = cleaned.replace(old, new)
+        return cleaned.strip("。！？!?；;，, ")
+
+    @classmethod
+    def _is_meta_plan_clause(cls, text: str) -> bool:
+        normalized = coerce_to_text(text)
+        if not normalized:
+            return True
+        if any(marker in normalized for marker in cls.META_PLAN_MARKERS):
+            return True
+        if "结尾留下" in normalized:
+            return True
+        if "线索" in normalized and any(marker in normalized for marker in ("暂时避险", "继续靠近", "继续追查")):
+            return True
+        return False
 
     @staticmethod
     def _links_for_beat(links: list[str], beat_index: int) -> list[str]:
@@ -476,7 +648,7 @@ class StoryQualityService:
         ][:2]
 
     @staticmethod
-    def _dedupe_text(items: list[str]) -> list[str]:
+    def _dedupe_text(items) -> list[str]:
         seen = set()
         result = []
         for item in items:

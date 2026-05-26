@@ -99,6 +99,42 @@ async def test_generate_score_prompt_requires_flagging_english_terms(async_sessi
 
 
 @pytest.mark.asyncio
+async def test_generate_score_prompt_uses_compiled_style_contract(async_session):
+    score_result = ScoreResult(
+        overall=88,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment=""),
+            DimensionScore(name="characterization", score=85, comment=""),
+            DimensionScore(name="readability", score=85, comment=""),
+            DimensionScore(name="consistency", score=85, comment=""),
+            DimensionScore(name="humanity", score=85, comment=""),
+        ],
+        summary_feedback="ok",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+    context = _make_context().model_dump()
+    context["style_profile"] = {
+        "style_guide": "克制、具体。",
+        "language_rules": ["少用抽象玄幻大词。"],
+        "anti_ai_rules": ["不要段尾升华。"],
+    }
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score("林照收起残信。", context, "novel_crit_style")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "### 写法合同" in prompt
+    assert "#### 语言质感" in prompt
+    assert "少用抽象玄幻大词" in prompt
+    assert "#### 反AI风险" in prompt
+    assert "不要段尾升华" in prompt
+    assert '"style_guide"' not in prompt
+
+
+@pytest.mark.asyncio
 async def test_generate_score_prompt_includes_resolved_genre_rules(async_session):
     await NovelStateRepository(async_session).save_checkpoint(
         "novel_crit_genre",
@@ -177,7 +213,38 @@ async def test_generate_score_prompt_flags_specific_ai_flavor_patterns(async_ses
     assert "感官平均用力" in prompt
     assert "模板化奇遇" in prompt
     assert "现代吐槽突兀" in prompt
-    assert "只保留最有辨识度的一处" in prompt
+    assert "先判断这段最不像真人写作的原因" in prompt
+    assert "只改最影响读感的部分" in prompt
+
+
+@pytest.mark.asyncio
+async def test_generate_score_prompt_avoids_formulaic_hook_and_dialogue_requirements(async_session):
+    score_result = ScoreResult(
+        overall=88,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment=""),
+            DimensionScore(name="characterization", score=85, comment=""),
+            DimensionScore(name="readability", score=85, comment=""),
+            DimensionScore(name="consistency", score=85, comment=""),
+            DimensionScore(name="humanity", score=85, comment=""),
+            DimensionScore(name="hook_strength", score=85, comment=""),
+        ],
+        summary_feedback="ok",
+    )
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text=score_result.model_dump_json())
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = CriticAgent(async_session)
+        await agent._generate_score("林照听完，只把残信重新折好。", _make_context().model_dump(), "n_crit_hook")
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "不按固定钩子类型" in prompt
+    assert "安静收束也可以高分" in prompt
+    assert "对话不是必需形式" in prompt
+    assert "强悬念/反转/赌注升级/情绪爆点" not in prompt
+    assert "必须有短对话" not in prompt
 
 
 @pytest.mark.asyncio

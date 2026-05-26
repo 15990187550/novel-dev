@@ -59,7 +59,7 @@ API_GENERATION_STAGES = (
     "export",
 )
 MAX_SETTING_CLARIFICATION_ROUNDS = 5
-API_SMOKE_TIMEOUT_SECONDS = 600
+API_SMOKE_TIMEOUT_SECONDS = 1800
 GENERATION_JOB_POLL_INTERVAL_SECONDS = 2
 GENERATION_JOB_MAX_POLLS = 900
 ACCEPTANCE_TARGET_WORD_COUNT_FLOOR = 1000
@@ -1312,22 +1312,44 @@ async def _approve_review_batch_non_conflict_changes(
         and change.get("target_type") != "conflict"
         and str(change.get("status") or "pending") == "pending"
     ]
+    conflict_ids = [
+        str(change["id"])
+        for change in changes
+        if change.get("id")
+        and change.get("target_type") == "conflict"
+        and str(change.get("status") or "pending") == "pending"
+    ]
     conflict_count = sum(1 for change in changes if change.get("target_type") == "conflict")
     artifacts[f"{artifact_prefix}_change_count"] = str(len(changes))
     artifacts[f"{artifact_prefix}_approvable_change_count"] = str(len(approvable_ids))
     artifacts[f"{artifact_prefix}_conflict_change_count"] = str(conflict_count)
-    if not approvable_ids:
+    artifacts[f"{artifact_prefix}_rejected_conflict_change_count"] = str(len(conflict_ids))
+    if not approvable_ids and not conflict_ids:
         artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(detail) or "no_approvable_changes"
         return
 
-    result = await _request_json(
-        client.post(
-            f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/approve",
-            json={"change_ids": approvable_ids, "approve_all": False},
+    result: dict[str, Any] | None = None
+    if approvable_ids:
+        result = await _request_json(
+            client.post(
+                f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/approve",
+                json={"change_ids": approvable_ids, "approve_all": False},
+            )
         )
-    )
+    if conflict_ids:
+        result = await _request_json(
+            client.post(
+                f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
+                json={
+                    "decisions": [
+                        {"change_id": change_id, "decision": "reject"}
+                        for change_id in conflict_ids
+                    ]
+                },
+            )
+        )
     artifacts[f"{artifact_prefix}_approved_change_ids"] = ",".join(approvable_ids)
-    artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(result) or "unknown"
+    artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(result or {}) or "unknown"
 
 
 async def _apply_review_batch_non_conflict_changes(
@@ -1350,23 +1372,33 @@ async def _apply_review_batch_non_conflict_changes(
         and change.get("target_type") != "conflict"
         and str(change.get("status") or "pending") == "pending"
     ]
+    conflict_ids = [
+        str(change["id"])
+        for change in changes
+        if change.get("id")
+        and change.get("target_type") == "conflict"
+        and str(change.get("status") or "pending") == "pending"
+    ]
     conflict_count = sum(1 for change in changes if change.get("target_type") == "conflict")
     artifacts[f"{artifact_prefix}_change_count"] = str(len(changes))
     artifacts[f"{artifact_prefix}_approvable_change_count"] = str(len(approvable_ids))
     artifacts[f"{artifact_prefix}_conflict_change_count"] = str(conflict_count)
-    if not approvable_ids:
+    artifacts[f"{artifact_prefix}_rejected_conflict_change_count"] = str(len(conflict_ids))
+    decisions = [
+        {"change_id": change_id, "decision": "approve"}
+        for change_id in approvable_ids
+    ] + [
+        {"change_id": change_id, "decision": "reject"}
+        for change_id in conflict_ids
+    ]
+    if not decisions:
         artifacts[f"{artifact_prefix}_batch_status"] = _batch_status_from_detail(detail) or "no_approvable_changes"
         return
 
     result = await _request_json(
         client.post(
             f"/api/novels/{novel_id}/settings/review_batches/{batch_id}/apply",
-            json={
-                "decisions": [
-                    {"change_id": change_id, "decision": "approve"}
-                    for change_id in approvable_ids
-                ]
-            },
+            json={"decisions": decisions},
         )
     )
     artifacts[f"{artifact_prefix}_approved_change_ids"] = ",".join(approvable_ids)

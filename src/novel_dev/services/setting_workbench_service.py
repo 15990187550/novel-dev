@@ -15,7 +15,7 @@ from novel_dev.agents.setting_workbench_agent import (
     SettingClarificationDecision,
     SettingWorkbenchAgent,
 )
-from novel_dev.db.models import EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
+from novel_dev.db.models import EntityRelationship, NovelDocument, PendingExtraction, SettingReviewBatch, SettingReviewChange
 from novel_dev.llm import llm_factory
 from novel_dev.llm.context_tools import build_mcp_context_tools
 from novel_dev.llm.exceptions import LLMTimeoutError
@@ -1804,25 +1804,47 @@ class SettingWorkbenchService:
             if not source_doc_ids:
                 continue
 
-            docs = []
+            evidence_items = []
             for doc_id in source_doc_ids:
                 doc = await self.doc_repo.get_by_id_for_novel(novel_id, doc_id)
-                if doc is None:
+                if doc is not None:
+                    evidence_items.append((doc.title, doc.content))
+                    continue
+                pending = await self._get_source_evidence_pending_extraction(novel_id, doc_id)
+                if pending is None:
                     raise ValueError(
                         f"Draft change {index} source evidence document not found: {doc_id}"
                     )
-                docs.append(doc)
+                evidence_items.append((
+                    pending.source_filename or pending.id,
+                    json.dumps(pending.raw_result or {}, ensure_ascii=False),
+                ))
 
             mentioned_domains = self._extract_mentioned_domains(text)
             if not mentioned_domains:
                 continue
-            evidence_text = "\n".join(f"{doc.title}\n{doc.content}" for doc in docs)
+            evidence_text = "\n".join(f"{title}\n{content}" for title, content in evidence_items)
             missing_domains = [domain for domain in mentioned_domains if domain not in evidence_text]
             if missing_domains:
                 raise ValueError(
                     f"Draft change {index} Source evidence mismatch for domains: "
                     f"{', '.join(missing_domains)}"
                 )
+
+    async def _get_source_evidence_pending_extraction(self, novel_id: str, source_ref: str) -> PendingExtraction | None:
+        source_ref = str(source_ref or "").strip()
+        if not source_ref:
+            return None
+        result = await self.session.execute(
+            select(PendingExtraction)
+            .where(
+                PendingExtraction.novel_id == novel_id,
+                PendingExtraction.source_filename == source_ref,
+            )
+            .order_by(PendingExtraction.created_at.desc(), PendingExtraction.id.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
 
     def _validate_source_doc_ids_for_source_critical_snapshot(
         self,

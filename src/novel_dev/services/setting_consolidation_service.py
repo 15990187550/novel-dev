@@ -11,6 +11,7 @@ from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
+from novel_dev.services.entity_service import EntityService
 from novel_dev.services.log_service import log_service
 
 
@@ -23,6 +24,7 @@ class SettingConsolidationService:
         self.setting_repo = SettingWorkbenchRepository(session)
         self.entity_repo = EntityRepository(session)
         self.relationship_repo = RelationshipRepository(session)
+        self.entity_service = EntityService(session)
 
     async def build_input_snapshot(self, novel_id: str, selected_pending_ids: list[str]) -> dict[str, Any]:
         documents = []
@@ -285,35 +287,71 @@ class SettingConsolidationService:
             raise ValueError("冲突项必须先提交解决结果")
         if change.operation == "archive":
             await self._archive_target(batch, change)
-        elif change.target_type == "setting_card" and change.operation == "create":
-            snapshot = change.after_snapshot or {}
-            title = (snapshot.get("title") or "").strip()
-            if not title:
-                raise ValueError("设定卡标题不能为空")
-            doc_id = f"setting_{change.id}"
-            existing = await self.doc_repo.get_by_id(doc_id)
-            if existing is not None:
-                if existing.source_review_change_id == change.id:
-                    return
-                raise ValueError(f"设定卡已存在且来源不匹配: {doc_id}")
-            doc = await self.doc_repo.create(
-                doc_id,
-                batch.novel_id,
-                snapshot.get("doc_type") or "setting",
-                title,
-                snapshot.get("content") or "",
-                version=1,
-            )
-            doc.source_type = "consolidation"
-            doc.source_review_batch_id = batch.id
-            doc.source_review_change_id = change.id
+        elif change.operation == "create":
+            await self._create_setting_document(batch, change)
+        elif change.operation == "upsert" and self._is_setting_target_type(change.target_type):
+            await self._create_setting_document(batch, change)
+        elif change.operation == "upsert" and change.target_type == "relationship":
+            await self._upsert_relationship(batch, change)
+        elif change.operation in {"update", "upsert"} and self._is_entity_target_type(change.target_type):
+            await self._update_entity(batch, change)
         else:
             raise ValueError(f"暂不支持的设定审核变更: {change.target_type}/{change.operation}")
+
+    async def _create_setting_document(self, batch, change) -> None:
+        snapshot = change.after_snapshot or {}
+        fallback_title = change.target_type if change.target_type != "setting_card" else ""
+        title = (snapshot.get("title") or fallback_title or "").strip()
+        if not title:
+            raise ValueError("设定卡标题不能为空")
+        doc_id = f"setting_{change.id}"
+        existing = await self.doc_repo.get_by_id(doc_id)
+        if existing is not None:
+            if existing.source_review_change_id == change.id:
+                return
+            raise ValueError(f"设定卡已存在且来源不匹配: {doc_id}")
+        doc = await self.doc_repo.create(
+            doc_id,
+            batch.novel_id,
+            snapshot.get("doc_type") or "setting",
+            title,
+            snapshot.get("content") or "",
+            version=1,
+        )
+        doc.source_type = "consolidation"
+        doc.source_review_batch_id = batch.id
+        doc.source_review_change_id = change.id
 
     async def _archive_target(self, batch, change) -> None:
         if not change.target_id:
             raise ValueError("归档目标不存在: 空目标")
-        if change.target_type == "setting_card":
+        if change.target_type == "archive":
+            archived = await self.doc_repo.archive_for_consolidation(
+                change.target_id,
+                novel_id=batch.novel_id,
+                batch_id=batch.id,
+                change_id=change.id,
+            )
+            if archived is None:
+                archived = await self.entity_repo.archive_for_consolidation(
+                    change.target_id,
+                    novel_id=batch.novel_id,
+                    batch_id=batch.id,
+                    change_id=change.id,
+                )
+            if archived is None:
+                try:
+                    relationship_id = int(change.target_id)
+                except (TypeError, ValueError):
+                    relationship_id = None
+                if relationship_id is not None:
+                    archived = await self.relationship_repo.archive_for_consolidation(
+                        str(relationship_id),
+                        novel_id=batch.novel_id,
+                        batch_id=batch.id,
+                        change_id=change.id,
+                    )
+        elif self._is_setting_target_type(change.target_type):
             archived = await self.doc_repo.archive_for_consolidation(
                 change.target_id,
                 novel_id=batch.novel_id,
@@ -334,10 +372,141 @@ class SettingConsolidationService:
                 batch_id=batch.id,
                 change_id=change.id,
             )
+        elif self._is_entity_target_type(change.target_type):
+            archived = await self.entity_repo.archive_for_consolidation(
+                change.target_id,
+                novel_id=batch.novel_id,
+                batch_id=batch.id,
+                change_id=change.id,
+            )
         else:
             raise ValueError(f"不支持归档目标类型: {change.target_type}")
         if archived is None:
             raise ValueError(f"归档目标不存在: {change.target_id}")
+
+    async def _update_entity(self, batch, change) -> None:
+        if not change.target_id:
+            raise ValueError("实体更新目标不存在: 空目标")
+        entity = await self.entity_repo.get_by_id(change.target_id)
+        if entity is None or entity.novel_id != batch.novel_id:
+            raise ValueError(f"实体更新目标不存在: {change.target_id}")
+
+        snapshot = change.after_snapshot or {}
+        state_fields = self._entity_state_fields(snapshot)
+        name = (snapshot.get("name") or entity.name or "").strip()
+        entity_type = (
+            snapshot.get("type")
+            or snapshot.get("entity_type")
+            or entity.type
+            or change.target_type
+            or ""
+        ).strip()
+        if not name:
+            raise ValueError("实体名称不能为空")
+        if not entity_type:
+            raise ValueError("实体类型不能为空")
+
+        latest_state = await self.entity_service.get_latest_state(entity.id) or {}
+        next_state = dict(latest_state)
+        next_state.update(state_fields)
+        next_state["name"] = name
+
+        await self.entity_repo.update_basic_fields(entity.id, name=name, entity_type=entity_type)
+        await self.entity_service.update_state_from_import(
+            entity.id,
+            next_state,
+            diff_summary={
+                "setting_consolidation": True,
+                "review_batch_id": batch.id,
+                "review_change_id": change.id,
+            },
+        )
+        refreshed = await self.entity_repo.get_by_id(entity.id)
+        if refreshed is None:
+            raise ValueError(f"实体更新目标不存在: {change.target_id}")
+        if "system_category" in snapshot:
+            refreshed.system_category = snapshot.get("system_category")
+        if "manual_category" in snapshot:
+            refreshed.manual_category = snapshot.get("manual_category")
+        if "search_document" in snapshot:
+            refreshed.search_document = snapshot.get("search_document")
+        refreshed.source_type = "consolidation"
+        refreshed.source_review_batch_id = batch.id
+        refreshed.source_review_change_id = change.id
+        await self.session.flush()
+
+    async def _upsert_relationship(self, batch, change) -> None:
+        snapshot = change.after_snapshot or {}
+        source_id = snapshot.get("source_id")
+        target_id = snapshot.get("target_id")
+        relation_type = snapshot.get("relation_type")
+        if not source_id or not target_id or not relation_type:
+            raise ValueError("关系 upsert 必须包含 source_id、target_id、relation_type")
+        meta = dict(snapshot.get("meta") or {})
+        meta["source"] = "setting_consolidation"
+        relationship = await self.relationship_repo.upsert(
+            source_id=source_id,
+            target_id=target_id,
+            relation_type=relation_type,
+            meta=meta,
+            novel_id=batch.novel_id,
+        )
+        relationship.source_type = "consolidation"
+        relationship.source_review_batch_id = batch.id
+        relationship.source_review_change_id = change.id
+        await self.session.flush()
+
+    @staticmethod
+    def _is_entity_target_type(target_type: str | None) -> bool:
+        return target_type not in {None, "", "setting_card", "setting", "document", "archive", "relationship", "conflict"}
+
+    @staticmethod
+    def _is_setting_target_type(target_type: str | None) -> bool:
+        return target_type in {
+            "setting_card",
+            "setting",
+            "document",
+            "worldview",
+            "synopsis",
+            "concept",
+            "plot",
+            "power_system",
+        }
+
+    @staticmethod
+    def _entity_state_fields(snapshot: dict[str, Any]) -> dict[str, Any]:
+        state = snapshot.get("state") or snapshot.get("data") or {}
+        if state is not None and not isinstance(state, dict):
+            raise ValueError("实体状态必须是对象")
+        fields = dict(state or {})
+        excluded = {
+            "id",
+            "type",
+            "entity_type",
+            "name",
+            "state",
+            "data",
+            "system_category",
+            "system_group_id",
+            "manual_category",
+            "manual_group_id",
+            "classification_reason",
+            "classification_confidence",
+            "system_needs_review",
+            "search_document",
+            "source_type",
+            "source_session_id",
+            "source_review_batch_id",
+            "source_review_change_id",
+            "archived_at",
+            "archive_reason",
+            "archived_by_consolidation_batch_id",
+            "archived_by_consolidation_change_id",
+        }
+        for key, value in snapshot.items():
+            if key not in excluded:
+                fields[key] = value
+        return fields
 
     @staticmethod
     def _is_newer_document(candidate, current) -> bool:

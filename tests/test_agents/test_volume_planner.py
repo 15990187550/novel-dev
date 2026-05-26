@@ -95,6 +95,32 @@ def test_volume_plan_blueprint_backfills_missing_chapter_titles():
     assert [chapter.chapter_id for chapter in blueprint.chapters] == ["vol_1_ch_1", "vol_1_ch_2"]
 
 
+def test_infer_exact_target_chapters_counts_volume_outline_range(async_session):
+    synopsis = SynopsisData(
+        title="长篇测试",
+        logline="陆照追查赵元系统来源。",
+        core_conflict="陆照 vs 系统幕后力量。",
+        themes=["正统与捷径"],
+        character_arcs=[],
+        milestones=[],
+        estimated_volumes=18,
+        estimated_total_chapters=1200,
+        estimated_total_words=2000000,
+        volume_outlines=[
+            SynopsisVolumeOutline(
+                volume_number=1,
+                title="道经初承",
+                summary="陆照承接道经。",
+                target_chapter_range="1-67",
+            )
+        ],
+    )
+
+    target = VolumePlannerAgent(async_session)._infer_exact_target_chapters(synopsis, 1)
+
+    assert target == 67
+
+
 @pytest.mark.asyncio
 async def test_generate_volume_plan_prompt_includes_genre_template_rules(async_session):
     async_session.add(
@@ -204,6 +230,39 @@ def test_repair_quality_blocked_expanded_chapter_removes_template_blockers(async
     assert "证物" not in repaired_text
     assert "追兵" not in repaired_text
     assert "道经初醒" in repaired_text or "藏经阁发现道经异动" in repaired_text
+
+
+def test_quality_blocked_expanded_chapter_repair_stays_genre_neutral(async_session):
+    chapter = VolumeBeat(
+        chapter_id="ch_board_hearing",
+        chapter_number=4,
+        title="董事会听证",
+        summary="林岚解释系统审计差异。",
+        target_word_count=1800,
+        target_mood="紧张",
+        key_entities=["林岚"],
+        beats=[
+            BeatPlan(
+                summary="林岚推进目标时被资源限制、身份压力或对手试探阻住；阻力当场升级；林岚必须在继续追查与保全自身之间做出选择，失败代价是失去关键线索并暴露处境。",
+                target_mood="紧张",
+                key_entities=["林岚"],
+            ),
+            BeatPlan(
+                summary="林岚推进目标时被资源限制、身份压力或对手试探阻住；阻力当场升级；林岚必须在继续追查与保全自身之间做出选择，失败代价是失去关键线索并暴露处境。",
+                target_mood="紧张",
+                key_entities=["林岚"],
+            )
+        ],
+    )
+    before = QualityPreflightService.evaluate_chapter_plan(chapter)
+    assert before.status == "block"
+
+    repaired = VolumePlannerAgent(async_session)._repair_quality_blocked_expanded_chapter(chapter)
+    repaired_text = "\n".join(beat.summary for beat in repaired.beats)
+
+    assert "董事会听证" in repaired_text or "系统审计差异" in repaired_text
+    for biased in ("继续追查", "暂时避险", "线索", "暴露异常", "后续追查"):
+        assert biased not in repaired_text
 
 
 def test_reviewed_volume_plan_payload_includes_writability_summary(async_session):
@@ -400,8 +459,50 @@ def test_deterministic_repair_unwritable_chapter_adds_choice_cost(async_session)
 
     repaired_report = StoryQualityService.evaluate_chapter_writability(repaired)
     assert repaired_report.passed is True
-    assert "必须" in repaired.beats[0].summary
-    assert "代价" in repaired.beats[0].summary
+    assert "选择" in repaired.beats[0].summary
+    assert "失去" in repaired.beats[0].summary
+    assert "必须" not in repaired.beats[0].summary
+    assert "失败代价是" not in repaired.beats[0].summary
+
+
+def test_deterministic_repair_unwritable_chapter_avoids_meta_template_clauses(async_session):
+    agent = VolumePlannerAgent(async_session)
+    chapter = VolumeBeat(
+        chapter_id="vol_1_ch_1",
+        chapter_number=1,
+        title="后山禁地",
+        summary="陆照于玄天宗后山采药，误入禁地边缘裂缝，发现石壁上残留的古老经文痕迹。",
+        target_word_count=3200,
+        target_mood="mysterious",
+        key_entities=["陆照"],
+        beats=[
+            BeatPlan(
+                summary="陆照清晨背篓出工，沿后山小道攀爬采集宗门药方所需的赤芝；行至半山腰时天色骤暗，山雾从谷底涌起，他被迫绕道避开塌方路段，误入一条从未踏足的干涸溪谷。",
+                target_mood="tense",
+                key_entities=["陆照"],
+            ),
+            BeatPlan(
+                summary="陆照伸手触碰石壁文字，远处传来宗门巡山弟子的呼唤声。",
+                target_mood="tense",
+                key_entities=["陆照"],
+            ),
+        ],
+    )
+    report = StoryQualityService.evaluate_chapter_writability(chapter)
+
+    repaired = agent._deterministic_repair_unwritable_chapter(chapter, report)
+
+    repaired_report = StoryQualityService.evaluate_chapter_writability(repaired)
+    assert repaired_report.passed is True
+    joined = "\n".join(beat.summary for beat in repaired.beats)
+    assert "当场阻力便迫使目标无法照旧推进" not in joined
+    assert "关键窗口被错过" not in joined
+    assert "无法形成可承接的阶段结果" not in joined
+    assert "必须决定" not in joined
+    assert "失败代价是" not in joined
+    assert "结尾留下" not in joined
+    assert "必须在下一章继续处理" not in joined
+    assert chapter.summary not in joined
 
 
 def test_deterministic_repair_unwritable_chapter_removes_repeated_generic_constraints(async_session):
@@ -2101,7 +2202,7 @@ async def test_plan_volume_passes_single_value_target_chapters(async_session):
 
 
 @pytest.mark.asyncio
-async def test_plan_volume_does_not_force_range_target_chapters(async_session):
+async def test_plan_volume_uses_range_length_as_target_chapters(async_session):
     director = NovelDirector(session=async_session)
     synopsis = SynopsisData(
         title="Test",
@@ -2165,7 +2266,7 @@ async def test_plan_volume_does_not_force_range_target_chapters(async_session):
 
     await agent.plan("n_target_range")
 
-    assert agent._generate_volume_plan.call_args.kwargs["target_chapters"] is None
+    assert agent._generate_volume_plan.call_args.kwargs["target_chapters"] == 3
 
 
 @pytest.mark.asyncio

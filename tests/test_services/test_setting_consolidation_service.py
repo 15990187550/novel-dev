@@ -1,8 +1,9 @@
 from datetime import datetime
 
 import pytest
+from sqlalchemy import select
 
-from novel_dev.db.models import Entity, EntityRelationship, GenerationJob
+from novel_dev.db.models import Entity, EntityRelationship, EntityVersion, GenerationJob
 from novel_dev.repositories.document_repo import DocumentRepository
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
@@ -421,6 +422,313 @@ async def test_approve_setting_card_create_writes_consolidation_source_metadata(
     assert created.source_review_batch_id == batch.id
     assert created.source_review_change_id == create_change.id
     assert updated_change.status == "approved"
+
+
+async def test_approve_create_with_setting_category_target_writes_document(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-create-category-setting",
+        source_type="consolidation",
+        summary="创建分类设定卡",
+        input_snapshot={},
+    )
+    create_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="人物设定",
+        operation="create",
+        after_snapshot={"title": "人物设定", "content": "陆照：玄天宗外门弟子。"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[create_change.id])
+
+    created = await DocumentRepository(async_session).get_by_id(f"setting_{create_change.id}")
+    updated_change = await repo.get_review_change(create_change.id)
+    assert updated_batch.status == "approved"
+    assert created is not None
+    assert created.novel_id == "novel-create-category-setting"
+    assert created.doc_type == "setting"
+    assert created.title == "人物设定"
+    assert created.content == "陆照：玄天宗外门弟子。"
+    assert created.source_type == "consolidation"
+    assert created.source_review_batch_id == batch.id
+    assert created.source_review_change_id == create_change.id
+    assert updated_change.status == "approved"
+
+
+async def test_approve_setting_upsert_writes_consolidated_document(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-setting-upsert",
+        source_type="consolidation",
+        summary="upsert 设定",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting",
+        operation="upsert",
+        target_id="doc_old",
+        after_snapshot={"title": "世界观", "doc_type": "worldview", "content": "新世界观。"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+
+    created = await DocumentRepository(async_session).get_by_id(f"setting_{change.id}")
+    updated_change = await repo.get_review_change(change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert created is not None
+    assert created.doc_type == "worldview"
+    assert created.title == "世界观"
+    assert created.content == "新世界观。"
+
+
+async def test_approve_synopsis_upsert_writes_consolidated_document(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-synopsis-upsert",
+        source_type="consolidation",
+        summary="upsert 总纲",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="synopsis",
+        operation="upsert",
+        target_id="doc_old_synopsis",
+        after_snapshot={"title": "剧情梗概", "doc_type": "synopsis", "content": "新梗概。"},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+
+    created = await DocumentRepository(async_session).get_by_id(f"setting_{change.id}")
+    updated_change = await repo.get_review_change(change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert created is not None
+    assert created.doc_type == "synopsis"
+    assert created.title == "剧情梗概"
+
+
+async def test_approve_entity_type_update_refreshes_entity_and_latest_state(async_session):
+    entity = Entity(
+        id="entity-update",
+        novel_id="novel-entity-update",
+        type="character",
+        name="旧名",
+        system_category="人物",
+        manual_category="旧分类",
+        search_document="旧检索文本",
+    )
+    async_session.add(entity)
+    async_session.add(
+        EntityVersion(
+            entity_id=entity.id,
+            version=1,
+            state={"name": "旧名", "identity": "旧身份"},
+        )
+    )
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-entity-update",
+        source_type="consolidation",
+        summary="更新实体",
+        input_snapshot={},
+    )
+    update_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="character",
+        operation="update",
+        target_id=entity.id,
+        before_snapshot={"name": "旧名"},
+        after_snapshot={
+            "name": "新名",
+            "type": "character",
+            "manual_category": "主角",
+            "system_category": "人物",
+            "search_document": "名称：新名\n一级分类：人物",
+            "state": {"identity": "新身份", "goal": "查清真相"},
+        },
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[update_change.id])
+
+    updated_entity = await service.entity_repo.get_by_id(entity.id)
+    latest_state = await service.entity_service.get_latest_state(entity.id)
+    updated_change = await repo.get_review_change(update_change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert updated_entity.name == "新名"
+    assert updated_entity.type == "character"
+    assert updated_entity.manual_category == "主角"
+    assert updated_entity.system_category == "人物"
+    assert updated_entity.search_document == "名称：新名\n一级分类：人物"
+    assert updated_entity.source_type == "consolidation"
+    assert updated_entity.source_review_batch_id == batch.id
+    assert updated_entity.source_review_change_id == update_change.id
+    assert latest_state["name"] == "新名"
+    assert latest_state["identity"] == "新身份"
+    assert latest_state["goal"] == "查清真相"
+
+
+async def test_approve_location_upsert_refreshes_entity(async_session):
+    entity = Entity(
+        id="location-upsert",
+        novel_id="novel-location-upsert",
+        type="location",
+        name="旧地点",
+    )
+    async_session.add(entity)
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-location-upsert",
+        source_type="consolidation",
+        summary="upsert 地点",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="location",
+        operation="upsert",
+        target_id=entity.id,
+        after_snapshot={
+            "name": "无垠混沌海",
+            "type": "location",
+            "state": {"description": "终极虚空"},
+        },
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+
+    updated_entity = await service.entity_repo.get_by_id(entity.id)
+    latest_state = await service.entity_service.get_latest_state(entity.id)
+    updated_change = await repo.get_review_change(change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert updated_entity.name == "无垠混沌海"
+    assert latest_state["description"] == "终极虚空"
+
+
+async def test_approve_relationship_upsert_refreshes_relationship(async_session):
+    source = Entity(id="rel-source", novel_id="novel-rel-upsert", type="character", name="陆照")
+    target = Entity(id="rel-target", novel_id="novel-rel-upsert", type="item", name="道经")
+    async_session.add_all([source, target])
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-rel-upsert",
+        source_type="consolidation",
+        summary="upsert 关系",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="relationship",
+        operation="upsert",
+        after_snapshot={
+            "source_id": source.id,
+            "target_id": target.id,
+            "relation_type": "持有者",
+            "meta": {"confidence": 0.9},
+        },
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+
+    updated_change = await repo.get_review_change(change.id)
+    relationships = (
+        await async_session.execute(
+            select(EntityRelationship).where(EntityRelationship.novel_id == "novel-rel-upsert")
+        )
+    ).scalars().all()
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert len(relationships) == 1
+    assert relationships[0].relation_type == "持有者"
+    assert relationships[0].source_type == "consolidation"
+
+
+async def test_approve_entity_type_archive_marks_entity_archived(async_session):
+    entity = Entity(
+        id="entity-archive",
+        novel_id="novel-entity-archive",
+        type="faction",
+        name="旧势力",
+    )
+    async_session.add(entity)
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-entity-archive",
+        source_type="consolidation",
+        summary="归档实体",
+        input_snapshot={},
+    )
+    archive_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="faction",
+        operation="archive",
+        target_id=entity.id,
+        before_snapshot={"name": entity.name},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[archive_change.id])
+
+    archived = await service.entity_repo.get_by_id(entity.id)
+    updated_change = await repo.get_review_change(archive_change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert archived.archived_at is not None
+    assert archived.archive_reason == "setting_consolidation"
+    assert archived.archived_by_consolidation_batch_id == batch.id
+    assert archived.archived_by_consolidation_change_id == archive_change.id
+
+
+async def test_approve_generic_archive_hides_document(async_session):
+    doc_repo = DocumentRepository(async_session)
+    document = await doc_repo.create(
+        "doc-generic-archive",
+        "novel-generic-archive",
+        "setting",
+        "旧设定",
+        "旧内容",
+    )
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-generic-archive",
+        source_type="consolidation",
+        summary="通用归档",
+        input_snapshot={},
+    )
+    change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="archive",
+        operation="archive",
+        target_id=document.id,
+        before_snapshot={"title": document.title},
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
+
+    archived = await doc_repo.get_by_id(document.id)
+    updated_change = await repo.get_review_change(change.id)
+    assert updated_batch.status == "approved"
+    assert updated_change.status == "approved"
+    assert archived.archived_at is not None
 
 
 async def test_approve_review_batch_missing_batch_raises(async_session):

@@ -7,7 +7,14 @@ import yaml
 from pydantic import ValidationError
 from sqlalchemy import select
 
-from novel_dev.db.models import Entity, EntityRelationship, NovelDocument, SettingReviewBatch, SettingReviewChange
+from novel_dev.db.models import (
+    Entity,
+    EntityRelationship,
+    NovelDocument,
+    PendingExtraction,
+    SettingReviewBatch,
+    SettingReviewChange,
+)
 from novel_dev.llm.exceptions import LLMTimeoutError
 from novel_dev.llm.orchestrator import OrchestratedTaskConfig
 from novel_dev.repositories.document_repo import DocumentRepository
@@ -1555,6 +1562,44 @@ async def test_validate_batch_draft_allows_multi_world_realm_mapping_table(async
     )
 
     SettingWorkbenchService(async_session)._validate_batch_draft(draft)
+
+
+async def test_validate_draft_source_evidence_accepts_uploaded_source_filename(async_session):
+    from novel_dev.agents.setting_workbench_agent import SettingBatchDraft
+
+    async_session.add(
+        PendingExtraction(
+            id="pe_world",
+            novel_id="novel-source-filename",
+            source_filename="世界观.md",
+            extraction_type="setting",
+            status="approved",
+            raw_result={"worldview": "无垠混沌海与一世之尊世界设定"},
+        )
+    )
+    await async_session.flush()
+    draft = SettingBatchDraft.model_validate(
+        {
+            "summary": "来源文件名",
+            "changes": [
+                {
+                    "target_type": "setting_card",
+                    "operation": "create",
+                    "after_snapshot": {
+                        "doc_type": "worldview",
+                        "title": "世界观",
+                        "source_doc_ids": ["世界观.md"],
+                        "content": "无垠混沌海包含一世之尊世界。",
+                    },
+                }
+            ],
+        }
+    )
+
+    await SettingWorkbenchService(async_session)._validate_draft_source_evidence(
+        "novel-source-filename",
+        draft,
+    )
 
 
 async def test_validate_batch_draft_does_not_use_builtin_same_world_realm_rank_order(async_session):

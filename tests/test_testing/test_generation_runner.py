@@ -504,6 +504,10 @@ async def test_fake_longform_run_validates_source_dir_and_records_target_artifac
     assert report.artifacts["source_material_count"] == "1"
 
 
+def test_real_longform_http_timeout_allows_slow_volume_planning():
+    assert generation_runner.API_SMOKE_TIMEOUT_SECONDS >= 1200
+
+
 def test_httpx_timeout_exception_is_internal_timeout_with_message():
     issue = classify_exception("generate_setting_review_batch", httpx.ReadTimeout(""), True)
 
@@ -1486,6 +1490,7 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
                         "batch": {"id": "batch-consolidation", "status": "pending"},
                         "changes": [
                             {"id": "change-2", "target_type": "setting_card", "status": "pending"},
+                            {"id": "change-consolidation-conflict", "target_type": "conflict", "status": "pending"},
                         ],
                     },
                 )
@@ -1510,11 +1515,16 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
             if path.endswith("/generate"):
                 return self._response("POST", path, {"id": "batch-test"})
             if path == "/api/novels/novel-test/settings/review_batches/batch-test/apply":
-                assert payload == {"decisions": [{"change_id": "change-1", "decision": "approve"}]}
+                assert payload == {
+                    "decisions": [
+                        {"change_id": "change-1", "decision": "approve"},
+                        {"change_id": "change-conflict", "decision": "reject"},
+                    ]
+                }
                 return self._response(
                     "POST",
                     path,
-                    {"status": "partially_approved", "applied": 1, "rejected": 0, "failed": 0},
+                    {"status": "partially_approved", "applied": 1, "rejected": 1, "failed": 0},
                 )
             if path == "/api/novels/novel-test/documents/upload":
                 return self._response("POST", path, {"id": f"pending-{payload['filename']}"})
@@ -1527,7 +1537,18 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
                 return self._response(
                     "POST",
                     path,
-                    {"batch": {"id": "batch-consolidation", "status": "approved"}, "changes": []},
+                    {"batch": {"id": "batch-consolidation", "status": "partially_approved"}, "changes": []},
+                )
+            if path == "/api/novels/novel-test/settings/review_batches/batch-consolidation/apply":
+                assert payload == {
+                    "decisions": [
+                        {"change_id": "change-consolidation-conflict", "decision": "reject"},
+                    ]
+                }
+                return self._response(
+                    "POST",
+                    path,
+                    {"status": "approved", "applied": 0, "rejected": 1, "failed": 0},
                 )
             if path == "/api/novels/novel-test/brainstorm":
                 return self._response("POST", path, {})
@@ -1600,6 +1621,7 @@ async def test_longform_volume1_flow_imports_sources_consolidates_and_generates_
     assert artifacts["acceptance_scope"] == "real-longform-volume1"
     assert artifacts["generated_setting_approvable_change_count"] == "1"
     assert artifacts["generated_setting_conflict_change_count"] == "1"
+    assert artifacts["generated_setting_rejected_conflict_change_count"] == "1"
     assert artifacts["generated_setting_batch_status"] == "partially_approved"
     assert artifacts["consolidated_setting_approvable_change_count"] == "1"
     assert artifacts["consolidated_setting_batch_status"] == "approved"

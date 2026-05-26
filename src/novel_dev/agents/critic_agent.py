@@ -11,6 +11,7 @@ from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
 class BeatScoreIssue(BaseModel):
@@ -279,9 +280,9 @@ class CriticAgent:
             },
         )
         # Trim context to only what Critic needs, avoiding retrieval bloat
+        style_contract = StyleContractCompiler.compile(context_data.get("style_profile", {})).render_prompt_block()
         trimmed_context = {
             "chapter_plan": context_data.get("chapter_plan", {}),
-            "style_profile": context_data.get("style_profile", {}),
             "worldview_summary": context_data.get("worldview_summary", ""),
             "previous_chapter_summary": context_data.get("previous_chapter_summary", ""),
             "active_entities": [
@@ -300,7 +301,8 @@ class CriticAgent:
             "## 评价总原则\n"
             "从读者体验出发判断:读者是否看得懂当下目标和阻力,是否相信人物选择,"
             "是否能感到场景在推进,以及章末是否让人愿意继续读。"
-            "每条 suggestion 都写成正向改写目标,说明下一版应该呈现什么效果。\n\n"
+            "每条 suggestion 都写成正向改写目标,说明下一版应该呈现什么效果。"
+            "不按固定钩子类型或对话数量打分;先判断当前场景最自然的表达方式。\n\n"
             "## 评分 Rubric(每个维度 4 档)\n"
             "### plot_tension(情节张力)\n"
             "- 85-100: 有明确冲突升级、赌注递进,场景间存在因果推动,章末钩子强\n"
@@ -325,13 +327,13 @@ class CriticAgent:
             "- 50-69: 存在 1-2 处明显冲突(称谓、能力、关系)\n"
             "- <50: 与核心设定严重矛盾\n\n"
             "### humanity(人味/沉浸感)\n"
-            "- 85-100: 对话自然、有潜台词,内心戏节制,能『显示不说』\n"
+            "- 85-100: 人物反应自然可信,情绪不是作者替人物总结出来的;对话不是必需形式,但出现时有潜台词\n"
             "- 70-84: 偶有 AI 腔词汇、过度解释情感、跨语域表达突兀或异常事件描写偏模板\n"
             "- 50-69: 明显 AI 腔、总结式心理描写、对话扁平、模板化异常事件演出,"
             "人物被抽象光影和设定说明淹没\n"
             "- <50: 通篇 AI 味、读起来像设定说明\n\n"
             "### hook_strength(章末钩子强度,仅评价最后一个 beat)\n"
-            "- 85-100: 结尾有强悬念/反转/赌注升级/情绪爆点,能拉读者进下一章\n"
+            "- 85-100: 结尾让读者形成更具体的下一章期待;安静收束也可以高分,前提是信息、关系、压力或情绪余波确实推进\n"
             "- 70-84: 有收束但钩子偏弱,下一步走向过于可预测\n"
             "- 50-69: 章末平淡收束或用总结句收尾\n"
             "- <50: 章末无悬念、信息倾倒式结尾、或本章未呼应已埋伏笔\n\n"
@@ -346,12 +348,14 @@ class CriticAgent:
             "5. 语言体验:英文、拼音、网络缩写和 UI 术语原文会破坏沉浸感。"
             "如果草稿出现这类词,readability 必须低于 75,并在 per_dim_issues 写出原词和自然中文表达建议。\n"
             "6. AI 味问题必须具体定位:连续比喻、类型概念堆叠、感官平均用力、模板化异常事件、跨语域表达突兀。"
-            "suggestion 必须给正向改写目标,例如『把连续三处像字比喻收束为一个身体反应,只保留最有辨识度的一处』。\n"
+            "suggestion 必须先判断这段最不像真人写作的原因,再只改最影响读感的部分,"
+            "例如『把连续三处像字比喻收束为更贴近当场处境的一个反应』。\n"
             "7. per_dim_issues 可填写 source_stage,用于标记问题来自哪个流程阶段;"
             "取值优先使用 setting_generation / brainstorm / volume_plan / drafting / editing。"
             "例如设定承接断裂填 volume_plan,正文新增计划外事实填 editing。\n"
             "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
             f"{genre_block}"
+            f"{style_contract + chr(10) + chr(10) if style_contract else ''}"
             f"### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
             f"### 草稿\n{raw_draft}\n\n"
             "请评分:"

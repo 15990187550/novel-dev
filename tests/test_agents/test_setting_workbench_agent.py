@@ -274,7 +274,7 @@ def test_normalize_setting_batch_payload_accepts_common_field_drift():
     assert draft.changes[1].after_snapshot["state"] == {"description": "北境统治势力"}
 
 
-def test_normalize_setting_batch_payload_preserves_unsafe_relationship_refs_for_rejection():
+def test_normalize_setting_batch_payload_drops_relationship_name_refs_and_still_requires_ids():
     payload = {
         "changes": [
             {
@@ -293,6 +293,52 @@ def test_normalize_setting_batch_payload_preserves_unsafe_relationship_refs_for_
 
     with pytest.raises(ValidationError, match="source_id, target_id, and relation_type"):
         SettingBatchDraft.model_validate(normalized)
+
+
+def test_normalize_setting_batch_payload_drops_redundant_relationship_refs_when_ids_exist():
+    payload = {
+        "changes": [
+            {
+                "target_type": "relationship",
+                "operation": "create",
+                "source_ref": "世界观.md",
+                "after_snapshot": {
+                    "source_id": "ent_luzhao",
+                    "target_id": "ent_seed",
+                    "source_ref": "世界观.md",
+                    "target_ref": "道种",
+                    "relation_type": "持有",
+                },
+            }
+        ]
+    }
+
+    draft = SettingBatchDraft.model_validate(normalize_setting_batch_payload(payload, None))
+
+    change = draft.changes[0]
+    assert change.source_ref is None
+    assert change.target_ref is None
+    assert "source_ref" not in change.after_snapshot
+    assert "target_ref" not in change.after_snapshot
+    assert change.after_snapshot["source_id"] == "ent_luzhao"
+
+
+def test_setting_batch_draft_parses_stringified_changes_with_inner_quotes():
+    payload = {
+        "summary": "带裸双引号的变更",
+        "changes": (
+            '[{"target_type":"setting_card","operation":"create","after_snapshot":'
+            '{"doc_type":"core_conflict","title":"核心冲突",'
+            '"content":"玄天宗外门出现"系统宿主"，陆照被迫追查；资料仅提及"需以特殊方式跨越"。"},'
+            '"source_ref":"道照诸天_brief.md"}]'
+        ),
+    }
+
+    draft = SettingBatchDraft.model_validate(payload)
+
+    assert draft.changes[0].after_snapshot["content"] == (
+        '玄天宗外门出现"系统宿主"，陆照被迫追查；资料仅提及"需以特殊方式跨越"。'
+    )
 
 
 @pytest.mark.parametrize(

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from novel_dev.agents._llm_helpers import (
     _await_llm_response_with_progress,
+    _prompt_metadata,
     call_and_parse,
     call_and_parse_model,
     orchestrated_call_and_parse_model,
@@ -47,6 +48,19 @@ class DummyLLMClient:
     async def acomplete(self, messages, **kwargs):
         self.calls.append((messages, kwargs))
         return self.response
+
+
+def test_prompt_metadata_adds_stable_snapshot_without_replacing_preview():
+    prompt = "第一行\n" + ("长提示" * 120)
+
+    metadata = _prompt_metadata(prompt)
+
+    assert metadata["prompt_chars"] == len(prompt)
+    assert metadata["prompt"] == prompt
+    assert metadata["prompt_preview"] != prompt
+    assert metadata["prompt_snapshot"]["id"].startswith("prompt_")
+    assert metadata["prompt_snapshot"]["sha256"]
+    assert metadata["prompt_snapshot"]["chars"] == len(prompt)
 
 
 @pytest.fixture(autouse=True)
@@ -312,7 +326,7 @@ async def test_orchestrated_call_and_parse_model_uses_default_schema_repairer():
     assert result.title == "旧字段"
     assert result.tags == ["兼容"]
     entries = list(LogService._buffers["novel-default-schema-repair"])
-    assert any(entry.get("node") == "llm_repairer" and entry.get("status") == "succeeded" for entry in entries)
+    assert any(entry.get("node") == "llm_normalize" and entry.get("status") == "succeeded" for entry in entries)
 
 
 @pytest.mark.asyncio

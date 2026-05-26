@@ -21,6 +21,7 @@ from novel_dev.llm.subtasks import LightweightSubtaskOrchestrator
 from novel_dev.services.log_service import log_service
 
 ToolHandler = Callable[[dict[str, Any]], Awaitable[Any] | Any]
+PayloadNormalizer = Callable[[Any, Exception | None], Any]
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,7 @@ class OrchestratedLLM:
         tools: list[LLMToolSpec],
         task_config: OrchestratedTaskConfig,
         subtask_orchestrator: LightweightSubtaskOrchestrator | None = None,
+        payload_normalizer: PayloadNormalizer | None = None,
     ):
         self.client = client
         self.base_config = base_config
@@ -74,6 +76,7 @@ class OrchestratedLLM:
         self.tools = {tool.name: tool for tool in tools}
         self.task_config = task_config
         self.subtask_orchestrator = subtask_orchestrator
+        self.payload_normalizer = payload_normalizer
 
     async def run(
         self,
@@ -327,9 +330,33 @@ class OrchestratedLLM:
         novel_id: str,
     ) -> Any:
         if not self.task_config.enable_subtasks:
-            return adapter.validate_python(payload)
+            try:
+                return adapter.validate_python(payload)
+            except ValidationError as exc:
+                normalized = self._normalize_payload_for_validation(
+                    payload,
+                    error=exc,
+                    agent_name=agent_name,
+                    task=task,
+                    novel_id=novel_id,
+                )
+                if normalized is not payload:
+                    return adapter.validate_python(normalized)
+                raise
         if self.subtask_orchestrator is None:
-            return adapter.validate_python(payload)
+            try:
+                return adapter.validate_python(payload)
+            except ValidationError as exc:
+                normalized = self._normalize_payload_for_validation(
+                    payload,
+                    error=exc,
+                    agent_name=agent_name,
+                    task=task,
+                    novel_id=novel_id,
+                )
+                if normalized is not payload:
+                    return adapter.validate_python(normalized)
+                raise
 
         payload, schema_validated_payload = await self._validate_schema_or_repair(
             payload,
@@ -460,6 +487,15 @@ class OrchestratedLLM:
         try:
             return payload, adapter.validate_python(payload)
         except ValidationError as exc:
+            normalized = self._normalize_payload_for_validation(
+                payload,
+                error=exc,
+                agent_name=agent_name,
+                task=task,
+                novel_id=novel_id,
+            )
+            if normalized is not payload:
+                return normalized, adapter.validate_python(normalized)
             if not self.task_config.repairer_subtask:
                 raise
 
@@ -518,10 +554,35 @@ class OrchestratedLLM:
         try:
             repaired = adapter.validate_python(payload)
         except ValidationError as exc:
+            active_exc = exc
+            normalized = self._normalize_payload_for_validation(
+                payload,
+                error=exc,
+                agent_name=agent_name,
+                task=task,
+                novel_id=novel_id,
+            )
+            if normalized is not payload:
+                try:
+                    repaired = adapter.validate_python(normalized)
+                except ValidationError as retry_exc:
+                    active_exc = retry_exc
+                else:
+                    self._log(
+                        novel_id,
+                        agent_name,
+                        task,
+                        success_message,
+                        status="succeeded",
+                        node="llm_repairer",
+                        metadata={"subtask": subtask_name, "duration_ms": duration_ms},
+                        duration_ms=duration_ms,
+                    )
+                    return repaired
             validation = {
                 "valid": False,
                 "reason": "schema_repair_failed",
-                "errors": self._validation_errors(exc),
+                "errors": self._validation_errors(active_exc),
             }
             self._log(
                 novel_id,
@@ -553,6 +614,32 @@ class OrchestratedLLM:
             duration_ms=duration_ms,
         )
         return repaired
+
+    def _normalize_payload_for_validation(
+        self,
+        payload: Any,
+        *,
+        error: Exception | None,
+        agent_name: str,
+        task: str,
+        novel_id: str,
+    ) -> Any:
+        if self.payload_normalizer is None:
+            return payload
+        normalized = self.payload_normalizer(payload, error)
+        if normalized is payload:
+            return payload
+        self._log(
+            novel_id,
+            agent_name,
+            task,
+            f"{task} 结构化结果已归一化",
+            status="succeeded",
+            node="llm_normalize",
+            level="info",
+            metadata={"had_error": error is not None},
+        )
+        return normalized
 
     def _validation_errors(self, exc: ValidationError) -> list[dict[str, Any]]:
         errors = exc.errors(include_url=False)

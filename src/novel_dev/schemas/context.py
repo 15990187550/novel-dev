@@ -174,6 +174,17 @@ class BeatWritingCard(BaseModel):
     ending_hook: str = ""
     reader_takeaway: str = ""
     target_word_count: int = 800
+    chapter_role: str = ""
+    chapter_purpose: str = ""
+    suspense_mode: str = ""
+    foreshadowing_operation: str = ""
+    reveal_delta: str = ""
+    emotional_shift: str = ""
+    next_chapter_pressure: str = ""
+    scene_pressure_lenses: List[str] = Field(default_factory=list)
+    relationship_subtext_lenses: List[str] = Field(default_factory=list)
+    prose_texture_lenses: List[str] = Field(default_factory=list)
+    freshness_lenses: List[str] = Field(default_factory=list)
 
     @field_validator(
         "source_summary",
@@ -183,6 +194,13 @@ class BeatWritingCard(BaseModel):
         "stake",
         "ending_hook",
         "reader_takeaway",
+        "chapter_role",
+        "chapter_purpose",
+        "suspense_mode",
+        "foreshadowing_operation",
+        "reveal_delta",
+        "emotional_shift",
+        "next_chapter_pressure",
         mode="before",
     )
     @classmethod
@@ -199,6 +217,10 @@ class BeatWritingCard(BaseModel):
         "causal_links",
         "allowed_bridge_details",
         "forbidden_future_events",
+        "scene_pressure_lenses",
+        "relationship_subtext_lenses",
+        "prose_texture_lenses",
+        "freshness_lenses",
         mode="before",
     )
     @classmethod
@@ -222,11 +244,13 @@ class ChapterContext(BaseModel):
     beat_contexts: List[BeatContext] = Field(default_factory=list)
     writing_cards: List[BeatWritingCard] = Field(default_factory=list)
     story_contract: dict[str, Any] = Field(default_factory=dict)
+    scene_fuel: dict[str, list[str]] = Field(default_factory=dict)
+    narrative_source: str = ""
     genre_quality_config: dict[str, Any] = Field(default_factory=dict)
     genre_prompt_block: str = ""
     genre_template_warnings: List[str] = Field(default_factory=list)
 
-    @field_validator("worldview_summary", "previous_chapter_summary", "genre_prompt_block", mode="before")
+    @field_validator("worldview_summary", "previous_chapter_summary", "genre_prompt_block", "narrative_source", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)

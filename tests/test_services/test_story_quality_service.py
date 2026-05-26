@@ -260,8 +260,133 @@ def test_build_writing_cards_extracts_last_beat_payoff_and_reader_hook():
     last = cards[-1]
     assert any("密函" in item for item in last.required_payoffs)
     assert any("危险信号" in item or "内应" in item for item in last.required_payoffs)
-    assert "读者" in last.reader_takeaway
+    assert "读者" not in last.reader_takeaway
     assert "密函" in last.ending_hook
+
+
+def test_story_quality_payoff_terms_do_not_contain_specific_story_clue_words():
+    assert "密函" not in StoryQualityService.PAYOFF_TERMS
+
+
+def test_build_writing_cards_adds_narrative_control_variables():
+    plan = ChapterPlan(
+        chapter_number=7,
+        title="密函余波",
+        target_word_count=2200,
+        beats=[
+            BeatPlan(
+                summary="陆照拿到密函后被执事堵在药库门口；他权衡是否暴露玉佩残光，若迟疑就会被搜身并失去密函。",
+                target_mood="紧张",
+                key_entities=["陆照", "执事", "密函"],
+                foreshadowings_to_embed=["密函边角有血色符痕"],
+            ),
+            BeatPlan(
+                summary="陆照借玉佩残光脱身，却发现密函上的符痕正在变亮，说明追踪术已经启动。",
+                target_mood="压迫",
+                key_entities=["陆照", "密函"],
+            ),
+        ],
+    )
+
+    first, last = StoryQualityService.build_writing_cards(plan)
+
+    assert first.chapter_role == "冲突推进"
+    assert first.chapter_purpose
+    assert first.suspense_mode in {"行动压力", "信息差", "风险逼近", "关系压力", "情绪余波"}
+    assert first.foreshadowing_operation
+    assert "密函" in first.reveal_delta
+    assert first.emotional_shift == "紧张 -> 压迫"
+    assert first.next_chapter_pressure == "陆照借玉佩残光脱身"
+    assert last.next_chapter_pressure == ""
+
+
+def test_build_writing_cards_adds_soft_strategy_lenses_without_checklist_requirements():
+    plan = ChapterPlan(
+        chapter_number=8,
+        title="药库门前",
+        target_word_count=2200,
+        beats=[
+            BeatPlan(
+                summary="陆照拿到密函后被执事堵在药库门口；执事怀疑他偷药，陆照权衡是否暴露玉佩残光，若迟疑就会被搜身并失去密函。",
+                target_mood="紧张",
+                key_entities=["陆照", "执事", "密函"],
+                foreshadowings_to_embed=["密函边角有血色符痕"],
+            ),
+            BeatPlan(
+                summary="陆照借玉佩残光脱身，却发现密函上的符痕正在变亮，说明追踪术已经启动。",
+                target_mood="压迫",
+                key_entities=["陆照", "密函"],
+            ),
+        ],
+    )
+
+    first = StoryQualityService.build_writing_cards(plan)[0]
+
+    assert first.scene_pressure_lenses
+    assert first.relationship_subtext_lenses
+    assert first.prose_texture_lenses
+    assert first.freshness_lenses
+    combined = "\n".join(
+        first.scene_pressure_lenses
+        + first.relationship_subtext_lenses
+        + first.prose_texture_lenses
+        + first.freshness_lenses
+    )
+    assert "药库" in combined or "密函" in combined or "执事" in combined
+    assert "可选" in combined or "优先" in combined or "可以" in combined
+    assert "必须短对话" not in combined
+    assert "必须出现异变" not in combined
+    assert "必须反转" not in combined
+
+
+def test_build_writing_cards_filters_meta_plan_language_from_contract_fields():
+    plan = ChapterPlan(
+        chapter_number=3,
+        title="同门试探",
+        target_word_count=1600,
+        beats=[
+            BeatPlan(
+                summary=(
+                    "王顺率先出手，一记基础拳法直取陆照胸口；"
+                    "陆照侧身避开，随手一掌拍在王顺手腕上，将攻势带偏；"
+                    "王顺踉跄两步才站稳，周围弟子露出诧异之色；"
+                    "陆照处理“同门试探”线索时发现原计划受阻，对手或环境压力逼他立刻调整行动；"
+                    "陆照必须在继续追查“同门试探”与暂时避险之间选择，失败代价是线索被错过；"
+                    "失败代价是陆照暴露异常并错过“同门试探”线索；"
+                    "读者应看清本节拍的选择、代价或局势变化。"
+                ),
+                target_mood="紧张",
+                key_entities=["陆照", "王顺"],
+            ),
+            BeatPlan(
+                summary="王顺不服，连出七招，陆照以基础招式逐一化解。",
+                target_mood="压迫",
+                key_entities=["陆照", "王顺"],
+            ),
+        ],
+    )
+
+    card = StoryQualityService.build_writing_cards(plan)[0]
+    prompted_contract = "\n".join(
+        [
+            card.objective,
+            card.conflict,
+            card.turning_point,
+            card.stake,
+            card.ending_hook,
+            card.reader_takeaway,
+            *card.required_facts,
+            *card.required_payoffs,
+        ]
+    )
+
+    assert "王顺率先出手" in prompted_contract
+    assert "一掌拍在王顺手腕" in prompted_contract
+    assert "周围弟子露出诧异" in prompted_contract
+    assert "必须" not in prompted_contract
+    assert "失败代价" not in prompted_contract
+    assert "读者应" not in prompted_contract
+    assert "结尾留下" not in prompted_contract
 
 
 def test_setting_workbench_builds_quality_report_from_generated_draft():

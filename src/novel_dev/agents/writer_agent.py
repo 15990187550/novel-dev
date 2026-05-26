@@ -15,6 +15,7 @@ from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.genre_template_service import GenreTemplateService
+from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
 _BEAT_ANCHOR_STRIP_RE = re.compile(r"<!--/?BEAT:\d+-->")
@@ -141,11 +142,22 @@ class WriterAgent:
                 log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
 
         flow_control = FlowControlService(self.session)
+        whole_chapter_mode = self._should_generate_whole_chapter(checkpoint)
         genre_template = await GenreTemplateService(self.session).resolve(
             novel_id,
             "WriterAgent",
-            "generate_beat",
+            "generate_chapter" if whole_chapter_mode else "generate_beat",
         )
+        if whole_chapter_mode:
+            return await self._write_whole_chapter(
+                novel_id=novel_id,
+                context=context,
+                chapter_id=chapter_id,
+                checkpoint=checkpoint,
+                state=state,
+                rewrite_plan=rewrite_plan,
+                genre_template=genre_template,
+            )
         for idx, beat in enumerate(context.chapter_plan.beats):
             if idx < start_idx:
                 continue
@@ -396,6 +408,114 @@ class WriterAgent:
 
         return metadata
 
+    @staticmethod
+    def _should_generate_whole_chapter(checkpoint: dict[str, Any]) -> bool:
+        drafting_mode = str(checkpoint.get("drafting_mode") or "").strip().lower()
+        return drafting_mode not in {"beat_legacy", "single_beat", "beat_by_beat"}
+
+    async def _write_whole_chapter(
+        self,
+        *,
+        novel_id: str,
+        context: ChapterContext,
+        chapter_id: str,
+        checkpoint: dict,
+        state,
+        rewrite_plan: dict | None,
+        genre_template=None,
+    ) -> DraftMetadata:
+        flow_control = FlowControlService(self.session)
+        await flow_control.raise_if_cancelled(novel_id)
+        raw_draft = await self._generate_whole_chapter(
+            novel_id=novel_id,
+            context=context,
+            rewrite_plan=rewrite_plan,
+            genre_template=genre_template,
+        )
+        raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
+        beat_coverage = self._anchored_beat_coverage(raw_draft, context)
+        clean_text = _strip_anchors(raw_draft)
+        embedded_foreshadowings = [
+            fs.id
+            for fs in context.pending_foreshadowings
+            if fs.content and fs.content in clean_text
+        ]
+        total_words = self._word_count(clean_text)
+
+        log_agent_detail(
+            novel_id,
+            "WriterAgent",
+            f"整章草稿完成：总字数 {total_words}，节拍覆盖 {len(beat_coverage)} 条",
+            node="draft_chapter_result",
+            task="write",
+            metadata={
+                "chapter_id": chapter_id,
+                "total_words": total_words,
+                "beat_coverage": beat_coverage,
+                "embedded_foreshadowings": embedded_foreshadowings,
+                "preview": preview_text(clean_text, 300),
+            },
+        )
+        metadata = DraftMetadata(
+            total_words=total_words,
+            beat_coverage=beat_coverage,
+            style_violations=[],
+            embedded_foreshadowings=embedded_foreshadowings,
+        )
+        await self.chapter_repo.update_text(chapter_id, raw_draft=raw_draft.strip())
+        if self.embedding_service:
+            try:
+                await self.embedding_service.index_chapter(chapter_id)
+            except Exception as exc:
+                log_service.add_log(novel_id, "WriterAgent", f"章节索引失败: {exc}", level="warning")
+        await self.chapter_repo.update_status(chapter_id, "drafted")
+
+        checkpoint["draft_metadata"] = metadata.model_dump()
+        checkpoint["drafting_mode"] = "whole_chapter"
+        checkpoint["drafting_progress"] = {
+            "beat_index": len(context.chapter_plan.beats),
+            "total_beats": len(context.chapter_plan.beats),
+            "current_word_count": total_words,
+        }
+        checkpoint.pop("draft_rewrite_plan", None)
+        await self.director.save_checkpoint(
+            novel_id,
+            phase=Phase.REVIEWING,
+            checkpoint_data=checkpoint,
+            volume_id=state.current_volume_id,
+            chapter_id=state.current_chapter_id,
+        )
+        log_service.add_log(novel_id, "WriterAgent", "整章生成完成，进入 reviewing 阶段")
+        return metadata
+
+    async def _generate_whole_chapter(
+        self,
+        *,
+        novel_id: str,
+        context: ChapterContext,
+        rewrite_plan: dict | None,
+        genre_template=None,
+    ) -> str:
+        system_prompt = self._build_system_prompt(context, True, genre_template=genre_template)
+        user_content = self._build_whole_chapter_context_message(context, rewrite_plan)
+        messages = [
+            ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_content),
+        ]
+        from novel_dev.llm import llm_factory
+        client = llm_factory.get("WriterAgent", task="generate_chapter")
+        config = llm_factory._resolve_config("WriterAgent", "generate_chapter")
+        async with agent_step(
+            novel_id,
+            "WriterAgent",
+            "一次性生成整章正文",
+            node="generate_chapter",
+            task="generate_chapter",
+            metadata={"total_beats": len(context.chapter_plan.beats)},
+        ):
+            response = await client.acomplete(messages, config)
+        return response.text.strip()
+
     async def write_standalone(
         self,
         novel_id: str,
@@ -403,146 +523,33 @@ class WriterAgent:
         chapter_id: str,
         rewrite_plan: dict | None = None,
     ) -> tuple[DraftMetadata, dict]:
-        log_service.add_log(novel_id, "WriterAgent", f"开始独立重写章节草稿: {context.chapter_plan.title}")
+        log_service.add_log(novel_id, "WriterAgent", f"开始独立整章重写章节草稿: {context.chapter_plan.title}")
         rewrite_plan = rewrite_plan or {}
-        raw_draft = ""
-        beat_coverage = []
-        embedded_foreshadowings = []
-        total_beats = len(context.chapter_plan.beats)
-
-        from novel_dev.schemas.context import NarrativeRelay
-        relay_history: List[NarrativeRelay] = []
-        inner_beats: List[str] = []
         flow_control = FlowControlService(self.session)
+        await flow_control.raise_if_cancelled(novel_id)
         genre_template = None
         if novel_id:
             genre_template = await GenreTemplateService(self.session).resolve(
                 novel_id,
                 "WriterAgent",
-                "generate_beat",
+                "generate_chapter",
             )
 
-        for idx, beat in enumerate(context.chapter_plan.beats):
-            await flow_control.raise_if_cancelled(novel_id)
-            is_last = (idx == total_beats - 1)
-            last_beat_text = inner_beats[-1] if inner_beats else ""
-            log_service.add_log(novel_id, "WriterAgent", f"独立重写第 {idx + 1}/{total_beats} 个节拍: {beat.summary[:50]}...")
-
-            beat_text = await self._generate_beat(
-                beat, context, relay_history, last_beat_text,
-                idx, total_beats, is_last, novel_id, rewrite_plan, genre_template=genre_template,
-            )
-            inner = _strip_anchors(beat_text)
-            if len(inner) < 50:
-                inner = await self._rewrite_angle(
-                    beat,
-                    inner,
-                    context,
-                    relay_history,
-                    last_beat_text,
-                    idx,
-                    total_beats,
-                    is_last,
-                    None,
-                    novel_id,
-                    rewrite_plan,
-                    genre_template=genre_template,
-                )
-                beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
-
-            self_check = self._self_check_beat(inner, beat, context, idx, genre_template=genre_template)
-            if self_check.needs_rewrite:
-                log_service.add_log(
-                    novel_id,
-                    "WriterAgent",
-                    f"独立重写第 {idx + 1} 个节拍自检未通过，重写",
-                    level="warning",
-                )
-                inner = await self._rewrite_angle(
-                    beat,
-                    inner,
-                    context,
-                    relay_history,
-                    last_beat_text,
-                    idx,
-                    total_beats,
-                    is_last,
-                    self_check,
-                    novel_id,
-                    rewrite_plan,
-                    genre_template=genre_template,
-                )
-                beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
-
-            inner, beat_text = await self._guard_writer_beat(
-                novel_id=novel_id,
-                context=context,
-                beat=beat,
-                inner=inner,
-                relay_history=relay_history,
-                last_beat_text=last_beat_text,
-                idx=idx,
-                total_beats=total_beats,
-                is_last=is_last,
-                rewrite_plan=rewrite_plan,
-                checkpoint={},
-                state=None,
-                chapter_id=chapter_id,
-                genre_template=genre_template,
-            )
-            inner, beat_text = await self._enforce_beat_word_budget(
-                beat=beat,
-                inner=inner,
-                context=context,
-                relay_history=relay_history,
-                last_beat_text=last_beat_text,
-                idx=idx,
-                total_beats=total_beats,
-                is_last=is_last,
-                novel_id=novel_id,
-                rewrite_plan=rewrite_plan,
-                genre_template=genre_template,
-            )
-            inner, beat_text = await self._enforce_prose_hygiene(
-                beat=beat,
-                inner=inner,
-                context=context,
-                relay_history=relay_history,
-                last_beat_text=last_beat_text,
-                idx=idx,
-                total_beats=total_beats,
-                is_last=is_last,
-                novel_id=novel_id,
-                rewrite_plan=rewrite_plan,
-                genre_template=genre_template,
-            )
-            inner = self._trim_repeated_prefix_from_previous(last_beat_text, inner)
-            beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
-
-            inner_beats.append(inner)
-            raw_draft += beat_text + "\n\n"
-            beat_coverage.append({"beat_index": idx, "word_count": len(inner)})
-
-            try:
-                next_beat = context.chapter_plan.beats[idx + 1] if idx + 1 < total_beats else None
-                relay = await self._generate_relay(inner, beat, context, idx, next_beat, novel_id)
-                relay_history.append(relay)
-            except Exception as exc:
-                log_service.add_log(novel_id, "WriterAgent", f"独立重写叙事接力生成失败: {exc}", level="warning")
-                relay_history.append(NarrativeRelay(
-                    scene_state=beat.summary,
-                    emotional_tone=beat.target_mood,
-                    new_info_revealed="",
-                    open_threads="",
-                    next_beat_hook="",
-                ))
-
-            for fs in context.pending_foreshadowings:
-                if fs.content in inner and fs.id not in embedded_foreshadowings:
-                    embedded_foreshadowings.append(fs.id)
-
+        raw_draft = await self._generate_whole_chapter(
+            novel_id=novel_id,
+            context=context,
+            rewrite_plan=rewrite_plan,
+            genre_template=genre_template,
+        )
+        raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
         clean_text = _strip_anchors(raw_draft)
-        total_words = len(clean_text.replace(" ", "").replace("\n", "").replace("\t", "").replace("\r", ""))
+        beat_coverage = self._anchored_beat_coverage(raw_draft, context)
+        embedded_foreshadowings = [
+            fs.id
+            for fs in context.pending_foreshadowings
+            if fs.content and fs.content in clean_text
+        ]
+        total_words = self._word_count(clean_text)
         metadata = DraftMetadata(
             total_words=total_words,
             beat_coverage=beat_coverage,
@@ -559,7 +566,12 @@ class WriterAgent:
         return metadata, {
             "chapter_context": context.model_dump(),
             "draft_metadata": metadata.model_dump(),
-            "relay_history": [r.model_dump() for r in relay_history],
+            "drafting_mode": "whole_chapter",
+            "drafting_progress": {
+                "beat_index": len(context.chapter_plan.beats),
+                "total_beats": len(context.chapter_plan.beats),
+                "current_word_count": total_words,
+            },
         }
 
     async def _generate_beat(
@@ -764,7 +776,7 @@ class WriterAgent:
             if writing_card.required_facts:
                 card_lines.append("- 必须遵守事实: " + "；".join(writing_card.required_facts[:4]))
             if writing_card.required_payoffs:
-                card_lines.append("- 本节拍需要兑现给读者的信息: " + "；".join(writing_card.required_payoffs[:4]))
+                card_lines.append("- 本节拍需在正文中兑现的信息: " + "；".join(writing_card.required_payoffs[:4]))
             if getattr(writing_card, "canonical_constraints", None):
                 card_lines.append("- 标准设定约束: " + "；".join(writing_card.canonical_constraints[:4]))
             if getattr(writing_card, "continuity_requirements", None):
@@ -780,9 +792,12 @@ class WriterAgent:
             if writing_card.ending_hook:
                 card_lines.append(f"- 本节拍停点/钩子: {writing_card.ending_hook}")
             if writing_card.reader_takeaway:
-                card_lines.append(f"- 读者读完应获得: {writing_card.reader_takeaway}")
+                card_lines.append(f"- 正文完成效果: {writing_card.reader_takeaway}")
             if is_last and (writing_card.required_payoffs or writing_card.ending_hook):
-                card_lines.append("- 章末处理方向: 收束本章当场冲突，让线索或结果落到纸面，再把新的危险或疑问留在最后一个完整句子里。")
+                card_lines.append(
+                    "- 章末处理方向: 收束本章当场冲突，让线索或结果落到纸面；"
+                    "停点要让读者的关注点有所推进，但不要机械添加危险、异象或反转。"
+                )
             parts.append("### 当前节拍写作卡\n" + "\n".join(card_lines))
 
         boundary_prompt = self._build_beat_boundary_prompt(context.chapter_plan, idx)
@@ -832,6 +847,203 @@ class WriterAgent:
         parts.append(f"### 当前节拍{position}\n{beat.model_dump_json()}")
 
         return "\n\n".join(parts)
+
+    def _build_whole_chapter_context_message(
+        self,
+        context: ChapterContext,
+        rewrite_plan: dict | None = None,
+    ) -> str:
+        parts = [
+            "### 整章写作模式",
+            "一次性写完整章。beat 是章节内部大纲和验收合同，不是分多次生成的边界。",
+            "正文必须按 beat 顺序推进，覆盖每个 beat 的核心动作、阻力、选择、代价和停点。",
+            "禁止提前写下一章、后续卷、未列入本章合同的关键物件、关键证据、命名角色或长期因果。",
+            "输出应是一篇连续自然的章节正文，不要写 beat 标题、序号、锚点、清单或解释。",
+        ]
+
+        if context.previous_chapter_summary:
+            parts.append(f"### 前情回顾\n{context.previous_chapter_summary}")
+        if getattr(context, "narrative_source", ""):
+            parts.append(
+                "### 全书压缩故事源头\n"
+                + self._trim_context_text(
+                    context.narrative_source,
+                    1600,
+                )
+            )
+        if context.worldview_summary:
+            parts.append("### 世界观约束\n已加载到章节上下文；正文以检索到的设定与 guardrails 为准，核心设定保持一致。")
+        if context.story_contract:
+            contract_lines = []
+            for label, key in [
+                ("主角长期目标", "protagonist_goal"),
+                ("当前阶段目标", "current_stage_goal"),
+                ("首章启动目标", "first_chapter_goal"),
+                ("核心冲突", "core_conflict"),
+            ]:
+                value = context.story_contract.get(key)
+                if value:
+                    contract_lines.append(f"- {label}: {value}")
+            carry = context.story_contract.get("must_carry_forward") or context.story_contract.get("key_clues") or []
+            if carry:
+                contract_lines.append("- 必须承接: " + "、".join(str(item) for item in carry[:6]))
+            if contract_lines:
+                contract_lines.append("- 整章推进要服务长期目标，让读者看到目标、阻力和选择在同一条主线上推进。")
+                parts.append("### 故事契约\n" + "\n".join(contract_lines))
+        if context.location_context:
+            location_lines = []
+            if context.location_context.current:
+                location_lines.append(f"当前地点: {context.location_context.current}")
+            if context.location_context.parent:
+                location_lines.append(f"上级区域: {context.location_context.parent}")
+            if context.location_context.narrative:
+                location_lines.append(f"场景镜头: {context.location_context.narrative}")
+            if location_lines:
+                parts.append("### 当前场景\n" + "\n".join(location_lines))
+        if context.guardrails:
+            parts.append("### 本章事实准线\n" + "\n".join(f"- {item}" for item in context.guardrails[:12]))
+        if context.active_entities or context.related_entities:
+            entity_items = context.active_entities + [
+                e for e in context.related_entities
+                if e.entity_id not in {active.entity_id for active in context.active_entities}
+            ]
+            entity_text = "\n".join(
+                f"- [{entity.type}] {entity.name}: {entity.current_state[:300]}"
+                for entity in entity_items[:12]
+            )
+            if entity_text:
+                parts.append(f"### 本章相关实体\n{entity_text}")
+        if context.relevant_documents:
+            doc_text = "\n".join(
+                f"- [{doc.doc_type}] {doc.title}: {doc.content_preview}"
+                for doc in context.relevant_documents[:5]
+            )
+            parts.append(f"### 相关设定资料\n{doc_text}")
+        if getattr(context, "scene_fuel", None):
+            parts.append("### 可写作燃料\n" + self._format_scene_fuel(context.scene_fuel))
+
+        contract_lines = [
+            f"本章：{context.chapter_plan.title or context.chapter_plan.chapter_number}，目标约 {context.chapter_plan.target_word_count} 字。"
+        ]
+        boundary_cards_by_idx = {
+            self._get_plan_value(card, "beat_index"): card
+            for card in context.chapter_plan.beat_boundary_cards
+        }
+        writing_cards_by_idx = {
+            self._get_plan_value(card, "beat_index"): card
+            for card in getattr(context, "writing_cards", [])
+        }
+        for idx, beat in enumerate(context.chapter_plan.beats):
+            contract_lines.append(f"\n#### beat {idx}")
+            contract_lines.append(f"- 摘要: {beat.summary}")
+            if beat.target_mood:
+                contract_lines.append(f"- 情绪: {beat.target_mood}")
+            if beat.key_entities:
+                contract_lines.append("- 关键实体: " + "、".join(beat.key_entities[:8]))
+            writing_card = writing_cards_by_idx.get(idx)
+            if writing_card:
+                narrative_lines = self._format_writing_card_narrative_variables(writing_card)
+                if narrative_lines:
+                    contract_lines.extend(narrative_lines)
+            card = boundary_cards_by_idx.get(idx)
+            if card:
+                must_cover = self._string_list(self._get_plan_value(card, "must_cover", []))
+                allowed_materials = self._string_list(self._get_plan_value(card, "allowed_materials", []))
+                allowed_bridge_details = self._string_list(self._get_plan_value(card, "allowed_bridge_details", []))
+                forbidden_materials = self._string_list(self._get_plan_value(card, "forbidden_materials", []))
+                reveal_boundary = str(self._get_plan_value(card, "reveal_boundary", "") or "").strip()
+                ending_policy = str(self._get_plan_value(card, "ending_policy", "") or "").strip()
+                if must_cover:
+                    contract_lines.append("- 必须覆盖: " + "；".join(must_cover[:8]))
+                if allowed_materials:
+                    contract_lines.append("- 允许材料: " + "、".join(allowed_materials[:10]))
+                if allowed_bridge_details:
+                    contract_lines.append("- 允许桥接: " + "；".join(allowed_bridge_details[:5]))
+                if forbidden_materials:
+                    contract_lines.append("- 禁止越界: " + "；".join(forbidden_materials[:8]))
+                if reveal_boundary:
+                    contract_lines.append(f"- 信息释放边界: {reveal_boundary}")
+                if ending_policy:
+                    contract_lines.append(f"- 停点策略: {ending_policy}")
+        parts.append("### 整章写作合同\n" + "\n".join(contract_lines))
+
+        rewrite_focus = str((rewrite_plan or {}).get("summary_feedback") or "").strip()
+        if rewrite_focus:
+            parts.append("### 本轮重写重点\n" + rewrite_focus)
+
+        parts.append(
+            "### 输出要求\n"
+            "只输出连续小说正文；不要输出分析、清单、说明、写作计划、beat 标题或锚点。"
+        )
+        return "\n\n".join(part for part in parts if part)
+
+    @staticmethod
+    def _format_scene_fuel(scene_fuel: dict) -> str:
+        labels = [
+            ("plot_fuel", "情节燃料"),
+            ("character_pressure", "人物压力"),
+            ("world_fragment", "世界碎片"),
+            ("technique_hint", "表现提示"),
+            ("continuity_momentum", "连续性动能"),
+            ("freshness_guard", "新鲜度提醒"),
+        ]
+        lines = []
+        for key, label in labels:
+            values = WriterAgent._string_list(scene_fuel.get(key) if isinstance(scene_fuel, dict) else [])
+            if values:
+                lines.append(f"- {label}: " + "；".join(values[:5]))
+        return "\n".join(lines)
+
+    @staticmethod
+    def _trim_context_text(text: str, limit: int) -> str:
+        text = str(text or "").strip()
+        if len(text) <= limit:
+            return text
+        return text[:limit].rstrip() + "..."
+
+    @staticmethod
+    def _format_writing_card_narrative_variables(card: Any) -> list[str]:
+        field_labels = [
+            ("chapter_role", "章节定位"),
+            ("chapter_purpose", "核心作用"),
+            ("suspense_mode", "悬念来源"),
+            ("foreshadowing_operation", "伏笔操作"),
+            ("reveal_delta", "当前章信息变化"),
+            ("emotional_shift", "情绪迁移"),
+            ("next_chapter_pressure", "下一章压力"),
+        ]
+        lines = []
+        for field, label in field_labels:
+            value = str(WriterAgent._get_plan_value(card, field, "") or "").strip()
+            if value:
+                lines.append(f"- {label}: {value}")
+        strategy_lines = WriterAgent._format_soft_strategy_lenses(card)
+        if strategy_lines:
+            lines.append("- 可选叙事策略池: 这些策略不是逐项硬性完成；先判断当前场景最自然的表达方式，再选最小有效写法。")
+            lines.extend(f"  - {item}" for item in strategy_lines)
+        return lines
+
+    @staticmethod
+    def _format_soft_strategy_lenses(card: Any) -> list[str]:
+        fields = [
+            ("scene_pressure_lenses", "场景压力"),
+            ("relationship_subtext_lenses", "关系潜台词"),
+            ("prose_texture_lenses", "文字质感"),
+            ("freshness_lenses", "新鲜度"),
+        ]
+        lines: list[str] = []
+        for field, label in fields:
+            values = WriterAgent._string_list(WriterAgent._get_plan_value(card, field, []))
+            if values:
+                lines.append(f"{label}: " + "；".join(values[:3]))
+        return lines
+
+    def _normalize_whole_chapter_output(self, raw_text: str, context: ChapterContext) -> str:
+        return _strip_anchors(raw_text or "").strip()
+
+    def _anchored_beat_coverage(self, raw_draft: str, context: ChapterContext) -> list[dict[str, int]]:
+        clean = _strip_anchors(raw_draft or "")
+        return [{"beat_index": None, "word_count": self._word_count(clean)}] if clean.strip() else []
 
     @staticmethod
     def _build_beat_boundary_prompt(chapter_plan: Any, beat_index: int) -> str:
@@ -1459,6 +1671,12 @@ class WriterAgent:
 
         clauses = [part.strip() for part in re.split(r"[；;。！？!?]", beat.summary or "") if part.strip()]
         if writing_card:
+            source_summary = getattr(writing_card, "source_summary", "")
+            clauses.extend(
+                part.strip()
+                for part in re.split(r"[；;。！？!?]", source_summary or "")
+                if part.strip()
+            )
             clauses.extend(
                 part.strip()
                 for part in (
@@ -1466,16 +1684,12 @@ class WriterAgent:
                     writing_card.conflict,
                     writing_card.turning_point,
                     getattr(writing_card, "stake", ""),
-                    writing_card.reader_takeaway,
                     writing_card.ending_hook,
                 )
                 if part and part.strip()
             )
             clauses.extend(item.strip() for item in writing_card.required_facts[:3] if item and item.strip())
             clauses.extend(item.strip() for item in writing_card.required_payoffs[:2] if item and item.strip())
-            clauses.extend(item.strip() for item in getattr(writing_card, "allowed_bridge_details", [])[:2] if item and item.strip())
-        if beat_context:
-            clauses.extend(item.strip() for item in beat_context.guardrails[:3] if item and item.strip())
         if not clauses:
             return ""
 
@@ -1502,19 +1716,194 @@ class WriterAgent:
         if not deduped:
             return ""
 
+        prose = self._build_guard_fallback_prose(
+            beat=beat,
+            context=context,
+            writing_card=writing_card,
+            clauses=deduped,
+            is_last=is_last,
+        )
+        if prose:
+            return prose
+
         parts = [clause.rstrip("。！？!?") + "。" for clause in deduped[:6]]
         return "\n\n".join(part for part in parts if part.strip())
+
+    def _build_guard_fallback_prose(
+        self,
+        *,
+        beat: BeatPlan,
+        context: ChapterContext,
+        writing_card,
+        clauses: list[str],
+        is_last: bool,
+    ) -> str:
+        objective = self._contract_fragment(writing_card, "objective") if writing_card else ""
+        conflict = self._contract_fragment(writing_card, "conflict") if writing_card else ""
+        turning_point = self._contract_fragment(writing_card, "turning_point") if writing_card else ""
+        stake = self._contract_fragment(writing_card, "stake") if writing_card else ""
+        ending_hook = self._contract_fragment(writing_card, "ending_hook") if writing_card and is_last else ""
+        required_facts = self._contract_list(writing_card, "required_facts") if writing_card else []
+        required_payoffs = self._contract_list(writing_card, "required_payoffs") if writing_card else []
+        entities = list(beat.key_entities or [])
+        if writing_card:
+            entities.extend(item for item in self._contract_list(writing_card, "required_entities") if item not in entities)
+        actor = entities[0] if entities else "主角"
+        counterpart = entities[1] if len(entities) > 1 else "对方"
+        location = ""
+        if context.location_context and context.location_context.current:
+            location = str(context.location_context.current).strip()
+        contract_text = "；".join([beat.summary or "", objective, conflict, turning_point])
+        has_counterpart_action = len(entities) >= 2 or any(
+            marker in contract_text
+            for marker in ("对方", "同门", "出手", "攻势", "手腕", "踉跄", "试探", "交手")
+        )
+        solo_inner_scene = (
+            not has_counterpart_action
+            and (
+                len(entities) < 2
+                or any(marker in contract_text for marker in ("内视", "心神", "识海"))
+            )
+        )
+
+        if not any([objective, conflict, turning_point, stake, ending_hook, required_facts, required_payoffs, clauses]):
+            return ""
+
+        scene_clauses = [
+            self._safe_contract_sentence(clause)
+            for clause in clauses
+            if not self._is_meta_plan_clause(clause)
+        ]
+        scene_clauses = [clause for clause in scene_clauses if clause]
+        first_fact = self._safe_contract_sentence(scene_clauses[0] if scene_clauses else objective or beat.summary)
+        second_fact = self._safe_contract_sentence(scene_clauses[1] if len(scene_clauses) > 1 else (required_facts[1] if len(required_facts) > 1 else conflict))
+        third_fact = self._safe_contract_sentence(scene_clauses[2] if len(scene_clauses) > 2 else (required_facts[2] if len(required_facts) > 2 else turning_point))
+        payoff = self._safe_contract_sentence(required_payoffs[0] if required_payoffs else turning_point or objective)
+        hook = self._safe_contract_sentence(ending_hook or (required_payoffs[1] if len(required_payoffs) > 1 else "眼前的异样仍未散去"))
+        objective = self._safe_contract_sentence(objective or first_fact)
+        conflict = self._safe_contract_sentence(conflict or second_fact)
+        turning_point = self._safe_contract_sentence(turning_point or third_fact)
+        stake = self._safe_contract_sentence(stake or "当场声张会让自己的处境先暴露")
+        if self._is_meta_plan_clause(ending_hook) or self._is_meta_plan_clause(hook):
+            hook = self._safe_contract_sentence(
+                stake
+                if stake and not self._is_meta_plan_clause(stake)
+                else payoff
+                if payoff and not self._is_meta_plan_clause(payoff)
+                else "眼前问题仍未解开"
+            )
+
+        if solo_inner_scene:
+            paragraphs = self._build_solo_inner_paragraphs(
+                actor=actor,
+                location=location,
+                scene_clauses=scene_clauses,
+                first_fact=first_fact,
+                second_fact=second_fact,
+                third_fact=third_fact,
+                conflict=conflict,
+                turning_point=turning_point,
+                stake=stake,
+                payoff=payoff,
+                hook=hook,
+                required_facts=required_facts,
+                is_last=is_last,
+            )
+        else:
+            paragraphs = [
+                self._safe_contract_sentence(part).rstrip("。！？!?") + "。"
+                for part in scene_clauses[:6]
+                if part.strip()
+            ]
+            if is_last:
+                if hook and not self._is_meta_plan_clause(hook):
+                    paragraphs.append(self._safe_contract_sentence(hook).rstrip("。！？!?") + "。")
+            if not paragraphs:
+                paragraphs = [
+                    self._safe_contract_sentence(part).rstrip("。！？!?") + "。"
+                    for part in (first_fact, second_fact or conflict, turning_point, third_fact or payoff)
+                    if part and not self._is_meta_plan_clause(part)
+                ]
+
+        target_floor = self._guard_fallback_target_floor(beat, writing_card)
+        filler = [
+            self._safe_contract_sentence(part).rstrip("。！？!?") + "。"
+            for part in required_facts + required_payoffs
+            if part and not self._is_meta_plan_clause(part)
+        ]
+        for sentence in filler:
+            if len("\n\n".join(paragraphs)) >= target_floor:
+                break
+            if sentence in paragraphs:
+                continue
+            paragraphs.append(sentence)
+
+        return "\n\n".join(self._safe_contract_sentence(part).rstrip("。！？!?") + "。" for part in paragraphs if part.strip())
+
+    def _build_solo_inner_paragraphs(
+        self,
+        *,
+        actor: str,
+        location: str,
+        scene_clauses: list[str],
+        first_fact: str,
+        second_fact: str,
+        third_fact: str,
+        conflict: str,
+        turning_point: str,
+        stake: str,
+        payoff: str,
+        hook: str,
+        required_facts: list[str],
+        is_last: bool,
+    ) -> list[str]:
+        combined = "；".join(scene_clauses)
+        opening = (
+            f"{location}中，{actor}先让自己稳定下来。"
+            if location
+            else f"{actor}先让自己稳定下来。"
+        )
+        if "试验三次" in combined or "反复试验" in combined:
+            paragraphs = [
+                f"{opening}他先稳住呼吸，做第一次确认，把最初出现的变化记清楚，没有急着给它下结论。",
+                f"他停了一息，再按同样顺序确认第二次变化；等到第三次结果也落在眼前，{conflict}，他才把动作收住。",
+                f"{actor}终于确认，眼前变化并不是偶然。{conflict}他没有继续试探，只把呼吸慢慢压回原处，免得代价继续扩大。",
+            ]
+            local_contract = "；".join([combined, turning_point, third_fact, payoff, *required_facts])
+            if turning_point or required_facts:
+                material_facts = "；".join(required_facts[2:4] or required_facts[:2])
+                material_prefix = f"{material_facts}。" if material_facts else ""
+                paragraphs.append(
+                    f"{material_prefix}{turning_point}他没有急着声张，只把两边已经出现的细节逐一对照，确认相近处与不同处都没有看错。"
+                )
+            if payoff or len(required_facts) > 4:
+                closing_facts = "；".join(required_facts[4:5])
+                closing_prefix = f"{closing_facts}。" if closing_facts else ""
+                paragraphs.append(
+                    f"{closing_prefix}{third_fact or payoff}这个决定落下后，{actor}只保留已经确认的材料，没有再把风险往外推。"
+                )
+            if is_last:
+                paragraphs.append(
+                    f"{hook}{actor}仍没有得到完整答案，便把未解之处暂时压住。"
+                )
+            return paragraphs
+
+        paragraphs = [
+            f"{opening}{first_fact}他让呼吸一点点沉下去，先把最初出现的变化记住。",
+            f"{second_fact or conflict}{actor}没有急着推进，只把动作收得更稳，等那股变化重新落回可感知的范围。",
+            f"{turning_point}压力随之加重。{stake}，他便把心神压稳，不让这件事牵出更多未知风险。",
+            f"{third_fact or payoff}{actor}反复确认方才所见，知道未解之处仍在，仍先把已经发生的变化记牢。",
+        ]
+        if is_last:
+            paragraphs.append(
+                f"{hook}眼前没有新的答案，只有已经出现的变化仍在逼他继续面对。"
+            )
+        return paragraphs
 
     @staticmethod
     def _sanitize_plan_clause(clause: str) -> str:
         text = str(clause or "").strip("。！？!?；;，, ")
         replacements = (
-            ("阻力不需要另起一条线，它就压在当前这件事上：", ""),
-            ("他的选择也只落在眼前：", ""),
-            ("停点收在既有风险上：", ""),
-            ("这一拍的结果先落稳，", ""),
-            ("这一拍只把当场目标压到纸面，", ""),
-            ("只作为这一拍的动作余波压住", "只留下眼前尚未散去的余波"),
             ("这一拍", "眼前"),
             ("当前节拍", "眼前"),
             ("本节拍", "眼前"),
@@ -1526,6 +1915,75 @@ class WriterAgent:
         for old, new in replacements:
             text = text.replace(old, new)
         return text.strip("。！？!?；;，, ")
+
+    @staticmethod
+    def _contract_fragment(writing_card, name: str) -> str:
+        if isinstance(writing_card, dict):
+            value = writing_card.get(name, "")
+            return str(value or "").strip()
+        value = getattr(writing_card, name, "")
+        return str(value or "").strip()
+
+    @staticmethod
+    def _contract_list(writing_card, name: str) -> list[str]:
+        if isinstance(writing_card, dict):
+            value = writing_card.get(name, []) or []
+            if not isinstance(value, list):
+                return []
+            return [str(item).strip() for item in value if str(item).strip()]
+        value = getattr(writing_card, name, []) or []
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item).strip()]
+
+    @classmethod
+    def _safe_contract_sentence(cls, text: str) -> str:
+        cleaned = cls._sanitize_plan_clause(text)
+        replacements = (
+            ("失败代价是", ""),
+            ("结尾留下", ""),
+            ("读者应看清", ""),
+            ("读者应明确获得", ""),
+            ("可使用", ""),
+            ("允许", ""),
+            ("必须决定是否", "需要判断是否"),
+            ("必须决定", "需要决定"),
+        )
+        for old, new in replacements:
+            cleaned = cleaned.replace(old, new)
+        return cleaned.strip("。！？!?；;，, ")
+
+    @staticmethod
+    def _is_meta_plan_clause(text: str) -> bool:
+        normalized = str(text or "")
+        markers = (
+            "必须决定",
+            "选择必须",
+            "失败代价",
+            "结尾留下",
+            "读者应",
+            "读者",
+            "接近“",
+            "已有人物",
+            "短动作",
+            "承接当前冲突",
+            "当前场景",
+            "不要直接总结",
+            "桥接",
+            "线索无法收束",
+            "下一章继续处理",
+            "后续追查中断",
+        )
+        return any(marker in normalized for marker in markers)
+
+    @staticmethod
+    def _guard_fallback_target_floor(beat: BeatPlan, writing_card) -> int:
+        target = getattr(writing_card, "target_word_count", None) if writing_card else None
+        if not isinstance(target, int) or target <= 0:
+            target = beat.target_word_count if isinstance(beat.target_word_count, int) else 0
+        if target <= 0:
+            return 320
+        return min(700, max(280, round(target * 0.75)))
 
     @classmethod
     def _pad_conservative_fallback(
@@ -1778,14 +2236,14 @@ class WriterAgent:
         return relay
 
     def _build_style_guide_block(self, context: ChapterContext) -> str:
-        """把 style_profile 单独置顶,避免 LLM 在长 JSON 中忽略它。"""
+        """把 style_profile 编译成可执行写法合同,避免 LLM 忽略或照抄原始 JSON。"""
         sp = context.style_profile or {}
-        if not sp:
-            return ""
-        try:
-            sp_text = json.dumps(sp, ensure_ascii=False, indent=2)
-        except Exception:
+        contract = StyleContractCompiler.compile(sp)
+        sp_text = contract.render_prompt_block()
+        if not sp_text and sp:
             sp_text = str(sp)
+        if not sp_text:
+            return ""
         return (
             "### 作品风格硬约束(必须遵守)\n"
             f"{sp_text}\n"
@@ -1793,22 +2251,28 @@ class WriterAgent:
 
     def _build_writing_rules_block(self, is_last: bool) -> str:
         hook_clause = (
-            "- **章末钩子**:这是本章最后一个节拍,把已有风险、未完成选择或情绪余波推到台前,"
-            "让读者自然想知道下一章会怎样。\n"
+            "- **章末钩子/牵引**:这是本章最后一个节拍,让读者获得更具体的阅读期待。"
+            "期待可以来自信息差、关系变化、行动压力、情绪余波、环境异常或人物选择,"
+            "也可以来自低声量的余震；安静收束可以成立,但不能只是作者总结。\n"
         ) if is_last else (
-            "- **节拍内钩子**:结尾留一个能把读者推到下一个节拍的动作、疑问或冲突余波,让场景有继续向前的惯性。\n"
+            "- **节拍停点**:结尾让当前目标、阻力或选择产生自然余波,把读者顺势带到下一个节拍；"
+            "不要为了推进而机械添加疑问或冲突。\n"
         )
         return (
             "### 写作方向\n"
+            "- **反模板判断**:不要为了满足形式要求机械添加对话、动作、感官或悬念；"
+            "优先判断当前场景最自然的表达方式。\n"
             "- **读者读感**:正文优先清楚、顺滑、有画面,让读者能跟住人物目标、阻力和情绪推进。\n"
             "- **节拍读感骨架**:每个节拍都呈现当场目标、可见阻力、角色策略/态度变化和具体停点,"
             "让读者知道这一段完成了什么、局势如何变化。\n"
             "- **自然中文表达**:前世、现代或术语概念都转写成贴合角色处境的中文说法,让表达像角色会想到或说出口的话。\n"
-            "- **显示不说**:用动作、对话、物件、身体反应、环境反衬承载信息,让读者自己读出人物情绪和认知变化。\n"
+            "- **显示不说**:先判断情绪是否由作者替人物说出；如果是,改成更贴近当场处境的表达,"
+            "动作、对话、物件都只是工具；可以用动作、对话、沉默、物件、身体反应、环境反衬或一句话,"
+            "也可以保留克制的内心判断。\n"
             "- **人物态度转折**:角色从敌对到放行、从冷淡到帮助、从拒绝到合作时,"
             "按触发点 -> 犹豫/识别 -> 选择代价来呈现,让转向来自场景压力和人物判断。\n"
-            "- **对话信息释放**:关键事实先经过试探、保留、误判或代价,再让角色说出口或用行动承认,"
-            "让人际关系在信息交换里自然升温或紧绷。\n"
+            "- **人物关系压力**:关键事实需要先经过试探、保留、误判或代价。"
+            "对话只是工具,也可以通过沉默、避让、停顿、动作变化或没说出口的反应完成。\n"
             "- **低 AI 味默认准则**:优先遵守 style_profile；style_profile 未明确要求华丽、轻松或强烈风格化时,"
             "默认写得克制、具体、生活化。比喻服务画面和情绪,抽象"
             "玄幻概念要落到人物能触到、看见、承受的后果。\n"
@@ -1817,13 +2281,12 @@ class WriterAgent:
             "吐槽限制**:不要连续使用现代"
             "吐槽、网文口头禅或抽象标签替代角色在场反应。\n"
             "- **跨时代/跨语域表达**:只有来源资料、文风或类型模板允许时才使用；否则转写成贴合角色处境的短促念头。\n"
-            "- **对话占比**目标 30%-50%,对话带潜台词、打断和回避,让人物关系在说话方式里显出来。\n"
             "- **句式节奏**:长短句交替,动作场景用短句推进,情绪/景物可用长句铺陈;"
             "相近句式连续出现时主动换成动作、短对白或具象物件。\n"
             "- **视点一致**:全章保持设定视点(默认紧贴主角),通过主角可感知的信息组织场景。\n"
             "- **开场多样性**:用动作、对话、具象物件或反常细节切入,让第一段立刻形成当下事件。\n"
             f"{hook_clause}"
-            "- **线索兑现**:章末或关键停点优先用既有线索、当场后果、下一步疑问或风险余波形成牵引。\n"
+            "- **线索兑现**:章末或关键停点优先用既有线索、当场后果、下一步疑问或风险余波、人物关系变化形成牵引。\n"
             "- **字数**:按用户消息中的当前节拍目标字数写作,允许 ±20%。\n"
             "- **伏笔**:pending_foreshadowings 中标注 role_in_chapter=embed 的条目,"
             "请自然嵌入文本,让它像场景的一部分。\n"

@@ -75,6 +75,12 @@ BUILTIN_TEMPLATES: tuple[GenreTemplate, ...] = (
                 "KTV",
                 "社畜",
             ],
+            "contextual_modern_term_rules": [
+                {
+                    "terms": ["系统提示"],
+                    "context_markers": ["系统"],
+                }
+            ],
             "foreign_terms_policy": "contextual",
             "blocking_rules": {"source_conflict": True, "type_drift": True},
             "dimension_weights": {"setting_consistency": 1.0, "plot_cohesion": 1.0, "readability": 1.0},

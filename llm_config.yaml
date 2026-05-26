@@ -243,6 +243,8 @@ agents:
       timeout: 120
       retries: 1
     tasks:
+      generate_chapter:
+        temperature: 0.8
       generate_beat:
         temperature: 0.8
       rewrite_beat:

@@ -67,6 +67,9 @@ class AutoRunChaptersResult(BaseModel):
     failed_phase: str | None = None
     failed_chapter_id: str | None = None
     error: str | None = None
+    failed_step: str | None = None
+    partial_result: dict = Field(default_factory=dict)
+    cached_steps: list[str] = Field(default_factory=list)
     can_resume: bool = False
     resume_stage: str | None = None
     chapter_run: dict = Field(default_factory=dict)
@@ -102,6 +105,39 @@ class ChapterGenerationService:
             return {}
         checkpoint = dict(state.checkpoint_data or {})
         return ChapterRunStateService.get(checkpoint)
+
+    @staticmethod
+    def _partial_result_payload(checkpoint: dict | None) -> tuple[dict, list[str]]:
+        checkpoint = checkpoint if isinstance(checkpoint, dict) else {}
+        stage_keys = [
+            (Phase.CONTEXT_PREPARATION.value, "chapter_context"),
+            (Phase.DRAFTING.value, "draft_metadata"),
+            (Phase.REVIEWING.value, "beat_scores"),
+            (Phase.EDITING.value, "editor_feedback"),
+            (Phase.FAST_REVIEWING.value, "fast_review_feedback"),
+        ]
+        partial: dict = {}
+        cached_steps: list[str] = []
+        for stage, key in stage_keys:
+            value = checkpoint.get(key)
+            if not value:
+                break
+            partial[stage] = {
+                "available": True,
+                "checkpoint_key": key,
+            }
+            cached_steps.append(stage)
+        return partial, cached_steps
+
+    @staticmethod
+    def _failure_resume_payload(state, failed_step: str | None) -> dict:
+        checkpoint = dict(state.checkpoint_data or {}) if state is not None else {}
+        partial, cached_steps = ChapterGenerationService._partial_result_payload(checkpoint)
+        return {
+            "failed_step": failed_step,
+            "partial_result": partial,
+            "cached_steps": cached_steps,
+        }
 
     async def auto_run(
         self,
@@ -243,15 +279,18 @@ class ChapterGenerationService:
             state = await self.director.resume(novel_id)
             if state is not None:
                 state = await self._persist_failure_diagnostics(novel_id, state, exc)
+            failed_step = getattr(exc, "failed_phase", None) or (state.current_phase if state else None)
+            resume_payload = self._failure_resume_payload(state, failed_step)
             result = AutoRunChaptersResult(
                 novel_id=novel_id,
                 current_phase=state.current_phase if state else "",
                 current_chapter_id=state.current_chapter_id if state else None,
                 completed_chapters=completed,
                 stopped_reason="failed",
-                failed_phase=getattr(exc, "failed_phase", None) or (state.current_phase if state else None),
+                failed_phase=failed_step,
                 failed_chapter_id=state.current_chapter_id if state else None,
                 error=error_message,
+                **resume_payload,
                 can_resume=bool(state and state.current_chapter_id),
                 resume_stage=ChapterRunStateService.stage_from_phase(state.current_phase if state else None),
                 chapter_run=self._chapter_run_payload(state),

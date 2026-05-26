@@ -579,7 +579,9 @@ class VolumePlannerAgent:
                 return None
             lower = int(ranged.group(1))
             upper = int(ranged.group(2))
-            return lower if lower == upper else None
+            if upper < lower:
+                return None
+            return upper - lower + 1
         return None
 
     def _is_acceptable(self, score) -> bool:
@@ -1875,7 +1877,9 @@ class VolumePlannerAgent:
 
     @staticmethod
     def _chapter_anchor(chapter_title: str, chapter_summary: str, fallback: str = "当前目标") -> str:
-        anchor = (chapter_summary or chapter_title or fallback).strip().rstrip("。！？!?；;")
+        title = (chapter_title or "").strip().rstrip("。！？!?；;")
+        summary = (chapter_summary or "").strip().rstrip("。！？!?；;")
+        anchor = title or summary or fallback
         if len(anchor) > 42:
             anchor = anchor[:42].rstrip("，,；;、 ")
         return anchor or fallback
@@ -1889,31 +1893,31 @@ class VolumePlannerAgent:
     def _deterministic_conflict_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == 0:
-            return f"{actor}刚开始推进“{anchor}”，当场阻力便迫使目标无法照旧推进"
+            return f"{actor}围绕“{anchor}”行动时遭遇突发阻力，原定路线被迫改道"
         if index == total_beats - 1:
-            return f"{actor}推进“{anchor}”接近阶段停点时，未解决的阻力再次压回眼前"
+            return f"{actor}接近“{anchor}”停点时，未解决的阻力再次压回眼前"
         return f"{actor}推进“{anchor}”时发现原计划受阻，对手或环境压力逼他立刻调整行动"
 
     @classmethod
     def _deterministic_choice_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == 0:
-            return f"{actor}必须在继续推进“{anchor}”与先处理眼前阻力之间选择，失败代价是开局主动权被夺"
+            return f"{actor}选择继续靠近“{anchor}”还是先处理眼前风险，稍有迟疑便会失去开局主动权"
         if index == total_beats - 1:
-            return f"{actor}必须决定如何收束“{anchor}”的当场结果，失败代价是阶段目标中断"
-        return f"{actor}必须在立刻推进与暂时收束之间选择，失败代价是“{anchor}”的关键窗口被错过"
+            return f"{actor}选择当场收束“{anchor}”的结果，若没压住余波，后续行动就会失去依据"
+        return f"{actor}选择继续推进“{anchor}”还是先控制当场风险，当前目标随时可能被迫延后"
 
     @classmethod
     def _deterministic_stake_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == total_beats - 1:
-            return f"失败代价是“{anchor}”无法形成可承接的阶段结果，后续目标缺少落点"
-        return f"失败代价是“{anchor}”当场停滞，{actor}失去继续推进的窗口"
+            return f"若“{anchor}”无法形成明确停点，下一步行动就会失去落点"
+        return f"若局面继续拖延，{actor}会失去处理“{anchor}”的主动权"
 
     @classmethod
     def _deterministic_hook_clause(cls, actor: str, chapter_title: str, chapter_summary: str) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary, fallback="下一步目标")
-        return f"结尾留下与“{anchor}”直接相关的未解变化，让{actor}必须在下一章继续处理"
+        return f"与“{anchor}”直接相关的未解变化压到章末，逼得{actor}下一步继续处理"
 
     def _complete_expanded_batch(
         self,

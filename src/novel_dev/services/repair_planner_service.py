@@ -13,6 +13,7 @@ TaskType = Literal[
     "cohesion_repair",
     "hook_repair",
     "character_repair",
+    "scene_pressure_repair",
     "integrity_repair",
     "continuity_repair",
 ]
@@ -31,8 +32,11 @@ class RepairPlanner:
         "language_style": "prose_polish",
         "word_count_drift": "prose_polish",
         "final_review_score": "prose_polish",
+        "critical_dimension_score": "scene_pressure_repair",
         "required_payoff": "hook_repair",
         "hook_strength": "hook_repair",
+        "plot_tension": "scene_pressure_repair",
+        "humanity": "character_repair",
         "characterization": "character_repair",
         "continuity_audit": "continuity_repair",
         "consistency": "continuity_repair",
@@ -44,9 +48,10 @@ class RepairPlanner:
         "cohesion_repair": 0,
         "integrity_repair": 1,
         "prose_polish": 2,
-        "hook_repair": 3,
-        "character_repair": 4,
-        "continuity_repair": 5,
+        "scene_pressure_repair": 3,
+        "hook_repair": 4,
+        "character_repair": 5,
+        "continuity_repair": 6,
     }
     TASK_GUIDANCE: ClassVar[dict[TaskType, tuple[list[str], list[str]]]] = {
         "cohesion_repair": (
@@ -100,6 +105,16 @@ class RepairPlanner:
                 "关键选择具备可追踪动机，读者能理解角色为什么这样做。",
             ],
         ),
+        "scene_pressure_repair": (
+            [
+                "围绕当前场景已有冲突、阻碍、代价和人物关系修复张力，不另起一条新危机。",
+                "不得新增计划外敌人、道具、线索、场所或外部事件来制造压力。",
+            ],
+            [
+                "读者能在当前行动中看见阻力、代价或关系压力，而不是只读到作者概括。",
+                "场景推进保留原有事实顺序，但压力感和下一步选择更清楚。",
+            ],
+        ),
         "continuity_repair": (
             [
                 "以已归档世界状态、时间线和前文事实为准修复冲突。",
@@ -118,7 +133,7 @@ class RepairPlanner:
         for issue in issues:
             if issue.repairability not in cls.PLANNABLE_REPAIRABILITY:
                 continue
-            task_type = cls.ISSUE_TASK_TYPES.get(issue.code)
+            task_type = cls._task_type_for_issue(issue)
             if task_type is None:
                 continue
             task_scope = cls._task_scope(issue.scope)
@@ -128,7 +143,7 @@ class RepairPlanner:
         for task_type, scope, beat_index in sorted(grouped, key=cls._group_sort_key):
             group_issues = grouped[(task_type, scope, beat_index)]
             issue_codes = sorted({issue.code for issue in group_issues})
-            constraints, success_criteria = cls.TASK_GUIDANCE[task_type]
+            constraints, success_criteria = cls._task_guidance(task_type, group_issues)
             tasks.append(
                 RepairTask(
                     task_id=cls._task_id(chapter_id, task_type, scope, beat_index, issue_codes),
@@ -137,11 +152,81 @@ class RepairPlanner:
                     task_type=task_type,
                     scope=scope,
                     beat_index=beat_index,
+                    problem=cls._task_problem(group_issues),
+                    evidence=cls._task_evidence(group_issues),
+                    suggestion=cls._task_suggestion(group_issues),
                     constraints=list(constraints),
                     success_criteria=list(success_criteria),
                 )
             )
         return tasks
+
+    @classmethod
+    def _task_type_for_issue(cls, issue: QualityIssue) -> TaskType | None:
+        if issue.code == "critical_dimension_score":
+            dimension = cls._dimension_from_issue(issue)
+            if dimension == "hook_strength":
+                return "hook_repair"
+            if dimension == "humanity":
+                return "character_repair"
+            if dimension == "plot_tension":
+                return "scene_pressure_repair"
+        return cls.ISSUE_TASK_TYPES.get(issue.code)
+
+    @staticmethod
+    def _dimension_from_issue(issue: QualityIssue) -> str:
+        haystack = "\n".join([*issue.evidence, issue.suggestion])
+        for marker in ("hook_strength", "humanity", "plot_tension"):
+            if marker in haystack:
+                return marker
+        return ""
+
+    @classmethod
+    def _task_guidance(
+        cls,
+        task_type: TaskType,
+        issues: list[QualityIssue],
+    ) -> tuple[list[str], list[str]]:
+        base_constraints, base_success_criteria = cls.TASK_GUIDANCE[task_type]
+        constraints = list(base_constraints)
+        success_criteria = list(base_success_criteria)
+        evidence = cls._task_evidence(issues)
+        if evidence:
+            constraints.append("修复依据: " + "；".join(evidence[:6]))
+        suggestions = [issue.suggestion.strip() for issue in issues if issue.suggestion.strip()]
+        if suggestions:
+            success_criteria.append("评审建议: " + "；".join(dict.fromkeys(suggestions)))
+        return constraints, success_criteria
+
+    @staticmethod
+    def _task_problem(issues: list[QualityIssue]) -> str:
+        for issue in issues:
+            for evidence in issue.evidence:
+                cleaned = evidence.strip()
+                if cleaned:
+                    return cleaned
+        return ""
+
+    @staticmethod
+    def _task_evidence(issues: list[QualityIssue]) -> list[str]:
+        seen = set()
+        result = []
+        for issue in issues:
+            for evidence in issue.evidence:
+                cleaned = evidence.strip()
+                if cleaned and cleaned not in seen:
+                    seen.add(cleaned)
+                    result.append(cleaned)
+        return result[:6]
+
+    @staticmethod
+    def _task_suggestion(issues: list[QualityIssue]) -> str:
+        suggestions = []
+        for issue in issues:
+            cleaned = issue.suggestion.strip()
+            if cleaned and cleaned not in suggestions:
+                suggestions.append(cleaned)
+        return "；".join(suggestions)
 
     @staticmethod
     def _task_scope(scope: str) -> TaskScope:
