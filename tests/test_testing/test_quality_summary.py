@@ -490,6 +490,46 @@ def test_quality_summary_records_passed_chapter_quality_details():
     assert any("补一个触发点" in item for item in detail.recommendation)
 
 
+def test_quality_summary_records_nonblocking_chapter_improvement_directives():
+    report = build_quality_summary_report(
+        {
+            "novel_id": "novel-improve",
+            "checkpoint": {
+                "chapter_improvement_directives": [
+                    {
+                        "source": "final_review",
+                        "target": "readability",
+                        "beat_index": 2,
+                        "instruction": "用赵元身体异变和擂台裂缝节奏替代抽象解释。",
+                    },
+                    {
+                        "source": "final_review",
+                        "target": "hook_strength",
+                        "beat_index": 2,
+                        "instruction": "让佛门气息触碰道经未激活符文。",
+                    },
+                ],
+            },
+            "chapters": [
+                {
+                    "chapter_id": "vol_1_ch_1",
+                    "quality_status": "pass",
+                    "final_review_score": 85,
+                    "quality_reasons": {},
+                }
+            ],
+        },
+        run_id="quality-improvement-directives",
+    )
+
+    assert report.status == "passed"
+    assert report.artifacts["chapter_improvement_directive_count"] == "2"
+    detail = next(item for item in report.details if item.stage == "chapter_improvement")
+    assert "readability.beat=2.source=final_review" in detail.evidence
+    assert any("赵元身体异变" in item for item in detail.recommendation)
+    assert any("佛门气息" in item for item in detail.recommendation)
+
+
 def test_quality_summary_reports_target_word_count_mismatch_root_cause():
     report = build_quality_summary_report(
         {

@@ -60,6 +60,7 @@ def build_quality_summary_report(
     synopsis_quality = _synopsis_quality_from_checkpoint(checkpoint)
     _add_synopsis_quality_detail(report, checkpoint, synopsis_quality)
     _add_volume_quality_detail(report, checkpoint, story_contract, cross_stage_quality)
+    _add_chapter_improvement_detail(report, checkpoint)
 
     if setting_quality and not setting_quality.get("passed", True):
         report.add_issue(_issue(
@@ -295,6 +296,36 @@ def _add_volume_quality_detail(
         title="卷纲与跨阶段承接质量详情",
         evidence=evidence[:28],
         recommendation=recommendation[:16],
+    ))
+
+
+def _add_chapter_improvement_detail(
+    report: TestRunReport,
+    checkpoint: dict[str, Any],
+) -> None:
+    raw_directives = checkpoint.get("chapter_improvement_directives")
+    if not isinstance(raw_directives, list):
+        return
+    directives = [item for item in raw_directives if isinstance(item, dict) and item.get("instruction")]
+    if not directives:
+        return
+
+    report.artifacts["chapter_improvement_directive_count"] = str(len(directives))
+    evidence = []
+    recommendation = []
+    for item in directives[:8]:
+        target = str(item.get("target") or "chapter")
+        beat = item.get("beat_index")
+        source = str(item.get("source") or "unknown")
+        location = f"{target}.beat={beat}" if beat is not None else target
+        evidence.append(f"{location}.source={source}")
+        recommendation.append(str(item.get("instruction")))
+    report.details.append(Detail(
+        id=f"CHAPTER-IMPROVEMENT-DETAIL-{len(report.details) + 1:03d}",
+        stage="chapter_improvement",
+        title="非阻塞章节优化建议",
+        evidence=evidence,
+        recommendation=recommendation,
     ))
 
 

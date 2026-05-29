@@ -81,6 +81,10 @@ class ChapterStructureGuardService:
         source_text: str,
         polished_text: str,
     ) -> ChapterStructureGuardResult:
+        deterministic = self._deterministic_editor_side_effect_check(source_text, polished_text)
+        if deterministic is not None:
+            return deterministic
+
         prompt = (
             "你是小说章节结构守卫。请比较润色前后文本，判断润色是否只改表达，"
             "没有改剧情结构。\n"
@@ -119,6 +123,64 @@ class ChapterStructureGuardService:
                 issues=["结构守卫超时或失败，保守回退原文"],
                 suggested_rewrite_focus="保留润色前文本，避免结构漂移",
             )
+
+    @classmethod
+    def _deterministic_editor_side_effect_check(
+        cls,
+        source_text: str,
+        polished_text: str,
+    ) -> ChapterStructureGuardResult | None:
+        issues: list[str] = []
+        changed_event_order = False
+        introduced_plan_external_fact = False
+
+        new_time_markers = cls._introduced_markers(
+            source_text,
+            polished_text,
+            ("清晨", "早晨", "上午", "午后", "黄昏", "傍晚", "入夜", "深夜", "天色将暗", "日光已斜"),
+        )
+        if new_time_markers:
+            changed_event_order = True
+            issues.append("润色新增明确时间标记，可能造成章节时间线跳变: " + "、".join(new_time_markers[:4]))
+
+        new_hook_signals = cls._introduced_hook_signal_count(source_text, polished_text)
+        if new_hook_signals >= 2:
+            introduced_plan_external_fact = True
+            issues.append("润色同时新增多重章末信号或异变，可能把局部修复变成加料式钩子堆叠。")
+
+        if not issues:
+            return None
+        return ChapterStructureGuardResult(
+            passed=False,
+            completed_current_beat=True,
+            premature_future_beat=False,
+            introduced_plan_external_fact=introduced_plan_external_fact,
+            changed_event_order=changed_event_order,
+            issues=issues,
+            suggested_rewrite_focus="回到润色前事实，只做局部表达修补；保留一个最自然的牵引来源，避免新增时间跳变或多重钩子。",
+        )
+
+    @staticmethod
+    def _introduced_markers(source_text: str, polished_text: str, markers: tuple[str, ...]) -> list[str]:
+        source = source_text or ""
+        polished = polished_text or ""
+        return [marker for marker in markers if marker in polished and marker not in source]
+
+    @classmethod
+    def _introduced_hook_signal_count(cls, source_text: str, polished_text: str) -> int:
+        source = source_text or ""
+        polished = polished_text or ""
+        signal_groups = (
+            ("浮出", "露出", "显出", "出现", "多出", "映出", "透出"),
+            ("字迹", "墨迹", "纹路", "符号", "图案", "裂纹", "痕迹"),
+            ("忽然", "骤然", "猛地", "陡然", "无端"),
+            ("抽吸", "倒灌", "失控", "钝痛", "刺痛", "发烫", "收紧"),
+        )
+        count = 0
+        for group in signal_groups:
+            if any(marker in polished and marker not in source for marker in group):
+                count += 1
+        return count
 
 
 def _to_jsonable(value: Any) -> Any:

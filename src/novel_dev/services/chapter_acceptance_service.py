@@ -14,9 +14,12 @@ ContinuePolicy = Literal["continue", "repair_once", "pause"]
 class ChapterAcceptanceResult(BaseModel):
     status: AcceptanceStatus
     summary: str
+    obligation_contract: dict[str, Any] = Field(default_factory=dict)
     blocking_issues: list[dict[str, Any]] = Field(default_factory=list)
     warning_issues: list[dict[str, Any]] = Field(default_factory=list)
     repair_directives: list[dict[str, Any]] = Field(default_factory=list)
+    missing_obligations: list[dict[str, Any]] = Field(default_factory=list)
+    repairability: Literal["none", "patchable_obligation_gap", "rewrite_needed", "plan_misalignment"] = "none"
     continue_policy: ContinuePolicy = "continue"
 
 
@@ -40,15 +43,18 @@ class ChapterAcceptanceService:
         content: str,
         quality_issues: list[dict[str, Any]] | None = None,
         target_word_count: int | None = None,
+        obligation_contract: dict[str, Any] | None = None,
     ) -> ChapterAcceptanceResult:
         issues = [issue for issue in quality_issues or [] if isinstance(issue, dict)]
         blocking = [cls._normalize_issue(issue) for issue in issues if cls._is_blocking(issue)]
         warnings = [cls._normalize_issue(issue) for issue in issues if not cls._is_blocking(issue)]
+        missing_obligations = cls._missing_obligations(issues, obligation_contract)
 
         if blocking:
             return ChapterAcceptanceResult(
                 status="manual_review_required",
                 summary="存在连续性、文本完整性或事实边界阻断问题，需要人工确认或进入重修。",
+                obligation_contract=obligation_contract or {},
                 blocking_issues=blocking,
                 warning_issues=warnings,
                 continue_policy="pause",
@@ -59,8 +65,11 @@ class ChapterAcceptanceService:
             return ChapterAcceptanceResult(
                 status="repairable",
                 summary="章节主体可保留，存在适合局部补丁修复的问题。",
+                obligation_contract=obligation_contract or {},
                 warning_issues=warnings,
                 repair_directives=[cls._repair_directive(issue, content) for issue in repairable[:3]],
+                missing_obligations=missing_obligations,
+                repairability="patchable_obligation_gap" if missing_obligations else "none",
                 continue_policy="repair_once",
             )
 
@@ -68,6 +77,7 @@ class ChapterAcceptanceService:
             return ChapterAcceptanceResult(
                 status="continue_with_risk",
                 summary="章节可以继续推进，但保留非阻断质量风险。",
+                obligation_contract=obligation_contract or {},
                 warning_issues=warnings,
                 continue_policy="continue",
             )
@@ -75,6 +85,7 @@ class ChapterAcceptanceService:
         return ChapterAcceptanceResult(
             status="accepted",
             summary="章节可接收。",
+            obligation_contract=obligation_contract or {},
             continue_policy="continue",
         )
 
@@ -126,6 +137,54 @@ class ChapterAcceptanceService:
             "target": target,
             "instruction": instruction,
         }
+
+    @classmethod
+    def _missing_obligations(
+        cls,
+        issues: list[dict[str, Any]],
+        obligation_contract: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        if not isinstance(obligation_contract, dict):
+            return []
+        issue = next(
+            (
+                item for item in issues
+                if str(item.get("code") or "") in {"required_payoff", "hook_strength"}
+                and str(item.get("severity") or "").lower() not in {"block", "critical", "high"}
+            ),
+            None,
+        )
+        if not issue:
+            return []
+        obligations = cls._string_list(obligation_contract.get("must_hit_now"))
+        if not obligations:
+            return []
+        evidence = cls._first_evidence(issue)
+        return [
+            {
+                "kind": "must_hit_now",
+                "summary": obligations[0],
+                "evidence": evidence,
+            }
+        ]
+
+    @staticmethod
+    def _string_list(value: Any) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        return [str(item).strip() for item in value if str(item or "").strip()]
+
+    @staticmethod
+    def _first_evidence(issue: dict[str, Any]) -> str:
+        evidence = issue.get("evidence")
+        if isinstance(evidence, list):
+            for item in evidence:
+                text = str(item or "").strip()
+                if text:
+                    return text
+        if evidence:
+            return str(evidence).strip()
+        return str(issue.get("message") or issue.get("problem") or "").strip()
 
     @staticmethod
     def _anchor_from_issue(issue: dict[str, Any]) -> str:

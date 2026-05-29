@@ -285,15 +285,21 @@ class SettingConsolidationService:
     async def _apply_change(self, batch, change) -> None:
         if change.target_type == "conflict":
             raise ValueError("冲突项必须先提交解决结果")
-        if change.operation == "archive":
+        original_operation = change.operation
+        operation = "create" if original_operation == "add" else original_operation
+        if operation == "archive":
             await self._archive_target(batch, change)
-        elif change.operation == "create":
-            await self._create_setting_document(batch, change)
-        elif change.operation == "upsert" and self._is_setting_target_type(change.target_type):
-            await self._create_setting_document(batch, change)
-        elif change.operation == "upsert" and change.target_type == "relationship":
+        elif original_operation == "add" and change.target_type == "relationship":
             await self._upsert_relationship(batch, change)
-        elif change.operation in {"update", "upsert"} and self._is_entity_target_type(change.target_type):
+        elif original_operation == "add" and self._is_entity_target_type(change.target_type):
+            await self._create_entity(batch, change)
+        elif operation == "create":
+            await self._create_setting_document(batch, change)
+        elif operation == "upsert" and self._is_setting_target_type(change.target_type):
+            await self._create_setting_document(batch, change)
+        elif operation == "upsert" and change.target_type == "relationship":
+            await self._upsert_relationship(batch, change)
+        elif operation in {"update", "upsert"} and self._is_entity_target_type(change.target_type):
             await self._update_entity(batch, change)
         else:
             raise ValueError(f"暂不支持的设定审核变更: {change.target_type}/{change.operation}")
@@ -321,6 +327,58 @@ class SettingConsolidationService:
         doc.source_type = "consolidation"
         doc.source_review_batch_id = batch.id
         doc.source_review_change_id = change.id
+
+    async def _create_entity(self, batch, change) -> None:
+        snapshot = change.after_snapshot or {}
+        name = (snapshot.get("name") or "").strip()
+        if not name:
+            raise ValueError("实体名称不能为空")
+        entity_type = (
+            snapshot.get("type")
+            or snapshot.get("entity_type")
+            or change.target_type
+            or ""
+        ).strip()
+        if not entity_type:
+            raise ValueError("实体类型不能为空")
+        state_fields = self._entity_state_fields(snapshot)
+        state_fields["name"] = name
+
+        existing = await self.entity_repo.find_by_name(name, entity_type=entity_type, novel_id=batch.novel_id)
+        if existing is None:
+            entity = await self.entity_service.create_entity(
+                snapshot.get("id") or change.target_id or f"entity_{change.id}",
+                entity_type,
+                name,
+                novel_id=batch.novel_id,
+                initial_state=state_fields,
+                use_llm_for_classification=False,
+            )
+        else:
+            latest_state = await self.entity_service.get_latest_state(existing.id) or {}
+            next_state = dict(latest_state)
+            next_state.update(state_fields)
+            entity = await self.entity_repo.update_basic_fields(existing.id, name=name, entity_type=entity_type)
+            await self.entity_service.update_state_from_import(
+                existing.id,
+                next_state,
+                diff_summary={
+                    "setting_consolidation": True,
+                    "review_batch_id": batch.id,
+                    "review_change_id": change.id,
+                },
+            )
+
+        if "system_category" in snapshot:
+            entity.system_category = snapshot.get("system_category")
+        if "manual_category" in snapshot:
+            entity.manual_category = snapshot.get("manual_category")
+        if "search_document" in snapshot:
+            entity.search_document = snapshot.get("search_document")
+        entity.source_type = "consolidation"
+        entity.source_review_batch_id = batch.id
+        entity.source_review_change_id = change.id
+        await self.session.flush()
 
     async def _archive_target(self, batch, change) -> None:
         if not change.target_id:

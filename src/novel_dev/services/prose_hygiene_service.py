@@ -55,6 +55,16 @@ class ProseHygieneService:
         "AI",
     )
     _LATIN_WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_'-]*")
+    _ANALYTIC_CHOICE_RE = re.compile(
+        r"[^。！？!?；;\n]{0,24}(?:继续|推进|追查|收束|中断|停下|离开|出手|放弃|退让)"
+        r"[^。！？!?；;\n]{0,12}，还是[^。！？!?\n]{2,40}[？?]"
+    )
+    _CONDITIONAL_RISK_RE = re.compile(
+        r"(?:若|如果)[^。！？!?\n]{2,60}(?:；|;|，|,)?但(?:若|如果)[^。！？!?\n]{2,80}"
+    )
+    _ABSTRACT_VERDICT_RE = re.compile(
+        r"(?:成了|成为|变成了)[^。！？!?\n]{0,18}(?:佐证|证明|注脚|象征|隐喻)"
+    )
 
     @classmethod
     def find_plan_language_issues(cls, text: str) -> list[str]:
@@ -74,8 +84,8 @@ class ProseHygieneService:
             return []
         issues = [
             HygieneIssue(f"正文出现未授权现代术语: {pattern}", "modern_drift")
-            for pattern in cls._modern_drift_patterns(context)
-            if pattern in text
+            for pattern in cls._configured_modern_drift_patterns(context)
+            if pattern in text and not cls._modern_pattern_authorized_in_text(pattern, text, context)
         ]
         latin_words = []
         seen = set()
@@ -93,8 +103,34 @@ class ProseHygieneService:
         return issues
 
     @classmethod
+    def find_narration_hygiene_issues(cls, text: str) -> list[str]:
+        if not text:
+            return []
+        issues = []
+        if cls._ANALYTIC_CHOICE_RE.search(text):
+            issues.append(HygieneIssue(
+                "正文出现作者式理性选项题: 用角色当场动作失败、身体反应或环境后果呈现两难。",
+                "analytic_choice_question",
+            ))
+        if cls._CONDITIONAL_RISK_RE.search(text):
+            issues.append(HygieneIssue(
+                "正文出现条件推演式风险总结: 把若A但若B的分析改成角色尝试、受阻和代价显现。",
+                "conditional_risk_calculus",
+            ))
+        if cls._ABSTRACT_VERDICT_RE.search(text):
+            issues.append(HygieneIssue(
+                "正文出现抽象定性句: 把证明、佐证、注脚等判断改成可见变化或人物感知。",
+                "abstract_verdict",
+            ))
+        return issues
+
+    @classmethod
     def find_issues(cls, text: str, context: object | None = None) -> list[str]:
-        return cls.find_plan_language_issues(text) + cls.find_modern_drift_issues(text, context=context)
+        return (
+            cls.find_plan_language_issues(text)
+            + cls.find_modern_drift_issues(text, context=context)
+            + cls.find_narration_hygiene_issues(text)
+        )
 
     @classmethod
     def prompt_rules(cls, context: object | None = None) -> str:
@@ -110,6 +146,7 @@ class ProseHygieneService:
             "- 只写小说正文，不复述章节计划、写作卡、节拍边界或质量要求。\n"
             f"- 正文禁用规划/元叙述词: {forbidden}。\n"
             "- 遇到目标、阻力、选择、代价、停点，只能把它们改写成角色可见的动作、对话、身体反应和场景后果。\n"
+            "- 避免作者站在场外列选项、推演若A但若B、或用佐证/证明/注脚给异象定性；改成角色尝试失败、身体受击、物件变化和可见后果。\n"
             f"{modern_line}"
             "- 不得出现 beat、chapter_plan、UI、系统字段、质量门禁、读感合同等工程或规划痕迹。\n"
         )
@@ -136,14 +173,19 @@ class ProseHygieneService:
 
     @classmethod
     def _modern_drift_patterns(cls, context: object | None = None) -> tuple[str, ...]:
+        value = cls._configured_modern_drift_patterns(context)
+        authorized = cls._contextual_authorized_modern_terms(context)
+        return tuple(item for item in value if item not in authorized)
+
+    @classmethod
+    def _configured_modern_drift_patterns(cls, context: object | None = None) -> tuple[str, ...]:
         value = cls._genre_quality_config(context).get("modern_drift_patterns") or ()
         if not isinstance(value, (list, tuple, set)):
             return ()
-        authorized = cls._contextual_authorized_modern_terms(context)
         return tuple(
             str(item)
             for item in value
-            if str(item).strip() and str(item).strip() not in authorized
+            if str(item).strip()
         )
 
     @classmethod
@@ -198,10 +240,52 @@ class ProseHygieneService:
             markers = rule.get("context_markers")
             if not isinstance(terms, list) or not isinstance(markers, list):
                 continue
+            if isinstance(rule.get("near_markers"), list) and rule.get("near_markers"):
+                continue
             if not any(str(marker).strip() and str(marker).strip() in text for marker in markers):
                 continue
             authorized.update(str(term).strip() for term in terms if str(term).strip())
         return authorized
+
+    @classmethod
+    def _modern_pattern_authorized_in_text(cls, pattern: str, text: str, context: object | None) -> bool:
+        if cls._genre_quality_config(context).get("modern_terms_policy") != "contextual":
+            return False
+        marker_text = cls._contextual_marker_text(context)
+        if not marker_text:
+            return False
+        for rule in cls._contextual_modern_term_rules(context):
+            terms = rule.get("terms")
+            context_markers = rule.get("context_markers")
+            if not isinstance(terms, list) or pattern not in {str(term).strip() for term in terms}:
+                continue
+            if not isinstance(context_markers, list):
+                continue
+            if not any(str(marker).strip() and str(marker).strip() in marker_text for marker in context_markers):
+                continue
+            near_markers = rule.get("near_markers")
+            if not isinstance(near_markers, list) or not near_markers:
+                return True
+            markers = [str(marker).strip() for marker in near_markers if str(marker).strip()]
+            if markers and cls._all_pattern_occurrences_have_near_marker(text, pattern, markers):
+                return True
+        return False
+
+    @staticmethod
+    def _all_pattern_occurrences_have_near_marker(text: str, pattern: str, markers: list[str]) -> bool:
+        start = 0
+        found = False
+        while True:
+            index = text.find(pattern, start)
+            if index < 0:
+                return found
+            found = True
+            window_start = max(0, index - 12)
+            window_end = min(len(text), index + len(pattern) + 12)
+            window = text[window_start:window_end]
+            if not any(marker in window for marker in markers):
+                return False
+            start = index + len(pattern)
 
     @classmethod
     def _full_context_text(cls, context: object | None) -> str:

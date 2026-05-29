@@ -121,6 +121,26 @@ def test_infer_exact_target_chapters_counts_volume_outline_range(async_session):
     assert target == 67
 
 
+def test_deterministic_writability_repair_avoids_meta_plan_language(async_session):
+    agent = VolumePlannerAgent(async_session)
+
+    repaired = agent._concretize_beat_summary(
+        "陆照发现识海异动",
+        actor="陆照",
+        chapter_title="识海异动",
+        chapter_summary="陆照尝试压住识海里的异常变化。",
+        index=1,
+        total_beats=3,
+    )
+
+    assert "识海异动" in repaired
+    assert "原计划受阻" not in repaired
+    assert "原定路线被迫改道" not in repaired
+    assert "失去主动权" not in repaired
+    assert "当前目标" not in repaired
+    assert "读者应" not in repaired
+
+
 @pytest.mark.asyncio
 async def test_generate_volume_plan_prompt_includes_genre_template_rules(async_session):
     async_session.add(
@@ -743,6 +763,38 @@ def test_narrative_constraints_do_not_pull_terminal_nodes_from_global_synopsis()
     assert sequence.terms == ["内天地", "外天地", "诸天万界"]
 
 
+def test_narrative_constraints_do_not_make_climax_ladder_executable():
+    synopsis = SynopsisData(
+        title="道经照诸天",
+        logline="陆照争夺超脱路径。",
+        core_conflict="陆照 vs 末劫幕后布局者",
+        estimated_volumes=2,
+        estimated_total_chapters=120,
+        estimated_total_words=240000,
+        volume_outlines=[{
+            "volume_number": 1,
+            "title": "道经初现",
+            "summary": "陆照在外门选拔中站稳脚跟，初步掌握道经修炼法门。",
+            "main_goal": "稳固外门地位，确认赵元身上存在异常外力。",
+            "start_state": "陆照是普通外门弟子。",
+            "end_state": "陆照被宗门初步关注，赵元开始忌惮道经。",
+            "climax": "赵元动用系统底牌，陆照被误认为触及外景并压制传说特征。",
+        }],
+    )
+    source_text = (
+        "[setting] 修炼体系\n"
+        "境界从低到高：百日筑基→蓄气锻体→开窍→半步外景→外景→传说"
+    )
+
+    context = NarrativeConstraintBuilder().build_for_volume(
+        synopsis=synopsis,
+        volume_number=1,
+        source_text=source_text,
+    )
+
+    assert not [item for item in context.executable_constraints if item.constraint_type == "sequence"]
+
+
 def test_find_constraint_term_position_accepts_cultivation_alias_drift(async_session):
     agent = VolumePlannerAgent(async_session)
     blueprint = VolumePlanBlueprint(
@@ -830,6 +882,71 @@ def test_deterministic_repair_blueprint_sequence_constraints_preserves_chapter_c
     assert "眉心祖窍" in repaired.chapters[2].summary
 
 
+def test_sequence_validation_does_not_force_long_ladder_into_single_chapter(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="陆照只完成入门试炼。",
+        total_chapters=1,
+        estimated_total_words=2000,
+        chapters=[
+            {"chapter_number": 1, "title": "后山奇遇", "summary": "陆照在后山遇见道经残痕，决定参加宗门选拔。"},
+        ],
+    )
+    context = ActiveConstraintContext(
+        volume_number=1,
+        executable_constraints=[
+            ExecutableNarrativeConstraint(
+                constraint_type="sequence",
+                title="完整修炼阶梯",
+                terms=["蓄气", "开窍", "外景", "法身", "传说", "彼岸"],
+            )
+        ],
+    )
+
+    repaired = agent._deterministic_repair_blueprint_sequence_constraints(blueprint, context)
+
+    assert agent._validate_blueprint_constraints(blueprint, context) == []
+    assert repaired.chapters[0].summary == blueprint.chapters[0].summary
+    assert "本章按设定链推进至" not in repaired.chapters[0].summary
+
+
+def test_sequence_validation_does_not_force_absent_global_ladder_into_volume(async_session):
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="陆照在宗门选拔中站稳脚跟。",
+        total_chapters=4,
+        estimated_total_words=8000,
+        chapters=[
+            {"chapter_number": 1, "title": "后山残痕", "summary": "陆照在后山发现古老传承残痕。"},
+            {"chapter_number": 2, "title": "外门风波", "summary": "陆照因资源分配受阻，被迫参加外门小比。"},
+            {"chapter_number": 3, "title": "选拔将启", "summary": "赵元突然实力暴涨，陆照察觉其气息异常。"},
+            {"chapter_number": 4, "title": "台前试探", "summary": "周厉当众压迫寒门弟子，陆照选择站上演武台。"},
+        ],
+    )
+    context = ActiveConstraintContext(
+        volume_number=1,
+        executable_constraints=[
+            ExecutableNarrativeConstraint(
+                constraint_type="sequence",
+                title="完整修炼阶梯",
+                terms=["外景", "第一天梯", "第二天梯", "第三天梯", "法身", "传说"],
+            )
+        ],
+    )
+
+    repaired = agent._deterministic_repair_blueprint_sequence_constraints(blueprint, context)
+
+    assert agent._validate_blueprint_constraints(blueprint, context) == []
+    assert [chapter.summary for chapter in repaired.chapters] == [chapter.summary for chapter in blueprint.chapters]
+    assert "本章按设定链推进至" not in repaired.model_dump_json()
+
+
 @pytest.mark.asyncio
 async def test_generate_volume_plan_repairs_missing_setting_constraints(async_session):
     await DocumentRepository(async_session).create(
@@ -864,7 +981,7 @@ async def test_generate_volume_plan_repairs_missing_setting_constraints(async_se
         total_chapters=3,
         estimated_total_words=9000,
         chapters=[
-            {"chapter_number": 1, "title": "古卷初现", "summary": "陆照得到道经。"},
+            {"chapter_number": 1, "title": "古卷初现", "summary": "陆照从百日筑基起步并得到道经。"},
             {"chapter_number": 2, "title": "修行初成", "summary": "陆照修为快速提升。"},
             {"chapter_number": 3, "title": "半步外景", "summary": "陆照抵达半步外景。"},
         ],
@@ -1093,6 +1210,8 @@ async def test_generate_volume_plan_semantic_repair_prompt_mentions_highlight_do
         if call_no == 3:
             assert "entity_highlights 与 relationship_highlights" in prompt
             assert "卷摘要与章节摘要也必须同步修正" in prompt
+            assert "不要只把冲突词改成伏笔词" in prompt
+            assert "替换成当前阶段可触达的事件承载" in prompt
             return LLMResponse(text=repaired_blueprint.model_dump_json())
         if call_no == 4:
             return LLMResponse(text=VolumePlanSemanticJudgement(passed=True, confidence=0.93).model_dump_json())

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,6 +25,22 @@ class ContinuityAuditService:
     """Deterministic continuity checks before world-state ingestion."""
 
     DEAD_MARKERS = ("已死亡", "死亡", "身亡", "阵亡", "尸身", "尸体")
+    EXPLICIT_DEAD_MARKERS = ("已死亡", "身亡", "阵亡", "尸身", "尸体")
+    DEATH_STATUS_KEYS = (
+        "condition=",
+        "condition:",
+        "status=",
+        "status:",
+        "状态=",
+        "状态:",
+        "当前状态:",
+        "生死=",
+        "生死:",
+        "存活=",
+        "存活:",
+        "alive=",
+        "alive:",
+    )
     LIVING_ACTION_MARKERS = ("醒来", "开口", "说出", "走来", "站起", "活着", "出手")
 
     @classmethod
@@ -125,7 +142,27 @@ class ContinuityAuditService:
 
     @classmethod
     def _looks_dead(cls, state: str) -> bool:
-        return any(marker in state for marker in cls.DEAD_MARKERS)
+        normalized = str(state or "").strip()
+        if not normalized:
+            return False
+        clauses = [item.strip() for item in re.split(r"[\n\r；;。]", normalized) if item.strip()]
+        for clause in clauses:
+            if cls._death_clause_has_status_key(clause):
+                return True
+            if cls._clause_starts_as_dead_state(clause):
+                return True
+        return cls._clause_starts_as_dead_state(normalized)
+
+    @classmethod
+    def _death_clause_has_status_key(cls, clause: str) -> bool:
+        if not any(key in clause for key in cls.DEATH_STATUS_KEYS):
+            return False
+        return any(marker in clause for marker in cls.DEAD_MARKERS)
+
+    @classmethod
+    def _clause_starts_as_dead_state(cls, clause: str) -> bool:
+        stripped = clause.strip(" ，,：:")
+        return any(stripped.startswith(marker) for marker in cls.EXPLICIT_DEAD_MARKERS)
 
     @staticmethod
     def _canonical_identity_role(entity: dict[str, Any]) -> str:

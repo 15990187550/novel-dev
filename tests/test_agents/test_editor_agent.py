@@ -50,6 +50,60 @@ def test_clean_text_integrity_fragments_removes_markdown_section_separator():
     assert cleaned == "第一段动作。\n\n第二段动作。"
 
 
+def test_hook_score_below_quality_line_forces_last_beat_rewrite():
+    assert EditorAgent._hook_score_requires_last_beat_rewrite(72)
+    assert EditorAgent._hook_score_requires_last_beat_rewrite(74.9)
+    assert not EditorAgent._hook_score_requires_last_beat_rewrite(75)
+    assert not EditorAgent._hook_score_requires_last_beat_rewrite(None)
+
+
+def test_repair_task_is_not_complete_when_flagged_phrase_remains():
+    task = {
+        "task_type": "prose_polish",
+        "issue_codes": ["humanity"],
+        "problem": "情感状态由作者总结式交代（'崩溃边缘''他只剩一个念头还清晰'），而非通过具体动作呈现。",
+    }
+
+    assert not EditorAgent._repair_task_completed_by_text(
+        task,
+        "他已经到了崩溃边缘。\n\n他只剩一个念头还清晰。",
+        "视野边缘开始发黑，他只剩一个念头还清晰。",
+    )
+
+
+def test_repair_task_issue_prompts_dynamic_flagged_phrases_as_completion_criteria():
+    task = {
+        "task_type": "character_repair",
+        "issue_codes": ["critical_dimension_score"],
+        "problem": "关键维度 humanity 低于质量线。",
+        "evidence": [
+            "comment=作者替人物总结情绪和风险。'当场风险在累积''成了失控的佐证'仍是外部解释。",
+        ],
+        "success_criteria": ["人物心理改为当场身体反应和失败动作。"],
+    }
+
+    issue = EditorAgent._repair_task_to_issue(task)
+
+    assert "当场风险在累积" in issue["problem"]
+    assert "成了失控的佐证" in issue["problem"]
+    assert "被评审点名的原文短语需改写到不再原样出现" in issue["problem"]
+    assert "完成标准之一" in issue["suggestion"]
+
+
+def test_editor_prose_hygiene_includes_narration_hygiene_issues():
+    issues = EditorAgent._prose_hygiene_issues(
+        "继续推进，还是强行收束？若此刻失控，经脉尽断；但若强行中断，线索断绝。此刻却成了失控的佐证。",
+        1,
+        {},
+    )
+
+    assert issues
+    problem = issues[0]["problem"]
+    assert "作者式理性选项题" in problem
+    assert "条件推演式风险总结" in problem
+    assert "抽象定性句" in problem
+
+
 def test_editor_formats_cohesion_repair_task_prompt():
     prompt = EditorAgent._build_repair_task_prompt(
         "林照把残信收起。下一句忽然转到城门。",
@@ -76,6 +130,67 @@ def test_editor_formats_cohesion_repair_task_prompt():
     assert "林照藏好残信后绕路离开" in prompt
     assert "林照把残信收起" in prompt
     assert "严禁新增章节计划外的人物、物件、线索、威胁、地点或事件" in prompt
+
+
+@pytest.mark.asyncio
+async def test_retry_unfinished_repair_tasks_prompts_remaining_flagged_phrases(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="陆照指甲掐进掌心，借疼痛去截断失控真气。")
+    task = {
+        "task_type": "character_repair",
+        "issue_codes": ["critical_dimension_score"],
+        "evidence": ["'当场风险在累积'仍是作者替人物权衡。"],
+    }
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        result = await EditorAgent(async_session)._retry_unfinished_repair_tasks(
+            source_text="当场风险在累积。",
+            polished_text="当场风险在累积，陆照必须决断。",
+            unfinished_tasks=[task],
+            chapter_context={"chapter_plan": {"title": "识海异动"}},
+        )
+
+    assert result == "陆照指甲掐进掌心，借疼痛去截断失控真气。"
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "必须改写到以下短语不再原样出现" in prompt
+    assert "当场风险在累积" in prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_beat_prompt_sanitizes_chapter_plan_meta_language(async_session):
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(text="陆照发现识海异动后压住呼吸。")
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = EditorAgent(async_session)
+        await agent._rewrite_beat(
+            "陆照发现识海异动。",
+            {},
+            [{"dim": "hook_strength", "problem": "章末偏弱", "suggestion": "强化停点。"}],
+            [],
+            {
+                "chapter_plan": {
+                    "title": "识海异动",
+                    "beats": [
+                        {
+                            "summary": (
+                                "陆照发现识海异动；"
+                                "陆照推进“识海异动”时发现原计划受阻，对手或环境压力逼他立刻调整行动；"
+                                "若局面继续拖延，陆照会失去处理“识海异动”的主动权。"
+                            )
+                        }
+                    ],
+                }
+            },
+        )
+
+    prompt = mock_client.acomplete.call_args.args[0][0].content
+    assert "陆照发现识海异动" in prompt
+    assert "原计划受阻" not in prompt
+    assert "对手或环境压力逼" not in prompt
+    assert "主动权" not in prompt
 
 
 def test_editor_repair_task_prompt_includes_evidence_without_mechanical_requirements():
@@ -844,7 +959,23 @@ async def test_rewrite_beat_prompt_uses_soft_strategy_pool_without_checklist(asy
     assert "执事的停顿、视线" in prompt
     assert "最小有效修法" in prompt
     assert "必须短对话" not in prompt
-    assert "必须出现异变" not in prompt
+
+
+def test_editor_bounds_hook_suggestion_without_copying_review_examples():
+    bounded = EditorAgent._bounded_suggestion_for_issue({
+        "dim": "hook_strength",
+        "suggestion": (
+            "在章末最后两段补入一个由本章已出现线索触发的即时新信号："
+            "例如主角摊开残页，发现虫蛀处露出一行被墨迹覆盖过的模糊字迹；"
+            "或体内穴窍突然抽吸真气。这样章末从压力汇总升级为下一个行动。"
+        ),
+    })
+
+    assert "即时新信号" in bounded
+    assert "虫蛀" not in bounded
+    assert "穴窍突然抽吸" not in bounded
+    assert "不要照搬评审示例" in bounded
+    assert "必须出现异变" not in bounded
 
 
 @pytest.mark.asyncio

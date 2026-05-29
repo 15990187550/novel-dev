@@ -1302,17 +1302,22 @@ class VolumePlannerAgent:
         for constraint in constraint_context.executable_constraints:
             if constraint.priority != "hard" or constraint.constraint_type != "sequence" or len(constraint.terms) < 2:
                 continue
-            positions = [
-                self._find_constraint_term_position(
-                    term,
-                    VolumePlanBlueprint.model_validate(payload),
-                    excluded_aliases=self._sequence_excluded_aliases(term, constraint.terms),
-                )
-                for term in constraint.terms
-            ]
-            if all(position >= 0 for position in positions) and positions == sorted(positions):
+            if not self._sequence_constraint_fits_chapter_scale(constraint, chapter_count=len(chapters)):
                 continue
-            for index, term in enumerate(constraint.terms):
+            active_terms = self._active_sequence_terms(
+                VolumePlanBlueprint.model_validate(payload),
+                constraint.terms,
+            )
+            if len(active_terms) < 2:
+                continue
+            positions = self._sequence_term_positions(
+                VolumePlanBlueprint.model_validate(payload),
+                constraint.terms,
+            )
+            active_positions = [positions[term] for term in active_terms if positions.get(term, -1) >= 0]
+            if len(active_positions) == len(active_terms) and active_positions == sorted(active_positions):
+                continue
+            for index, term in enumerate(active_terms):
                 target_index = min(index, len(chapters) - 1)
                 chapter = chapters[target_index]
                 summary = coerce_to_text(chapter.get("summary")).strip()
@@ -1350,6 +1355,31 @@ class VolumePlannerAgent:
             excluded_aliases.update(self.constraint_builder._term_aliases(item))
         return excluded_aliases
 
+    def _sequence_term_positions(
+        self,
+        blueprint: VolumePlanBlueprint,
+        terms: list[str],
+    ) -> dict[str, int]:
+        return {
+            term: self._find_constraint_term_position(
+                term,
+                blueprint,
+                excluded_aliases=self._sequence_excluded_aliases(term, terms),
+            )
+            for term in terms
+        }
+
+    def _active_sequence_terms(
+        self,
+        blueprint: VolumePlanBlueprint,
+        terms: list[str],
+    ) -> list[str]:
+        positions = self._sequence_term_positions(blueprint, terms)
+        present_indexes = [index for index, term in enumerate(terms) if positions.get(term, -1) >= 0]
+        if len(present_indexes) < 2:
+            return []
+        return terms[min(present_indexes) : max(present_indexes) + 1]
+
     @staticmethod
     def _append_summary_clause(summary: str, clause: str) -> str:
         cleaned = summary.strip().rstrip("。！？!?；;")
@@ -1366,14 +1396,16 @@ class VolumePlannerAgent:
         for constraint in constraint_context.executable_constraints:
             if constraint.priority != "hard" or constraint.constraint_type != "sequence" or len(constraint.terms) < 2:
                 continue
+            if not self._sequence_constraint_fits_chapter_scale(constraint, chapter_count=len(blueprint.chapters)):
+                continue
+            active_terms = self._active_sequence_terms(blueprint, constraint.terms)
+            if len(active_terms) < 2:
+                continue
+            positions_by_term = self._sequence_term_positions(blueprint, constraint.terms)
             positions: list[int] = []
             missing: list[str] = []
-            for term in constraint.terms:
-                position = self._find_constraint_term_position(
-                    term,
-                    blueprint,
-                    excluded_aliases=self._sequence_excluded_aliases(term, constraint.terms),
-                )
+            for term in active_terms:
+                position = positions_by_term.get(term, -1)
                 if position < 0:
                     missing.append(term)
                 else:
@@ -1384,6 +1416,18 @@ class VolumePlannerAgent:
             if positions != sorted(positions):
                 violations.append(f"{constraint.title} 必经节点顺序错误: {' -> '.join(constraint.terms)}")
         return violations
+
+    @staticmethod
+    def _sequence_constraint_fits_chapter_scale(
+        constraint,
+        *,
+        chapter_count: int,
+    ) -> bool:
+        if chapter_count <= 0:
+            return False
+        if chapter_count == 1:
+            return len(constraint.terms) <= 2
+        return True
 
     def _find_constraint_term_position(
         self,
@@ -1533,6 +1577,9 @@ class VolumePlannerAgent:
             + "\n".join(f"- {item}" for item in judgement.repair_suggestions[:8])
             + "\n修正要求：不得与设定事实、阶段边界、伏笔限制、人物/势力关系冲突；"
             "如果信息不足，降级为传闻、残痕、误判或待确认线索。"
+            "不要只把冲突词改成伏笔词，也不要保留原本高阶事件的实际胜负/接触/揭底效果；"
+            "必须保留原章节在卷内承担的因果功能，并替换成当前阶段可触达的事件承载，"
+            "例如代理人压力、局部证据、异常余波、误读线索、资源代价、关系试探或环境异变。"
             "entity_highlights 与 relationship_highlights 也必须同步修正，"
             "不能保留旧的高确定性表述；必要时直接删除冲突条目。"
             "卷摘要与章节摘要也必须同步修正，避免正文线索已降级但摘要仍保留已证实口吻。"
@@ -1893,31 +1940,31 @@ class VolumePlannerAgent:
     def _deterministic_conflict_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == 0:
-            return f"{actor}围绕“{anchor}”行动时遭遇突发阻力，原定路线被迫改道"
+            return f"{actor}处理“{anchor}”时先碰到当场阻力，动作被迫放慢"
         if index == total_beats - 1:
             return f"{actor}接近“{anchor}”停点时，未解决的阻力再次压回眼前"
-        return f"{actor}推进“{anchor}”时发现原计划受阻，对手或环境压力逼他立刻调整行动"
+        return f"{actor}处理“{anchor}”时遇到新的阻隔，只能先稳住眼前局面"
 
     @classmethod
     def _deterministic_choice_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == 0:
-            return f"{actor}选择继续靠近“{anchor}”还是先处理眼前风险，稍有迟疑便会失去开局主动权"
+            return f"{actor}选择继续靠近“{anchor}”，还是先处理眼前风险"
         if index == total_beats - 1:
             return f"{actor}选择当场收束“{anchor}”的结果，若没压住余波，后续行动就会失去依据"
-        return f"{actor}选择继续推进“{anchor}”还是先控制当场风险，当前目标随时可能被迫延后"
+        return f"{actor}选择继续处理“{anchor}”，还是先压住当场风险"
 
     @classmethod
     def _deterministic_stake_clause(cls, actor: str, chapter_title: str, chapter_summary: str, index: int, total_beats: int) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary)
         if index == total_beats - 1:
             return f"若“{anchor}”无法形成明确停点，下一步行动就会失去落点"
-        return f"若局面继续拖延，{actor}会失去处理“{anchor}”的主动权"
+        return f"代价是“{anchor}”留下的余波反过来限制{actor}，让下一步行动失去落点"
 
     @classmethod
     def _deterministic_hook_clause(cls, actor: str, chapter_title: str, chapter_summary: str) -> str:
         anchor = cls._chapter_anchor(chapter_title, chapter_summary, fallback="下一步目标")
-        return f"与“{anchor}”直接相关的未解变化压到章末，逼得{actor}下一步继续处理"
+        return f"与“{anchor}”直接相关的未解变化留在章末，让{actor}看见下一步必须面对的具体余波"
 
     def _complete_expanded_batch(
         self,

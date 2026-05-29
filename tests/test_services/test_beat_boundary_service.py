@@ -92,3 +92,29 @@ def test_build_cards_includes_real_plan_material_keys():
         "铜钥匙",
         "墨迹未干",
     ]
+
+
+def test_build_cards_sanitizes_abstract_ending_driver_from_must_cover():
+    cards = BeatBoundaryService.build_cards(
+        {
+            "beats": [
+                {
+                    "summary": (
+                        "主角握住残页离开功法阁；"
+                        "主角接近困境停点时，未解决的阻力再次压回眼前；"
+                        "与困境直接相关的未解变化压到章末，逼得主角下一步继续处理。"
+                    ),
+                    "goal": "主角确认残页仍在手里",
+                    "key_entities": ["主角", "残页", "功法阁"],
+                }
+            ]
+        }
+    )
+
+    combined = "\n".join(cards[0].must_cover)
+
+    assert "主角握住残页离开功法阁" in combined
+    assert "主角确认残页仍在手里" in combined
+    assert "困境停点" not in combined
+    assert "未解决的阻力" not in combined
+    assert "下一步继续处理" not in combined

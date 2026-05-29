@@ -185,6 +185,9 @@ class BeatWritingCard(BaseModel):
     relationship_subtext_lenses: List[str] = Field(default_factory=list)
     prose_texture_lenses: List[str] = Field(default_factory=list)
     freshness_lenses: List[str] = Field(default_factory=list)
+    ending_driver_candidates: List[str] = Field(default_factory=list)
+    humanity_surface_candidates: List[str] = Field(default_factory=list)
+    summary_risk_flags: List[str] = Field(default_factory=list)
 
     @field_validator(
         "source_summary",
@@ -221,6 +224,9 @@ class BeatWritingCard(BaseModel):
         "relationship_subtext_lenses",
         "prose_texture_lenses",
         "freshness_lenses",
+        "ending_driver_candidates",
+        "humanity_surface_candidates",
+        "summary_risk_flags",
         mode="before",
     )
     @classmethod

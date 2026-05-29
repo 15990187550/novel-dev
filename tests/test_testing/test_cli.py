@@ -26,6 +26,8 @@ def test_generation_parser_accepts_longform_volume1_options():
             "1",
             "--target-volume-chapters",
             "67",
+            "--run-chapter-limit",
+            "1",
         ]
     )
 
@@ -36,6 +38,7 @@ def test_generation_parser_accepts_longform_volume1_options():
     assert args.target_word_count == 2_000_000
     assert args.target_volume_number == 1
     assert args.target_volume_chapters == 67
+    assert args.run_chapter_limit == 1
 
 
 def test_generation_command_writes_summary_report(tmp_path):

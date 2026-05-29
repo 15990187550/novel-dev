@@ -79,6 +79,11 @@ BUILTIN_TEMPLATES: tuple[GenreTemplate, ...] = (
                 {
                     "terms": ["系统提示"],
                     "context_markers": ["系统"],
+                },
+                {
+                    "terms": ["界面"],
+                    "context_markers": ["系统", "游戏", "任务"],
+                    "near_markers": ["系统", "任务", "光幕", "属性", "警告"],
                 }
             ],
             "foreign_terms_policy": "contextual",

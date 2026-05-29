@@ -76,7 +76,23 @@ def test_longform_options_default_volume1_distribution():
     )
 
     assert options.resolved_target_volume_chapters() == 67
+    assert options.resolved_run_chapter_limit() == 67
     assert options.resolved_chapter_target_word_count() == 1667
+    assert options.resolved_target_volume_word_count() == 111_689
+
+
+def test_longform_run_chapter_limit_does_not_shrink_volume_distribution():
+    options = GenerationRunOptions(
+        acceptance_scope="real-longform-volume1",
+        target_volumes=18,
+        target_chapters=1200,
+        target_word_count=2_000_000,
+        target_volume_number=1,
+        run_chapter_limit=1,
+    )
+
+    assert options.resolved_target_volume_chapters() == 67
+    assert options.resolved_run_chapter_limit() == 1
     assert options.resolved_target_volume_word_count() == 111_689
 
 
@@ -220,6 +236,7 @@ async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_sessi
         target_word_count=2_000_000,
         target_volume_number=1,
         target_volume_chapters=67,
+        run_chapter_limit=1,
     )
 
     old_session_maker = generation_runner.async_session_maker
@@ -235,6 +252,8 @@ async def test_prepare_longform_synopsis_contract_sets_volume1_range(async_sessi
     assert synopsis["estimated_total_chapters"] == 1200
     assert synopsis["estimated_total_words"] == 2_000_000
     assert synopsis["volume_outlines"][0]["target_chapter_range"] == "1-67"
+    assert state.checkpoint_data["longform_target"]["target_volume_chapters"] == 67
+    assert state.checkpoint_data["longform_target"]["run_chapter_limit"] == 1
     assert state.checkpoint_data["acceptance_scope"] == "real-longform-volume1"
 
 
@@ -500,6 +519,7 @@ async def test_fake_longform_run_validates_source_dir_and_records_target_artifac
 
     assert report.status == "passed"
     assert report.artifacts["target_volume_chapters"] == "67"
+    assert report.artifacts["run_chapter_limit"] == "67"
     assert report.artifacts["chapter_target_word_count"] == "1667"
     assert report.artifacts["source_material_count"] == "1"
 

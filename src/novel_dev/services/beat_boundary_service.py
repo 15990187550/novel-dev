@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from novel_dev.schemas.quality import BeatBoundaryCard
+from novel_dev.services.story_quality_service import StoryQualityService
 
 
 class BeatBoundaryService:
@@ -59,12 +60,12 @@ class BeatBoundaryService:
     @classmethod
     def _must_cover(cls, beat: Any) -> list[str]:
         if not isinstance(beat, dict):
-            text = cls._coerce_text(beat)
+            text = cls._sanitize_contract_text(cls._coerce_text(beat))
             return [text] if text else []
 
         items: list[str] = []
         for key in ("summary", "content", "goal", "conflict"):
-            text = cls._coerce_text(beat.get(key))
+            text = cls._sanitize_contract_text(cls._coerce_text(beat.get(key)))
             if text:
                 items.append(text)
         return items
@@ -98,10 +99,17 @@ class BeatBoundaryService:
     def _ending_policy(cls, beat: Any) -> str:
         if isinstance(beat, dict):
             for key in ("hook", "ending_hook"):
-                text = cls._coerce_text(beat.get(key))
+                text = cls._sanitize_contract_text(cls._coerce_text(beat.get(key)))
                 if text:
                     return text
         return cls._DEFAULT_ENDING_POLICY
+
+    @staticmethod
+    def _sanitize_contract_text(text: str) -> str:
+        cleaned = StoryQualityService.sanitize_prompt_text(text)
+        if StoryQualityService._looks_like_abstract_ending_driver(cleaned):
+            return ""
+        return cleaned
 
     @staticmethod
     def _dedupe(items: list[str]) -> list[str]:

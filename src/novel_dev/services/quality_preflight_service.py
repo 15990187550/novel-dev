@@ -261,6 +261,16 @@ class QualityPreflightService:
                 evidence=[plan.beats[-1].summary],
                 suggestion="补一个由本章已出现线索引发的新危险、反转或问题。",
             ))
+        if plan.beats and cls._has_weak_ending_driver(plan.beats[-1].summary, plan.beats[-1].key_entities):
+            issues.append(cls._issue(
+                "weak_ending_driver",
+                "writability",
+                "warn",
+                "最后一个 beat 缺少具体牵引来源，Writer 容易写成情绪总结或抽象停点。",
+                beat_index=len(plan.beats) - 1,
+                evidence=[plan.beats[-1].summary],
+                suggestion="从本章已出现的人物、物件、行动后果、关系压力或伏笔中选一个可见变化作为章末牵引。",
+            ))
         return issues
 
     @classmethod
@@ -455,6 +465,51 @@ class QualityPreflightService:
     @classmethod
     def _has_any(cls, text: str, terms: tuple[str, ...]) -> bool:
         return any(term in (text or "") for term in terms)
+
+    @classmethod
+    def _has_weak_ending_driver(cls, text: str, key_entities: list[str]) -> bool:
+        clauses = [part.strip() for part in re.split(r"[；;。！？!?]", text or "") if part.strip()]
+        if not clauses:
+            return True
+        concrete_entities = [
+            str(item).strip() for item in key_entities
+            if str(item).strip() and not cls._looks_like_abstract_topic(str(item))
+        ]
+        driver_clauses = [
+            clause for clause in clauses
+            if not cls._looks_like_abstract_ending_driver(clause)
+            and (
+                any(entity in clause for entity in concrete_entities)
+                or any(marker in clause for marker in ("门", "脚步", "视线", "声音", "手", "袖", "血", "纸", "眼", "窗", "袋"))
+            )
+        ]
+        return not driver_clauses
+
+    @staticmethod
+    def _looks_like_abstract_topic(text: str) -> bool:
+        normalized = coerce_to_text(text).strip("“”")
+        return any(marker in normalized for marker in ("困境", "旧案", "停点", "线索", "事件", "目标")) and len(normalized) <= 8
+
+    @staticmethod
+    def _looks_like_abstract_ending_driver(text: str) -> bool:
+        normalized = coerce_to_text(text)
+        markers = (
+            "未解变化压到章末",
+            "下一步继续处理",
+            "下一步行动",
+            "失去落点",
+            "明确停点",
+            "后续行动就会",
+            "当场收束",
+            "读者",
+            "原计划受阻",
+            "主动权",
+            "接近",
+            "未解决的阻力",
+        )
+        return any(marker in normalized for marker in markers) and any(
+            marker in normalized for marker in ("停点", "未解", "下一步", "阻力", "主动权", "原计划")
+        )
 
     @staticmethod
     def _first_clause(text: str) -> str:

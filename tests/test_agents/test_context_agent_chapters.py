@@ -211,6 +211,68 @@ async def test_assemble_for_chapter_mutates_provided_checkpoint_with_boundary_ca
 
 
 @pytest.mark.asyncio
+async def test_assemble_for_chapter_persists_clean_chapter_plan_view(async_session, monkeypatch):
+    plan = ChapterPlan(
+        chapter_number=3,
+        title="抽象停点",
+        target_word_count=1600,
+        beats=[
+            BeatPlan(
+                summary=(
+                    "主角在井边确认资源只剩三日，却发现报名令牌被扣下；"
+                    "他必须在当场讨回令牌和另找担保之间选择，失败会错过选拔。"
+                ),
+                target_mood="窘迫",
+                key_entities=["主角"],
+            ),
+            BeatPlan(
+                summary=(
+                    "主角必须在交出残页换取令牌和隐瞒残页另寻入口之间选择，失败会暴露底牌；"
+                    "主角握紧手中的残页，低头快步离去；"
+                    "主角接近困境停点时，未解决的阻力再次压回眼前；"
+                    "与困境直接相关的未解变化压到章末，逼得主角下一步继续处理。"
+                ),
+                target_mood="压迫",
+                key_entities=["主角", "残页"],
+            ),
+        ],
+    )
+    checkpoint = {"story_contract": {"protagonist_goal": "通过选拔"}}
+
+    async def fake_location_context(self, chapter_plan, novel_id):
+        return LocationContext(current="功法阁", narrative="旧书页气味很重。")
+
+    monkeypatch.setattr(ContextAgent, "_load_location_context", fake_location_context)
+
+    context = await ContextAgent(async_session, embedding_service=None).assemble_for_chapter(
+        "n_clean_plan",
+        "ch_clean_plan",
+        plan,
+        volume_id="vol_clean_plan",
+        checkpoint=checkpoint,
+    )
+
+    persisted_plan = checkpoint["chapter_context"]["chapter_plan"]
+    persisted_text = "\n".join(beat["summary"] for beat in persisted_plan["beats"])
+    card_text = "\n".join(
+        "\n".join(card.get("must_cover", []))
+        for card in persisted_plan["beat_boundary_cards"]
+    )
+    ending_candidates = "\n".join(
+        "\n".join(card.get("ending_driver_candidates", []))
+        for card in checkpoint["chapter_context"]["writing_cards"]
+    )
+
+    assert "主角在井边确认资源只剩三日" in persisted_text
+    assert "困境停点" not in persisted_text
+    assert "未解决的阻力" not in persisted_text
+    assert "下一步继续处理" not in persisted_text
+    assert "低头快步离去" not in ending_candidates
+    assert "低头快步离去" not in card_text
+    assert "低头快步离去" not in context.writing_cards[-1].ending_driver_candidates
+
+
+@pytest.mark.asyncio
 async def test_assemble_blocks_when_quality_preflight_blocks(async_session, monkeypatch):
     plan = ChapterPlan(
         chapter_number=1,

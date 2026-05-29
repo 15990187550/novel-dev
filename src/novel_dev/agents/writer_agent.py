@@ -15,6 +15,8 @@ from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.genre_template_service import GenreTemplateService
+from novel_dev.services.chapter_obligation_service import ChapterObligationService
+from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
@@ -776,7 +778,13 @@ class WriterAgent:
             if writing_card.required_facts:
                 card_lines.append("- 必须遵守事实: " + "；".join(writing_card.required_facts[:4]))
             if writing_card.required_payoffs:
-                card_lines.append("- 本节拍需在正文中兑现的信息: " + "；".join(writing_card.required_payoffs[:4]))
+                safe_payoffs = [
+                    StoryQualityService.sanitize_prompt_text(item)
+                    for item in writing_card.required_payoffs
+                    if not StoryQualityService._looks_like_abstract_ending_driver(str(item))
+                ]
+                if safe_payoffs:
+                    card_lines.append("- 本节拍需在正文中兑现的信息: " + "；".join(safe_payoffs[:4]))
             if getattr(writing_card, "canonical_constraints", None):
                 card_lines.append("- 标准设定约束: " + "；".join(writing_card.canonical_constraints[:4]))
             if getattr(writing_card, "continuity_requirements", None):
@@ -789,11 +797,16 @@ class WriterAgent:
                 card_lines.append("- 允许的最小桥接细节: " + "；".join(writing_card.allowed_bridge_details[:4]))
             if writing_card.forbidden_future_events:
                 card_lines.append("- 后续节拍保留内容: " + "；".join(writing_card.forbidden_future_events[:4]))
-            if writing_card.ending_hook:
-                card_lines.append(f"- 本节拍停点/钩子: {writing_card.ending_hook}")
+            if writing_card.ending_hook and not StoryQualityService._looks_like_abstract_ending_driver(writing_card.ending_hook):
+                card_lines.append(f"- 本节拍停点/钩子: {StoryQualityService.sanitize_prompt_text(writing_card.ending_hook)}")
+            if getattr(writing_card, "ending_driver_candidates", None):
+                card_lines.append("- 章末牵引候选: " + "；".join(writing_card.ending_driver_candidates[:3]))
+                card_lines.append("- 使用方式: 这些策略不是逐项硬性完成；只选最自然的一个最小写法。")
+            if getattr(writing_card, "humanity_surface_candidates", None):
+                card_lines.append("- 人物在场感候选: " + "；".join(writing_card.humanity_surface_candidates[:3]))
             if writing_card.reader_takeaway:
                 card_lines.append(f"- 正文完成效果: {writing_card.reader_takeaway}")
-            if is_last and (writing_card.required_payoffs or writing_card.ending_hook):
+            if is_last and (writing_card.required_payoffs or writing_card.ending_hook or getattr(writing_card, "ending_driver_candidates", None)):
                 card_lines.append(
                     "- 章末处理方向: 收束本章当场冲突，让线索或结果落到纸面；"
                     "停点要让读者的关注点有所推进，但不要机械添加危险、异象或反转。"
@@ -813,7 +826,7 @@ class WriterAgent:
                 role = "当前必须完成"
             else:
                 role = "后续停点参考"
-            plan_lines.append(f"{marker}节拍{i+1}（{role}）: {b.summary}")
+            plan_lines.append(f"{marker}节拍{i+1}（{role}）: {StoryQualityService.sanitize_prompt_text(b.summary)}")
         parts.append("### 章节计划\n" + "\n".join(plan_lines))
         if idx + 1 < total:
             parts.append(
@@ -844,7 +857,8 @@ class WriterAgent:
             parts.append(f"### 紧邻上文（承接风格与情感）\n{last_beat_text}")
 
         position = f"（第{idx+1}/{total}个节拍{'|章末节拍' if is_last else ''}）"
-        parts.append(f"### 当前节拍{position}\n{beat.model_dump_json()}")
+        safe_beat_payload = StoryQualityService.sanitize_prompt_payload(beat.model_dump())
+        parts.append(f"### 当前节拍{position}\n{json.dumps(safe_beat_payload, ensure_ascii=False)}")
 
         return "\n\n".join(parts)
 
@@ -922,6 +936,12 @@ class WriterAgent:
         if getattr(context, "scene_fuel", None):
             parts.append("### 可写作燃料\n" + self._format_scene_fuel(context.scene_fuel))
 
+        obligation_block = ChapterObligationService.render_prompt_block(
+            ChapterObligationService.build_from_context(context)
+        )
+        if obligation_block:
+            parts.append(obligation_block)
+
         contract_lines = [
             f"本章：{context.chapter_plan.title or context.chapter_plan.chapter_number}，目标约 {context.chapter_plan.target_word_count} 字。"
         ]
@@ -935,7 +955,7 @@ class WriterAgent:
         }
         for idx, beat in enumerate(context.chapter_plan.beats):
             contract_lines.append(f"\n#### beat {idx}")
-            contract_lines.append(f"- 摘要: {beat.summary}")
+            contract_lines.append(f"- 摘要: {StoryQualityService.sanitize_prompt_text(beat.summary)}")
             if beat.target_mood:
                 contract_lines.append(f"- 情绪: {beat.target_mood}")
             if beat.key_entities:
@@ -1015,8 +1035,10 @@ class WriterAgent:
         lines = []
         for field, label in field_labels:
             value = str(WriterAgent._get_plan_value(card, field, "") or "").strip()
+            if value and StoryQualityService._looks_like_abstract_ending_driver(value):
+                continue
             if value:
-                lines.append(f"- {label}: {value}")
+                lines.append(f"- {label}: {StoryQualityService.sanitize_prompt_text(value)}")
         strategy_lines = WriterAgent._format_soft_strategy_lenses(card)
         if strategy_lines:
             lines.append("- 可选叙事策略池: 这些策略不是逐项硬性完成；先判断当前场景最自然的表达方式，再选最小有效写法。")
@@ -1030,6 +1052,8 @@ class WriterAgent:
             ("relationship_subtext_lenses", "关系潜台词"),
             ("prose_texture_lenses", "文字质感"),
             ("freshness_lenses", "新鲜度"),
+            ("ending_driver_candidates", "章末牵引候选"),
+            ("humanity_surface_candidates", "人物在场感"),
         ]
         lines: list[str] = []
         for field, label in fields:

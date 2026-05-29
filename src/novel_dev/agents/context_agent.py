@@ -327,6 +327,7 @@ class ContextAgent:
             active_entity_payloads=active_entity_payloads,
             node="context_quality_preflight",
         )
+        chapter_plan = self._build_clean_chapter_plan_view(chapter_plan)
 
         guardrails = self._build_guardrails(chapter_plan, active_entities, location_context, checkpoint)
         genre_template = await GenreTemplateService(self.session).resolve(
@@ -571,6 +572,14 @@ class ContextAgent:
     def _attach_beat_boundary_cards(self, chapter_plan: ChapterPlan) -> ChapterPlan:
         cards = BeatBoundaryService.build_cards(chapter_plan.model_dump())
         return chapter_plan.model_copy(update={"beat_boundary_cards": cards})
+
+    def _build_clean_chapter_plan_view(self, chapter_plan: ChapterPlan) -> ChapterPlan:
+        clean_beats = [
+            beat.model_copy(update={"summary": StoryQualityService.sanitize_prompt_text(beat.summary)})
+            for beat in chapter_plan.beats
+        ]
+        clean_plan = chapter_plan.model_copy(update={"beats": clean_beats, "beat_boundary_cards": []})
+        return self._attach_beat_boundary_cards(clean_plan)
 
     def _extract_key_entities_from_plan(self, chapter_plan: ChapterPlan) -> List[str]:
         names: list[str] = []

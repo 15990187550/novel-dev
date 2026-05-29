@@ -73,3 +73,33 @@ def test_chapter_acceptance_does_not_guess_anchor_from_generic_suggestion_or_con
     instruction = result.repair_directives[0]["instruction"]
     assert "优先使用原文已有素材：" not in instruction
     assert "铜扣" not in instruction
+
+
+def test_chapter_acceptance_records_repairable_missing_obligation_from_contract():
+    result = ChapterAcceptanceService.assess(
+        content="主角把旧钥匙握在掌心，门里没有任何变化。",
+        quality_issues=[
+            {
+                "code": "required_payoff",
+                "severity": "warn",
+                "evidence": ["旧钥匙的当场后果没有写出来。"],
+                "suggestion": "补出线索造成的可见变化。",
+            }
+        ],
+        obligation_contract={
+            "must_hit_now": ["旧钥匙必须造成可见后果"],
+            "must_preserve": ["旧钥匙仍由主角持有"],
+            "can_defer": ["旧钥匙来源可以延后"],
+            "forbidden_crossings": ["不得提前确认房间主人身份"],
+        },
+    )
+
+    assert result.status == "repairable"
+    assert result.repairability == "patchable_obligation_gap"
+    assert result.missing_obligations == [
+        {
+            "kind": "must_hit_now",
+            "summary": "旧钥匙必须造成可见后果",
+            "evidence": "旧钥匙的当场后果没有写出来。",
+        }
+    ]

@@ -579,6 +579,81 @@ async def test_approve_entity_type_update_refreshes_entity_and_latest_state(asyn
     assert latest_state["goal"] == "查清真相"
 
 
+async def test_approve_add_operations_from_consolidation_agent_outputs(async_session):
+    repo = SettingWorkbenchRepository(async_session)
+    batch = await repo.create_review_batch(
+        novel_id="novel-add-ops",
+        source_type="consolidation",
+        summary="新增整合设定",
+        input_snapshot={},
+    )
+    character_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="character",
+        operation="add",
+        after_snapshot={
+            "name": "陆照",
+            "type": "character",
+            "state": {"identity": "道经传承者"},
+        },
+    )
+    setting_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="setting",
+        operation="add",
+        after_snapshot={
+            "title": "世界规则",
+            "doc_type": "worldview",
+            "content": "一世之尊体系压制外挂。",
+        },
+    )
+    source = Entity(id="entity-source", novel_id="novel-add-ops", type="character", name="孟奇")
+    target = Entity(id="entity-target", novel_id="novel-add-ops", type="item", name="道经")
+    async_session.add_all([source, target])
+    relationship_change = await repo.add_review_change(
+        batch_id=batch.id,
+        target_type="relationship",
+        operation="add",
+        after_snapshot={
+            "source_id": source.id,
+            "target_id": target.id,
+            "relation_type": "传承",
+            "meta": {"evidence": "孟奇传下道经"},
+        },
+    )
+    await async_session.commit()
+
+    service = SettingConsolidationService(async_session, agent=FailingIfCalledAgent())
+    updated_batch = await service.approve_review_batch(
+        batch.id,
+        change_ids=[character_change.id, setting_change.id, relationship_change.id],
+    )
+
+    updated_character_change = await repo.get_review_change(character_change.id)
+    updated_setting_change = await repo.get_review_change(setting_change.id)
+    updated_relationship_change = await repo.get_review_change(relationship_change.id)
+    created_entities = await service.entity_repo.list_by_novel("novel-add-ops")
+    created_doc = await DocumentRepository(async_session).get_by_id(f"setting_{setting_change.id}")
+    relationship_rows = await async_session.execute(
+        select(EntityRelationship).where(EntityRelationship.novel_id == "novel-add-ops")
+    )
+    relationships = relationship_rows.scalars().all()
+
+    assert updated_batch.status == "approved"
+    assert updated_character_change.status == "approved"
+    assert updated_setting_change.status == "approved"
+    assert updated_relationship_change.status == "approved"
+    assert any(entity.name == "陆照" and entity.type == "character" for entity in created_entities)
+    assert created_doc is not None
+    assert created_doc.title == "世界规则"
+    assert any(
+        rel.source_id == source.id
+        and rel.target_id == target.id
+        and rel.relation_type == "传承"
+        for rel in relationships
+    )
+
+
 async def test_approve_location_upsert_refreshes_entity(async_session):
     entity = Entity(
         id="location-upsert",

@@ -12,7 +12,12 @@ from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.llm.models import LLMResponse
 from novel_dev.schemas.review import DimensionIssue, DimensionScore, ScoreResult
-from novel_dev.services.quality_gate_service import QUALITY_UNCHECKED, QUALITY_WARN, QualityGateResult
+from novel_dev.services.quality_gate_service import (
+    QUALITY_MANUAL_REVIEW_REQUIRED,
+    QUALITY_UNCHECKED,
+    QUALITY_WARN,
+    QualityGateResult,
+)
 
 
 def test_build_genre_quality_issues_converts_type_drift_items():
@@ -29,6 +34,12 @@ def test_build_genre_quality_issues_converts_type_drift_items():
     assert issues[0].severity == "block"
     assert issues[0].source == "fast_review"
     assert any("宗门" in item for item in issues[0].evidence)
+
+
+def test_fast_review_uses_extra_edit_attempt_for_real_longform_scope_only():
+    assert FastReviewAgent._max_edit_attempts({}) == 2
+    assert FastReviewAgent._max_edit_attempts({"acceptance_scope": "real-contract"}) == 2
+    assert FastReviewAgent._max_edit_attempts({"acceptance_scope": "real-longform-volume1"}) == 3
 
 
 @pytest.mark.asyncio
@@ -616,6 +627,93 @@ def test_store_chapter_acceptance_records_parallel_repairable_diagnostic():
     assert "残信" in checkpoint["chapter_acceptance"]["repair_directives"][0]["instruction"]
 
 
+def test_store_chapter_acceptance_attaches_obligation_contract_from_chapter_context():
+    checkpoint = {
+        "chapter_context": {
+            "chapter_plan": {
+                "beat_boundary_cards": [
+                    {
+                        "beat_index": 0,
+                        "must_cover": ["旧钥匙必须造成可见后果"],
+                    }
+                ]
+            },
+            "writing_cards": [
+                {
+                    "beat_index": 0,
+                    "objective": "主角确认旧钥匙不是普通钥匙",
+                    "required_payoffs": ["旧钥匙必须触发一次当场变化"],
+                    "required_facts": ["旧钥匙仍在主角手里"],
+                }
+            ],
+        },
+        "quality_issues": [
+            {
+                "code": "required_payoff",
+                "severity": "warn",
+                "evidence": ["旧钥匙的当场变化没有写出来。"],
+                "suggestion": "补出线索造成的可见变化。",
+            }
+        ],
+    }
+
+    FastReviewAgent._store_chapter_acceptance(
+        checkpoint,
+        polished_text="主角把旧钥匙握在掌心，门里没有任何变化。",
+        target_word_count=1200,
+    )
+
+    acceptance = checkpoint["chapter_acceptance"]
+    assert acceptance["repairability"] == "patchable_obligation_gap"
+    assert acceptance["obligation_contract"]["must_hit_now"][:2] == [
+        "主角确认旧钥匙不是普通钥匙",
+        "旧钥匙必须触发一次当场变化",
+    ]
+    assert acceptance["missing_obligations"][0]["summary"] == "主角确认旧钥匙不是普通钥匙"
+
+
+def test_store_chapter_acceptance_records_nonblocking_improvement_directives_for_passed_chapter():
+    checkpoint = {
+        "chapter_improvement_directives": [{"instruction": "stale"}],
+        "per_dim_issues": [
+            {
+                "dim": "readability",
+                "beat_idx": 2,
+                "problem": "系统力量偏概念说明。",
+                "suggestion": "用赵元身体异变和擂台裂缝节奏替代抽象解释。",
+            },
+            {
+                "dim": "hook_strength",
+                "beat_idx": 2,
+                "problem": "章末焦点偏移。",
+                "suggestion": "让佛门气息触碰道经未激活符文，保留未知面。",
+            },
+        ],
+        "editor_guard_warnings": [
+            {
+                "beat_index": 1,
+                "suggested_rewrite_focus": "删除计划外传音。",
+            }
+        ],
+    }
+
+    FastReviewAgent._store_chapter_acceptance(
+        checkpoint,
+        polished_text="章节正文。",
+        target_word_count=1600,
+    )
+
+    assert checkpoint["chapter_acceptance"]["status"] == "accepted"
+    assert checkpoint["chapter_acceptance"]["repair_directives"] == []
+    directives = checkpoint["chapter_improvement_directives"]
+    assert [item["source"] for item in directives] == ["final_review", "final_review", "editor_guard"]
+    assert directives[0]["target"] == "readability"
+    assert directives[0]["beat_index"] == 2
+    assert "赵元身体异变" in directives[0]["instruction"]
+    assert "佛门气息" in directives[1]["instruction"]
+    assert "计划外传音" in directives[2]["instruction"]
+
+
 def test_store_quality_issues_ignores_resolved_structure_guard_for_warn_gate():
     guard = {
         "beat_index": 1,
@@ -794,7 +892,7 @@ async def test_fast_review_returns_to_editing_for_recoverable_quality_gate_block
         phase=Phase.FAST_REVIEWING,
         checkpoint_data={
             "acceptance_scope": "real-longform-volume1",
-            "edit_attempt_count": 2,
+            "edit_attempt_count": 3,
             "chapter_context": {
                 "chapter_plan": {"target_word_count": 12},
                 "writing_cards": [
@@ -852,7 +950,7 @@ async def test_fast_review_returns_to_editing_for_longform_repairable_structure_
         phase=Phase.FAST_REVIEWING,
         checkpoint_data={
             "acceptance_scope": "real-longform-volume1",
-            "edit_attempt_count": 2,
+            "edit_attempt_count": 3,
             "chapter_structure_guard": {
                 "beat_index": 2,
                 "issues": ["新增计划外事实", "删除关键决心表达"],
@@ -1099,6 +1197,73 @@ async def test_fast_review_returns_to_editing_for_sub_publishable_final_score_be
 
 
 @pytest.mark.asyncio
+async def test_fast_review_returns_to_editing_for_sub_excellent_passed_chapter_before_edit_limit(async_session):
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_excellent_threshold",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 1,
+            "chapter_context": {
+                "chapter_plan": {
+                    "target_word_count": 4,
+                    "beats": [{"summary": "主角在本章完成一次局部选择", "target_mood": "tense"}],
+                }
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_excellent_threshold",
+    )
+    repo = ChapterRepository(async_session)
+    await repo.create("c_excellent_threshold", "v1", 1, "Excellent Threshold")
+    await repo.update_text("c_excellent_threshold", raw_draft="甲乙丙。", polished_text="甲乙丙。")
+
+    final_score = ScoreResult(
+        overall=85,
+        dimensions=[
+            DimensionScore(name="readability", score=85, comment="可读但部分段落偏说明"),
+            DimensionScore(name="hook_strength", score=84, comment="结尾有悬念但焦点可更集中"),
+        ],
+        summary_feedback="章节可归档，但若目标是精品线，应减少解释性段落并集中章末钩子。",
+        per_dim_issues=[
+            DimensionIssue(
+                dim="readability",
+                beat_idx=0,
+                problem="关键力量表现偏解释说明。",
+                suggestion="改为通过身体反应、环境变化和人物动作呈现。",
+            )
+        ],
+    )
+
+    with patch(
+        "novel_dev.agents.fast_review_agent.call_and_parse_model",
+        new_callable=AsyncMock,
+        return_value=type("LLMCheck", (), {
+            "consistency_fixed": True,
+            "beat_cohesion_ok": True,
+            "notes": [],
+        })(),
+    ), patch(
+        "novel_dev.agents.critic_agent.CriticAgent._generate_score",
+        new_callable=AsyncMock,
+        return_value=final_score,
+    ):
+        await FastReviewAgent(async_session).review("novel_fr_excellent_threshold", "c_excellent_threshold")
+
+    chapter = await repo.get_by_id("c_excellent_threshold")
+    assert chapter.quality_status == QUALITY_UNCHECKED
+    assert chapter.final_review_score == 85
+
+    state = await director.resume("novel_fr_excellent_threshold")
+    assert state.current_phase == Phase.EDITING.value
+    final_polish = state.checkpoint_data["final_polish_issues"]
+    assert final_polish["target_score"] == 90
+    assert final_polish["polish_mode"] == "excellent_candidate"
+    assert final_polish["beat_issues"][0]["issues"][0]["dim"] == "readability"
+    assert state.checkpoint_data["chapter_improvement_directives"][0]["target"] == "readability"
+
+
+@pytest.mark.asyncio
 async def test_fast_review_warns_word_count_only_at_edit_limit(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
@@ -1195,14 +1360,14 @@ async def test_fast_review_holds_manual_review_required_at_edit_limit(async_sess
 
 
 @pytest.mark.asyncio
-async def test_fast_review_longform_downgrades_exhausted_nonblocking_quality_warnings(async_session):
+async def test_fast_review_longform_keeps_exhausted_readability_warnings_manual(async_session):
     director = NovelDirector(session=async_session)
     await director.save_checkpoint(
         "novel_fr_longform_warn",
         phase=Phase.FAST_REVIEWING,
         checkpoint_data={
             "acceptance_scope": "real-longform-volume1",
-            "edit_attempt_count": 2,
+            "edit_attempt_count": 3,
             "chapter_context": {
                 "chapter_plan": {
                     "target_word_count": 4,
@@ -1242,12 +1407,12 @@ async def test_fast_review_longform_downgrades_exhausted_nonblocking_quality_war
         await FastReviewAgent(async_session).review("novel_fr_longform_warn", "c_longform_warn")
 
     chapter = await repo.get_by_id("c_longform_warn")
-    assert chapter.quality_status == QUALITY_WARN
+    assert chapter.quality_status == QUALITY_MANUAL_REVIEW_REQUIRED
     assert any(item["code"] == "critical_dimension_score" for item in chapter.quality_reasons["warning_items"])
 
     state = await director.resume("novel_fr_longform_warn")
-    assert state.current_phase == Phase.LIBRARIAN.value
-    assert state.checkpoint_data["quality_gate"]["status"] == QUALITY_WARN
+    assert state.current_phase == Phase.FAST_REVIEWING.value
+    assert state.checkpoint_data["quality_gate"]["status"] == QUALITY_MANUAL_REVIEW_REQUIRED
 
 
 @pytest.mark.asyncio

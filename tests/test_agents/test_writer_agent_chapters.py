@@ -415,6 +415,42 @@ def test_whole_chapter_prompt_uses_narrative_variables_and_scene_fuel():
     assert "对话占比" not in prompt
 
 
+def test_whole_chapter_prompt_includes_chapter_obligation_contract():
+    from novel_dev.agents.writer_agent import WriterAgent
+    from novel_dev.schemas.context import BeatPlan, BeatWritingCard, ChapterContext, ChapterPlan, LocationContext
+
+    agent = WriterAgent.__new__(WriterAgent)
+    beat = BeatPlan(summary="主角带着旧钥匙进入封存房间。", key_entities=["主角", "旧钥匙"])
+    context = ChapterContext(
+        chapter_plan=ChapterPlan(chapter_number=2, title="压力转向", target_word_count=1200, beats=[beat]),
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="封存房间"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        writing_cards=[
+            BeatWritingCard(
+                beat_index=0,
+                objective="主角确认旧钥匙不是普通钥匙",
+                required_facts=["旧钥匙仍在主角手里"],
+                required_payoffs=["旧钥匙必须触发一次当场变化"],
+                forbidden_future_events=["房间主人真实身份留到后续章节"],
+            )
+        ],
+    )
+
+    prompt = agent._build_whole_chapter_context_message(context)
+
+    assert "### 章节义务合同" in prompt
+    assert "主角确认旧钥匙不是普通钥匙" in prompt
+    assert "旧钥匙必须触发一次当场变化" in prompt
+    assert "旧钥匙仍在主角手里" in prompt
+    assert "房间主人真实身份留到后续章节" in prompt
+    assert "必须出现新风险" not in prompt
+    assert "必须短对话" not in prompt
+
+
 def test_whole_chapter_prompt_includes_compressed_narrative_source():
     from novel_dev.agents.writer_agent import WriterAgent
     from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, LocationContext

@@ -25,6 +25,7 @@ TARGET_CHAPTERS="${TARGET_CHAPTERS:-1200}"
 TARGET_WORD_COUNT="${TARGET_WORD_COUNT:-2000000}"
 TARGET_VOLUME_NUMBER="${TARGET_VOLUME_NUMBER:-1}"
 TARGET_VOLUME_CHAPTERS="${TARGET_VOLUME_CHAPTERS:-}"
+RUN_CHAPTER_LIMIT="${RUN_CHAPTER_LIMIT:-}"
 
 if [[ "${LLM_MODE}" == real* ]]; then
   novel_dev_require_env DEEPSEEK_API_KEY MINIMAX_API_KEY
@@ -55,6 +56,10 @@ args+=(
 
 if [[ -n "${TARGET_VOLUME_CHAPTERS}" ]]; then
   args+=(--target-volume-chapters "${TARGET_VOLUME_CHAPTERS}")
+fi
+
+if [[ -n "${RUN_CHAPTER_LIMIT}" ]]; then
+  args+=(--run-chapter-limit "${RUN_CHAPTER_LIMIT}")
 fi
 
 if [[ -n "${STAGE}" ]]; then

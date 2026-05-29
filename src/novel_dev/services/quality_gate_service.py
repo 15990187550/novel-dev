@@ -103,6 +103,7 @@ class QualityGateService:
         "ai_flavor": ("prose", "chapter", "guided"),
         "language_style": ("style", "chapter", "guided"),
         "required_payoff": ("plot", "chapter", "guided"),
+        "ending_driver": ("plot", "chapter", "guided"),
         "final_review_score": ("prose", "chapter", "guided"),
         "critical_dimension_score": ("plot", "chapter", "guided"),
         "review_note": ("structure", "chapter", "manual"),
@@ -120,6 +121,7 @@ class QualityGateService:
         "ai_flavor": "替换模板化总结句，增加具体动作、感官细节和角色独有表达。",
         "language_style": "统一叙述语体，移除未授权外文、现代术语和破坏世界观的表达。",
         "required_payoff": "回到章节计划补写缺失线索、钩子或回收点，确保读者能在正文中明确感知。",
+        "ending_driver": "回到章末已出现的人物、物件、风险或选择，让其中一个产生可见后果或限制下一步行动。",
         "final_review_score": "针对低分维度重修章节，优先处理情节推进、人物动机和语言完成度。",
         "critical_dimension_score": "针对低分关键维度定点重修，优先修复章末钩子、冲突升级和人物在场反应。",
         "review_note": "人工核查评审备注，判断是否需要结构重排、补写或删除问题段落。",
@@ -141,6 +143,7 @@ class QualityGateService:
         final_review_feedback: dict | None = None,
         polished_text: str | None = None,
         required_payoffs: list[str] | None = None,
+        ending_driver_candidates: list[str] | None = None,
         acceptance_scope: str | None = None,
     ) -> QualityGateResult:
         blocking: list[dict[str, Any]] = []
@@ -201,6 +204,14 @@ class QualityGateService:
                 "required_payoff",
                 "章节计划要求的线索或章末钩子未充分兑现",
                 {"missing": missing_payoffs[:5]},
+            ))
+
+        missing_ending_drivers = cls._missing_ending_drivers(polished_text, ending_driver_candidates or [])
+        if missing_ending_drivers:
+            warnings.append(cls._item(
+                "ending_driver",
+                "章末缺少可见的下一步驱动",
+                {"missing": missing_ending_drivers[:5]},
             ))
 
         for note in report.notes:
@@ -312,7 +323,13 @@ class QualityGateService:
 
     @staticmethod
     def _requires_manual_review(warnings: list[dict[str, Any]]) -> bool:
-        manual_review_codes = {"final_review_score", "critical_dimension_score", "language_style", "required_payoff"}
+        manual_review_codes = {
+            "final_review_score",
+            "critical_dimension_score",
+            "language_style",
+            "required_payoff",
+            "ending_driver",
+        }
         return any(str(item.get("code")) in manual_review_codes for item in warnings if isinstance(item, dict))
 
     @classmethod
@@ -401,6 +418,69 @@ class QualityGateService:
             if cls._text_overlap(normalized_payoff, normalized_text) < 0.55:
                 missing.append(str(payoff))
         return missing
+
+    @classmethod
+    def _missing_ending_drivers(cls, polished_text: str | None, candidates: list[str]) -> list[str]:
+        text = str(polished_text or "").strip()
+        if not text or not candidates:
+            return []
+        ending = text[-500:]
+        normalized_ending = cls._normalize_for_match(ending)
+        evaluated: list[str] = []
+        for candidate in candidates:
+            cleaned = str(candidate or "").strip()
+            if not cleaned:
+                continue
+            terms = cls._ending_driver_terms(cleaned)
+            if not terms:
+                continue
+            evaluated.append(cleaned)
+            if cls._ending_driver_evidence_present(normalized_ending, terms):
+                return []
+        return evaluated
+
+    @classmethod
+    def _ending_driver_evidence_present(cls, normalized_ending: str, terms: list[str]) -> bool:
+        evidence_markers = (
+            "发热", "变热", "变冷", "变亮", "亮起", "震动", "颤动", "裂开", "渗出",
+            "响", "停住", "回头", "盯", "视线", "拦", "堵", "跟", "靠近", "收紧",
+            "握紧", "按住", "摸到", "刺痛", "发麻", "沉", "烫", "冷", "沙沙",
+        )
+        for term in terms:
+            start = 0
+            while True:
+                index = normalized_ending.find(term, start)
+                if index < 0:
+                    break
+                window = normalized_ending[max(0, index - 30): index + len(term) + 50]
+                if any(marker in window for marker in evidence_markers):
+                    return True
+                start = index + len(term)
+        return False
+
+    @staticmethod
+    def _ending_driver_terms(candidate: str) -> list[str]:
+        stop_terms = {
+            "出现", "可感知", "变化", "状态", "行动", "限制", "关系", "压力",
+            "章末", "下一步", "受限", "手里", "可见", "后果", "忽然", "正在",
+            "留下", "人物", "物件", "风险", "选择",
+        }
+        terms: list[str] = []
+        for chunk in re.findall(r"[\u4e00-\u9fff]{2,12}", candidate):
+            for part in re.split(r"在|被|让|使|把|将|出现|发生|留下|产生|变得|手里|身上|眼前|章末|下一步", chunk):
+                part = part.strip()
+                if len(part) >= 2:
+                    terms.append(part[:6])
+            if len(chunk) <= 4:
+                terms.append(chunk)
+        seen = set()
+        result = []
+        for term in terms:
+            if term in seen or term in stop_terms or term.endswith(("变化", "压力", "后果")):
+                continue
+            seen.add(term)
+            result.append(term)
+        return result[:4]
 
     @classmethod
     def _abstract_payoff_covered(cls, normalized_payoff: str, normalized_text: str) -> bool:

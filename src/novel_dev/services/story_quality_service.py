@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
-from novel_dev.schemas.context import BeatWritingCard, ChapterPlan
+from novel_dev.schemas.context import BeatPlan, BeatWritingCard, ChapterPlan
 from novel_dev.schemas.outline import SynopsisData, VolumeBeat
 from novel_dev.services.quality_preflight_service import QualityPreflightService
 
@@ -73,6 +73,8 @@ class StoryQualityService:
         "线索无法收束",
         "下一步追查失去落点",
         "下一章继续处理",
+        "失去处理",
+        "主动权",
     )
 
     @classmethod
@@ -247,6 +249,9 @@ class StoryQualityService:
                 relationship_subtext_lenses=cls._relationship_subtext_lenses(beat.summary, list(beat.key_entities)),
                 prose_texture_lenses=cls._prose_texture_lenses(beat.summary, beat.target_mood),
                 freshness_lenses=cls._freshness_lenses(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
+                ending_driver_candidates=cls._ending_driver_candidates(beat, is_last=index == len(chapter_plan.beats) - 1),
+                humanity_surface_candidates=cls._humanity_surface_candidates(beat.summary, beat.target_mood, list(beat.key_entities)),
+                summary_risk_flags=cls._summary_risk_flags(beat.summary, is_last=index == len(chapter_plan.beats) - 1),
             ))
         return cards
 
@@ -592,16 +597,200 @@ class StoryQualityService:
         return lenses
 
     @classmethod
+    def _ending_driver_candidates(cls, beat: BeatPlan, *, is_last: bool) -> list[str]:
+        if not is_last:
+            return []
+        clauses = cls._contract_clauses(beat.summary)
+        entities = [str(item).strip() for item in beat.key_entities if str(item).strip()]
+        concrete_entities = [
+            item for item in entities
+            if not cls._looks_like_abstract_topic(item)
+        ]
+        candidates: list[str] = []
+        for clause in reversed(clauses):
+            if cls._clause_has_concrete_driver(clause, concrete_entities):
+                candidates.append(cls._driver_from_clause(clause, concrete_entities))
+        for item in beat.foreshadowings_to_embed:
+            cleaned = cls.sanitize_prompt_text(item)
+            if cleaned and not cls._looks_like_abstract_topic(cleaned):
+                candidates.append(f"已埋伏笔在章末留下可感知余波：{cls._shorten_contract_clause(cleaned)}")
+        return cls._dedupe_text(candidates)[:3]
+
+    @classmethod
+    def _humanity_surface_candidates(cls, text: str, target_mood: str, key_entities: list[str]) -> list[str]:
+        clauses = cls._contract_clauses(text)
+        entities = [item for item in key_entities if item and not cls._looks_like_abstract_topic(item)]
+        candidates: list[str] = []
+        if entities:
+            candidates.append(f"让{entities[0]}的动作停顿、身体反应或手边物件承载情绪变化")
+        if len(entities) >= 2:
+            candidates.append(f"用{entities[0]}与{entities[1]}之间的视线、距离、避让或未出口反应呈现关系压力")
+        if clauses:
+            candidates.append(f"从当前事实挑一个可触摸细节落地：{cls._shorten_contract_clause(clauses[0])}")
+        mood = coerce_to_text(target_mood).strip()
+        if mood:
+            candidates.append(f"把{mood}写成场内可见后果，而不是作者替人物下判断")
+        return cls._dedupe_text(candidates)[:4]
+
+    @classmethod
+    def _summary_risk_flags(cls, text: str, *, is_last: bool) -> list[str]:
+        flags: list[str] = []
+        raw_clauses = cls._split_clauses(text)
+        if any(cls._is_meta_plan_clause(clause) or cls._looks_like_abstract_ending_driver(clause) for clause in raw_clauses):
+            flags.append("计划中存在抽象或元叙述句，不可直接写成正文。")
+        if is_last and not cls._ending_driver_candidates(
+            BeatPlan(summary=text, target_mood="", key_entities=[], foreshadowings_to_embed=[]),
+            is_last=True,
+        ):
+            flags.append("章末缺少可直接落地的牵引来源。")
+        return cls._dedupe_text(flags)
+
+    @classmethod
+    def _clause_has_concrete_driver(cls, clause: str, entities: list[str]) -> bool:
+        if cls._looks_like_abstract_ending_driver(clause):
+            return False
+        if cls._looks_like_static_exit_closure(clause):
+            return False
+        concrete_surface_markers = (
+            "手", "眼", "门", "血", "纸", "脚步", "视线", "声音", "窗", "袖", "袋",
+            "书", "信", "钥", "令", "牌", "灯", "火", "影", "伤", "药", "刀", "剑",
+        )
+        observable_change_markers = (
+            "发现", "听见", "传来", "出现", "留下", "暴露", "拦", "堵", "盯", "追",
+            "逼", "夺", "失去", "拿到", "换到", "交出", "经过", "提醒", "裂", "亮",
+            "响", "停", "回头", "靠近", "收紧", "握", "摸", "刺痛", "变",
+        )
+        has_entity = bool(entities and any(entity in clause for entity in entities))
+        has_surface = any(term in clause for term in concrete_surface_markers)
+        has_change = any(term in clause for term in observable_change_markers)
+        if has_entity and has_change:
+            return True
+        return has_surface and has_change
+
+    @classmethod
+    def _driver_from_clause(cls, clause: str, entities: list[str]) -> str:
+        shortened = cls._shorten_contract_clause(clause)
+        matched = [entity for entity in entities if entity in clause]
+        if matched:
+            return f"{'、'.join(matched[:2])}在章末留下可见后果：{shortened}"
+        return f"章末沿已出现材料留下可见后果：{shortened}"
+
+    @classmethod
+    def _looks_like_abstract_ending_driver(cls, text: str) -> bool:
+        normalized = coerce_to_text(text)
+        if not normalized:
+            return True
+        markers = (
+            "未解变化压到章末",
+            "下一步继续处理",
+            "下一步行动",
+            "失去落点",
+            "明确停点",
+            "后续行动就会",
+            "后续行动",
+            "当场收束",
+            "未解决的阻力",
+            "压回眼前",
+            "读者",
+        )
+        paired_abstract = (
+            "接近" in normalized
+            and any(marker in normalized for marker in ("停点", "未解", "阻力", "困境", "事件", "目标"))
+        )
+        return any(marker in normalized for marker in markers) or paired_abstract or cls._is_meta_plan_clause(normalized)
+
+    @staticmethod
+    def _looks_like_static_exit_closure(text: str) -> bool:
+        normalized = coerce_to_text(text)
+        if not normalized:
+            return True
+        exit_markers = (
+            "离去",
+            "走远",
+            "快步",
+            "转身",
+            "低头",
+            "脚步没停",
+        )
+        driver_markers = (
+            "发现",
+            "听见",
+            "传来",
+            "出现",
+            "暴露",
+            "拦",
+            "堵",
+            "追",
+            "逼",
+            "夺",
+            "失去",
+            "拿到",
+            "换到",
+            "交出",
+            "提醒",
+            "裂",
+            "亮",
+            "响",
+            "刺痛",
+            "变",
+        )
+        return any(marker in normalized for marker in exit_markers) and not any(
+            marker in normalized for marker in driver_markers
+        )
+
+    @staticmethod
+    def _looks_like_abstract_topic(text: str) -> bool:
+        normalized = coerce_to_text(text).strip("“”")
+        return any(marker in normalized for marker in ("困境", "旧案", "停点", "线索", "事件", "目标")) and len(normalized) <= 8
+
+    @classmethod
     def _contract_clauses(cls, text: str) -> list[str]:
         clauses = []
         for clause in cls._split_clauses(text):
             cleaned = cls._clean_contract_clause(clause)
             if not cleaned:
                 continue
-            if cls._is_generic_repair_clause(cleaned) or cls._is_meta_plan_clause(cleaned):
+            if (
+                cls._is_generic_repair_clause(cleaned)
+                or cls._is_meta_plan_clause(cleaned)
+                or cls._looks_like_abstract_ending_driver(cleaned)
+                or cls._looks_like_static_exit_closure(cleaned)
+            ):
                 continue
             clauses.append(cleaned)
         return cls._dedupe_text(clauses)
+
+    @classmethod
+    def sanitize_prompt_text(cls, text: Any) -> str:
+        raw = coerce_to_text(text).strip()
+        if not raw:
+            return ""
+        clauses = cls._contract_clauses(raw)
+        if clauses:
+            return "；".join(clauses)
+        return cls.strip_generic_repair_clauses(raw).strip()
+
+    @classmethod
+    def sanitize_prompt_payload(cls, value: Any) -> Any:
+        text_keys = {
+            "summary",
+            "objective",
+            "conflict",
+            "turning_point",
+            "stake",
+            "ending_hook",
+            "reader_takeaway",
+            "scene_state",
+            "next_beat_hook",
+        }
+        if isinstance(value, dict):
+            return {
+                key: cls.sanitize_prompt_text(item) if key in text_keys else cls.sanitize_prompt_payload(item)
+                for key, item in value.items()
+            }
+        if isinstance(value, list):
+            return [cls.sanitize_prompt_payload(item) for item in value]
+        return value
 
     @classmethod
     def _clean_contract_clause(cls, text: str) -> str:

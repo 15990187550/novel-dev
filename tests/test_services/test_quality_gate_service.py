@@ -162,6 +162,80 @@ def test_evaluate_fast_review_warns_when_required_payoff_missing():
     assert any(item["code"] == "required_payoff" for item in gate.warning_items)
 
 
+def test_evaluate_fast_review_warns_when_ending_driver_candidates_not_visible_in_ending():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照收起残页，低头走出功法阁。他终于意识到接下来会很麻烦。",
+        ending_driver_candidates=["残页在林照手里出现可感知变化", "周家弟子的视线让林照下一步受限"],
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "manual_review_required"
+    item = next(item for item in gate.warning_items if item["code"] == "ending_driver")
+    assert "章末缺少可见的下一步驱动" in item["message"]
+    assert "残页" in str(item["detail"])
+
+
+def test_evaluate_fast_review_accepts_visible_ending_driver_evidence():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照走出功法阁时，怀里的残页忽然发热，纸边贴着胸口轻轻颤了一下。",
+        ending_driver_candidates=["残页在林照手里出现可感知变化"],
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "pass"
+    assert not any(item["code"] == "ending_driver" for item in gate.warning_items)
+
+
+def test_evaluate_fast_review_accepts_any_one_visible_ending_driver_candidate():
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    gate = QualityGateService.evaluate_fast_review(
+        report,
+        target_word_count=1000,
+        polished_word_count=1000,
+        final_review_score=82,
+        polished_text="林照跨出门槛时，周家弟子的视线忽然停在他怀里那本残页上。",
+        ending_driver_candidates=["玉佩在林照手里出现可感知变化", "周家弟子的视线让林照下一步受限"],
+        acceptance_scope="real-longform-volume1",
+    )
+
+    assert gate.status == "pass"
+    assert not any(item["code"] == "ending_driver" for item in gate.warning_items)
+
+
 def test_evaluate_fast_review_accepts_abstract_required_payoff_when_semantically_covered():
     report = FastReviewReport(
         word_count_ok=True,

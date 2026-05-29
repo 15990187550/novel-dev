@@ -16,6 +16,7 @@ from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.quality_gate_service import (
     QUALITY_BLOCK,
     QUALITY_MANUAL_REVIEW_REQUIRED,
+    QUALITY_PASS,
     QUALITY_UNCHECKED,
     QUALITY_WARN,
     QualityGateService,
@@ -25,6 +26,7 @@ from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.chapter_acceptance_service import ChapterAcceptanceService
+from novel_dev.services.chapter_obligation_service import ChapterObligationService
 from novel_dev.schemas.quality import QualityIssue
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
@@ -34,7 +36,9 @@ FAST_REVIEW_PASS_SCORE = 100
 FAST_REVIEW_FAIL_SCORE = 50
 # Editor ↔ FastReview 最大循环次数,防止极端情况下无限翻译
 MAX_EDIT_ATTEMPTS = 2
+LONGFORM_MAX_EDIT_ATTEMPTS = 3
 MAX_QUALITY_GATE_REPAIR_ATTEMPTS = 1
+EXCELLENT_FINAL_REVIEW_SCORE = 90
 
 
 def _apply_continuity_audit_to_gate(gate, audit):
@@ -299,6 +303,7 @@ class FastReviewAgent:
 
             score = await CriticAgent(self.session)._generate_score(polished, chapter_context, novel_id)
             feedback = {
+                "overall": score.overall,
                 "summary_feedback": score.summary_feedback,
                 "breakdown": {
                     dim.name: {"score": dim.score, "comment": dim.comment}
@@ -468,7 +473,8 @@ class FastReviewAgent:
         )
 
         edit_attempts = checkpoint.get("edit_attempt_count", 0)
-        if passed or edit_attempts >= MAX_EDIT_ATTEMPTS:
+        max_edit_attempts = self._max_edit_attempts(checkpoint)
+        if passed or edit_attempts >= max_edit_attempts:
             final_score, final_feedback = await self._score_final_text(
                 novel_id=novel_id,
                 chapter_id=chapter_id,
@@ -485,6 +491,7 @@ class FastReviewAgent:
                 final_review_feedback=final_feedback,
                 polished_text=polished,
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
+                ending_driver_candidates=self._ending_driver_candidates_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             continuity_audit = ContinuityAuditService.audit_chapter(
@@ -511,6 +518,7 @@ class FastReviewAgent:
                 checkpoint,
                 polished_text=polished,
                 target_word_count=target,
+                final_feedback=final_feedback,
             )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
@@ -577,6 +585,7 @@ class FastReviewAgent:
                 final_review_score=final_score,
                 checkpoint=checkpoint,
                 edit_attempts=edit_attempts,
+                final_feedback=final_feedback,
             ):
                 checkpoint["final_polish_issues"] = self._build_final_polish_issues(
                     final_feedback=final_feedback,
@@ -594,8 +603,9 @@ class FastReviewAgent:
                     metadata={
                         "final_review_score": final_score,
                         "edit_attempts": edit_attempts,
-                        "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                        "max_edit_attempts": max_edit_attempts,
                         "final_polish_issues": checkpoint["final_polish_issues"],
+                        "target_score": EXCELLENT_FINAL_REVIEW_SCORE,
                     },
                 )
                 await self.director.save_checkpoint(
@@ -625,7 +635,7 @@ class FastReviewAgent:
                 )
             elif not passed:
                 report.notes.append(
-                    f"edit_attempts={edit_attempts} 已达上限 {MAX_EDIT_ATTEMPTS},跳过精修轮转"
+                    f"edit_attempts={edit_attempts} 已达上限 {max_edit_attempts},跳过精修轮转"
                 )
                 log_agent_detail(
                     novel_id,
@@ -637,7 +647,7 @@ class FastReviewAgent:
                     metadata={
                         "passed": passed,
                         "edit_attempts": edit_attempts,
-                        "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                        "max_edit_attempts": max_edit_attempts,
                         "target_phase": Phase.LIBRARIAN.value,
                         "quality_gate": gate.model_dump(),
                         "notes": report.notes,
@@ -682,7 +692,7 @@ class FastReviewAgent:
                 metadata={
                     "passed": passed,
                     "edit_attempts": edit_attempts,
-                    "max_edit_attempts": MAX_EDIT_ATTEMPTS,
+                    "max_edit_attempts": max_edit_attempts,
                     "target_phase": Phase.EDITING.value,
                     "notes": report.notes,
                 },
@@ -789,13 +799,82 @@ class FastReviewAgent:
         *,
         polished_text: str,
         target_word_count: int | None = None,
+        final_feedback: dict | None = None,
     ) -> None:
+        obligation_contract = ChapterObligationService.build_from_context(
+            checkpoint.get("chapter_context") or {}
+        )
         assessment = ChapterAcceptanceService.assess(
             content=polished_text,
             quality_issues=checkpoint.get("quality_issues") or [],
             target_word_count=target_word_count,
+            obligation_contract=obligation_contract,
         )
         checkpoint["chapter_acceptance"] = assessment.model_dump()
+        improvement_directives = FastReviewAgent._build_chapter_improvement_directives(
+            checkpoint,
+            final_feedback=final_feedback,
+        )
+        if improvement_directives:
+            checkpoint["chapter_improvement_directives"] = improvement_directives
+        else:
+            checkpoint.pop("chapter_improvement_directives", None)
+
+    @staticmethod
+    def _build_chapter_improvement_directives(
+        checkpoint: dict,
+        *,
+        final_feedback: dict | None = None,
+    ) -> list[dict]:
+        directives: list[dict] = []
+        per_dim_issues = (
+            final_feedback.get("per_dim_issues")
+            if isinstance(final_feedback, dict) and isinstance(final_feedback.get("per_dim_issues"), list)
+            else checkpoint.get("per_dim_issues")
+        )
+        if isinstance(per_dim_issues, list):
+            for issue in per_dim_issues:
+                if not isinstance(issue, dict):
+                    continue
+                suggestion = str(issue.get("suggestion") or "").strip()
+                if not suggestion:
+                    continue
+                directive = {
+                    "mode": "improve",
+                    "source": "final_review",
+                    "target": str(issue.get("dim") or "chapter"),
+                    "instruction": suggestion,
+                    "non_blocking": True,
+                }
+                if issue.get("beat_idx") is not None:
+                    directive["beat_index"] = issue.get("beat_idx")
+                if issue.get("problem"):
+                    directive["problem"] = str(issue.get("problem"))
+                directives.append(directive)
+                if len(directives) >= 6:
+                    break
+
+        editor_guard_warnings = checkpoint.get("editor_guard_warnings")
+        if isinstance(editor_guard_warnings, list):
+            for warning in editor_guard_warnings:
+                if not isinstance(warning, dict):
+                    continue
+                focus = str(warning.get("suggested_rewrite_focus") or "").strip()
+                if not focus:
+                    continue
+                directive = {
+                    "mode": "improve",
+                    "source": "editor_guard",
+                    "target": "structure_guard",
+                    "instruction": focus,
+                    "non_blocking": True,
+                }
+                if warning.get("beat_index") is not None:
+                    directive["beat_index"] = warning.get("beat_index")
+                directives.append(directive)
+                if len(directives) >= 6:
+                    break
+        return directives
 
     @staticmethod
     def _unresolved_structure_guard(checkpoint: dict) -> dict | None:
@@ -831,14 +910,44 @@ class FastReviewAgent:
         return result
 
     @staticmethod
+    def _ending_driver_candidates_from_context(chapter_context: dict) -> list[str]:
+        if not isinstance(chapter_context, dict):
+            return []
+        cards = chapter_context.get("writing_cards") or []
+        if not isinstance(cards, list):
+            return []
+        max_beat = None
+        for card in cards:
+            if isinstance(card, dict) and isinstance(card.get("beat_index"), int):
+                max_beat = card["beat_index"] if max_beat is None else max(max_beat, card["beat_index"])
+        candidates: list[str] = []
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            if max_beat is not None and card.get("beat_index") != max_beat:
+                continue
+            value = card.get("ending_driver_candidates")
+            if isinstance(value, list):
+                candidates.extend(str(item) for item in value if str(item or "").strip())
+        seen = set()
+        result = []
+        for item in candidates:
+            if item in seen:
+                continue
+            seen.add(item)
+            result.append(item)
+        return result
+
+    @staticmethod
     def _should_return_to_editing_for_final_polish(
         *,
         gate,
         final_review_score: int | None,
         checkpoint: dict,
         edit_attempts: int,
+        final_feedback: dict | None = None,
     ) -> bool:
-        if gate.status == QUALITY_BLOCK or edit_attempts >= MAX_EDIT_ATTEMPTS:
+        if gate.status == QUALITY_BLOCK or edit_attempts >= FastReviewAgent._max_edit_attempts(checkpoint):
             return False
         warning_codes = {
             str(item.get("code"))
@@ -850,13 +959,44 @@ class FastReviewAgent:
         if warning_codes.intersection({"final_review_score", "critical_dimension_score", "required_payoff"}):
             return True
         editor_warnings = checkpoint.get("editor_guard_warnings")
-        return isinstance(editor_warnings, list) and bool(editor_warnings)
+        if isinstance(editor_warnings, list) and bool(editor_warnings):
+            return True
+        return FastReviewAgent._should_return_for_excellent_polish(
+            gate=gate,
+            final_review_score=final_review_score,
+            final_feedback=final_feedback,
+        )
+
+    @staticmethod
+    def _max_edit_attempts(checkpoint: dict | None) -> int:
+        if isinstance(checkpoint, dict) and str(checkpoint.get("acceptance_scope") or "") == "real-longform-volume1":
+            return LONGFORM_MAX_EDIT_ATTEMPTS
+        return MAX_EDIT_ATTEMPTS
+
+    @staticmethod
+    def _should_return_for_excellent_polish(
+        *,
+        gate,
+        final_review_score: int | None,
+        final_feedback: dict | None,
+    ) -> bool:
+        if gate.status not in {QUALITY_PASS, QUALITY_WARN}:
+            return False
+        if not isinstance(final_review_score, (int, float)):
+            return False
+        if final_review_score >= EXCELLENT_FINAL_REVIEW_SCORE:
+            return False
+        if final_review_score < 82:
+            return False
+        if not isinstance(final_feedback, dict):
+            return False
+        return any(isinstance(item, dict) and item.get("suggestion") for item in final_feedback.get("per_dim_issues") or [])
 
     @staticmethod
     def _downgrade_exhausted_longform_quality_warnings(gate, *, checkpoint: dict, edit_attempts: int):
         if gate.status != QUALITY_MANUAL_REVIEW_REQUIRED:
             return gate
-        if edit_attempts < MAX_EDIT_ATTEMPTS:
+        if edit_attempts < FastReviewAgent._max_edit_attempts(checkpoint):
             return gate
         if str(checkpoint.get("acceptance_scope") or "") != "real-longform-volume1":
             return gate
@@ -867,12 +1007,7 @@ class FastReviewAgent:
             for item in gate.warning_items
             if isinstance(item, dict) and item.get("code")
         }
-        auto_run_safe_codes = {
-            "final_review_score",
-            "critical_dimension_score",
-            "word_count_drift",
-            "ai_flavor",
-        }
+        auto_run_safe_codes = {"word_count_drift"}
         if not warning_codes or not warning_codes.issubset(auto_run_safe_codes):
             return gate
         gate.status = QUALITY_WARN
@@ -933,7 +1068,7 @@ class FastReviewAgent:
             else:
                 global_issues.append(issue)
 
-        return {
+        result = {
             "source": "final_review",
             "summary_feedback": final_feedback.get("summary_feedback"),
             "beat_issues": [
@@ -944,6 +1079,13 @@ class FastReviewAgent:
             "quality_gate_blocking_items": gate_data.get("blocking_items") or [],
             "quality_gate_warnings": gate_data.get("warning_items") or [],
         }
+        overall = final_feedback.get("overall") or final_feedback.get("score")
+        if isinstance(overall, (int, float)) and overall < EXCELLENT_FINAL_REVIEW_SCORE:
+            result["polish_mode"] = "excellent_candidate"
+            result["target_score"] = EXCELLENT_FINAL_REVIEW_SCORE
+        elif final_feedback.get("summary_feedback"):
+            result["target_score"] = EXCELLENT_FINAL_REVIEW_SCORE
+        return result
 
     async def review_standalone(self, novel_id: str, chapter_id: str, checkpoint: dict) -> FastReviewReport:
         log_service.add_log(novel_id, "FastReviewAgent", f"开始独立快速评审: {chapter_id}")
@@ -1032,7 +1174,7 @@ class FastReviewAgent:
             feedback=report.model_dump(),
         )
         edit_attempts = checkpoint.get("edit_attempt_count", 0)
-        if passed or edit_attempts >= MAX_EDIT_ATTEMPTS:
+        if passed or edit_attempts >= self._max_edit_attempts(checkpoint):
             final_score, final_feedback = await self._score_final_text(
                 novel_id=novel_id,
                 chapter_id=chapter_id,
@@ -1049,6 +1191,7 @@ class FastReviewAgent:
                 final_review_feedback=final_feedback,
                 polished_text=polished,
                 required_payoffs=self._required_payoffs_from_context(checkpoint.get("chapter_context", {})),
+                ending_driver_candidates=self._ending_driver_candidates_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
             continuity_audit = ContinuityAuditService.audit_chapter(

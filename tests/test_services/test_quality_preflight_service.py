@@ -133,3 +133,33 @@ def test_preflight_builds_dynamic_contract_from_entities_and_story_contract():
     assert any("主角长期目标" in item for item in contract["canonical_constraints"])
     assert any("林照 固定身份" in item for item in contract["canonical_constraints"])
     assert any("玉佩" in item for item in contract["continuity_requirements"])
+
+
+def test_preflight_warns_when_last_beat_has_only_abstract_ending_driver():
+    plan = ChapterPlan(
+        chapter_number=3,
+        title="章末抽象停点",
+        target_word_count=1600,
+        beats=[
+            BeatPlan(
+                summary="林照为查旧钥匙潜入库房，却被守卫拦住；他必须在交出钥匙和暴露身份之间选择，失败就会失去钥匙。",
+                target_mood="紧张",
+                key_entities=["林照", "旧钥匙"],
+            ),
+            BeatPlan(
+                summary=(
+                    "林照接近旧案停点时，未解决的阻力再次压回眼前；"
+                    "与“旧案”直接相关的未解变化压到章末，逼得林照下一步继续处理。"
+                ),
+                target_mood="压迫",
+                key_entities=["林照"],
+            ),
+        ],
+    )
+
+    report = QualityPreflightService.evaluate_chapter_plan(plan)
+
+    assert any(issue.code == "weak_ending_driver" for issue in report.warning_issues)
+    issue = next(issue for issue in report.warning_issues if issue.code == "weak_ending_driver")
+    assert issue.beat_index == 1
+    assert "具体牵引来源" in issue.message

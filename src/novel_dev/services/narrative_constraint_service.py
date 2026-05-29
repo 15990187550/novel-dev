@@ -344,7 +344,7 @@ class NarrativeConstraintBuilder:
         # "超脱") that should guide long-range direction but should not become
         # mandatory chapter nodes in volume one.
         scope_text = "\n".join([
-            current_outline.model_dump_json() if current_outline else query_text,
+            self._sequence_scope_text(current_outline, query_text),
             "\n".join(context.current_scope),
         ])
 
@@ -406,6 +406,22 @@ class NarrativeConstraintBuilder:
             )
 
         return constraints[:16]
+
+    def _sequence_scope_text(
+        self,
+        current_outline: SynopsisVolumeOutline | None,
+        query_text: str,
+    ) -> str:
+        if not current_outline:
+            return query_text
+        values = [
+            current_outline.title,
+            current_outline.summary,
+            current_outline.main_goal,
+            current_outline.start_state,
+            current_outline.end_state,
+        ]
+        return "\n".join(coerce_to_text(value) for value in values if coerce_to_text(value).strip())
 
     def _parse_sequence_terms(self, text: str) -> list[str]:
         segment = coerce_to_text(text)

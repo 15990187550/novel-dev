@@ -85,6 +85,55 @@ async def test_editor_guard_compares_source_and_polished(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_editor_guard_fails_before_llm_on_time_marker_side_effect(monkeypatch):
+    fake_call = AsyncMock()
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_structure_guard_service.call_and_parse_model",
+        fake_call,
+    )
+    service = ChapterStructureGuardService()
+
+    result = await service.check_editor_beat(
+        novel_id="novel-guard-editor-time",
+        chapter_plan={"beats": [{"summary": "散会后主角去藏书阁换残卷"}]},
+        beat_index=0,
+        source_text="散会后，主角去藏书阁换了半本残卷，沿回廊离开。",
+        polished_text="散会后，主角去藏书阁换了半本残卷。午后的日光斜下来，他沿回廊离开。",
+    )
+
+    assert result.passed is False
+    assert result.changed_event_order is True
+    assert any("时间" in issue for issue in result.issues)
+    assert fake_call.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_editor_guard_fails_before_llm_on_stacked_new_hook_signals(monkeypatch):
+    fake_call = AsyncMock()
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_structure_guard_service.call_and_parse_model",
+        fake_call,
+    )
+    service = ChapterStructureGuardService()
+
+    result = await service.check_editor_beat(
+        novel_id="novel-guard-editor-hook-stack",
+        chapter_plan={"beats": [{"summary": "主角带着残卷回到屋内"}]},
+        beat_index=0,
+        source_text="主角带着残卷回到屋内，合上门，低头看着掌心的纸边。",
+        polished_text=(
+            "主角带着残卷回到屋内，合上门。纸边忽然浮出一行模糊字迹，"
+            "紧接着胸口一闷，体内气息开始不受控制地倒灌。"
+        ),
+    )
+
+    assert result.passed is False
+    assert result.introduced_plan_external_fact is True
+    assert any("多重" in issue or "堆叠" in issue for issue in result.issues)
+    assert fake_call.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_editor_guard_times_out_to_closed_failure(monkeypatch):
     async def fail_call(*args, **kwargs):
         raise RuntimeError("Request timed out")

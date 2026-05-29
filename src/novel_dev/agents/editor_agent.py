@@ -13,10 +13,12 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
 BEAT_ANCHOR_RE = re.compile(r"<!--BEAT:(\d+)-->(.*?)<!--/BEAT:\1-->", re.DOTALL)
+CRITICAL_HOOK_MIN_SCORE = 75
 
 
 def split_beats(raw_draft: str, *, whole_chapter: bool = False) -> Tuple[List[str], bool]:
@@ -100,12 +102,7 @@ class EditorAgent:
             hook_entry = breakdown.get("hook_strength") or {}
             if isinstance(hook_entry, dict):
                 hook_score = hook_entry.get("score")
-        force_last_beat_rewrite = (
-            hook_score is not None
-            and isinstance(hook_score, (int, float))
-            and hook_score < 70
-            and len(beats) > 0
-        )
+        force_last_beat_rewrite = self._hook_score_requires_last_beat_rewrite(hook_score) and len(beats) > 0
 
         # 按 beat_idx 聚合问题,避免 Editor 不知道改什么
         issues_by_beat: dict[int, list] = {}
@@ -153,7 +150,7 @@ class EditorAgent:
                 all_issues = all_issues + [{
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
-                    "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
+                    "problem": f"章末钩子评分 {hook_score} 低于 {CRITICAL_HOOK_MIN_SCORE},结尾未能让读者想读下一章",
                     "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
                 }]
 
@@ -241,8 +238,24 @@ class EditorAgent:
                 polished = beat_text
             polished = self._clean_text_integrity_fragments(polished)
             if beat_repair_tasks and polished != beat_text:
-                completed = True
-                self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
+                unfinished_tasks = [
+                    task for task in beat_repair_tasks
+                    if not self._repair_task_completed_by_text(task, beat_text, polished)
+                ]
+                if unfinished_tasks:
+                    polished = await self._retry_unfinished_repair_tasks(
+                        source_text=beat_text,
+                        polished_text=polished,
+                        unfinished_tasks=unfinished_tasks,
+                        chapter_context=chapter_context,
+                    )
+                    polished = self._clean_text_integrity_fragments(polished)
+                completed = all(
+                    self._repair_task_completed_by_text(task, beat_text, polished)
+                    for task in beat_repair_tasks
+                )
+                if completed:
+                    self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
                 checkpoint.setdefault("repair_history", []).append(
                     self._build_repair_history_entry(
                         logical_beat_index,
@@ -314,12 +327,7 @@ class EditorAgent:
             hook_entry = breakdown.get("hook_strength") or {}
             if isinstance(hook_entry, dict):
                 hook_score = hook_entry.get("score")
-        force_last_beat_rewrite = (
-            hook_score is not None
-            and isinstance(hook_score, (int, float))
-            and hook_score < 70
-            and len(beats) > 0
-        )
+        force_last_beat_rewrite = self._hook_score_requires_last_beat_rewrite(hook_score) and len(beats) > 0
 
         issues_by_beat: dict[int, list] = {}
         whole_chapter_issues: list = []
@@ -364,7 +372,7 @@ class EditorAgent:
                 all_issues = all_issues + [{
                     "dim": "hook_strength",
                     "beat_idx": last_idx,
-                    "problem": f"章末钩子评分 {hook_score} 低于 70,结尾未能让读者想读下一章",
+                    "problem": f"章末钩子评分 {hook_score} 低于 {CRITICAL_HOOK_MIN_SCORE},结尾未能让读者想读下一章",
                     "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
                 }]
             needs_rewrite = any(s < 70 for s in scores.values()) or bool(all_issues) or is_forced_last or force_continuity_rewrite
@@ -393,8 +401,24 @@ class EditorAgent:
                 polished = beat_text
             polished = self._clean_text_integrity_fragments(polished)
             if beat_repair_tasks and polished != beat_text:
-                completed = True
-                self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
+                unfinished_tasks = [
+                    task for task in beat_repair_tasks
+                    if not self._repair_task_completed_by_text(task, beat_text, polished)
+                ]
+                if unfinished_tasks:
+                    polished = await self._retry_unfinished_repair_tasks(
+                        source_text=beat_text,
+                        polished_text=polished,
+                        unfinished_tasks=unfinished_tasks,
+                        chapter_context=chapter_context,
+                    )
+                    polished = self._clean_text_integrity_fragments(polished)
+                completed = all(
+                    self._repair_task_completed_by_text(task, beat_text, polished)
+                    for task in beat_repair_tasks
+                )
+                if completed:
+                    self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
                 checkpoint.setdefault("repair_history", []).append(
                     self._build_repair_history_entry(
                         logical_beat_index,
@@ -553,7 +577,8 @@ class EditorAgent:
         plan_block = ""
         if chapter_plan:
             import json
-            plan_block = f"### 章节计划\n{json.dumps(chapter_plan, ensure_ascii=False)}\n\n"
+            safe_plan = StoryQualityService.sanitize_prompt_payload(chapter_plan)
+            plan_block = f"### 章节计划\n{json.dumps(safe_plan, ensure_ascii=False)}\n\n"
         genre_prompt = ""
         if isinstance(chapter_context, dict):
             genre_prompt = str(chapter_context.get("genre_prompt_block") or "").strip()
@@ -625,6 +650,8 @@ class EditorAgent:
             ("relationship_subtext_lenses", "关系潜台词"),
             ("prose_texture_lenses", "文字质感"),
             ("freshness_lenses", "新鲜度"),
+            ("ending_driver_candidates", "章末牵引候选"),
+            ("humanity_surface_candidates", "人物在场感"),
         ]
         lines: list[str] = []
         for card in cards[:2]:
@@ -687,6 +714,10 @@ class EditorAgent:
         )
 
     @staticmethod
+    def _hook_score_requires_last_beat_rewrite(hook_score) -> bool:
+        return isinstance(hook_score, (int, float)) and hook_score < CRITICAL_HOOK_MIN_SCORE
+
+    @staticmethod
     def _score_entry_for_edit_unit(beat_scores: list, beat_index: int, whole_chapter_unit: bool) -> dict:
         if not isinstance(beat_scores, list):
             return {}
@@ -743,6 +774,30 @@ class EditorAgent:
         code = str(raw_codes).strip()
         return [code] if code else []
 
+    @classmethod
+    def _repair_task_completed_by_text(cls, task: dict, source_text: str, polished_text: str) -> bool:
+        source = str(source_text or "")
+        polished = str(polished_text or "")
+        if source == polished:
+            return False
+        for phrase in cls._repair_task_flagged_phrases(task):
+            if phrase in source and phrase in polished:
+                return False
+        return True
+
+    @staticmethod
+    def _repair_task_flagged_phrases(task: dict) -> list[str]:
+        if not isinstance(task, dict):
+            return []
+        raw = " ".join(
+            str(task.get(field) or "")
+            for field in ("problem", "evidence", "suggestion", "description", "summary")
+        )
+        phrases: list[str] = []
+        for pattern in (r"'([^']{2,24})'", r"“([^”]{2,24})”", r"\"([^\"]{2,24})\""):
+            phrases.extend(match.strip() for match in re.findall(pattern, raw) if match.strip())
+        return list(dict.fromkeys(phrases))
+
     @staticmethod
     def _repair_task_key(task: dict) -> tuple:
         task_id = task.get("task_id")
@@ -795,6 +850,44 @@ class EditorAgent:
                 unfinished.append(task)
         return unfinished
 
+    async def _retry_unfinished_repair_tasks(
+        self,
+        *,
+        source_text: str,
+        polished_text: str,
+        unfinished_tasks: list[dict],
+        chapter_context: dict,
+    ) -> str:
+        flagged_phrases = []
+        for task in unfinished_tasks:
+            for phrase in self._repair_task_flagged_phrases(task):
+                if phrase in str(source_text or "") and phrase in str(polished_text or ""):
+                    flagged_phrases.append(phrase)
+        flagged_phrases = list(dict.fromkeys(flagged_phrases))
+        if not flagged_phrases:
+            return polished_text
+
+        task_prompts = "\n\n".join(
+            self._build_repair_task_prompt(polished_text, task, chapter_context)
+            for task in unfinished_tasks[:3]
+        )
+        prompt = "\n".join([
+            "你是一位小说编辑。上一轮改写后仍有评审点名的问题短语原样残留。",
+            "请只围绕这些残留句群做二次局部改写，保留原事件、人物、地点、信息顺序和章节事实。",
+            "不要新增人物、物件、线索、威胁、地点或设定；只把作者总结、抽象判断或模板表达改成当场动作、身体反应、环境触感或具体后果。",
+            "必须改写到以下短语不再原样出现：",
+            "\n".join(f"- {phrase}" for phrase in flagged_phrases[:8]),
+            "## 修复任务",
+            task_prompts,
+            "## 上一轮改写文本",
+            polished_text,
+            "改写:",
+        ])
+        from novel_dev.llm import llm_factory
+        client = llm_factory.get("EditorAgent", task="polish_beat")
+        response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        return response.text.strip()
+
     @staticmethod
     def _build_repair_task_prompt(source_text: str, task: dict, chapter_context: dict) -> str:
         import json
@@ -811,7 +904,8 @@ class EditorAgent:
         if isinstance(chapter_context, dict):
             chapter_plan = chapter_context.get("chapter_plan") or {}
         title = chapter_plan.get("title") if isinstance(chapter_plan, dict) else None
-        plan_text = json.dumps(chapter_plan, ensure_ascii=False, indent=2) if chapter_plan else ""
+        safe_plan = StoryQualityService.sanitize_prompt_payload(chapter_plan) if chapter_plan else {}
+        plan_text = json.dumps(safe_plan, ensure_ascii=False, indent=2) if safe_plan else ""
 
         return "\n".join([
             "你是一位小说编辑，请根据质量修复任务改写原文。",
@@ -845,6 +939,7 @@ class EditorAgent:
         success_criteria = cls._stringify_repair_field(task.get("success_criteria"))
         evidence = cls._stringify_repair_field(task.get("evidence"))
         suggestion = str(task.get("suggestion") or "").strip()
+        flagged_phrases = cls._repair_task_flagged_phrases(task)
         schema_fields = []
         for field in ("task_id", "chapter_id", "scope", "allowed_materials"):
             value = cls._stringify_repair_field(task.get(field))
@@ -863,12 +958,22 @@ class EditorAgent:
             problem_parts.append(f"约束：{constraints}")
         if evidence:
             problem_parts.append(f"证据：{evidence}")
+        if flagged_phrases:
+            problem_parts.append(
+                "被评审点名的原文短语需改写到不再原样出现："
+                + "；".join(flagged_phrases[:8])
+            )
         if schema_fields:
             problem_parts.extend(schema_fields)
+        suggestion_parts = [item for item in (success_criteria, suggestion) if item]
+        if flagged_phrases:
+            suggestion_parts.append(
+                "完成标准之一：上述被点名短语若存在于原文，本轮改写后不能原样保留。"
+            )
         return {
             "dim": task_type,
             "problem": "质量修复任务：" + "；".join(problem_parts),
-            "suggestion": success_criteria or suggestion or "按质量修复任务完成定点修复。",
+            "suggestion": "；".join(suggestion_parts) or "按质量修复任务完成定点修复。",
         }
 
     @classmethod
@@ -922,11 +1027,12 @@ class EditorAgent:
             "新线索", "新证据", "新物件", "新威胁", "例如：", "比如：",
         )
         if dim == "hook_strength" or any(marker in suggestion for marker in risky_markers):
-            base = suggestion
+            base, removed_examples = EditorAgent._strip_review_examples(suggestion)
             if base:
                 base += "。"
+            example_guard = "不要照搬评审示例; " if removed_examples else ""
             return (
-                f"{base}执行时只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔; "
+                f"{base}{example_guard}执行时只使用原文和章节计划已出现的物件、伤势、选择、风险或伏笔; "
                 "先判断这一段最自然的牵引来源,可以来自信息差、关系变化、行动压力、情绪余波、环境异常或人物选择。"
             )
         if dim in {"editing_boundary", "consistency", "quality_gate", "required_payoff"}:
@@ -935,6 +1041,17 @@ class EditorAgent:
                 f"{base} 改动范围收束在表达、节奏和读者感知,事件、人物、物件、线索和台词沿用已有材料。"
             )
         return suggestion
+
+    @staticmethod
+    def _strip_review_examples(suggestion: str) -> tuple[str, bool]:
+        text = str(suggestion or "").strip()
+        if not text:
+            return "", False
+        for marker in ("例如", "比如", "如：", "如:"):
+            if marker in text:
+                head = text.split(marker, 1)[0].strip("。；;，, ：:")
+                return head or "吸收评审指出的读感目标", True
+        return text, False
 
     @staticmethod
     def _continuity_rewrite_issues(checkpoint: dict) -> tuple[list[dict], bool]:

@@ -383,10 +383,83 @@ def test_build_writing_cards_filters_meta_plan_language_from_contract_fields():
     assert "王顺率先出手" in prompted_contract
     assert "一掌拍在王顺手腕" in prompted_contract
     assert "周围弟子露出诧异" in prompted_contract
+    assert "原计划受阻" not in prompted_contract
+    assert "失去主动权" not in prompted_contract
+    assert "读者应" not in prompted_contract
     assert "必须" not in prompted_contract
     assert "失败代价" not in prompted_contract
     assert "读者应" not in prompted_contract
     assert "结尾留下" not in prompted_contract
+
+
+def test_build_writing_cards_derives_generic_ending_driver_candidates_without_meta_hook():
+    plan = ChapterPlan(
+        chapter_number=3,
+        title="外门困境",
+        target_word_count=1600,
+        beats=[
+            BeatPlan(
+                summary="陆照在井边发现丹药不足，张顺抱怨管事迟迟不发辟谷丹。",
+                target_mood="窘迫",
+                key_entities=["陆照", "张顺", "辟谷丹"],
+            ),
+            BeatPlan(
+                summary=(
+                    "陆照去功法阁借吐纳术作掩护，却因贡献点不足只换到半本残页；"
+                    "周家弟子从他身边经过，旁人提醒别惹；"
+                    "与“外门困境”直接相关的未解变化压到章末，逼得陆照下一步继续处理。"
+                ),
+                target_mood="压迫",
+                key_entities=["陆照", "周家弟子", "功法阁", "残页"],
+            ),
+        ],
+    )
+
+    last = StoryQualityService.build_writing_cards(plan)[-1]
+
+    assert last.ending_driver_candidates
+    combined = "\n".join(last.ending_driver_candidates)
+    assert "残页" in combined or "周家弟子" in combined or "功法阁" in combined
+    assert "外门困境" not in combined
+    assert "下一步继续处理" not in combined
+    assert any("抽象" in flag or "不可直接写" in flag for flag in last.summary_risk_flags)
+
+
+def test_build_writing_cards_rejects_abstract_ending_driver_candidates_instead_of_fallback():
+    plan = ChapterPlan(
+        chapter_number=4,
+        title="抽象停点",
+        target_word_count=1600,
+        beats=[
+            BeatPlan(
+                summary="林照听见旧案传闻，决定继续追查。",
+                target_mood="紧张",
+                key_entities=["林照"],
+            ),
+            BeatPlan(
+                summary=(
+                    "林照接近旧案停点时，未解决的阻力再次压回眼前；"
+                    "林照选择当场收束旧案的结果，若没压住余波，后续行动就会失去依据；"
+                    "与旧案直接相关的未解变化压到章末，逼得林照下一步继续处理。"
+                ),
+                target_mood="压迫",
+                key_entities=["林照", "旧案"],
+            ),
+        ],
+    )
+
+    last = StoryQualityService.build_writing_cards(plan)[-1]
+
+    assert last.ending_driver_candidates == []
+    assert any("章末缺少" in flag or "未就绪" in flag for flag in last.summary_risk_flags)
+    combined_contract = "\n".join([
+        last.ending_hook,
+        last.reader_takeaway,
+        *last.required_payoffs,
+        *last.ending_driver_candidates,
+    ])
+    assert "接近旧案停点" not in combined_contract
+    assert "下一步继续处理" not in combined_contract
 
 
 def test_setting_workbench_builds_quality_report_from_generated_draft():

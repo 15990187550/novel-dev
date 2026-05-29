@@ -120,6 +120,7 @@ class GenerationRunOptions:
     target_word_count: int = 2_000_000
     target_volume_number: int = 1
     target_volume_chapters: int | None = None
+    run_chapter_limit: int | None = None
 
     def resolved_target_volume_chapters(self) -> int:
         if self.target_volume_chapters is not None:
@@ -138,6 +139,13 @@ class GenerationRunOptions:
 
     def resolved_target_volume_word_count(self) -> int:
         return self.resolved_target_volume_chapters() * self.resolved_chapter_target_word_count()
+
+    def resolved_run_chapter_limit(self) -> int:
+        if self.run_chapter_limit is not None:
+            if self.run_chapter_limit <= 0:
+                raise ValueError("run_chapter_limit must be positive")
+            return self.run_chapter_limit
+        return self.resolved_target_volume_chapters()
 
 
 def make_run_id(prefix: str) -> str:
@@ -279,6 +287,7 @@ def _target_artifacts(options: GenerationRunOptions) -> dict[str, str]:
         "target_word_count": str(options.target_word_count),
         "target_volume_number": str(options.target_volume_number),
         "target_volume_chapters": str(options.resolved_target_volume_chapters()),
+        "run_chapter_limit": str(options.resolved_run_chapter_limit()),
         "chapter_target_word_count": str(options.resolved_chapter_target_word_count()),
         "target_volume_word_count": str(options.resolved_target_volume_word_count()),
     }
@@ -1111,7 +1120,7 @@ async def _run_api_smoke_flow(
 
         async def auto_run_chapters() -> None:
             nonlocal quality_gate_issue
-            max_chapters = options.resolved_target_volume_chapters() if longform_volume1 else 1
+            max_chapters = options.resolved_run_chapter_limit() if longform_volume1 else 1
             data = await _request_json(
                 client.post(
                     f"/api/novels/{novel_id}/chapters/auto-run",
@@ -2013,6 +2022,7 @@ async def _prepare_longform_synopsis_contract(
             "target_word_count": options.target_word_count,
             "target_volume_number": options.target_volume_number,
             "target_volume_chapters": options.resolved_target_volume_chapters(),
+            "run_chapter_limit": options.resolved_run_chapter_limit(),
             "chapter_target_word_count": options.resolved_chapter_target_word_count(),
             "target_volume_word_count": options.resolved_target_volume_word_count(),
         }

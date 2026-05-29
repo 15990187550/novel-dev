@@ -45,6 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
     generation.add_argument("--target-word-count", type=int, default=2_000_000)
     generation.add_argument("--target-volume-number", type=int, default=1)
     generation.add_argument("--target-volume-chapters", type=int)
+    generation.add_argument(
+        "--run-chapter-limit",
+        type=int,
+        help="Limit how many chapters this acceptance run generates without changing the volume outline size.",
+    )
 
     quality = subparsers.add_parser("quality-summary")
     quality.add_argument("--input-json", required=True)
@@ -76,6 +81,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             target_word_count=args.target_word_count,
             target_volume_number=args.target_volume_number,
             target_volume_chapters=args.target_volume_chapters,
+            run_chapter_limit=args.run_chapter_limit,
         )
         try:
             report = asyncio.run(run_generation_acceptance_and_write(options))
