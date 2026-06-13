@@ -58,6 +58,7 @@ from novel_dev.services.generation_job_service import (
 from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, RecoveryCleanupService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
+from novel_dev.services.quality_metrics_service import QualityMetricsService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.schemas.knowledge_domain import (
@@ -847,6 +848,35 @@ async def get_novel_state(novel_id: str, session: AsyncSession = Depends(get_ses
         "genre": checkpoint["genre"],
         "checkpoint_data": checkpoint,
         "last_updated": state.last_updated.isoformat(),
+    }
+
+
+@router.get("/api/novels/{novel_id}/quality/trends")
+async def get_quality_trends(
+    novel_id: str,
+    dimension: str = "overall",
+    phase: str = "final",
+    from_chapter: Optional[int] = None,
+    to_chapter: Optional[int] = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+    service = QualityMetricsService(session)
+    points = await service.get_trends(
+        novel_id=novel_id,
+        dimension=dimension,
+        phase=phase,
+        from_chapter=from_chapter,
+        to_chapter=to_chapter,
+    )
+    return {
+        "novel_id": novel_id,
+        "dimension": dimension,
+        "phase": phase,
+        "points": points,
     }
 
 
