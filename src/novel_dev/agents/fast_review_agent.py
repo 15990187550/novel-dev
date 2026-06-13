@@ -507,6 +507,7 @@ class FastReviewAgent:
                 checkpoint=checkpoint,
                 edit_attempts=edit_attempts,
             )
+            self._store_final_review_feedback(checkpoint, final_score=final_score, final_feedback=final_feedback)
             checkpoint["quality_gate"] = gate.model_dump()
             self._store_quality_issues_and_repairs(
                 checkpoint,
@@ -519,6 +520,20 @@ class FastReviewAgent:
                 polished_text=polished,
                 target_word_count=target,
                 final_feedback=final_feedback,
+            )
+            metric_issue_codes = [
+                str(item.get("code"))
+                for item in (gate.blocking_items or []) + (gate.warning_items or [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            await self._finalize_and_record_metric(
+                chapter=ch,
+                phase="fast_reviewing",
+                attempt_index=checkpoint.get("edit_attempt_count", 0),
+                final_score=final_score,
+                final_feedback=final_feedback,
+                gate_status=gate.status,
+                issue_codes=metric_issue_codes,
             )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
@@ -819,6 +834,79 @@ class FastReviewAgent:
             checkpoint["chapter_improvement_directives"] = improvement_directives
         else:
             checkpoint.pop("chapter_improvement_directives", None)
+
+    @staticmethod
+    def _store_final_review_feedback(
+        checkpoint: dict,
+        *,
+        final_score: int | None,
+        final_feedback: dict | None,
+    ) -> None:
+        if not isinstance(final_feedback, dict) or not final_feedback:
+            return
+        checkpoint["critique_feedback"] = {
+            "overall": final_feedback.get("overall", final_score),
+            "summary": final_feedback.get("summary") or final_feedback.get("summary_feedback", ""),
+            "breakdown": final_feedback.get("breakdown") or {},
+            "source": "final_review",
+        }
+        checkpoint["per_dim_issues"] = [
+            item for item in (final_feedback.get("per_dim_issues") or [])
+            if isinstance(item, dict)
+        ]
+        checkpoint["beat_scores"] = []
+
+    async def _finalize_and_record_metric(
+        self,
+        chapter,
+        phase: str,
+        attempt_index: int,
+        final_score,
+        final_feedback,
+        gate_status: str,
+        issue_codes=None,
+    ):
+        """Persist a chapter_quality_metrics row for this review attempt.
+
+        Called alongside the existing _store_final_review_feedback checkpoint
+        write so that every fast review produces a queryable metric row.
+        """
+        from novel_dev.services.quality_metrics_service import (
+            QualityMetricsService,
+            QualityMetricInput,
+        )
+        from novel_dev.config.quality_config import get_quality_config
+
+        # Skip cleanly if the chapter has no novel_id — chapter_quality_metrics
+        # requires novel_id as a NOT NULL column, and a flush failure here
+        # would poison the session and break the rest of the finalize path.
+        if not getattr(chapter, "novel_id", None):
+            return
+        try:
+            cfg = get_quality_config()
+            dim_scores = (final_feedback or {}).get("breakdown") or {}
+            svc = QualityMetricsService(self.session)
+            await svc.record(QualityMetricInput(
+                chapter_id=chapter.id,
+                novel_id=chapter.novel_id,
+                phase=phase,
+                attempt_index=attempt_index,
+                overall_score=final_score,
+                dimension_scores=dim_scores if isinstance(dim_scores, dict) else {},
+                gate_status=gate_status,
+                issue_codes=issue_codes or [],
+                model_version=cfg.get("model_version"),
+            ))
+        except Exception as e:  # noqa: BLE001
+            # Never let metric recording fail the chapter finalize path.
+            # A failed flush poisons the session, so we must roll back
+            # before the caller can run any further DB operations.
+            import logging
+            logging.getLogger(__name__).warning("metric_record_failed", extra={"err": str(e)[:200]})
+            try:
+                await self.session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
 
     @staticmethod
     def _build_chapter_improvement_directives(
@@ -1202,6 +1290,7 @@ class FastReviewAgent:
             gate = _apply_continuity_audit_to_gate(gate, continuity_audit)
             gate = self._apply_structure_guard_to_gate(checkpoint, gate)
             gate = self._apply_genre_quality_issues_to_gate(gate, genre_quality_issues)
+            self._store_final_review_feedback(checkpoint, final_score=final_score, final_feedback=final_feedback)
             checkpoint["quality_gate"] = gate.model_dump()
             self._store_quality_issues_and_repairs(
                 checkpoint,
@@ -1213,6 +1302,20 @@ class FastReviewAgent:
                 checkpoint,
                 polished_text=polished,
                 target_word_count=target,
+            )
+            metric_issue_codes = [
+                str(item.get("code"))
+                for item in (gate.blocking_items or []) + (gate.warning_items or [])
+                if isinstance(item, dict) and item.get("code")
+            ]
+            await self._finalize_and_record_metric(
+                chapter=ch,
+                phase="fast_reviewing",
+                attempt_index=checkpoint.get("edit_attempt_count", 0),
+                final_score=final_score,
+                final_feedback=final_feedback,
+                gate_status=gate.status,
+                issue_codes=metric_issue_codes,
             )
             await self.chapter_repo.update_quality_gate(
                 chapter_id,
