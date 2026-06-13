@@ -14,7 +14,7 @@ models:
       fallback_to_text: true
   minimax-2-7:
     provider: anthropic
-    model: Minimax-2.7
+    model: Minimax-3
     base_url: https://api.minimaxi.com/anthropic
     api_key_env: MINIMAX_API_KEY
     structured_output:
@@ -332,3 +332,73 @@ agents:
         temperature: 0.15
         max_tokens: 8192
     retries: 2
+quality_thresholds:
+  publishable_final_review_score: 82
+  critical_dimension_min_score: 75
+  judge_consistency:
+    stable_max_cv: 0.05
+    moderate_max_cv: 0.10
+  recommendation:
+    block_threshold: 60
+    minor_repair_min_score: 78
+    minor_repair_min_critical: 72
+    major_repair_min_score: 70
+    stop_after_attempts: 3
+    pattern_issue_threshold: 3
+issue_code_hints:
+  AI_FLAVOR_HIGH:
+    severity: warn
+    threshold: 3
+    hint: "检查 editor_agent.py 的 ai_flavor 关键词列表;考虑在 EditorAgent 改写规则中强化对短句堆砌的检查"
+  BEAT_BOUNDARY_VIOLATION:
+    severity: block
+    threshold: 2
+    hint: "Writer 节拍边界问题,通常源于 writer 提前执行后续 beat 的事件。在 WriterAgent prompt 中强化 'must stay in beat scope' 指令"
+  EXPORT_FAILED:
+    severity: block
+    threshold: 1
+    hint: "导出步骤失败,检查 export_service.py 的路径回传和文件落盘时序"
+  CONSISTENCY_BROKEN:
+    severity: block
+    threshold: 1
+    hint: "设定一致性被破坏,检查 ContextAgent 注入的 worldview 是否完整,以及 Writer 是否引用了已变更的实体状态"
+  WORD_COUNT_DRIFT:
+    severity: warn
+    threshold: 2
+    hint: "字数偏离目标 ±10%,检查 StoryQualityService 的 beat 字数分配数学"
+  REVIEW_TIMEOUT:
+    severity: warn
+    threshold: 1
+    hint: "Reviewing 阶段超时,考虑拆分 critic prompt 减少单次输入长度,或增加 timeout"
+  LLM_PARSE_ERROR:
+    severity: block
+    threshold: 1
+    hint: "LLM 输出无法解析,检查 call_and_parse 的 retry 逻辑和 prompt 中的 JSON 格式指令"
+  HUMANITY_LOW:
+    severity: warn
+    threshold: 2
+    hint: "humanity 维度偏低,检查 writer 是否有过度抽象描写或角色行为公式化"
+  PLOT_TENSION_LOW:
+    severity: warn
+    threshold: 2
+    hint: "plot_tension 偏低,检查 beat 是否包含有效冲突或悬念"
+  HOOK_WEAK:
+    severity: warn
+    threshold: 2
+    hint: "章末钩子弱,检查 writer 是否在结尾留下未解悬念或反转"
+  EVENT_ORDER_DRIFT:
+    severity: block
+    threshold: 1
+    hint: "事件顺序错乱,通常源于 writer 在 beat 写作时跳过了前置事件"
+  PLANNED_CHARACTER_DRIFT:
+    severity: block
+    threshold: 1
+    hint: "出现计划外人物或对计划人物的误用,检查 context 注入和 prompt 中的角色约束"
+  FORESHADOW_LEAKED:
+    severity: block
+    threshold: 1
+    hint: "伏笔被提前兑现,检查 NarrativeConstraintBuilder 的 foreshadow_only 列表是否正确应用"
+  LLM_JUDGE_INCONSISTENT:
+    severity: warn
+    threshold: 1
+    hint: "LLM 评分一致性偏低(variance_coefficient > 0.10),考虑降低 critic temperature 或增加 ensemble 投票"
