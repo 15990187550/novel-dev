@@ -3,8 +3,10 @@ from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy import (
-    ForeignKey, Text, Integer, Boolean, Float, JSON, TIMESTAMP, UniqueConstraint, Index
+    ForeignKey, Text, String, Integer, Boolean, Float, JSON, DateTime, TIMESTAMP,
+    UniqueConstraint, Index,
 )
+from sqlalchemy.sql import func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import TypeDecorator
 
@@ -527,3 +529,44 @@ class PendingExtraction(Base):
     resolution_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(TIMESTAMP, default=datetime.utcnow)
+
+
+class ChapterQualityMetric(Base):
+    """Per-attempt quality snapshot for a chapter.
+
+    Stores structured quality data so we can answer:
+    - How does score trend over chapters?
+    - Does the same issue code recur?
+    - What was the score on attempt 2 vs attempt 0?
+    """
+
+    __tablename__ = "chapter_quality_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    novel_id: Mapped[str] = mapped_column(Text, index=True)
+    chapter_id: Mapped[str] = mapped_column(
+        ForeignKey("chapters.id", ondelete="CASCADE"), index=True
+    )
+
+    phase: Mapped[str] = mapped_column(String(32), nullable=False)
+    attempt_index: Mapped[int] = mapped_column(default=0)
+
+    overall_score: Mapped[Optional[int]] = mapped_column(nullable=True)
+    dimension_scores: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    dimension_feedback: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    gate_status: Mapped[str] = mapped_column(String(32), nullable=False)
+    blocking_items: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    warning_items: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+
+    issue_codes: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
+    repairable: Mapped[Optional[bool]] = mapped_column(nullable=True)
+
+    latency_ms: Mapped[Optional[int]] = mapped_column(nullable=True)
+    token_usage: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    model_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    prompt_version: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), nullable=False
+    )
