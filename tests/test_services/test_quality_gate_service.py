@@ -472,3 +472,33 @@ def test_quality_gate_genre_type_drift_ignores_blank_and_duplicate_patterns():
         },
     )
     assert items == ["type_drift: 命中类型漂移规则：宗门"]
+
+
+def test_publishable_score_returns_config_value(monkeypatch):
+    from novel_dev.services.quality_gate_service import _publishable_score
+
+    monkeypatch.setattr(
+        "novel_dev.services.quality_gate_service.get_quality_config",
+        lambda: {
+            "publishable_final_review_score": 88,
+            "critical_dimension_min_score": 77,
+            "judge_consistency": {},
+            "recommendation": {},
+        },
+    )
+    assert _publishable_score() == 88
+
+
+def test_critical_min_returns_config_value(monkeypatch):
+    from novel_dev.services.quality_gate_service import _critical_min
+
+    monkeypatch.setattr(
+        "novel_dev.services.quality_gate_service.get_quality_config",
+        lambda: {
+            "publishable_final_review_score": 88,
+            "critical_dimension_min_score": 77,
+            "judge_consistency": {},
+            "recommendation": {},
+        },
+    )
+    assert _critical_min() == 77

@@ -7,6 +7,8 @@ from typing import Any
 from novel_dev.schemas.quality import QualityIssue
 from novel_dev.schemas.review import FastReviewReport
 
+from novel_dev.config.quality_config import get_quality_config
+
 
 QUALITY_UNCHECKED = "unchecked"
 QUALITY_PASS = "pass"
@@ -14,9 +16,15 @@ QUALITY_WARN = "warn"
 QUALITY_MANUAL_REVIEW_REQUIRED = "manual_review_required"
 QUALITY_BLOCK = "block"
 QUALITY_STOP_STATUSES = frozenset({QUALITY_BLOCK, QUALITY_MANUAL_REVIEW_REQUIRED})
-PUBLISHABLE_FINAL_REVIEW_SCORE = 82
-CRITICAL_DIMENSION_MIN_SCORE = 75
 CRITICAL_REVIEW_DIMENSIONS = frozenset({"plot_tension", "hook_strength", "humanity"})
+
+
+def _publishable_score() -> float:
+    return float(get_quality_config()["publishable_final_review_score"])
+
+
+def _critical_min() -> float:
+    return float(get_quality_config()["critical_dimension_min_score"])
 
 
 def quality_gate_stops_librarian(status: str | None) -> bool:
@@ -157,13 +165,13 @@ class QualityGateService:
         if final_review_score is not None:
             if final_review_score < 60:
                 blocking.append(cls._item("final_review_score", f"成稿评分过低: {final_review_score}"))
-            elif final_review_score < PUBLISHABLE_FINAL_REVIEW_SCORE:
+            elif final_review_score < _publishable_score():
                 warnings.append(cls._item(
                     "final_review_score",
                     f"成稿未达到自动归档质量线: {final_review_score}",
                     {
                         "score": final_review_score,
-                        "required": PUBLISHABLE_FINAL_REVIEW_SCORE,
+                        "required": _publishable_score(),
                     },
                 ))
 
@@ -345,7 +353,7 @@ class QualityGateService:
             score = value.get("score") if isinstance(value, dict) else value
             if not isinstance(score, (int, float)):
                 continue
-            if score >= CRITICAL_DIMENSION_MIN_SCORE:
+            if score >= _critical_min():
                 continue
             comment = value.get("comment") if isinstance(value, dict) else ""
             warnings.append(cls._item(
@@ -354,7 +362,7 @@ class QualityGateService:
                 {
                     "dimension": dim,
                     "score": score,
-                    "required": CRITICAL_DIMENSION_MIN_SCORE,
+                    "required": _critical_min(),
                     "comment": comment,
                 },
             ))
