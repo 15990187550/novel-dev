@@ -38,3 +38,20 @@ async def test_chapter_quality_metric_persists(async_session):
     assert loaded.dimension_scores["plot_tension"] == 85
     assert loaded.issue_codes == ["AI_FLAVOR_HIGH"]
     assert isinstance(loaded.created_at, datetime)
+
+
+async def test_migration_creates_table_with_columns(async_session):
+    from sqlalchemy import inspect
+
+    def _get_columns(conn):
+        inspector = inspect(conn)
+        return {c["name"] for c in inspector.get_columns("chapter_quality_metrics")}
+
+    async with async_session.bind.connect() as conn:
+        columns = await conn.run_sync(_get_columns)
+    assert "issue_codes" in columns
+    assert "phase" in columns
+    assert "created_at" in columns
+    assert "prompt_version" in columns
+    assert "model_version" in columns
+    assert "gate_status" in columns
