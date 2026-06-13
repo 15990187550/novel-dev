@@ -65,7 +65,7 @@
 
 <script setup>
 import { ref, computed, watch, nextTick, onBeforeUnmount, onMounted } from 'vue'
-import { formatBeijingTime } from '@/utils/time.js'
+import { formatBeijingDateTime } from '@/utils/time.js'
 
 const props = defineProps({ logs: { type: Array, default: () => [] }, connected: { type: Boolean, default: false } })
 const emit = defineEmits(['clear'])
@@ -92,7 +92,7 @@ const visibleLogs = computed(() => filters.value.size === 0 ? props.logs : props
 function isFiltered(agent) { return filters.value.size === 0 || filters.value.has(agent) }
 function toggleFilter(agent) { filters.value.has(agent) ? filters.value.delete(agent) : filters.value.add(agent) }
 function agentColor(agent) { return colors[agent] || '#9ca3af' }
-function formatTime(ts) { return formatBeijingTime(ts) }
+function formatTime(ts) { return formatBeijingDateTime(ts) }
 function logKey(log, index) {
   return `${log.timestamp || ''}:${log.agent || ''}:${log.node || ''}:${log.task || ''}:${index}`
 }
