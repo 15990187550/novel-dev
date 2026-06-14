@@ -252,10 +252,10 @@ EDITOR_PROMPT = (
     "{plan_block}"
     "{genre_block}"
     "{genre_quality_block}"
-    "{strategy_block}",
-    "f\"## 低分维度\n{', '.join(low_dims)}\n\" if low_dims else \"\"",
-    "\"## 本段具体问题(必须逐条解决)\\n\" + \"\\n\".join(issue_lines) + \"\\n\" if issue_lines else \"\"",
-    "\"## 整章通病(写本段时顺带注意)\\n\" + \"\\n\".join(whole_lines) + \"\\n\" if whole_lines else \"\"",
+    "{strategy_block}\n"
+    "## 低分维度\n{', '.join(low_dims)}\n"
+    "## 本段具体问题(必须逐条解决)\n{issue_lines}\n"
+    "## 整章通病(写本段时顺带注意)\n{whole_lines}\n"
     "## 原文\n{text}\n\n改写:"
 )
 
