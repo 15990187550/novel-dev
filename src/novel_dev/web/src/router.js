@@ -14,6 +14,9 @@ const routes = [
   { path: '/foreshadowings', component: () => import('@/views/Foreshadowings.vue') },
   { path: '/config', component: () => import('@/views/Config.vue') },
   { path: '/logs', component: () => import('@/views/RealtimeLog.vue') },
+  { path: '/quality/trends', component: () => import('@/views/QualityTrendsView.vue') },
+  { path: '/quality/issues', component: () => import('@/views/QualityIssuesView.vue') },
+  { path: '/quality/runs', component: () => import('@/views/QualityRunsView.vue') },
 ]
 
 export default createRouter({ history: createWebHistory(), routes })
