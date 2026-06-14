@@ -648,6 +648,7 @@ class FastReviewAgent:
                     volume_id=state.current_volume_id,
                     chapter_id=state.current_chapter_id,
                 )
+                await self._run_recommendation_wirer(novel_id, chapter_id)
             elif not passed:
                 report.notes.append(
                     f"edit_attempts={edit_attempts} 已达上限 {max_edit_attempts},跳过精修轮转"
@@ -676,6 +677,7 @@ class FastReviewAgent:
                     volume_id=state.current_volume_id,
                     chapter_id=state.current_chapter_id,
                 )
+                await self._run_recommendation_wirer(novel_id, chapter_id)
             else:
                 log_agent_detail(
                     novel_id,
@@ -694,6 +696,7 @@ class FastReviewAgent:
                     volume_id=state.current_volume_id,
                     chapter_id=state.current_chapter_id,
                 )
+                await self._run_recommendation_wirer(novel_id, chapter_id)
         else:
             await self._reset_quality_for_edit_retry(checkpoint, chapter_id)
             log_agent_detail(
@@ -907,6 +910,20 @@ class FastReviewAgent:
                 await self.session.rollback()
             except Exception:  # noqa: BLE001
                 pass
+
+    async def _run_recommendation_wirer(self, novel_id: str, chapter_id: str):
+        # Deferred import to avoid circular dependency
+        from novel_dev.services.recommendation_wirer import RecommendationWirer
+
+        wirer = RecommendationWirer(self.session)
+        try:
+            result = await wirer.evaluate_and_dispatch(novel_id, chapter_id)
+            logger.info(
+                "recommendation_wirer_result",
+                extra={"chapter_id": chapter_id, "action": result.action},
+            )
+        except Exception as exc:
+            logger.error("recommendation_wirer_error", extra={"chapter_id": chapter_id, "error": repr(exc)})
 
     @staticmethod
     def _build_chapter_improvement_directives(
@@ -1327,6 +1344,7 @@ class FastReviewAgent:
                 draft_review_feedback=ch.draft_review_feedback or ch.review_feedback,
                 world_state_ingested=False,
             )
+            await self._run_recommendation_wirer(novel_id, chapter_id)
         else:
             await self._reset_quality_for_edit_retry(checkpoint, chapter_id)
         return report

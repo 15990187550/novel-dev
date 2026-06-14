@@ -1291,7 +1291,7 @@ async def test_fast_review_warns_word_count_only_at_edit_limit(async_session):
             "beat_cohesion_ok": True,
             "notes": [],
         })(),
-    ):
+    ), patch.object(FastReviewAgent, "_run_recommendation_wirer", new_callable=AsyncMock):
         agent = FastReviewAgent(async_session)
         report = await agent.review("novel_fr_warn", "c_warn")
 
@@ -1345,7 +1345,7 @@ async def test_fast_review_holds_manual_review_required_at_edit_limit(async_sess
         "novel_dev.agents.critic_agent.CriticAgent._generate_score",
         new_callable=AsyncMock,
         return_value=final_score,
-    ):
+    ), patch.object(FastReviewAgent, "_run_recommendation_wirer", new_callable=AsyncMock):
         agent = FastReviewAgent(async_session)
         await agent.review("novel_fr_manual_review", "c_manual_review")
 
@@ -1403,7 +1403,7 @@ async def test_fast_review_longform_keeps_exhausted_readability_warnings_manual(
         "novel_dev.agents.critic_agent.CriticAgent._generate_score",
         new_callable=AsyncMock,
         return_value=final_score,
-    ):
+    ), patch.object(FastReviewAgent, "_run_recommendation_wirer", new_callable=AsyncMock):
         await FastReviewAgent(async_session).review("novel_fr_longform_warn", "c_longform_warn")
 
     chapter = await repo.get_by_id("c_longform_warn")
