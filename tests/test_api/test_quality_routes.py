@@ -523,3 +523,319 @@ async def test_quality_issues_unknown_code_returns_severity_unknown(async_sessio
             assert entry["occurrences"] == 1
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# /api/novels/{id}/chapters/{cid}/quality/recommend tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_accept_path(async_session):
+    """High score + pass status -> recommendation=accept, confidence=1.0."""
+    novel_id = "test-novel-recommend-accept"
+    chapter_id = "ch-recommend-accept"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-accept",
+            chapter_number=1,
+            title="第一章 渡劫",
+            novel_id=novel_id,
+            score_overall=85,
+            quality_status="pass",
+            score_breakdown={
+                "plot_tension": {"score": 88},
+                "hook_strength": {"score": 86},
+                "humanity": {"score": 90},
+            },
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["chapter_id"] == chapter_id
+            assert body["recommendation"] == "accept"
+            assert body["confidence"] == 1.0
+            assert isinstance(body["rationale"], list)
+            assert body["rationale"]  # non-empty
+            assert isinstance(body["suggested_actions"], list)
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_minor_repair_path(async_session):
+    """Score in minor_repair band (78..82), warn status, no critical dim below 75
+    -> recommendation=minor_repair. With accept_with_warn=False, score below
+    publishable threshold (82), so Rule 5 doesn't apply and we fall to Rule 6."""
+    novel_id = "test-novel-recommend-minor"
+    chapter_id = "ch-recommend-minor"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-minor",
+            chapter_number=2,
+            title="第二章 寻路",
+            novel_id=novel_id,
+            score_overall=78,
+            quality_status="warn",
+            score_breakdown={
+                "plot_tension": {"score": 80},
+                "hook_strength": {"score": 78},
+                "humanity": {"score": 82},
+            },
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["recommendation"] == "minor_repair"
+            assert 0.0 < body["confidence"] <= 1.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_major_repair_path(async_session):
+    """Score in major_repair band (< 78) -> recommendation=major_repair."""
+    novel_id = "test-novel-recommend-major"
+    chapter_id = "ch-recommend-major"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-major",
+            chapter_number=3,
+            title="第三章 困局",
+            novel_id=novel_id,
+            score_overall=60,
+            quality_status="warn",
+            score_breakdown={
+                "plot_tension": {"score": 65},
+                "hook_strength": {"score": 58},
+                "humanity": {"score": 70},
+            },
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["recommendation"] == "major_repair"
+            assert 0.0 < body["confidence"] <= 1.0
+            # Should include at least one suggested action (targeted_repair or manual_review)
+            assert body["suggested_actions"], "major_repair should suggest actions"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_stop_forced_by_attempt(async_session):
+    """current_attempt=5 (>= stop_after_attempts=3) -> stop_and_inspect, confidence=1.0."""
+    novel_id = "test-novel-recommend-stop-attempt"
+    chapter_id = "ch-recommend-stop-attempt"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-stop",
+            chapter_number=4,
+            title="第四章 抉择",
+            novel_id=novel_id,
+            score_overall=85,
+            quality_status="pass",
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 5, "accept_with_warn": False},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["recommendation"] == "stop_and_inspect"
+            assert body["confidence"] == 1.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_stop_for_pattern_failure(async_session):
+    """recent_issue_counts with code count >= pattern_issue_threshold=3
+    -> stop_and_inspect regardless of status/score."""
+    novel_id = "test-novel-recommend-stop-pattern"
+    chapter_id = "ch-recommend-stop-pattern"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-pattern",
+            chapter_number=5,
+            title="第五章 轮回",
+            novel_id=novel_id,
+            score_overall=85,
+            quality_status="pass",
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={
+                    "current_attempt": 1,
+                    "accept_with_warn": False,
+                    "recent_issue_counts": [["AI_FLAVOR_HIGH", 5]],
+                },
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["recommendation"] == "stop_and_inspect"
+            assert body["confidence"] == 1.0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_unknown_chapter_returns_404(async_session):
+    """Unknown chapter_id -> 404, matching the /quality endpoint pattern."""
+    novel_id = "test-novel-recommend-missing-ch"
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/ch-does-not-exist/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_unknown_novel_returns_404(async_session):
+    """Unknown novel_id -> 404, matching /quality/issues and /quality/trends pattern."""
+    novel_id = "test-novel-recommend-missing-novel"
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/whatever/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_recommend_accept_with_warn_promotes_to_accept(async_session):
+    """Same warn chapter that returned minor_repair in test 2, but with
+    accept_with_warn=true -> recommendation=accept. (Score is < publishable,
+    so Rule 5 still gives minor_repair unless accept_with_warn flips it.)
+
+    This test uses a score >= publishable threshold (82) so Rule 5 actually
+    fires: warn + publishable score + no low critical + accept_with_warn=True
+    -> accept, confidence=1.0.
+    """
+    novel_id = "test-novel-recommend-accept-warn"
+    chapter_id = "ch-recommend-accept-warn"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id="vol-recommend-aw",
+            chapter_number=6,
+            title="第六章",
+            novel_id=novel_id,
+            score_overall=83,
+            quality_status="warn",
+            score_breakdown={
+                "plot_tension": {"score": 84},
+                "hook_strength": {"score": 82},
+                "humanity": {"score": 85},
+            },
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # accept_with_warn=False first -> should be minor_repair
+            resp = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": False},
+            )
+            assert resp.status_code == 200
+            assert resp.json()["recommendation"] == "minor_repair"
+
+            # accept_with_warn=True -> promoted to accept
+            resp2 = await client.post(
+                f"/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend",
+                json={"current_attempt": 1, "accept_with_warn": True},
+            )
+            assert resp2.status_code == 200
+            body = resp2.json()
+            assert body["recommendation"] == "accept"
+            assert body["confidence"] == 1.0
+    finally:
+        app.dependency_overrides.clear()

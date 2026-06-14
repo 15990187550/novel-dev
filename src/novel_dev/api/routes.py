@@ -60,6 +60,7 @@ from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.quality_metrics_service import QualityMetricsService
 from novel_dev.services.issue_hints import IssueHintsService
+from novel_dev.services.recommendation_service import RecommendationService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.schemas.knowledge_domain import (
@@ -235,6 +236,12 @@ class ChapterRewriteRequest(BaseModel):
 class ChapterQualityManualReviewRequest(BaseModel):
     action: str = Field(pattern="^(approve|return_to_editing)$")
     note: str = ""
+
+
+class ChapterQualityRecommendRequest(BaseModel):
+    current_attempt: int = 1
+    accept_with_warn: bool = False
+    recent_issue_counts: list[list[int | str]] = Field(default_factory=list)
 
 
 class EntityClassificationUpdateRequest(BaseModel):
@@ -905,6 +912,65 @@ async def get_quality_issues(
         "phase": phase,
         "hints": [h.__dict__ for h in hints],
         "total_chapters": agg["total_chapters"],
+    }
+
+
+@router.post("/api/novels/{novel_id}/chapters/{chapter_id}/quality/recommend")
+async def recommend_chapter_quality(
+    novel_id: str,
+    chapter_id: str,
+    req: ChapterQualityRecommendRequest,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    state_repo = NovelStateRepository(session)
+    state = await state_repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    chapter_repo = ChapterRepository(session)
+    chapter = await chapter_repo.get_by_id(chapter_id)
+    if not chapter or chapter.novel_id not in {None, novel_id}:
+        raise HTTPException(status_code=404, detail="Chapter not found")
+
+    chapter_dict = {
+        "id": chapter.id,
+        "final_review_score": chapter.score_overall,
+        "quality_status": chapter.quality_status or "unchecked",
+        "score_breakdown": chapter.score_breakdown or {},
+    }
+
+    # Normalize recent_issue_counts from [[code, count], ...] to [(code, count), ...]
+    normalized_counts: list[tuple[str, int]] = []
+    for entry in req.recent_issue_counts:
+        if not entry or len(entry) != 2:
+            continue
+        code, count = entry[0], entry[1]
+        try:
+            normalized_counts.append((str(code), int(count)))
+        except (TypeError, ValueError):
+            continue
+
+    service = RecommendationService(
+        chapter=chapter_dict,
+        recent_issue_counts=normalized_counts,
+        current_attempt=req.current_attempt,
+    )
+    rec = service.recommend(accept_with_warn=req.accept_with_warn)
+
+    return {
+        "chapter_id": rec.chapter_id,
+        "recommendation": rec.recommendation.value,
+        "confidence": rec.confidence,
+        "rationale": rec.rationale,
+        "suggested_actions": [
+            {
+                "type": a.type,
+                "scope": a.scope,
+                "estimated_iterations": a.estimated_iterations,
+                "reason": a.reason,
+            }
+            for a in rec.suggested_actions
+        ],
     }
 
 
