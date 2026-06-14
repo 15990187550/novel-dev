@@ -917,6 +917,67 @@ async def get_quality_issues(
     }
 
 
+@router.get("/api/novels/{novel_id}/quality/runs")
+async def get_quality_runs(
+    novel_id: str,
+    chapter_id: Optional[str] = None,
+    phase: Optional[str] = None,
+    limit: int = 50,
+    since: Optional[str] = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """List recent quality runs (ChapterQualityMetric rows) for a novel.
+
+    Useful for debugging "why did chapter X fail" - shows the full timeline
+    of attempts with their gate status and issue codes.
+    """
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    stmt = select(ChapterQualityMetric).where(ChapterQualityMetric.novel_id == novel_id)
+    if chapter_id is not None:
+        stmt = stmt.where(ChapterQualityMetric.chapter_id == chapter_id)
+    if phase is not None:
+        stmt = stmt.where(ChapterQualityMetric.phase == phase)
+    if since is not None:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid since timestamp")
+        stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
+
+    # Cap limit at 200
+    limit = min(max(1, limit), 200)
+    stmt = stmt.order_by(ChapterQualityMetric.created_at.desc()).limit(limit)
+
+    rows = (await session.execute(stmt)).scalars().all()
+
+    runs = []
+    for r in rows:
+        runs.append({
+            "id": r.id,
+            "chapter_id": r.chapter_id,
+            "phase": r.phase,
+            "attempt_index": r.attempt_index,
+            "overall_score": r.overall_score,
+            "gate_status": r.gate_status,
+            "blocking_items": r.blocking_items or [],
+            "warning_items": r.warning_items or [],
+            "issue_codes": r.issue_codes or [],
+            "latency_ms": r.latency_ms,
+            "model_version": r.model_version,
+            "prompt_version": r.prompt_version,
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        })
+
+    return {
+        "novel_id": novel_id,
+        "runs": runs,
+    }
+
+
 @router.get("/api/quality/judge-consistency")
 async def get_judge_consistency(
     model_version: Optional[str] = None,

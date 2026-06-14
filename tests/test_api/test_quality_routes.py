@@ -1118,3 +1118,251 @@ async def test_judge_consistency_thresholds_echoed_from_config(async_session):
     finally:
         app.dependency_overrides.clear()
 
+
+# /api/novels/{id}/quality/runs tests
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_empty_novel_returns_empty_runs(async_session):
+    """Novel with no metric rows -> 200, runs: []."""
+    novel_id = "test-novel-runs-empty"
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/runs")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["novel_id"] == novel_id
+            assert body["runs"] == []
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_single_run_has_all_fields(async_session):
+    """Single ChapterQualityMetric row -> all fields present in response."""
+    novel_id = "test-novel-runs-single"
+    chapter_id = "ch-runs-single"
+    volume_id = "vol-runs-single"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id=volume_id,
+            chapter_number=1,
+            title="第一章 测试",
+            novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    metric = ChapterQualityMetric(
+        novel_id=novel_id,
+        chapter_id=chapter_id,
+        phase="final",
+        attempt_index=0,
+        overall_score=82,
+        gate_status="warn",
+        blocking_items=[],
+        warning_items=[{"code": "AI_FLAVOR_HIGH", "message": "AI味浓"}],
+        issue_codes=["AI_FLAVOR_HIGH"],
+        latency_ms=4500,
+        model_version="kimi-k2-0711-preview",
+        prompt_version="v1.2",
+    )
+    async_session.add(metric)
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/runs")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["novel_id"] == novel_id
+            assert len(body["runs"]) == 1
+            run = body["runs"][0]
+            assert run["id"] == metric.id
+            assert run["chapter_id"] == chapter_id
+            assert run["phase"] == "final"
+            assert run["attempt_index"] == 0
+            assert run["overall_score"] == 82
+            assert run["gate_status"] == "warn"
+            assert run["blocking_items"] == []
+            assert len(run["warning_items"]) == 1
+            assert run["warning_items"][0]["code"] == "AI_FLAVOR_HIGH"
+            assert run["issue_codes"] == ["AI_FLAVOR_HIGH"]
+            assert run["latency_ms"] == 4500
+            assert run["model_version"] == "kimi-k2-0711-preview"
+            assert run["prompt_version"] == "v1.2"
+            assert run["created_at"] is not None
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_filter_by_chapter_id(async_session):
+    """Filter by chapter_id returns only matching chapter's runs."""
+    novel_id = "test-novel-runs-chapter-filter"
+    ch_a = "ch-runs-a"
+    ch_b = "ch-runs-b"
+    volume_id = "vol-runs-cf"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=ch_a, volume_id=volume_id, chapter_number=1,
+            title="第一章 A", novel_id=novel_id,
+        ),
+        Chapter(
+            id=ch_b, volume_id=volume_id, chapter_number=2,
+            title="第二章 B", novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    async_session.add_all([
+        ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=ch_a, phase="final",
+            attempt_index=0, overall_score=80, gate_status="pass",
+            issue_codes=["AI_FLAVOR_HIGH"],
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=ch_b, phase="final",
+            attempt_index=0, overall_score=75, gate_status="warn",
+            issue_codes=["STALE_TONE"],
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/runs", params={"chapter_id": ch_a}
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["runs"]) == 1
+            assert body["runs"][0]["chapter_id"] == ch_a
+            assert body["runs"][0]["issue_codes"] == ["AI_FLAVOR_HIGH"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_filter_by_phase(async_session):
+    """Filter by phase returns only matching phase's runs."""
+    novel_id = "test-novel-runs-phase-filter"
+    chapter_id = "ch-runs-phase"
+    volume_id = "vol-runs-pf"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id, volume_id=volume_id, chapter_number=1,
+            title="第一章 phase", novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    async_session.add_all([
+        ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=chapter_id, phase="final",
+            attempt_index=0, overall_score=80, gate_status="pass",
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=chapter_id, phase="draft",
+            attempt_index=0, overall_score=60, gate_status="fail",
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/runs", params={"phase": "final"}
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["runs"]) == 1
+            assert body["runs"][0]["phase"] == "final"
+            assert body["runs"][0]["gate_status"] == "pass"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_limit_returns_most_recent(async_session):
+    """limit=N returns N most recent rows ordered by created_at desc."""
+    novel_id = "test-novel-runs-limit"
+    chapter_id = "ch-runs-limit"
+    volume_id = "vol-runs-l"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id, volume_id=volume_id, chapter_number=1,
+            title="第一章 limit", novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    base = datetime(2026, 6, 1, 12, 0, 0)
+    metrics = []
+    for i in range(10):
+        m = ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=chapter_id, phase="final",
+            attempt_index=i, overall_score=70 + i, gate_status="pass",
+        )
+        # Force created_at to a known ordering
+        m.created_at = base + timedelta(minutes=i)
+        metrics.append(m)
+    async_session.add_all(metrics)
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/runs", params={"limit": 3}
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["runs"]) == 3
+            # Most recent first: attempt_index 9, 8, 7
+            assert [r["attempt_index"] for r in body["runs"]] == [9, 8, 7]
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_unknown_novel_returns_404(async_session):
+    """Unknown novel_id -> 404, matching other quality endpoints pattern."""
+    novel_id = "test-novel-runs-missing"
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/runs")
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
