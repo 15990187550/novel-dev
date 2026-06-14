@@ -51,6 +51,7 @@ from novel_dev.services.quality_gate_service import (
 )
 from novel_dev.services.volume_plan_guard_service import ensure_volume_plan_accepted
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
+from novel_dev.repositories.root_cause_repo import RootCauseRepository
 from novel_dev.services.generation_job_service import (
     CHAPTER_AUTO_RUN_JOB,
     CHAPTER_REWRITE_JOB,
@@ -3816,3 +3817,19 @@ async def declare_ab_winner(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok"}
+
+
+@router.get("/api/chapters/{chapter_id}/root-cause")
+async def get_root_cause(chapter_id: str, session: AsyncSession = Depends(get_session)):
+    repo = RootCauseRepository(session)
+    latest = await repo.get_latest_for_chapter(chapter_id)
+    if not latest:
+        raise HTTPException(status_code=404, detail="No root cause found")
+    return {
+        "chapter_id": chapter_id,
+        "analyzer_version": latest.analyzer_version,
+        "summary": latest.summary,
+        "suggested_actions": latest.suggested_actions.get("items", []),
+        "confidence": latest.confidence,
+        "created_at": latest.created_at.isoformat(),
+    }
