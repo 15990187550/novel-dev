@@ -30,19 +30,20 @@ app.include_router(router)
 
 def executable_beat_summary(index: int = 1) -> str:
     return (
-        f"第{index}节，陆照为追查旧案潜入药库，却被执事当场拦住；"
-        "他必须在继续搜证和立刻撤离之间选择，失败会暴露玉佩，结尾听见追兵逼近。"
+        f"第{index}节，陆照必须在继续搜证和立刻撤离之间选择，"
+        "失败会暴露玉佩，结尾听见追兵逼近。"
     )
 
 
 def build_test_volume(volume_id: str, chapter_prefix: str, count: int = 2) -> VolumePlan:
+    target_word_count = 95
     chapters = [
         VolumeBeat(
             chapter_id=f"{chapter_prefix}_{index}",
             chapter_number=index,
             title=f"Chapter {index}",
             summary=f"第{index}章",
-            target_word_count=80,
+            target_word_count=target_word_count,
             target_mood="tense",
             beats=[BeatPlan(summary=executable_beat_summary(index), target_mood="tense")],
         )
@@ -54,7 +55,7 @@ def build_test_volume(volume_id: str, chapter_prefix: str, count: int = 2) -> Vo
         title="Test Volume",
         summary="卷纲",
         total_chapters=count,
-        estimated_total_words=80 * count,
+        estimated_total_words=target_word_count * count,
         chapters=chapters,
         review_status={"status": "accepted", "reason": "test accepted"},
     )

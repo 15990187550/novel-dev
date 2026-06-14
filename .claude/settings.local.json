@@ -12,7 +12,10 @@
       "Bash(PYTHONPATH=/Users/linlin/Desktop/novel-dev/src python3.11 *)",
       "Bash(git add *)",
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git stash *)",
+      "Bash(git config *)",
+      "Skill(superpowers:brainstorming)"
     ]
   }
 }

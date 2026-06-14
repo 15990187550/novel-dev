@@ -6,10 +6,10 @@ from typing import Any
 
 from novel_dev.schemas.outline import SynopsisData
 from novel_dev.schemas.quality import QualityIssue
+from novel_dev.config.quality_config import get_quality_config
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
-from novel_dev.services.quality_gate_service import PUBLISHABLE_FINAL_REVIEW_SCORE
 from novel_dev.testing.generation_runner import (
     QUALITY_GATE_STOP_STATUSES,
     make_run_id,
@@ -31,6 +31,7 @@ def build_quality_summary_report(
     chapters_value = snapshot.get("chapters") or []
     chapters = chapters_value if isinstance(chapters_value, list) else []
     quality_issues = _quality_issues_from_checkpoint(checkpoint)
+    publishable_final_review_score = float(get_quality_config()["publishable_final_review_score"])
 
     report = TestRunReport(
         run_id=resolved_run_id,
@@ -109,7 +110,7 @@ def build_quality_summary_report(
         quality_status = str(chapter.get("quality_status") or "unchecked")
         final_score = chapter.get("final_review_score")
         if quality_status in QUALITY_GATE_STOP_STATUSES or (
-            isinstance(final_score, (int, float)) and final_score < PUBLISHABLE_FINAL_REVIEW_SCORE
+            isinstance(final_score, (int, float)) and final_score < publishable_final_review_score
         ):
             chapter_id = str(chapter.get("chapter_id") or chapter.get("id") or "unknown")
             target_mismatch = _target_word_count_mismatch(checkpoint, chapter)
@@ -117,7 +118,7 @@ def build_quality_summary_report(
                 f"chapter_id={chapter_id}",
                 f"quality_status={quality_status}",
                 f"final_review_score={final_score}",
-                f"publishable_final_review_score={PUBLISHABLE_FINAL_REVIEW_SCORE}",
+                f"publishable_final_review_score={publishable_final_review_score:g}",
                 *target_mismatch,
                 *_flatten_evidence(chapter.get("quality_reasons") or {}),
             ]

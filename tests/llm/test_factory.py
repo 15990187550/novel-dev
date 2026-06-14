@@ -277,7 +277,7 @@ def test_writer_relay_task_uses_writer_primary_model():
 
     assert cfg.model == "deepseek-v4-flash"
     assert cfg.fallback is not None
-    assert cfg.fallback.model == "Minimax-2.7"
+    assert cfg.fallback.model == "Minimax-3"
 
 
 def test_critic_score_chapter_has_enough_output_budget():
