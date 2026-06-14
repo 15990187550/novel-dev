@@ -284,7 +284,7 @@ class RootCauseAnalyzer:
 
 ### 7.3 调用与持久化关系
 
-- 每次 FastReview 后调一次,**无论章节 pass/warn/block**
+- 每次 FastReview 后调一次,**仅对非 pass 章节**(warn / block)触发。pass 章节不进根因分析,避免无谓的 LLM 调用
 - 失败软降级:LLM 出错时 summary 写"[分析失败]",confidence=0,继续流程
 - 不写 A/B test 范围(根因分析质量提升是另一条线,后续阶段评估)
 
