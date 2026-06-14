@@ -26,37 +26,66 @@ def _make_context(**overrides):
     return ChapterContext(**defaults)
 
 
+def _new_writer_agent():
+    """Create a WriterAgent bypassed via __new__ with a stub prompt_registry.
+
+    The default WriterAgent constructor needs a real AsyncSession, but the
+    tests below only exercise _build_system_prompt, which now reads through
+    prompt_registry.get_active(). Wire a fake registry that returns the
+    WRITER_PROMPT default directly.
+    """
+    from novel_dev.agents._default_prompts import DEFAULT_PROMPTS
+
+    class _FakeRegistry:
+        async def get_active(self, agent_name: str) -> str:
+            return DEFAULT_PROMPTS.get(agent_name, "")
+
+        async def get_active_version_name(self, agent_name: str) -> str:
+            return "v1.0"
+
+        async def increment_sample_count(self, agent_name: str, version: str) -> None:
+            return None
+
+    agent = WriterAgent.__new__(WriterAgent)
+    agent.prompt_registry = _FakeRegistry()
+    return agent
+
+
 class TestBuildSystemPrompt:
-    def test_contains_style_and_rules(self):
+    @pytest.mark.asyncio
+    async def test_contains_style_and_rules(self):
         ctx = _make_context()
-        agent = WriterAgent.__new__(WriterAgent)
-        result = agent._build_system_prompt(ctx, is_last=False)
+        agent = _new_writer_agent()
+        result = await agent._build_system_prompt(ctx, is_last=False)
         assert "简洁有力" in result
         assert "写作方向" in result
         assert "读者读感" in result
         assert "自然中文表达" in result
 
-    def test_prompt_contains_low_ai_flavor_style_controls(self):
+    @pytest.mark.asyncio
+    async def test_prompt_contains_low_ai_flavor_style_controls(self):
         ctx = _make_context(style_profile={})
-        agent = WriterAgent.__new__(WriterAgent)
-        result = agent._build_system_prompt(ctx, is_last=False)
+        agent = _new_writer_agent()
+        result = await agent._build_system_prompt(ctx, is_last=False)
         assert "比喻服务画面和情绪" in result
         assert "抽象玄幻概念" in result
         assert "最有辨识度" in result
         assert "现代吐槽" in result
         assert "style_profile" in result
 
-    def test_no_worldview_or_entities(self):
+    @pytest.mark.asyncio
+    async def test_no_worldview_or_entities(self):
         ctx = _make_context(worldview_summary="这是一段很长的世界观描述" * 100)
-        agent = WriterAgent.__new__(WriterAgent)
-        result = agent._build_system_prompt(ctx, is_last=False)
+        agent = _new_writer_agent()
+        result = await agent._build_system_prompt(ctx, is_last=False)
         assert "世界观描述" not in result
 
-    def test_last_beat_has_hook_clause(self):
+    @pytest.mark.asyncio
+    async def test_last_beat_has_hook_clause(self):
         ctx = _make_context()
-        agent = WriterAgent.__new__(WriterAgent)
-        result_last = agent._build_system_prompt(ctx, is_last=True)
-        result_mid = agent._build_system_prompt(ctx, is_last=False)
+        agent = _new_writer_agent()
+        result_last = await agent._build_system_prompt(ctx, is_last=True)
+        result_mid = await agent._build_system_prompt(ctx, is_last=False)
         assert "章末钩子" in result_last
         assert "章末钩子" not in result_mid
 

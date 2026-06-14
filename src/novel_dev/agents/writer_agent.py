@@ -19,6 +19,8 @@ from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.chapter_obligation_service import ChapterObligationService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
+from novel_dev.services.prompt_registry import PromptRegistry
+from novel_dev.agents._default_prompts import render_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +39,7 @@ class WriterAgent:
         session: AsyncSession,
         embedding_service: Optional[EmbeddingService] = None,
         structure_guard: Optional[ChapterStructureGuardService] = None,
+        prompt_registry: PromptRegistry | None = None,
     ):
         self.session = session
         self.chapter_repo = ChapterRepository(session)
@@ -44,6 +47,7 @@ class WriterAgent:
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
         self.structure_guard = structure_guard or ChapterStructureGuardService()
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     @logged_agent_step("WriterAgent", "写作章节草稿", node="draft", task="write")
     async def write(self, novel_id: str, context: ChapterContext, chapter_id: str) -> DraftMetadata:
@@ -501,7 +505,7 @@ class WriterAgent:
         rewrite_plan: dict | None,
         genre_template=None,
     ) -> str:
-        system_prompt = self._build_system_prompt(context, True, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, True, genre_template=genre_template)
         user_content = self._build_whole_chapter_context_message(context, rewrite_plan)
         messages = [
             ChatMessage(role="system", content=system_prompt),
@@ -598,7 +602,7 @@ class WriterAgent:
                 "WriterAgent",
                 "generate_beat",
             )
-        system_prompt = self._build_system_prompt(context, is_last, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template)
         context_msg = self._build_context_message(
             beat, context, relay_history, last_beat_text, idx, total, is_last, rewrite_plan
         )
@@ -629,7 +633,7 @@ class WriterAgent:
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-    def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None) -> str:
+    async def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None) -> str:
         """Layer 1: Rules. Goes in system message for highest LLM priority."""
         genre_block = ""
         if genre_template is not None:
@@ -639,14 +643,17 @@ class WriterAgent:
                 "forbidden_rules",
                 "quality_rules",
             )
-        parts = [
-            "你是一位追求沉浸感与可读性的中文小说家。按以下约束生成正文。只返回正文，不添加解释。",
-            self._build_style_guide_block(context),
-            self._build_writing_rules_block(is_last),
-            genre_block,
-            ProseHygieneService.prompt_rules(self._prose_hygiene_context(context, genre_template)),
-        ]
-        return "\n\n".join(p for p in parts if p)
+        # Load the writer system-prompt template from the registry; cold-start
+        # fallback (hardcoded default) is handled by PromptRegistry.get_active()
+        # if the table is empty.
+        template = await self.prompt_registry.get_active("writer")
+        return render_prompt_template(
+            template,
+            style_guide_block=self._build_style_guide_block(context),
+            writing_rules_block=self._build_writing_rules_block(is_last),
+            genre_block=genre_block,
+            prose_hygiene_rules=ProseHygieneService.prompt_rules(self._prose_hygiene_context(context, genre_template)),
+        )
 
     @staticmethod
     def _prose_hygiene_context(context: ChapterContext, genre_template=None) -> object:
@@ -2361,7 +2368,7 @@ class WriterAgent:
                 "WriterAgent",
                 "rewrite_beat",
             )
-        system_prompt = self._build_system_prompt(context, is_last, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template)
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
             idx, total, is_last, rewrite_plan,

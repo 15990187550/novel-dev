@@ -9,8 +9,10 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
+from novel_dev.agents._default_prompts import render_prompt_template
 from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.prompt_registry import PromptRegistry
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
 
@@ -27,11 +29,12 @@ class BeatScorePayload(BaseModel):
 
 
 class CriticAgent:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     @logged_agent_step("CriticAgent", "评审章节", node="review", task="review")
     async def review(self, novel_id: str, chapter_id: str) -> ScoreResult:
@@ -293,76 +296,21 @@ class CriticAgent:
             "genre_quality_config": context_data.get("genre_quality_config", {}),
         }
         genre_block = await self._build_genre_review_block(novel_id, context_data)
-        prompt = (
-            "你是一位严格的小说评审编辑。请根据以下章节草稿和章节上下文,"
-            "按 rubric 给 6 个维度打分(0-100),并输出**可操作的具体问题**,"
-            "以便 Editor 定点修改。返回严格符合 ScoreResult Schema 的 JSON。"
-            "dimensions 数组必须包含全部 6 个维度。\n\n"
-            "## 评价总原则\n"
-            "从读者体验出发判断:读者是否看得懂当下目标和阻力,是否相信人物选择,"
-            "是否能感到场景在推进,以及章末是否让人愿意继续读。"
-            "每条 suggestion 都写成正向改写目标,说明下一版应该呈现什么效果。"
-            "不按固定钩子类型或对话数量打分;先判断当前场景最自然的表达方式。\n\n"
-            "## 评分 Rubric(每个维度 4 档)\n"
-            "### plot_tension(情节张力)\n"
-            "- 85-100: 有明确冲突升级、赌注递进,场景间存在因果推动,章末钩子强\n"
-            "- 70-84: 冲突存在但张力不稳,部分段落节奏拖沓\n"
-            "- 50-69: 冲突模糊或重复同一量级冲突,无明显升级\n"
-            "- <50: 无冲突/流水账/情节停滞\n\n"
-            "### characterization(人物塑造)\n"
-            "- 85-100: 行为与动机自洽,有独特语言/行为标记,可看到内在选择\n"
-            "- 70-84: 行为基本合理,但缺少区分度,或动机交代略薄\n"
-            "- 50-69: 行为偏符号化,靠旁白解释情感\n"
-            "- <50: 工具人/OOC/与设定矛盾\n\n"
-            "### readability(可读性)\n"
-            "- 85-100: 句式多变,场景/对话/心理节奏合理,无冗余\n"
-            "- 70-84: 可读但有长句堆砌、重复用词、比喻密度略高\n"
-            "- 50-69: 大量书面语/AI 腔,段落结构雷同,比喻密度失控,抽象"
-            "玄幻词或类型概念连环复读,感官平均用力、模板化奇遇、现代"
-            "吐槽突兀,或出现未授权英文/拼音/网络缩写/UI 术语原文\n"
-            "- <50: 生硬、难以连读\n\n"
-            "### consistency(设定一致性)\n"
-            "- 85-100: 与 worldview/entities/前章完全一致\n"
-            "- 70-84: 有小瑕疵但不影响主线\n"
-            "- 50-69: 存在 1-2 处明显冲突(称谓、能力、关系)\n"
-            "- <50: 与核心设定严重矛盾\n\n"
-            "### humanity(人味/沉浸感)\n"
-            "- 85-100: 人物反应自然可信,情绪不是作者替人物总结出来的;对话不是必需形式,但出现时有潜台词\n"
-            "- 70-84: 偶有 AI 腔词汇、过度解释情感、跨语域表达突兀或异常事件描写偏模板\n"
-            "- 50-69: 明显 AI 腔、总结式心理描写、对话扁平、模板化异常事件演出,"
-            "人物被抽象光影和设定说明淹没\n"
-            "- <50: 通篇 AI 味、读起来像设定说明\n\n"
-            "### hook_strength(章末钩子强度,仅评价最后一个 beat)\n"
-            "- 85-100: 结尾让读者形成更具体的下一章期待;安静收束也可以高分,前提是信息、关系、压力或情绪余波确实推进\n"
-            "- 70-84: 有收束但钩子偏弱,下一步走向过于可预测\n"
-            "- 50-69: 章末平淡收束或用总结句收尾\n"
-            "- <50: 章末无悬念、信息倾倒式结尾、或本章未呼应已埋伏笔\n\n"
-            "## 输出要求(非常重要)\n"
-            "1. per_dim_issues:**每一个低于 75 分的维度**必须至少给 1 个具体问题,"
-            "格式为 {dim, beat_idx, problem, suggestion}。problem 要写具体(例:"
-            "『第 2 段对话中,A 的语气与其『沉默寡言』设定矛盾』),禁止抽象标签(『对话不自然』)。\n"
-            "2. hook_strength 低于 75 时,per_dim_issues 中必须指定 beat_idx=最后一个 beat 的索引,"
-            "problem 写清楚章末为什么不够勾人,suggestion 给出可执行的改写方向。\n"
-            "3. beat_idx 指向 chapter_plan.beats 的索引,跨 beat 的整章问题填 null。\n"
-            "4. suggestion 要给可直接执行的改写方向(例:『改为 A 用一个动作代替解释』)。\n"
-            "5. 语言体验:英文、拼音、网络缩写和 UI 术语原文会破坏沉浸感。"
-            "如果草稿出现这类词,readability 必须低于 75,并在 per_dim_issues 写出原词和自然中文表达建议。\n"
-            "6. AI 味问题必须具体定位:连续比喻、类型概念堆叠、感官平均用力、模板化异常事件、跨语域表达突兀。"
-            "suggestion 必须先判断这段最不像真人写作的原因,再只改最影响读感的部分,"
-            "例如『把连续三处像字比喻收束为更贴近当场处境的一个反应』。\n"
-            "7. per_dim_issues 可填写 source_stage,用于标记问题来自哪个流程阶段;"
-            "取值优先使用 setting_generation / brainstorm / volume_plan / drafting / editing。"
-            "例如设定承接断裂填 volume_plan,正文新增计划外事实填 editing。\n"
-            "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
-            f"{genre_block}"
-            f"{style_contract + chr(10) + chr(10) if style_contract else ''}"
-            f"### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
-            f"### 草稿\n{raw_draft}\n\n"
-            "请评分:"
+        template = await self.prompt_registry.get_active("critic")
+        version = await self.prompt_registry.get_active_version_name("critic")
+        style_contract_segment = (style_contract + "\n\n") if style_contract else ""
+        prompt = render_prompt_template(
+            template,
+            genre_block=genre_block,
+            style_contract=style_contract_segment,
+            trimmed_context=json.dumps(trimmed_context, ensure_ascii=False),
+            raw_draft=raw_draft,
         )
-        return await call_and_parse_model(
+        score_result = await call_and_parse_model(
             "CriticAgent", "score_chapter", prompt, ScoreResult, novel_id=novel_id
         )
+        await self.prompt_registry.increment_sample_count("critic", version)
+        return score_result
 
     async def _build_genre_review_block(self, novel_id: str, context_data: dict) -> str:
         genre_block = str(context_data.get("genre_prompt_block") or "").strip()

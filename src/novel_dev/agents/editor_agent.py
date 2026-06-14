@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents._default_prompts import render_prompt_template
 from novel_dev.llm.models import ChatMessage
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.embedding_service import EmbeddingService
@@ -13,6 +14,7 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.log_service import agent_step, logged_agent_step, log_service
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
+from novel_dev.services.prompt_registry import PromptRegistry
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
@@ -40,6 +42,7 @@ class EditorAgent:
         session: AsyncSession,
         embedding_service: Optional[EmbeddingService] = None,
         structure_guard: Optional[ChapterStructureGuardService] = None,
+        prompt_registry: PromptRegistry | None = None,
     ):
         self.session = session
         self.state_repo = NovelStateRepository(session)
@@ -47,6 +50,7 @@ class EditorAgent:
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
         self.structure_guard = structure_guard or ChapterStructureGuardService()
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     @logged_agent_step("EditorAgent", "精修章节", node="edit", task="polish")
     async def polish(self, novel_id: str, chapter_id: str):
@@ -568,10 +572,10 @@ class EditorAgent:
             )
 
         style_profile = chapter_context.get("style_profile", {})
-        style_block = ""
+        style_contract_block = ""
         if style_profile:
             style_contract = StyleContractCompiler.compile(style_profile).render_prompt_block()
-            style_block = f"### 作品风格约束\n{style_contract or str(style_profile)}\n\n"
+            style_contract_block = style_contract or str(style_profile)
 
         chapter_plan = chapter_context.get("chapter_plan", {})
         plan_block = ""
@@ -590,7 +594,9 @@ class EditorAgent:
             genre_quality_block = f"### 类型质量配置\n{json.dumps(genre_quality_config, ensure_ascii=False)}\n\n"
         strategy_block = self._soft_strategy_block(chapter_context)
 
-        prompt_parts = [
+        # Compose chapter_context block (style + plan + genre + quality + strategy)
+        # so it can be passed as a single {chapter_context} slot.
+        context_block_parts = [
             "你是一位小说编辑。请在保留叙事事实和原对话意图的前提下,针对以下问题定点改写本段。"
             "只返回改写后的正文，以正文形式呈现。\n",
             "## 改写方向\n"
@@ -618,24 +624,41 @@ class EditorAgent:
             "4. 正文只升级已有事实:新线索、新证据、新物件、新威胁、新动机、黑影、追兵、身份背景、额外线索和额外台词"
             "交给章节计划或后续节拍;本段用已给目标、阻力、选择和代价增强读感。\n",
             "5. 若问题建议里出现新增反转、陌生人物、额外物件或后续危险示例,请只吸收其读感目标,并改用原文/计划已经出现的素材完成同等效果。\n",
-            style_block,
+            style_contract_block,
             plan_block,
             genre_block,
             genre_quality_block,
             strategy_block,
         ]
-        if low_dims:
-            prompt_parts.append(f"## 低分维度\n{', '.join(low_dims)}\n")
-        if issue_lines:
-            prompt_parts.append("## 本段具体问题(必须逐条解决)\n" + "\n".join(issue_lines) + "\n")
-        if whole_lines:
-            prompt_parts.append("## 整章通病(写本段时顺带注意)\n" + "\n".join(whole_lines) + "\n")
-        prompt_parts.append(f"## 原文\n{text}\n\n改写:")
+        chapter_context_block = "\n".join(p for p in context_block_parts if p)
 
-        prompt = "\n".join(p for p in prompt_parts if p)
+        # fact_boundary is the same 事实边界 section inlined above; for the
+        # template slot, reuse chapter_context_block so the editor template
+        # remains a coherent artefact even if `fact_boundary` is unused.
+        fact_boundary = ""
+        prose_hygiene_rules = ProseHygieneService.prompt_rules(chapter_context)
+        low_dims_str = ", ".join(low_dims) if low_dims else ""
+        issue_lines_str = "\n".join(issue_lines) if issue_lines else ""
+        whole_lines_str = "\n".join(whole_lines) if whole_lines else ""
+
+        template = await self.prompt_registry.get_active("editor")
+        version = await self.prompt_registry.get_active_version_name("editor")
+        prompt = render_prompt_template(
+            template,
+            chapter_context=chapter_context_block,
+            text=text,
+            style_contract_block=style_contract_block,
+            prose_hygiene_rules=prose_hygiene_rules,
+            fact_boundary=fact_boundary,
+            low_dims=low_dims_str,
+            issue_lines=issue_lines_str,
+            whole_lines=whole_lines_str,
+        )
+
         from novel_dev.llm import llm_factory
         client = llm_factory.get("EditorAgent", task="polish_beat")
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+        await self.prompt_registry.increment_sample_count("editor", version)
         return response.text.strip()
 
     @staticmethod

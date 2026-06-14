@@ -28,6 +28,8 @@ from novel_dev.services.beat_boundary_service import BeatBoundaryService
 from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.quality_preflight_service import QualityPreflightService
+from novel_dev.services.prompt_registry import PromptRegistry
+from novel_dev.agents._default_prompts import render_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ class ContextNeeds(BaseModel):
 
 
 class ContextAgent:
-    def __init__(self, session: AsyncSession, embedding_service: EmbeddingService | None = None):
+    def __init__(self, session: AsyncSession, embedding_service: EmbeddingService | None = None, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.doc_repo = DocumentRepository(session)
@@ -52,6 +54,7 @@ class ContextAgent:
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
         self.embedding_service = embedding_service
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     @logged_agent_step("ContextAgent", "组装章节上下文", node="context", task="assemble")
     async def assemble(self, novel_id: str, chapter_id: str) -> ChapterContext:
@@ -822,27 +825,18 @@ class ContextAgent:
         }
 
     async def _analyze_context_needs(self, chapter_plan: ChapterPlan, novel_id: str = "") -> dict:
-        prompt = (
-            "你是一位小说场景分析师。请根据以下章节计划，分析写这一章需要哪些上下文信息。\n"
-            "返回严格 JSON：\n"
-            "{\n"
-            '  "locations": ["地点名1"],\n'
-            '  "entities": ["实体名1"],\n'
-            '  "time_range": {"start_tick": -3, "end_tick": 2},\n'
-            '  "foreshadowing_keywords": ["关键词1"]\n'
-            "}\n\n"
-            "说明：\n"
-            "- locations: 场景涉及的主要地点\n"
-            "- entities: 需要知道最新状态的关键人物/物品（超出章节计划已有实体）\n"
-            "- time_range: 相对于 current_tick 的时间范围\n"
-            "- foreshadowing_keywords: 用于筛选相关伏笔的关键词\n\n"
-            f"章节计划：\n{chapter_plan.model_dump_json()}"
+        template = await self.prompt_registry.get_active("context_agent")
+        version = await self.prompt_registry.get_active_version_name("context_agent")
+        prompt = render_prompt_template(
+            template,
+            chapter_plan_json=chapter_plan.model_dump_json(),
         )
         try:
             result = await call_and_parse_model(
                 "ContextAgent", "analyze_context_needs", prompt,
                 ContextNeeds, max_retries=3, novel_id=novel_id
             )
+            await self.prompt_registry.increment_sample_count("context_agent", version)
             return result.model_dump()
         except Exception as exc:
             return await self._fallback_context_needs(

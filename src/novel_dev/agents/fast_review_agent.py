@@ -9,10 +9,12 @@ from novel_dev.schemas.review import FastReviewReport
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
+from novel_dev.agents._default_prompts import render_prompt_template
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.genre_template_service import GenreTemplateService
+from novel_dev.services.prompt_registry import PromptRegistry
 from novel_dev.services.quality_gate_service import (
     QUALITY_BLOCK,
     QUALITY_MANUAL_REVIEW_REQUIRED,
@@ -201,11 +203,12 @@ def _check_ai_flavor_reduced(raw: str, polished: str) -> bool:
 
 
 class FastReviewAgent:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.chapter_repo = ChapterRepository(session)
         self.director = NovelDirector(session)
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     async def _llm_check_consistency_and_cohesion(
         self,
@@ -217,25 +220,18 @@ class FastReviewAgent:
     ) -> FastReviewLLMCheck:
         genre_section = f"### 类型模板约束\n{genre_prompt_block}\n\n" if genre_prompt_block.strip() else ""
         style_contract = StyleContractCompiler.compile(chapter_context.get("style_profile", {})).render_prompt_block()
+        style_contract_segment = (style_contract + "\n\n") if style_contract else ""
         visible_context = dict(chapter_context)
         visible_context.pop("style_profile", None)
-        prompt = (
-            "你是一位小说质量检查员。请根据以下精修文本、原始草稿和章节上下文,"
-            "从读者体验出发检查两点并返回严格 JSON:\n"
-            "1. consistency_fixed: 精修文本是否修复了与设定/上下文的不一致\n"
-            "2. beat_cohesion_ok: 节拍之间是否连贯\n"
-            "3. notes: 问题列表(字符串数组),最多 3 条,每条不超过 60 个汉字。"
-            "简短指出最影响读感的问题和正向改写目标；若没有问题返回空数组。"
-            "检查读者是否看得懂、是否相信人物、是否愿意继续读。"
-            "如果精修文本仍有比喻过密、类型概念复读、感官平均用力、模板化异常事件或跨语域表达突兀,"
-            "请写入 notes 并说明下一版应呈现什么效果。\n"
-            "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
-            f"{genre_section}"
-            f"{style_contract + chr(10) + chr(10) if style_contract else ''}"
-            f"### 章节上下文\n{json.dumps(visible_context, ensure_ascii=False)}\n\n"
-            f"### 原始草稿\n{raw}\n\n"
-            f"### 精修文本\n{polished}\n\n"
-            "请返回 JSON:"
+        template = await self.prompt_registry.get_active("fast_review")
+        version = await self.prompt_registry.get_active_version_name("fast_review")
+        prompt = render_prompt_template(
+            template,
+            genre_section=genre_section,
+            style_contract=style_contract_segment,
+            visible_context=json.dumps(visible_context, ensure_ascii=False),
+            raw=raw,
+            polished=polished,
         )
         result = await call_and_parse_model(
             "FastReviewAgent",
@@ -245,6 +241,7 @@ class FastReviewAgent:
             max_retries=2,
             novel_id=novel_id,
         )
+        await self.prompt_registry.increment_sample_count("fast_review", version)
         if novel_id:
             log_service.add_log(
                 novel_id,

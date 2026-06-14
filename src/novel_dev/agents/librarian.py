@@ -33,8 +33,10 @@ from novel_dev.services.entity_service import EntityService
 from novel_dev.services.entity_state_policy import EntityStatePolicy
 from novel_dev.services.embedding_service import EmbeddingService
 from novel_dev.services.log_service import logged_agent_step, log_service
+from novel_dev.services.prompt_registry import PromptRegistry
 from novel_dev.services.world_state_diff_guard_service import WorldStateDiffGuardService
 from novel_dev.services.world_state_review_service import WorldStateReviewRequiredError, WorldStateReviewService
+from novel_dev.agents._default_prompts import render_prompt_template
 from novel_dev.agents._llm_helpers import call_and_parse_model
 from novel_dev.agents._log_helpers import log_agent_detail, named_items, preview_text
 
@@ -99,9 +101,10 @@ class LibrarianAgent:
     PRIMARY_EXTRACT_TIMEOUT_SECONDS = 120
     SOFT_STATE_TIMEOUT_SECONDS = 45
 
-    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None):
+    def __init__(self, session: AsyncSession, embedding_service: Optional[EmbeddingService] = None, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.embedding_service = embedding_service
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     async def _load_context(self, novel_id: str, chapter_id: str) -> dict:
         entity_svc = EntityService(self.session, self.embedding_service)
@@ -121,19 +124,18 @@ class LibrarianAgent:
             "current_tick": current_tick,
         }
 
-    def _build_prompt(self, polished_text: str, context: dict) -> str:
-        return (
-            "你是一个小说世界状态提取器。从以下精修章节文本中提取对世界状态的变更。\n"
-            "返回严格 JSON，包含以下顶级键："
-            "timeline_events, spaceline_changes, new_entities, concept_updates, "
-            "character_updates, foreshadowings_recovered, new_foreshadowings, new_relationships。\n"
-            "规则：只提取文本中明确发生或暗示的变更；人物状态变更必须是具体键值对；"
-            "若 pending_foreshadowings 中的内容在文本中被解答，将其 ID 放入 foreshadowings_recovered；"
-            "new_relationships 的 source_entity_id 和 target_entity_id 必须是已存在的实体名（匹配 new_entities 或 character_updates 中的 name）。\n"
-            f"当前 pending_foreshadowings: {json.dumps(context.get('pending_foreshadowings', []), ensure_ascii=False)}\n"
-            f"当前时间 tick: {context.get('current_tick', 0)}\n"
-            f"章节文本：\n{polished_text}\n"
+    async def _build_prompt(self, polished_text: str, context: dict) -> str:
+        template = await self.prompt_registry.get_active("librarian")
+        version = await self.prompt_registry.get_active_version_name("librarian")
+        prompt = render_prompt_template(
+            template,
+            pending_foreshadowings=json.dumps(context.get("pending_foreshadowings", []), ensure_ascii=False),
+            current_tick=context.get("current_tick", 0),
+            polished_text=polished_text,
         )
+        # Stash version so the caller can track sample usage.
+        self._last_prompt_version = version
+        return prompt
 
     async def _call_llm(self, prompt: str) -> str:
         client = llm_factory.get("LibrarianAgent", task="extract")
@@ -211,7 +213,7 @@ class LibrarianAgent:
             },
         )
         context = await self._load_context(novel_id, chapter_id)
-        prompt = self._build_prompt(polished_text, context)
+        prompt = await self._build_prompt(polished_text, context)
         extraction = await call_and_parse_model(
             "LibrarianAgent",
             "extract",
@@ -219,6 +221,10 @@ class LibrarianAgent:
             ExtractionResult,
             novel_id=novel_id,
             max_wait_seconds=self.PRIMARY_EXTRACT_TIMEOUT_SECONDS,
+        )
+        await self.prompt_registry.increment_sample_count(
+            "librarian",
+            getattr(self, "_last_prompt_version", "v1.0"),
         )
 
         # 第二 pass:补抽隐性的情感/关系变化(硬事实常挤掉软状态)

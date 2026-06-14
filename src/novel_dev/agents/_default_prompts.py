@@ -205,8 +205,8 @@ CRITIC_PROMPT = (
     "例如设定承接断裂填 volume_plan,正文新增计划外事实填 editing。\n"
     "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
     "{genre_block}"
-    "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
-    "### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
+    "{style_contract}"
+    "### 章节上下文\n{trimmed_context}\n\n"
     "### 草稿\n{raw_draft}\n\n"
     "请评分:"
 )
@@ -229,7 +229,7 @@ EDITOR_PROMPT = (
     "- 遵守\"事实边界\"(角色当前不知道的事不能写)。\n"
     "- 遵守\"写作风格契约\":\n"
     "{style_contract_block}\n\n"
-    "{ProseHygieneService.prompt_rules(chapter_context)}\n\n"
+    "{prose_hygiene_rules}\n\n"
     "## 事实边界\n"
     "{fact_boundary}\n\n"
     "## 低分维度\n"
@@ -260,8 +260,8 @@ FAST_REVIEW_PROMPT = (
     "请写入 notes 并说明下一版应呈现什么效果。\n"
     "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
     "{genre_section}"
-    "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
-    "### 章节上下文\n{json.dumps(visible_context, ensure_ascii=False)}\n\n"
+    "{style_contract}"
+    "### 章节上下文\n{visible_context}\n\n"
     "### 原始草稿\n{raw}\n\n"
     "### 精修文本\n{polished}\n\n"
     "请返回 JSON:"
@@ -280,8 +280,8 @@ LIBRARIAN_PROMPT = (
     "规则：只提取文本中明确发生或暗示的变更；人物状态变更必须是具体键值对；"
     "若 pending_foreshadowings 中的内容在文本中被解答，将其 ID 放入 foreshadowings_recovered；"
     "new_relationships 的 source_entity_id 和 target_entity_id 必须是已存在的实体名（匹配 new_entities 或 character_updates 中的 name）。\n"
-    "当前 pending_foreshadowings: {json.dumps(context.get('pending_foreshadowings', []), ensure_ascii=False)}\n"
-    "当前时间 tick: {context.get('current_tick', 0)}\n"
+    "当前 pending_foreshadowings: {pending_foreshadowings}\n"
+    "当前时间 tick: {current_tick}\n"
     "章节文本：\n{polished_text}\n"
 )
 
@@ -321,4 +321,17 @@ DEFAULT_PROMPTS: dict[str, str] = {
 }
 
 
-__all__ = ["DEFAULT_PROMPTS"]
+def render_prompt_template(template: str, **slots: object) -> str:
+    """Render a prompt template via string replacement.
+
+    Default prompts often contain literal JSON braces (``{...}``) that would
+    confuse ``str.format``; we substitute known slots by name instead. Slots
+    that do not appear in the template are silently ignored.
+    """
+    rendered = template
+    for key, value in slots.items():
+        rendered = rendered.replace("{" + key + "}", str(value or ""))
+    return rendered
+
+
+__all__ = ["DEFAULT_PROMPTS", "render_prompt_template"]

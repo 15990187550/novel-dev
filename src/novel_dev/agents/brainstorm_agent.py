@@ -11,6 +11,8 @@ from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.genre_template_service import GenreTemplateService
+from novel_dev.services.prompt_registry import PromptRegistry
+from novel_dev.agents._default_prompts import render_prompt_template
 
 
 class BrainstormAgent:
@@ -24,13 +26,14 @@ class BrainstormAgent:
     MAX_REVISE_ATTEMPTS = 3
     VOLUME_OUTLINE_BATCH_SIZE = 6
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.doc_repo = DocumentRepository(session)
         self.state_repo = NovelStateRepository(session)
         self.director = NovelDirector(session)
         self.constraint_builder = NarrativeConstraintBuilder()
         self.knowledge_domain_service = KnowledgeDomainService(session)
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     def _log_progress(
         self,
@@ -436,51 +439,17 @@ class BrainstormAgent:
             novel_id,
             "generate_synopsis_top_level",
         )
-        prompt = (
-            "你是一位资深商业小说大纲生成专家,面向网文连载读者。"
-            "根据用户提供的设定文档,先生成顶层总纲。卷级概要会在下一步分批生成,"
-            "本步骤不要展开每一卷。"
-            "返回严格符合指定 JSON Schema 的数据。\n\n"
-            "## 结构要求(在里程碑与人物弧中体现)\n"
-            "1. 采用三幕式或更复杂结构,整部故事至少含 4 个能改变主角处境的转折点,"
-            "每一幕至少 1 个,转折尽量由角色选择驱动(而非纯外力)。\n"
-            "2. 节奏:里程碑分布上,平均每 3 章左右有 1 个小高潮,每卷有 1 个卷级高潮。\n"
-            "3. 伏笔:character_arcs 与 milestones 合计给出 ≥4 个可回收的悬念点,"
-            "每个悬念尽量在 1 卷内给出回收线索。\n"
-            "4. 钩子:整部故事结尾带开放性钩子,能引出下一卷或续作的核心悬念。\n"
-            "5. 人物弧光:主要角色 key_turning_points ≥3 个,且包含一次内在转变"
-            "(信念/价值观/关系的重要变化)。\n"
-            "6. 本步骤 volume_outlines 必须返回空数组 [],不要写任何卷级概要、章节列表或 beats。\n\n"
-            "## Schema 写法规范\n"
-            "- logline:写成『角色 + 欲望 + 阻力 + 赌注』的一句话,避免把 logline 写成 setting 说明。\n"
-            "- core_conflict:写成来自导入资料的具体对抗关系,例如『角色/阵营A vs 角色/阵营B 围绕核心目标的冲突』,"
-            "避免抽象标签(如『理念冲突』『命运考验』),也不要引入资料外的势力、地点或事件。\n"
-            "- milestones.climax_event:写一个可被后续章节直接展开的具体事件,不要只写情绪。\n\n"
-            f"{genre_prompt_block}"
-            "## 输出字段约束(必须严格遵守)\n"
-            "只允许以下顶层字段,禁止输出任何额外字段:\n"
-            '{"title","logline","core_conflict","themes","character_arcs","milestones",'
-            '"estimated_volumes","estimated_total_chapters","estimated_total_words",'
-            '"volume_outlines","entity_highlights","relationship_highlights"}\n'
-            "- title: 字符串\n"
-            "- logline: 字符串\n"
-            "- core_conflict: 字符串\n"
-            "- themes: 字符串数组,控制在 3-6 个\n"
-            "- character_arcs: 数组,每项只包含 name / arc_summary / key_turning_points 三个字段\n"
-            "- milestones: 数组,每项只包含 act / summary / climax_event 三个字段\n"
-            "- estimated_volumes: 整数\n"
-            "- estimated_total_chapters: 整数\n"
-            "- estimated_total_words: 整数\n"
-            "- volume_outlines: 本步骤必须是空数组 [],卷级概要由下一步分批生成\n"
-            "- entity_highlights: 对象,可选键包括 characters / factions / locations / items,值均为字符串数组\n"
-            "- relationship_highlights: 字符串数组,每项描述一个关键关系推进\n"
-            "不要输出 worldview_summary、three_act_structure、volume_hooks、suspense_plants、chapters、beats 等任何额外结构。\n"
-            "不要输出 Markdown、代码块、解释文字或字段注释,只返回单个 JSON 对象。\n\n"
-            f"{source_text}"
+        template = await self.prompt_registry.get_active("brainstorm")
+        version = await self.prompt_registry.get_active_version_name("brainstorm")
+        prompt = render_prompt_template(
+            template,
+            genre_prompt_block=genre_prompt_block,
+            source_text=source_text,
         )
         result = await call_and_parse_model(
             "BrainstormAgent", "generate_synopsis_top_level", prompt, SynopsisData, novel_id=novel_id
         )
+        await self.prompt_registry.increment_sample_count("brainstorm", version)
         self._log_progress(
             novel_id,
             f"顶层总纲生成完成: {result.title}",

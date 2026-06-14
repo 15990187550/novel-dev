@@ -40,6 +40,8 @@ from novel_dev.services.setting_readiness_service import SettingReadinessService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.services.story_contract_service import StoryContractService
 from novel_dev.services.quality_preflight_service import QualityPreflightService
+from novel_dev.services.prompt_registry import PromptRegistry
+from novel_dev.agents._default_prompts import render_prompt_template
 
 
 class VolumeChapterSkeleton(BaseModel):
@@ -310,7 +312,7 @@ class VolumePlannerAgent:
     MAX_AUTOREVISE_CHAPTERS = 18
     CONSTRAINT_SOURCE_DOC_TYPES = ("worldview", "setting", "concept", "synopsis")
 
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, prompt_registry: PromptRegistry | None = None):
         self.session = session
         self.state_repo = NovelStateRepository(session)
         self.doc_repo = DocumentRepository(session)
@@ -322,6 +324,7 @@ class VolumePlannerAgent:
         self.director = NovelDirector(session)
         self.constraint_builder = NarrativeConstraintBuilder()
         self.domain_activation_service = DomainActivationService(session)
+        self.prompt_registry = prompt_registry or PromptRegistry(session)
 
     async def _release_connection_before_external_call(self) -> None:
         if self.session.in_transaction():
@@ -971,39 +974,25 @@ class VolumePlannerAgent:
             "target_chapters": target_chapters,
         }
 
-        prompt = (
-            "你是一位小说分卷规划专家。请根据以下大纲数据,"
-            "只生成卷纲骨架 VolumePlanBlueprint，返回严格符合 VolumePlanBlueprint Schema 的 JSON。\n"
-            "不要返回 VolumePlan，不要返回 beats，不要展开章节细节。\n"
-            "## 结构要求\n"
-            "1. 只输出卷级字段和 chapters 骨架，每章只保留 chapter_number/title/summary。\n"
-            "2. 每章给出有意义的标题和摘要，不用『第X章』这类占位符。\n"
-            "3. 章节之间保持因果连贯，平均每 2-3 章安排 1 个冲突点/悬念点。\n"
-            "4. 本卷整体规划出 1 个卷级高潮和 1 个卷末钩子，但只体现在 chapter summary 的推进里。\n"
-            "5. entity_highlights 与 relationship_highlights 只保留最关键的 3-5 条，能省则省。\n"
-            "6. 估算字数合理。\n\n"
-            "## 叙事约束\n"
-            "1. 必须遵守 ActiveConstraintContext 的当前阶段边界。\n"
-            "1.1 必须遵守“可执行设定约束”；hard/sequence 约束中的节点必须在章节摘要中按顺序体现。\n"
-            "2. 高阶敌人、终局真相、后续世界/体系若未在本卷允许范围内，只能写成伏笔、残痕、传闻、代理人或异常现象。\n"
-            "3. 缺少设定依据时不得硬编关键事实，应保守降级为待确认线索。\n"
-            "4. 不得重新引入用户已删除或未批准的旧设定。\n\n"
-            "5. 境界、功法层级、势力层级等专有层级名称必须逐字来自总纲、当前设定或 ActiveConstraintContext；"
-            "不得按通用修仙套路自造如“某某三层/七层”等未提供层级。\n\n"
-            "## 输出规模限制\n"
-            f"{scale_rule}"
-            "2. 这是单卷可执行规划,不要试图一次覆盖整部小说的全部章节。\n"
-            "3. 每章 summary 控制在 25-50 字，优先写主线推进与章末悬念。\n"
-            "4. 不要返回 beats、target_word_count、target_mood、foreshadowings 字段。\n"
-            "5. 优先保证 JSON 完整，不要输出解释，不要输出 Markdown。\n\n"
-            f"大纲数据:\n{synopsis_prompt_data}\n\n"
-            f"{volume_contract_block}\n\n"
-            f"{story_contract_block}\n\n"
-            f"{constraint_block}\n\n"
-            f"{'## 类型模板约束' + chr(10) + genre_prompt_block + chr(10) + chr(10) if genre_prompt_block else ''}"
-            f"当前卷号:{volume_number}"
-            f"{world_block}"
-            f"{instruction_block}"
+        # Pre-compute the conditional genre block (templates contain literal braces,
+        # so we substitute all slots via string replacement rather than .format()).
+        genre_block_segment = (
+            f"## 类型模板约束\n{genre_prompt_block}\n\n" if genre_prompt_block else ""
+        )
+        volume_number_segment = f"当前卷号:{volume_number}"
+        template = await self.prompt_registry.get_active("volume_planner")
+        version = await self.prompt_registry.get_active_version_name("volume_planner")
+        prompt = render_prompt_template(
+            template,
+            scale_rule=scale_rule,
+            synopsis_prompt_data=synopsis_prompt_data,
+            volume_contract_block=volume_contract_block,
+            story_contract_block=story_contract_block,
+            constraint_block=constraint_block,
+            genre_block=genre_block_segment,
+            volume_number=volume_number_segment,
+            world_block=world_block,
+            instruction_block=instruction_block,
         )
         await self._release_connection_before_external_call()
         blueprint = await self._call_volume_blueprint_model(
@@ -1012,6 +1001,7 @@ class VolumePlannerAgent:
             orchestration_config=orchestration_config,
             volume_context=volume_context,
         )
+        await self.prompt_registry.increment_sample_count("volume_planner", version)
         if target_chapters and len(blueprint.chapters) != target_chapters:
             log_service.add_log(
                 novel_id,

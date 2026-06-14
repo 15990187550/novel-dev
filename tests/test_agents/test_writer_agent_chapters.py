@@ -12,6 +12,25 @@ from novel_dev.genres.defaults import default_genre
 from novel_dev.genres.models import ResolvedGenreTemplate
 
 
+def _new_writer_agent():
+    """Bypass WriterAgent constructor and wire a stub prompt_registry."""
+    from novel_dev.agents._default_prompts import DEFAULT_PROMPTS
+
+    class _FakeRegistry:
+        async def get_active(self, agent_name: str) -> str:
+            return DEFAULT_PROMPTS.get(agent_name, "")
+
+        async def get_active_version_name(self, agent_name: str) -> str:
+            return "v1.0"
+
+        async def increment_sample_count(self, agent_name: str, version: str) -> None:
+            return None
+
+    agent = WriterAgent.__new__(WriterAgent)
+    agent.prompt_registry = _FakeRegistry()
+    return agent
+
+
 @pytest.mark.asyncio
 async def test_multi_message_prompt_structure(async_session):
     """Verify WriterAgent uses system + user messages (not single message dump)."""
@@ -293,7 +312,7 @@ def test_writer_prompt_uses_non_formulaic_reader_pull():
     from novel_dev.agents.writer_agent import WriterAgent
     from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, LocationContext
 
-    agent = WriterAgent.__new__(WriterAgent)
+    agent = _new_writer_agent()
     beat = BeatPlan(summary="主角在压力下做出选择。", target_mood="紧张", target_word_count=300)
     context = ChapterContext(
         chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
@@ -306,7 +325,8 @@ def test_writer_prompt_uses_non_formulaic_reader_pull():
         story_contract={},
     )
 
-    prompt = agent._build_system_prompt(context, True)
+    import asyncio
+    prompt = asyncio.run(agent._build_system_prompt(context, True))
 
     assert "不要为了满足形式要求机械添加对话、动作、感官或悬念" in prompt
     assert "优先判断当前场景最自然的表达方式" in prompt
@@ -320,7 +340,7 @@ def test_writer_prompt_uses_compiled_style_contract_instead_of_raw_json():
     from novel_dev.agents.writer_agent import WriterAgent
     from novel_dev.schemas.context import BeatPlan, ChapterContext, ChapterPlan, LocationContext
 
-    agent = WriterAgent.__new__(WriterAgent)
+    agent = _new_writer_agent()
     beat = BeatPlan(summary="主角在压力下做出选择。", target_mood="紧张", target_word_count=300)
     context = ChapterContext(
         chapter_plan=ChapterPlan(chapter_number=1, title="第一章", target_word_count=800, beats=[beat]),
@@ -338,7 +358,8 @@ def test_writer_prompt_uses_compiled_style_contract_instead_of_raw_json():
         story_contract={},
     )
 
-    prompt = agent._build_system_prompt(context, True)
+    import asyncio
+    prompt = asyncio.run(agent._build_system_prompt(context, True))
 
     assert "### 写法合同" in prompt
     assert "#### 叙事规则" in prompt
