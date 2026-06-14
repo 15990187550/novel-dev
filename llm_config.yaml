@@ -345,6 +345,7 @@ quality_thresholds:
     major_repair_min_score: 70
     stop_after_attempts: 3
     pattern_issue_threshold: 3
+    max_auto_rewrites: 2            # 阶段二：自动重写硬上限
 issue_code_hints:
   AI_FLAVOR_HIGH:
     severity: warn

@@ -39,6 +39,12 @@ def test_quality_config_fails_loud_on_missing_key(tmp_path, monkeypatch):
         get_quality_config()
 
 
+def test_quality_config_includes_max_auto_rewrites():
+    cfg = get_quality_config()
+    assert "max_auto_rewrites" in cfg["recommendation"]
+    assert isinstance(cfg["recommendation"]["max_auto_rewrites"], int)
+
+
 def test_issue_code_hints_returns_empty_dict_when_absent(tmp_path, monkeypatch):
     yaml_path = tmp_path / "llm_config.yaml"
     yaml_path.write_text("quality_thresholds: {}\n")
