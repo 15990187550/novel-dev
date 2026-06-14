@@ -16,6 +16,19 @@
 
     <DashboardStatusCards :panels="statusCards" />
 
+    <section v-if="store.novelId && store.currentChapter?.chapter_id" class="surface-card rounded-[1.4rem] p-5">
+      <div class="mb-3 flex items-center justify-between">
+        <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">当前章节质量推荐</h2>
+        <span class="text-xs text-gray-500 dark:text-gray-400">
+          {{ store.currentChapter.title || `章节 ${store.currentChapter.chapter_id}` }}
+        </span>
+      </div>
+      <QualityRecommendationWidget
+        :novel-id="store.novelId"
+        :chapter-id="store.currentChapter.chapter_id"
+      />
+    </section>
+
     <div class="flex flex-wrap items-center justify-between gap-3">
       <DashboardNextActions class="flex-1" :actions="recommendedActions" @action="handleAction" />
       <el-button
@@ -59,6 +72,7 @@ import DashboardStatusCards from '@/components/dashboard/DashboardStatusCards.vu
 import DashboardVolumeSummary from '@/components/dashboard/DashboardVolumeSummary.vue'
 import DashboardNextActions from '@/components/dashboard/DashboardNextActions.vue'
 import DashboardInsights from '@/components/dashboard/DashboardInsights.vue'
+import QualityRecommendationWidget from '@/components/QualityRecommendationWidget.vue'
 import { formatBeijingDateTime } from '@/utils/time.js'
 import {
   buildChapterSummary,
