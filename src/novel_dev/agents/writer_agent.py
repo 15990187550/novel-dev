@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,8 @@ from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.chapter_obligation_service import ChapterObligationService
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
+
+logger = logging.getLogger(__name__)
 
 
 _BEAT_ANCHOR_STRIP_RE = re.compile(r"<!--/?BEAT:\d+-->")
@@ -953,39 +956,59 @@ class WriterAgent:
             self._get_plan_value(card, "beat_index"): card
             for card in getattr(context, "writing_cards", [])
         }
+        rendered_count = 0
         for idx, beat in enumerate(context.chapter_plan.beats):
-            contract_lines.append(f"\n#### beat {idx}")
-            contract_lines.append(f"- 摘要: {StoryQualityService.sanitize_prompt_text(beat.summary)}")
-            if beat.target_mood:
-                contract_lines.append(f"- 情绪: {beat.target_mood}")
-            if beat.key_entities:
-                contract_lines.append("- 关键实体: " + "、".join(beat.key_entities[:8]))
-            writing_card = writing_cards_by_idx.get(idx)
-            if writing_card:
-                narrative_lines = self._format_writing_card_narrative_variables(writing_card)
-                if narrative_lines:
-                    contract_lines.extend(narrative_lines)
-            card = boundary_cards_by_idx.get(idx)
-            if card:
-                must_cover = self._string_list(self._get_plan_value(card, "must_cover", []))
-                allowed_materials = self._string_list(self._get_plan_value(card, "allowed_materials", []))
-                allowed_bridge_details = self._string_list(self._get_plan_value(card, "allowed_bridge_details", []))
-                forbidden_materials = self._string_list(self._get_plan_value(card, "forbidden_materials", []))
-                reveal_boundary = str(self._get_plan_value(card, "reveal_boundary", "") or "").strip()
-                ending_policy = str(self._get_plan_value(card, "ending_policy", "") or "").strip()
-                if must_cover:
-                    contract_lines.append("- 必须覆盖: " + "；".join(must_cover[:8]))
-                if allowed_materials:
-                    contract_lines.append("- 允许材料: " + "、".join(allowed_materials[:10]))
-                if allowed_bridge_details:
-                    contract_lines.append("- 允许桥接: " + "；".join(allowed_bridge_details[:5]))
-                if forbidden_materials:
-                    contract_lines.append("- 禁止越界: " + "；".join(forbidden_materials[:8]))
-                if reveal_boundary:
-                    contract_lines.append(f"- 信息释放边界: {reveal_boundary}")
-                if ending_policy:
-                    contract_lines.append(f"- 停点策略: {ending_policy}")
+            try:
+                contract_lines.append(f"\n#### beat {idx}")
+                contract_lines.append(f"- 摘要: {StoryQualityService.sanitize_prompt_text(beat.summary)}")
+                if beat.target_mood:
+                    contract_lines.append(f"- 情绪: {beat.target_mood}")
+                if beat.key_entities:
+                    contract_lines.append("- 关键实体: " + "、".join(beat.key_entities[:8]))
+                writing_card = writing_cards_by_idx.get(idx)
+                if writing_card:
+                    narrative_lines = self._format_writing_card_narrative_variables(writing_card)
+                    if narrative_lines:
+                        contract_lines.extend(narrative_lines)
+                card = boundary_cards_by_idx.get(idx)
+                if card:
+                    must_cover = self._string_list(self._get_plan_value(card, "must_cover", []))
+                    allowed_materials = self._string_list(self._get_plan_value(card, "allowed_materials", []))
+                    allowed_bridge_details = self._string_list(self._get_plan_value(card, "allowed_bridge_details", []))
+                    forbidden_materials = self._string_list(self._get_plan_value(card, "forbidden_materials", []))
+                    reveal_boundary = str(self._get_plan_value(card, "reveal_boundary", "") or "").strip()
+                    ending_policy = str(self._get_plan_value(card, "ending_policy", "") or "").strip()
+                    if must_cover:
+                        contract_lines.append("- 必须覆盖: " + "；".join(must_cover[:8]))
+                    if allowed_materials:
+                        contract_lines.append("- 允许材料: " + "、".join(allowed_materials[:10]))
+                    if allowed_bridge_details:
+                        contract_lines.append("- 允许桥接: " + "；".join(allowed_bridge_details[:5]))
+                    if forbidden_materials:
+                        contract_lines.append("- 禁止越界: " + "；".join(forbidden_materials[:8]))
+                    if reveal_boundary:
+                        contract_lines.append(f"- 信息释放边界: {reveal_boundary}")
+                    if ending_policy:
+                        contract_lines.append(f"- 停点策略: {ending_policy}")
+                    rendered_count += 1
+            except Exception as exc:
+                logger.warning(
+                    "beat_boundary_card_render_failed",
+                    extra={
+                        "beat_index": idx,
+                        "chapter_id": getattr(context.chapter_plan, "chapter_id", None),
+                        "error": str(exc),
+                    },
+                )
         parts.append("### 整章写作合同\n" + "\n".join(contract_lines))
+        logger.info(
+            "whole_chapter_prompt_built",
+            extra={
+                "chapter_id": getattr(context.chapter_plan, "chapter_id", None),
+                "beat_count": len(context.chapter_plan.beats),
+                "beat_cards_count": rendered_count,
+            },
+        )
 
         rewrite_focus = str((rewrite_plan or {}).get("summary_feedback") or "").strip()
         if rewrite_focus:
