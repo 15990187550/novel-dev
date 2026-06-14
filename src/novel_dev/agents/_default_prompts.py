@@ -206,7 +206,7 @@ CRITIC_PROMPT = (
     "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
     "{genre_block}"
     "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
-    "### 章节上下文\n{trimmed_context_json}\n\n"
+    "### 章节上下文\n{json.dumps(trimmed_context, ensure_ascii=False)}\n\n"
     "### 草稿\n{raw_draft}\n\n"
     "请评分:"
 )
@@ -277,7 +277,7 @@ FAST_REVIEW_PROMPT = (
     "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
     "{genre_section}"
     "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
-    "### 章节上下文\n{visible_context_json}\n\n"
+    "### 章节上下文\n{json.dumps(visible_context, ensure_ascii=False)}\n\n"
     "### 原始草稿\n{raw}\n\n"
     "### 精修文本\n{polished}\n\n"
     "请返回 JSON:"
