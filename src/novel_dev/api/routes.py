@@ -66,6 +66,7 @@ from novel_dev.services.recommendation_service import RecommendationService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.services.prompt_registry import PromptRegistry
+from novel_dev.services.ab_test_runner import ABTestRunner
 from novel_dev.schemas.knowledge_domain import (
     ConfirmDomainScopeRequest,
     KnowledgeDomainCreate,
@@ -3726,3 +3727,92 @@ async def delete_prompt_version(
         await reg.delete_version(agent_name, version)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/api/ab-tests", status_code=201)
+async def start_ab_test(
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    runner = ABTestRunner(session)
+    try:
+        ab = await runner.start(
+            agent_name=payload["agent_name"],
+            baseline_version=payload["baseline_version"],
+            challenger_version=payload["challenger_version"],
+            max_samples=payload.get("max_samples", 10),
+            min_samples=payload.get("min_samples", 3),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"id": ab.id, "status": ab.status, "agent_name": ab.agent_name}
+
+
+@router.get("/api/ab-tests")
+async def list_ab_tests(
+    session: AsyncSession = Depends(get_session),
+):
+    runner = ABTestRunner(session)
+    tests = await runner.list_all()
+    return {"tests": [
+        {
+            "id": t.id,
+            "agent_name": t.agent_name,
+            "baseline_version": t.baseline_version,
+            "challenger_version": t.challenger_version,
+            "status": t.status,
+            "winner": t.winner,
+        }
+        for t in tests
+    ]}
+
+
+@router.get("/api/ab-tests/{test_id}")
+async def get_ab_test(
+    test_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    runner = ABTestRunner(session)
+    ab = await runner.repo.get(test_id)
+    if not ab:
+        raise HTTPException(status_code=404, detail="A/B test not found")
+    results = await runner.results(test_id)
+    return {
+        "id": ab.id,
+        "agent_name": ab.agent_name,
+        "baseline_version": ab.baseline_version,
+        "challenger_version": ab.challenger_version,
+        "status": ab.status,
+        "winner": ab.winner,
+        "results": {
+            "baseline_mean": results.baseline_mean,
+            "challenger_mean": results.challenger_mean,
+            "p_value": results.p_value,
+            "baseline_n": results.baseline_n,
+            "challenger_n": results.challenger_n,
+        },
+    }
+
+
+@router.post("/api/ab-tests/{test_id}/stop")
+async def stop_ab_test(
+    test_id: str,
+    session: AsyncSession = Depends(get_session),
+):
+    runner = ABTestRunner(session)
+    await runner.stop(test_id)
+    return {"status": "aborted"}
+
+
+@router.post("/api/ab-tests/{test_id}/declare-winner")
+async def declare_ab_winner(
+    test_id: str,
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    runner = ABTestRunner(session)
+    try:
+        await runner.declare_winner(test_id, payload["winner"])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "ok"}
