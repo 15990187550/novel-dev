@@ -422,6 +422,14 @@ class WriterAgent:
         drafting_mode = str(checkpoint.get("drafting_mode") or "").strip().lower()
         return drafting_mode not in {"beat_legacy", "single_beat", "beat_by_beat"}
 
+    @staticmethod
+    def _insert_root_cause_segment(context: dict, segment: str) -> dict:
+        """Prepend a root-cause suggestion segment so it appears at the top of any
+        prompt that consumes the chapter context. Empty segment is a no-op."""
+        if not segment:
+            return context
+        return {"root_cause_segment": segment, **context}
+
     async def _write_whole_chapter(
         self,
         *,
@@ -435,11 +443,15 @@ class WriterAgent:
     ) -> DraftMetadata:
         flow_control = FlowControlService(self.session)
         await flow_control.raise_if_cancelled(novel_id)
+        root_cause_segment = ""
+        if isinstance(checkpoint, dict):
+            root_cause_segment = str(checkpoint.get("root_cause_segment") or "")
         raw_draft = await self._generate_whole_chapter(
             novel_id=novel_id,
             context=context,
             rewrite_plan=rewrite_plan,
             genre_template=genre_template,
+            root_cause_segment=root_cause_segment,
         )
         raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
         beat_coverage = self._anchored_beat_coverage(raw_draft, context)
@@ -504,9 +516,12 @@ class WriterAgent:
         context: ChapterContext,
         rewrite_plan: dict | None,
         genre_template=None,
+        root_cause_segment: str = "",
     ) -> str:
         system_prompt = await self._build_system_prompt(context, True, genre_template=genre_template)
-        user_content = self._build_whole_chapter_context_message(context, rewrite_plan)
+        user_content = self._build_whole_chapter_context_message(
+            context, rewrite_plan, root_cause_segment=root_cause_segment
+        )
         messages = [
             ChatMessage(role="system", content=system_prompt),
             ChatMessage(role="user", content=user_content),
@@ -531,6 +546,7 @@ class WriterAgent:
         context: ChapterContext,
         chapter_id: str,
         rewrite_plan: dict | None = None,
+        root_cause_segment: str = "",
     ) -> tuple[DraftMetadata, dict]:
         log_service.add_log(novel_id, "WriterAgent", f"开始独立整章重写章节草稿: {context.chapter_plan.title}")
         rewrite_plan = rewrite_plan or {}
@@ -549,6 +565,7 @@ class WriterAgent:
             context=context,
             rewrite_plan=rewrite_plan,
             genre_template=genre_template,
+            root_cause_segment=root_cause_segment,
         )
         raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
         clean_text = _strip_anchors(raw_draft)
@@ -876,14 +893,18 @@ class WriterAgent:
         self,
         context: ChapterContext,
         rewrite_plan: dict | None = None,
+        root_cause_segment: str | None = "",
     ) -> str:
-        parts = [
+        parts: list[str] = []
+        if root_cause_segment:
+            parts.append(str(root_cause_segment))
+        parts.extend([
             "### 整章写作模式",
             "一次性写完整章。beat 是章节内部大纲和验收合同，不是分多次生成的边界。",
             "正文必须按 beat 顺序推进，覆盖每个 beat 的核心动作、阻力、选择、代价和停点。",
             "禁止提前写下一章、后续卷、未列入本章合同的关键物件、关键证据、命名角色或长期因果。",
             "输出应是一篇连续自然的章节正文，不要写 beat 标题、序号、锚点、清单或解释。",
-        ]
+        ])
 
         if context.previous_chapter_summary:
             parts.append(f"### 前情回顾\n{context.previous_chapter_summary}")
