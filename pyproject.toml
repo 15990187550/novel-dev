@@ -39,6 +39,9 @@ novel-dev = "novel_dev.api.routes:main"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (multiple agent invocations, may take >1s)",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
