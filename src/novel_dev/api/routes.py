@@ -946,6 +946,8 @@ async def get_quality_runs(
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid since timestamp")
+        # Strip tz to compare against naive columns (SQLite) and tz-aware (PostgreSQL)
+        since_dt = since_dt.replace(tzinfo=None) if since_dt.tzinfo else since_dt
         stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
 
     # Cap limit at 200
@@ -1006,9 +1008,13 @@ async def get_judge_consistency(
             since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid since timestamp")
+        # Strip tz to compare against naive columns (SQLite) and tz-aware (PostgreSQL)
+        since_dt = since_dt.replace(tzinfo=None) if since_dt.tzinfo else since_dt
         stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
     else:
         since_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        # Strip tz to compare against naive columns (SQLite) and tz-aware (PostgreSQL)
+        since_dt = since_dt.replace(tzinfo=None)
         stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
 
     rows = (await session.execute(stmt)).scalars().all()
@@ -1717,7 +1723,7 @@ async def resolve_chapter_quality_manual_review(
     audit = {
         "action": req.action,
         "note": str(req.note or "").strip(),
-        "reviewed_at": datetime.utcnow().isoformat() + "Z",
+        "reviewed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
     }
     checkpoint = dict(state.checkpoint_data or {})
     quality_reasons = dict(ch.quality_reasons or {})
@@ -3628,7 +3634,7 @@ async def clear_logs(novel_id: str, session: AsyncSession = Depends(get_session)
     )
     deleted_count = int(count_result.scalar_one() or 0)
     await session.execute(delete(AgentLog).where(AgentLog.novel_id == novel_id))
-    audit_timestamp = datetime.utcnow()
+    audit_timestamp = datetime.now(timezone.utc).replace(tzinfo=None)
     audit_entry = {
         "timestamp": audit_timestamp.isoformat() + "Z",
         "agent": "LogService",

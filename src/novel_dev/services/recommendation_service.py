@@ -45,10 +45,12 @@ class RecommendationService:
         current_attempt: int,
         thresholds: Optional[dict] = None,
     ):
+        config = get_quality_config()
         self.chapter = chapter
         self.recent_issue_counts = recent_issue_counts
         self.current_attempt = current_attempt
-        self.thresholds = thresholds or get_quality_config()["recommendation"]
+        self.thresholds = thresholds if thresholds is not None else config["recommendation"]
+        self.publishable_threshold = config["publishable_final_review_score"]
 
     def recommend(self, accept_with_warn: bool = False) -> Recommendation:
         rec_cfg = self.thresholds
@@ -89,8 +91,7 @@ class RecommendationService:
             return self._build(RecommendationType.ACCEPT, 1.0, ["gate_status=pass"])
 
         # Rule 5: warn with high score
-        publishable_threshold = get_quality_config()["publishable_final_review_score"]
-        publishable = (score or 0) >= publishable_threshold
+        publishable = (score or 0) >= self.publishable_threshold
         if status == "warn" and publishable and not low_critical:
             if accept_with_warn:
                 return self._build(
