@@ -65,6 +65,7 @@ from novel_dev.services.issue_hints import IssueHintsService
 from novel_dev.services.recommendation_service import RecommendationService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
+from novel_dev.services.prompt_registry import PromptRegistry
 from novel_dev.schemas.knowledge_domain import (
     ConfirmDomainScopeRequest,
     KnowledgeDomainCreate,
@@ -3670,3 +3671,58 @@ async def clear_logs(novel_id: str, session: AsyncSession = Depends(get_session)
     await session.commit()
     log_service.clear_memory(novel_id)
     return {"novel_id": novel_id, "deleted_count": deleted_count, "audit_log": audit_entry}
+
+
+@router.get("/api/prompts/{agent_name}/versions")
+async def list_prompt_versions(
+    agent_name: str,
+    session: AsyncSession = Depends(get_session),
+):
+    reg = PromptRegistry(session)
+    versions = await reg.list_versions(agent_name)
+    return {"agent_name": agent_name, "versions": versions}
+
+
+@router.post("/api/prompts/{agent_name}/versions", status_code=201)
+async def create_prompt_version(
+    agent_name: str,
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    reg = PromptRegistry(session)
+    try:
+        return await reg.create_version(
+            agent_name=agent_name,
+            version=payload["version"],
+            content=payload["content"],
+            is_active=payload.get("is_active", False),
+            created_by=payload.get("created_by", "user"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.patch("/api/prompts/{agent_name}/versions/{version}")
+async def update_prompt_version(
+    agent_name: str,
+    version: str,
+    payload: dict,
+    session: AsyncSession = Depends(get_session),
+):
+    reg = PromptRegistry(session)
+    if payload.get("is_active"):
+        await reg.set_active(agent_name, version)
+    return {"status": "ok"}
+
+
+@router.delete("/api/prompts/{agent_name}/versions/{version}", status_code=204)
+async def delete_prompt_version(
+    agent_name: str,
+    version: str,
+    session: AsyncSession = Depends(get_session),
+):
+    reg = PromptRegistry(session)
+    try:
+        await reg.delete_version(agent_name, version)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
