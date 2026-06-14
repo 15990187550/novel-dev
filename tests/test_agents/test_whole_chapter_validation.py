@@ -1,5 +1,5 @@
 import pytest
-from novel_dev.schemas.context import ChapterContext, ChapterPlan
+from novel_dev.schemas.context import ChapterPlan
 from novel_dev.schemas.quality import BeatBoundaryCard
 from novel_dev.services.beat_coverage_validator import BeatCoverageValidator
 
