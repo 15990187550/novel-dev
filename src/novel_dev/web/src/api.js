@@ -33,6 +33,16 @@ export const getArchiveStats = (id) => api.get(`/novels/${id}/archive_stats`).th
 export const getChapters = (id) => api.get(`/novels/${id}/chapters`).then(r => r.data)
 export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/text`).then(r => r.data)
 export const getChapterQuality = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/quality`).then(r => r.data)
+export const getQualityTrends = (id, params = {}) =>
+  api.get(`/novels/${id}/quality/trends`, { params }).then(r => r.data)
+export const getQualityIssues = (id, params = {}) =>
+  api.get(`/novels/${id}/quality/issues`, { params }).then(r => r.data)
+export const recommendChapterQuality = (nid, cid, payload) =>
+  api.post(`/novels/${nid}/chapters/${cid}/quality/recommend`, payload).then(r => r.data)
+export const getJudgeConsistency = (params = {}) =>
+  api.get(`/quality/judge-consistency`, { params }).then(r => r.data)
+export const getQualityRuns = (id, params = {}) =>
+  api.get(`/novels/${id}/quality/runs`, { params }).then(r => r.data)
 export const resolveChapterQualityManualReview = (nid, cid, payload) =>
   api.post(`/novels/${nid}/chapters/${cid}/quality/manual_review`, payload).then(r => r.data)
 export const getEntities = (id, params = {}) => api.get(`/novels/${id}/entities`, { params }).then(r => r.data)
