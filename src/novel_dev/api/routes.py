@@ -9,7 +9,7 @@ from sqlalchemy import delete, func, select, text
 from pydantic import BaseModel, Field
 
 from novel_dev.db.engine import async_session_maker
-from novel_dev.db.models import AgentLog, EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter
+from novel_dev.db.models import AgentLog, EntityGroup, NovelState, Entity, EntityRelationship, Timeline, Spaceline, Foreshadowing, Chapter, ChapterQualityMetric
 from novel_dev.services.entity_service import EntityService
 from novel_dev.repositories.entity_repo import EntityRepository
 from novel_dev.repositories.genre_repo import GenreRepository
@@ -59,6 +59,7 @@ from novel_dev.services.recovery_cleanup_service import RecoveryCleanupOptions, 
 from novel_dev.services.log_service import log_service
 from novel_dev.services.novel_deletion_service import NovelDeletionService
 from novel_dev.services.quality_metrics_service import QualityMetricsService
+from novel_dev.services.issue_hints import IssueHintsService
 from novel_dev.services.outline_workbench_service import OutlineWorkbenchService
 from novel_dev.services.knowledge_domain_service import KnowledgeDomainService
 from novel_dev.schemas.knowledge_domain import (
@@ -877,6 +878,56 @@ async def get_quality_trends(
         "dimension": dimension,
         "phase": phase,
         "points": points,
+    }
+
+
+@router.get("/api/novels/{novel_id}/quality/issues")
+async def get_quality_issues(
+    novel_id: str,
+    from_chapter: Optional[int] = None,
+    to_chapter: Optional[int] = None,
+    phase: str = "final",
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    # Pull metric rows for this novel + phase
+    metrics_stmt = select(ChapterQualityMetric).where(
+        ChapterQualityMetric.novel_id == novel_id,
+        ChapterQualityMetric.phase == phase,
+    )
+    metrics = list((await session.execute(metrics_stmt)).scalars().all())
+
+    # Apply chapter range filter via Chapter.chapter_number lookup
+    if from_chapter is not None or to_chapter is not None:
+        ch_map_rows = (await session.execute(
+            select(Chapter.id, Chapter.chapter_number).where(Chapter.novel_id == novel_id)
+        )).all()
+        ch_map = {cid: num for cid, num in ch_map_rows}
+        metrics = [
+            m for m in metrics
+            if (num := ch_map.get(m.chapter_id)) is not None
+            and (from_chapter is None or num >= from_chapter)
+            and (to_chapter is None or num <= to_chapter)
+        ]
+
+    # Count issue code occurrences
+    counts: dict[str, int] = {}
+    for m in metrics:
+        for code in (m.issue_codes or []):
+            counts[code] = counts.get(code, 0) + 1
+
+    service = IssueHintsService()
+    hints = service.matched_hints(counts.items())
+
+    return {
+        "novel_id": novel_id,
+        "phase": phase,
+        "hints": [h.__dict__ for h in hints],
+        "total_chapters": len(metrics),
     }
 
 

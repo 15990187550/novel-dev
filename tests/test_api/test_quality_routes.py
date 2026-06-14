@@ -240,3 +240,286 @@ async def test_quality_trends_novel_without_state_returns_404(async_session):
             assert resp.status_code == 404
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# /api/novels/{id}/quality/issues tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_aggregates_issue_codes(async_session):
+    """Happy path: multiple ChapterQualityMetric rows with different issue_codes
+    are aggregated and returned with correct occurrences + matches."""
+    novel_id = "test-novel-issues-aggregate"
+    volume_id = "vol-issues-1"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    chapters = [
+        Chapter(
+            id=f"ch-issues-{n}",
+            volume_id=volume_id,
+            chapter_number=n,
+            title=f"第{n}章",
+            novel_id=novel_id,
+            score_overall=80,
+        )
+        for n in range(1, 4)
+    ]
+    async_session.add_all(chapters)
+    await async_session.flush()
+
+    # ch1: AI_FLAVOR_HIGH x2
+    # ch2: AI_FLAVOR_HIGH x1, WORD_COUNT_DRIFT x1
+    # ch3: STALE_TONE x1 (no hint config -> unknown)
+    async_session.add_all([
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id="ch-issues-1",
+            phase="final",
+            overall_score=80,
+            dimension_scores={},
+            gate_status="warn",
+            issue_codes=["AI_FLAVOR_HIGH", "AI_FLAVOR_HIGH"],
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id="ch-issues-2",
+            phase="final",
+            overall_score=78,
+            dimension_scores={},
+            gate_status="warn",
+            issue_codes=["AI_FLAVOR_HIGH", "WORD_COUNT_DRIFT"],
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id="ch-issues-3",
+            phase="final",
+            overall_score=82,
+            dimension_scores={},
+            gate_status="pass",
+            issue_codes=["STALE_TONE"],
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/issues")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["novel_id"] == novel_id
+            assert body["phase"] == "final"
+            assert body["total_chapters"] == 3
+
+            by_code = {h["code"]: h for h in body["hints"]}
+
+            # AI_FLAVOR_HIGH appears 3 times (>= threshold 3) -> matches=True
+            assert by_code["AI_FLAVOR_HIGH"]["occurrences"] == 3
+            assert by_code["AI_FLAVOR_HIGH"]["matches"] is True
+            assert by_code["AI_FLAVOR_HIGH"]["severity"] == "warn"
+            assert by_code["AI_FLAVOR_HIGH"]["threshold"] == 3
+
+            # WORD_COUNT_DRIFT appears 1 time (< threshold 2) -> matches=False
+            assert by_code["WORD_COUNT_DRIFT"]["occurrences"] == 1
+            assert by_code["WORD_COUNT_DRIFT"]["matches"] is False
+            assert by_code["WORD_COUNT_DRIFT"]["severity"] == "warn"
+
+            # STALE_TONE not in config -> unknown
+            assert by_code["STALE_TONE"]["occurrences"] == 1
+            assert by_code["STALE_TONE"]["matches"] is False
+            assert by_code["STALE_TONE"]["severity"] == "unknown"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_hint_text_from_llm_config(async_session):
+    """Hint text comes from llm_config.yaml.issue_code_hints."""
+    novel_id = "test-novel-issues-hint-text"
+    volume_id = "vol-issues-hint"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    async_session.add(Chapter(
+        id="ch-issues-hint-1",
+        volume_id=volume_id,
+        chapter_number=1,
+        title="第一章",
+        novel_id=novel_id,
+    ))
+    await async_session.flush()
+
+    # Add enough occurrences to trigger WORD_COUNT_DRIFT (threshold=2)
+    async_session.add_all([
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id="ch-issues-hint-1",
+            phase="final",
+            overall_score=80,
+            dimension_scores={},
+            gate_status="warn",
+            issue_codes=["WORD_COUNT_DRIFT", "WORD_COUNT_DRIFT"],
+        ),
+    ])
+    await async_session.commit()
+
+    # Reset the lru_cache so we get the actual loaded config
+    from novel_dev.config.quality_config import get_issue_code_hints
+    get_issue_code_hints.cache_clear()
+    expected_cfg = get_issue_code_hints()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/issues")
+            assert resp.status_code == 200
+            body = resp.json()
+            by_code = {h["code"]: h for h in body["hints"]}
+            assert by_code["WORD_COUNT_DRIFT"]["hint"] == expected_cfg["WORD_COUNT_DRIFT"]["hint"]
+            assert by_code["WORD_COUNT_DRIFT"]["hint"]  # non-empty
+            assert by_code["WORD_COUNT_DRIFT"]["matches"] is True
+    finally:
+        app.dependency_overrides.clear()
+        get_issue_code_hints.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_chapter_range_filter(async_session):
+    """from_chapter / to_chapter query params restrict which chapters contribute."""
+    novel_id = "test-novel-issues-range"
+    volume_id = "vol-issues-range"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    chapters = [
+        Chapter(
+            id=f"ch-range-{n}",
+            volume_id=volume_id,
+            chapter_number=n,
+            title=f"第{n}章",
+            novel_id=novel_id,
+        )
+        for n in range(1, 6)
+    ]
+    async_session.add_all(chapters)
+    await async_session.flush()
+
+    # All 5 chapters have the same code
+    for n in range(1, 6):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id=f"ch-range-{n}",
+            phase="final",
+            overall_score=80,
+            dimension_scores={},
+            gate_status="warn",
+            issue_codes=["AI_FLAVOR_HIGH"],
+        ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Restrict to chapters 3..5 -> only 3 occurrences
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/issues",
+                params={"from_chapter": 3, "to_chapter": 5},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["total_chapters"] == 3
+            by_code = {h["code"]: h for h in body["hints"]}
+            assert by_code["AI_FLAVOR_HIGH"]["occurrences"] == 3
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_empty_novel_returns_empty_hints(async_session):
+    """Novel with no metric rows -> 200, hints: [], total_chapters: 0."""
+    novel_id = "test-novel-issues-empty"
+    async_session.add(NovelState(novel_id=novel_id, current_phase="brainstorming", checkpoint_data={}))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/issues")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["novel_id"] == novel_id
+            assert body["phase"] == "final"
+            assert body["hints"] == []
+            assert body["total_chapters"] == 0
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_unknown_novel_returns_404(async_session):
+    """Unknown novel_id -> 404, matching /state and /trends pattern."""
+    novel_id = "test-novel-issues-missing"
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/issues")
+            assert resp.status_code == 404
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_issues_unknown_code_returns_severity_unknown(async_session):
+    """Issue code with no hint config -> hint="", severity="unknown", matches=False."""
+    novel_id = "test-novel-issues-unknown-code"
+    volume_id = "vol-issues-uc"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    async_session.add(Chapter(
+        id="ch-issues-uc-1",
+        volume_id=volume_id,
+        chapter_number=1,
+        title="第一章",
+        novel_id=novel_id,
+    ))
+    await async_session.flush()
+
+    async_session.add(ChapterQualityMetric(
+        novel_id=novel_id,
+        chapter_id="ch-issues-uc-1",
+        phase="final",
+        overall_score=80,
+        dimension_scores={},
+        gate_status="warn",
+        issue_codes=["UNKNOWN_CODE_XYZ"],
+    ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(f"/api/novels/{novel_id}/quality/issues")
+            assert resp.status_code == 200
+            body = resp.json()
+            by_code = {h["code"]: h for h in body["hints"]}
+            assert "UNKNOWN_CODE_XYZ" in by_code
+            entry = by_code["UNKNOWN_CODE_XYZ"]
+            assert entry["hint"] == ""
+            assert entry["severity"] == "unknown"
+            assert entry["matches"] is False
+            assert entry["occurrences"] == 1
+    finally:
+        app.dependency_overrides.clear()
