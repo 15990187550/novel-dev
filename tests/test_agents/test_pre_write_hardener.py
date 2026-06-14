@@ -38,3 +38,44 @@ async def test_build_context_includes_beat_boundary_cards(caplog):
     record = whole_chapter_records[0]
     assert hasattr(record, "beat_cards_count"), f"expected beat_cards_count in record.extra, got: {dir(record)}"
     assert record.beat_cards_count == 1
+
+
+@pytest.mark.asyncio
+async def test_build_context_with_empty_boundary_cards():
+    plan = ChapterPlan(chapter_number=1, target_word_count=3000, beats=[], beat_boundary_cards=[])
+    context = ChapterContext(
+        chapter_plan=plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current=""),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    agent = WriterAgent(None, None)
+    prompt = agent._build_whole_chapter_context_message(context, None)
+    assert "### 整章写作合同" in prompt
+    assert "#### beat" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_build_context_preserves_base_sections():
+    plan = ChapterPlan(
+        chapter_number=1,
+        target_word_count=3000,
+        beats=[BeatPlan(summary="测试节拍", target_mood="tense")],
+        beat_boundary_cards=[BeatBoundaryCard(beat_index=0, must_cover=["陆照"])],
+    )
+    context = ChapterContext(
+        chapter_plan=plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current=""),
+        timeline_events=[],
+        pending_foreshadowings=[],
+    )
+    agent = WriterAgent(None, None)
+    prompt = agent._build_whole_chapter_context_message(context, None)
+    assert "测试节拍" in prompt
+    assert "陆照" in prompt
