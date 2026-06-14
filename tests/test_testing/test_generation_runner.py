@@ -2342,6 +2342,11 @@ async def test_build_generation_quality_snapshot_collects_checkpoint_chapters_an
         quality_status="pass",
         quality_reasons={"blocking_items": []},
         final_review_score=88,
+        final_review_feedback={
+            "overall": 88,
+            "summary_feedback": "最终成稿可归档。",
+            "per_dim_issues": [],
+        },
     )
     await SettingWorkbenchRepository(async_session).create_review_batch(
         novel_id="novel-snapshot",
@@ -2379,6 +2384,7 @@ async def test_build_generation_quality_snapshot_collects_checkpoint_chapters_an
     assert snapshot["checkpoint"]["current_volume_id"] == "vol-1"
     assert snapshot["chapters"][0]["chapter_id"] == "ch-1"
     assert snapshot["chapters"][0]["quality_status"] == "pass"
+    assert snapshot["chapters"][0]["final_review_feedback"]["summary_feedback"] == "最终成稿可归档。"
     assert snapshot["setting_review_batch"]["input_snapshot"]["setting_quality_report"]["passed"] is False
 
 
@@ -3016,3 +3022,81 @@ async def test_prepare_minimal_chapter_plan_syncs_volume_plan_when_response_chap
     assert volume_chapter["summary"] == "Response summary"
     assert current_chapter_plan["chapter_id"] == "acceptance-novel-test-ch1"
     assert volume_chapter["chapter_id"] == "acceptance-novel-test-ch1"
+
+
+# ---------------------------------------------------------------------------
+# Task 18: export HTTP retry + explicit failure mode
+# ---------------------------------------------------------------------------
+
+
+async def test_post_with_retry_succeeds_after_transient_connect_error(monkeypatch):
+    """_post_with_retry: two ConnectErrors then success returns parsed JSON."""
+    call_count = 0
+
+    class FlakyClient:
+        async def post(self, path, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            request = httpx.Request("POST", f"http://testserver{path}")
+            if call_count <= 2:
+                raise httpx.ConnectError("simulated transient failure", request=request)
+            return httpx.Response(
+                200, request=request, json={"exported_path": "/tmp/novel.md"}
+            )
+
+    async def immediate_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(generation_runner.asyncio, "sleep", immediate_sleep)
+
+    data = await generation_runner._post_with_retry(
+        FlakyClient(), "/api/novels/n/export", max_attempts=3, base_delay=0.01
+    )
+    assert call_count == 3
+    assert data == {"exported_path": "/tmp/novel.md"}
+
+
+async def test_post_with_retry_raises_last_exception_when_exhausted(monkeypatch):
+    """_post_with_retry: when all attempts fail, re-raise the last exception."""
+    call_count = 0
+
+    class AlwaysFailingClient:
+        async def post(self, path, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            request = httpx.Request("POST", f"http://testserver{path}")
+            raise httpx.ConnectError(
+                f"persistent failure attempt={call_count}", request=request
+            )
+
+    async def immediate_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(generation_runner.asyncio, "sleep", immediate_sleep)
+
+    with pytest.raises(httpx.ConnectError) as excinfo:
+        await generation_runner._post_with_retry(
+            AlwaysFailingClient(),
+            "/api/novels/n/export",
+            max_attempts=3,
+            base_delay=0.01,
+        )
+    assert call_count == 3
+    assert "attempt=3" in str(excinfo.value)
+
+
+def test_validate_report_artifacts_includes_last_error_in_evidence():
+    """When export contract fails, evidence should include the last error from artifacts."""
+    artifacts = {
+        "acceptance_scope": "real-e2e-export",
+        "archived_chapter_count": "0",
+        "export_error": "ConnectError('boom')",
+        "export_status": "http_failed",
+    }
+    try:
+        generation_runner._validate_report_artifacts(artifacts)
+    except generation_runner.ContractValidationError as exc:
+        # After the fix, evidence MUST include the last error (not just the count).
+        assert any("export_error" in e for e in exc.evidence), exc.evidence
+    else:
+        pytest.fail("Expected ContractValidationError for missing exported_path")

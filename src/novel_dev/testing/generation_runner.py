@@ -551,8 +551,10 @@ async def _build_generation_quality_snapshot(
                 "quality_status": chapter.quality_status,
                 "quality_reasons": chapter.quality_reasons,
                 "draft_review_score": chapter.draft_review_score,
+                "draft_review_feedback": chapter.draft_review_feedback,
                 "fast_review_score": chapter.fast_review_score,
                 "final_review_score": chapter.final_review_score,
+                "final_review_feedback": chapter.final_review_feedback,
                 "world_state_ingested": chapter.world_state_ingested,
                 "raw_draft": chapter.raw_draft,
                 "polished_text": chapter.polished_text,
@@ -1277,12 +1279,49 @@ async def _run_api_smoke_flow(
             return artifacts, issues
 
         async def export() -> None:
-            data = await _request_json(
-                client.post(f"/api/novels/{novel_id}/export", params={"format": "md"})
-            )
+            url = f"/api/novels/{novel_id}/export"
+            try:
+                data = await _post_with_retry(
+                    client,
+                    url,
+                    max_attempts=3,
+                    base_delay=0.1,
+                    params={"format": "md"},
+                )
+            except Exception as exc:
+                artifacts["export_status"] = "http_failed"
+                artifacts["export_error"] = repr(exc)
+                issues.append(
+                    Issue(
+                        id="EXPORT_HTTP_FAILED",
+                        type="SYSTEM_BUG",
+                        severity="high",
+                        stage="export",
+                        is_external_blocker=False,
+                        real_llm=True,
+                        fake_rerun_status=None,
+                        message=(
+                            f"Export HTTP call failed after retries: {exc!r}"
+                        ),
+                        evidence=[
+                            f"novel_id={novel_id}",
+                            f"url={url}",
+                            f"error={exc!r}",
+                        ],
+                        reproduce=_reproduce_command_for_stage(
+                            "export", acceptance_scope
+                        ),
+                    )
+                )
+                return
             exported_path = _first_string(data, "exported_path", "path")
             if exported_path is not None:
                 artifacts["exported_path"] = exported_path
+            else:
+                artifacts["export_status"] = "missing_exported_path"
+                artifacts["export_error"] = (
+                    f"response had no exported_path: {data!r}"
+                )
 
         await run_stage("export", export)
         if should_stop_after("export"):
@@ -1299,6 +1338,45 @@ async def _request_json(response_awaitable: Awaitable[httpx.Response]) -> dict[s
     if not isinstance(data, dict):
         raise RuntimeError("HTTP response JSON must be an object")
     return data
+
+
+async def _post_with_retry(
+    client: httpx.AsyncClient,
+    url: str,
+    *,
+    max_attempts: int = 3,
+    base_delay: float = 0.1,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """POST with exponential backoff for transient HTTP/connection errors.
+
+    Returns the parsed JSON dict on success. Re-raises the final exception
+    if all attempts fail.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            response = await client.post(url, **kwargs)
+            response.raise_for_status()
+            if not response.content:
+                return {}
+            data = response.json()
+            if not isinstance(data, dict):
+                raise RuntimeError("HTTP response JSON must be an object")
+            return data
+        except (
+            httpx.ConnectError,
+            httpx.ConnectTimeout,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.PoolTimeout,
+            httpx.HTTPStatusError,
+        ) as exc:
+            last_exc = exc
+            if attempt < max_attempts - 1:
+                await asyncio.sleep(base_delay * (2 ** attempt))
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _approve_review_batch_non_conflict_changes(
@@ -2357,10 +2435,15 @@ def _validate_report_artifacts(artifacts: dict[str, str]) -> None:
     archived_count = _coerce_int(artifacts.get("archived_chapter_count")) or 0
     if exported_path is None:
         if _should_require_export(acceptance_scope, archived_count=archived_count):
+            evidence = [f"archived_chapter_count={archived_count}"]
+            if artifacts.get("export_error"):
+                evidence.append(f"export_error={artifacts['export_error']}")
+            if artifacts.get("export_status"):
+                evidence.append(f"export_status={artifacts['export_status']}")
             raise ContractValidationError(
                 "export_contract",
                 "Exported novel file missing: exported_path not returned",
-                [f"archived_chapter_count={archived_count}"],
+                evidence,
             )
         return
 
