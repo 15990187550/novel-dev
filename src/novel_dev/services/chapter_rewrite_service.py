@@ -257,18 +257,12 @@ class ChapterRewriteService:
                 can_resume=True,
                 rewrite_checkpoint=checkpoint,
             )
-            try:
-                await self._record_rewrite_metric(novel_id, chapter_id)
-            finally:
-                pass
+            await self._record_rewrite_metric(novel_id, chapter_id)
             raise ChapterRewriteFailedError(result) from exc
 
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         log_service.add_log(novel_id, "ChapterRewriteService", f"独立重写章节完成: {chapter_id}")
-        try:
-            await self._record_rewrite_metric(novel_id, chapter_id)
-        finally:
-            pass
+        await self._record_rewrite_metric(novel_id, chapter_id)
         return ChapterRewriteResult(
             novel_id=novel_id,
             chapter_id=chapter_id,
