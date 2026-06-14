@@ -241,6 +241,7 @@ class Chapter(Base):
     final_review_score: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     final_review_feedback: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     quality_status: Mapped[str] = mapped_column(Text, nullable=False, default="unchecked")
+    attempt_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     quality_reasons: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     quality_checked_at: Mapped[Optional[datetime]] = mapped_column(TIMESTAMP, nullable=True)
     world_state_ingested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
