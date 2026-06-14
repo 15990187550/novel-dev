@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional
 from datetime import datetime
 
@@ -247,6 +248,54 @@ class Chapter(Base):
     world_state_ingested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     novel_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     vector_embedding: Mapped[Optional[list[float]]] = mapped_column(VectorCompat(1024), nullable=True)
+
+
+class PromptVersion(Base):
+    __tablename__ = "prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("agent_name", "version", name="uq_prompt_versions_agent_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    created_by: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    parent_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    ab_test_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+
+
+class QualityRootCause(Base):
+    __tablename__ = "quality_root_cause"
+    __table_args__ = (
+        Index("ix_quality_root_cause_chapter_created", "chapter_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    chapter_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    analyzer_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_actions: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    input_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+
+
+class ABTest(Base):
+    __tablename__ = "ab_tests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    baseline_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    challenger_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", index=True)
+    winner: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class GenerationJob(Base):
