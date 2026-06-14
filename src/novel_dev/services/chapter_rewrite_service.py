@@ -424,6 +424,12 @@ class ChapterRewriteService:
         if not chapter or not chapter.novel_id:
             return
         try:
+            prompt_version = None
+            try:
+                from novel_dev.services.prompt_registry import PromptRegistry
+                prompt_version = await PromptRegistry(self.session).get_active_version_name("fast_review_agent")
+            except Exception as pv_exc:
+                logger.debug("rewrite_metric_prompt_version_lookup_failed", extra={"chapter_id": chapter_id, "error": repr(pv_exc)})
             await QualityMetricsService(self.session).record(
                 QualityMetricInput(
                     chapter_id=chapter_id,
@@ -434,6 +440,7 @@ class ChapterRewriteService:
                     gate_status=chapter.quality_status or "unchecked",
                     issue_codes=self._extract_remaining_issues(chapter.fast_review_feedback),
                     dimension_feedback=chapter.fast_review_feedback or {},
+                    prompt_version=prompt_version,
                 )
             )
         except Exception as exc:
