@@ -29,6 +29,7 @@ from novel_dev.services.continuity_audit_service import ContinuityAuditService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.chapter_acceptance_service import ChapterAcceptanceService
 from novel_dev.services.chapter_obligation_service import ChapterObligationService
+from novel_dev.services.root_cause_analyzer import RootCauseAnalyzer
 from novel_dev.schemas.quality import QualityIssue
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
@@ -908,6 +909,86 @@ class FastReviewAgent:
             except Exception:  # noqa: BLE001
                 pass
 
+    async def _run_root_cause_for_non_pass_gate(
+        self,
+        *,
+        novel_id: str,
+        chapter_id: str,
+        chapter,
+        gate,
+        final_feedback: dict | None,
+        checkpoint: dict,
+    ) -> None:
+        """当门禁未通过时,调用 RootCauseAnalyzer 诊断根因并写回 checkpoint。
+
+        - 仅在 gate.status != QUALITY_PASS 时触发(符合规格:通过即跳过)。
+        - 任何异常都被吞掉并记录 warning,确保不破坏主评审路径。
+        - 写入 checkpoint["root_cause"] (summary) 与
+          checkpoint["root_cause_actions"] (suggested_actions),
+          供下游 WriterAgent/ChapterRewriteService 消费。
+        """
+        gate_status = getattr(gate, "status", None) if gate is not None else None
+        if gate_status == QUALITY_PASS:
+            return
+        try:
+            score_breakdown: dict = {}
+            if isinstance(final_feedback, dict):
+                breakdown = final_feedback.get("breakdown")
+                if isinstance(breakdown, dict):
+                    score_breakdown = breakdown
+            issue_codes: list[str] = []
+            for bucket in (gate.blocking_items or [], gate.warning_items or []):
+                for item in bucket:
+                    if isinstance(item, dict):
+                        code = item.get("code")
+                        if code:
+                            issue_codes.append(str(code))
+
+            chapter_text = ""
+            if chapter is not None:
+                chapter_text = (chapter.polished_text or chapter.raw_draft or "")
+
+            beat_cards: list = []
+            chapter_context = checkpoint.get("chapter_context") or {}
+            if isinstance(chapter_context, dict):
+                plan = chapter_context.get("chapter_plan") or {}
+                if isinstance(plan, dict):
+                    raw_cards = plan.get("beat_boundary_cards") or []
+                    if isinstance(raw_cards, list):
+                        beat_cards = [c for c in raw_cards if c is not None]
+
+            analyzer = RootCauseAnalyzer(self.session)
+            result = await analyzer.analyze(
+                novel_id=novel_id,
+                chapter_id=chapter_id,
+                chapter_text=chapter_text,
+                score_breakdown=score_breakdown,
+                issue_codes=issue_codes,
+                beat_boundary_cards=beat_cards,
+            )
+            checkpoint["root_cause"] = result.summary
+            checkpoint["root_cause_actions"] = list(result.suggested_actions or [])
+            checkpoint["root_cause_confidence"] = float(result.confidence or 0.0)
+            checkpoint["root_cause_analyzer_version"] = result.analyzer_version
+            log_agent_detail(
+                novel_id,
+                "FastReviewAgent",
+                f"RootCauseAnalyzer 完成: gate={gate_status} confidence={result.confidence:.2f}",
+                node="root_cause_analyzer",
+                task="review",
+                metadata={
+                    "chapter_id": chapter_id,
+                    "gate_status": gate_status,
+                    "confidence": result.confidence,
+                    "issue_codes": issue_codes,
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "root_cause_integration_failed",
+                extra={"chapter_id": chapter_id, "gate_status": gate_status, "error": repr(exc)},
+            )
+
     async def _run_recommendation_wirer(self, novel_id: str, chapter_id: str):
         # Deferred import to avoid circular dependency
         from novel_dev.services.recommendation_wirer import RecommendationWirer
@@ -1340,6 +1421,14 @@ class FastReviewAgent:
                 draft_review_score=ch.draft_review_score if ch.draft_review_score is not None else ch.score_overall,
                 draft_review_feedback=ch.draft_review_feedback or ch.review_feedback,
                 world_state_ingested=False,
+            )
+            await self._run_root_cause_for_non_pass_gate(
+                novel_id=novel_id,
+                chapter_id=chapter_id,
+                chapter=ch,
+                gate=gate,
+                final_feedback=final_feedback,
+                checkpoint=checkpoint,
             )
             await self._run_recommendation_wirer(novel_id, chapter_id)
         else:
