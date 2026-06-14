@@ -236,7 +236,7 @@ class ChapterRewriteRequest(BaseModel):
 
 
 class ChapterQualityManualReviewRequest(BaseModel):
-    action: str = Field(pattern="^(approve|return_to_editing)$")
+    action: str = Field(pattern="^(approve|return_to_editing|continue_retry|accept_version)$")
     note: str = ""
 
 
@@ -1729,7 +1729,7 @@ async def resolve_chapter_quality_manual_review(
     quality_reasons = dict(ch.quality_reasons or {})
     quality_reasons["manual_review"] = audit
 
-    if req.action == "approve":
+    if req.action == "approve" or req.action == "accept_version":
         quality_reasons["status"] = QUALITY_WARN
         await repo.update_quality_gate(
             chapter_id,
@@ -1750,7 +1750,20 @@ async def resolve_chapter_quality_manual_review(
                 current_volume_id=state.current_volume_id,
                 current_chapter_id=state.current_chapter_id,
             )
-    else:
+    elif req.action == "continue_retry":
+        ch.attempt_index = 0
+        await session.flush()
+        quality_reasons["status"] = QUALITY_UNCHECKED
+        await repo.update_quality_gate(
+            chapter_id,
+            quality_status=QUALITY_UNCHECKED,
+            quality_reasons=quality_reasons,
+            world_state_ingested=False,
+        )
+        if state.current_chapter_id == chapter_id:
+            for key in ("quality_gate", "quality_issues", "quality_issue_summary", "repair_tasks", "continuity_audit"):
+                checkpoint.pop(key, None)
+    else:  # return_to_editing
         quality_reasons["status"] = QUALITY_UNCHECKED
         await repo.update_quality_gate(
             chapter_id,
