@@ -85,7 +85,7 @@ VOLUME_PLANNER_PROMPT = (
     "5. 境界、功法层级、势力层级等专有层级名称必须逐字来自总纲、当前设定或 ActiveConstraintContext；"
     "不得按通用修仙套路自造如“某某三层/七层”等未提供层级。\n\n"
     "## 输出规模限制\n"
-    "{scale_rule}\n"
+    "{scale_rule}"
     "2. 这是单卷可执行规划,不要试图一次覆盖整部小说的全部章节。\n"
     "3. 每章 summary 控制在 25-50 字，优先写主线推进与章末悬念。\n"
     "4. 不要返回 beats、target_word_count、target_mood、foreshadowings 字段。\n"
@@ -205,7 +205,7 @@ CRITIC_PROMPT = (
     "例如设定承接断裂填 volume_plan,正文新增计划外事实填 editing。\n"
     "8. summary_feedback 300 字内,总结三条最影响读感的问题。\n\n"
     "{genre_block}"
-    "{style_contract_block}"
+    "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
     "### 章节上下文\n{trimmed_context_json}\n\n"
     "### 草稿\n{raw_draft}\n\n"
     "请评分:"
@@ -238,7 +238,7 @@ EDITOR_PROMPT = (
     "9. 跨语域表达:只有风格约束明确允许时才放大;通常改成短促、贴处境的内心念头。\n"
     "10. 字数节奏:保持与原段相近的字数(±20%),优先补顺断句、压缩重复解释、保留有效冲突。\n"
     "\n"
-    "{prose_hygiene_rules}"
+    "{ProseHygieneService.prompt_rules(chapter_context)}"
     "## 事实边界\n"
     "1. 使用计划和原段已经给出的事实强化表达,保留事件先后顺序和人物已完成动作。\n"
     "2. 章末或停点只从已有物件、风险、情绪余波、人物关系、未完成选择或已埋伏笔中寻找自然牵引。\n"
@@ -252,10 +252,10 @@ EDITOR_PROMPT = (
     "{plan_block}"
     "{genre_block}"
     "{genre_quality_block}"
-    "{strategy_block}"
-    "{low_dims_block}"
-    "{issue_lines_block}"
-    "{whole_lines_block}"
+    "{strategy_block}",
+    "f\"## 低分维度\n{', '.join(low_dims)}\n\" if low_dims else \"\"",
+    "\"## 本段具体问题(必须逐条解决)\\n\" + \"\\n\".join(issue_lines) + \"\\n\" if issue_lines else \"\"",
+    "\"## 整章通病(写本段时顺带注意)\\n\" + \"\\n\".join(whole_lines) + \"\\n\" if whole_lines else \"\"",
     "## 原文\n{text}\n\n改写:"
 )
 
@@ -276,7 +276,7 @@ FAST_REVIEW_PROMPT = (
     "请写入 notes 并说明下一版应呈现什么效果。\n"
     "只返回 JSON 对象本体,不要 markdown 代码块。\n\n"
     "{genre_section}"
-    "{style_contract_block}"
+    "f\"{style_contract + chr(10) + chr(10) if style_contract else ''}\""
     "### 章节上下文\n{visible_context_json}\n\n"
     "### 原始草稿\n{raw}\n\n"
     "### 精修文本\n{polished}\n\n"
@@ -296,8 +296,8 @@ LIBRARIAN_PROMPT = (
     "规则：只提取文本中明确发生或暗示的变更；人物状态变更必须是具体键值对；"
     "若 pending_foreshadowings 中的内容在文本中被解答，将其 ID 放入 foreshadowings_recovered；"
     "new_relationships 的 source_entity_id 和 target_entity_id 必须是已存在的实体名（匹配 new_entities 或 character_updates 中的 name）。\n"
-    "当前 pending_foreshadowings: {pending_foreshadowings_json}\n"
-    "当前时间 tick: {current_tick}\n"
+    "当前 pending_foreshadowings: {json.dumps(context.get('pending_foreshadowings', []), ensure_ascii=False)}\n"
+    "当前时间 tick: {context.get('current_tick', 0)}\n"
     "章节文本：\n{polished_text}\n"
 )
 
