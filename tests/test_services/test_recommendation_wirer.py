@@ -83,14 +83,14 @@ async def test_wirer_attempt_drift_detection(async_session):
 
 
 @pytest.mark.asyncio
-async def test_wirer_with_max_zero_never_queues(async_session):
-    wirer = RecommendationWirer(async_session, max_auto_rewrites=0)
-    ch = type("Chapter", (), {"id": "ch_1", "final_review_score": 80, "quality_status": "warn", "attempt_index": 0, "score_breakdown": {}})()
+async def test_wirer_respects_configured_max(async_session):
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    ch = type("Chapter", (), {"id": "ch_1", "final_review_score": 80, "quality_status": "warn", "attempt_index": 1, "score_breakdown": {}})()
     with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=ch)):
         with patch.object(ChapterRewriteService, "rewrite", new=AsyncMock()) as mock_rewrite:
             result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
-    assert result.action == "manual_review"
-    mock_rewrite.assert_not_awaited()
+    assert result.action == "auto_rewrite_queued"
+    mock_rewrite.assert_awaited_once()
 
 
 @pytest.mark.asyncio
