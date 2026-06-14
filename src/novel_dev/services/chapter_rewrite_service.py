@@ -15,6 +15,7 @@ from novel_dev.llm import llm_factory
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
+from novel_dev.repositories.root_cause_repo import RootCauseRepository
 from novel_dev.schemas.context import ChapterPlan
 from novel_dev.services.archive_service import ArchiveService
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
@@ -150,6 +151,8 @@ class ChapterRewriteService:
                 current_stage = REWRITE_STAGE_DRAFT
                 context_data = await self._ensure_context_data(novel_id, chapter_id, chapter_plan, volume_id, checkpoint, state)
                 chapter_context = self._chapter_context_from_checkpoint(context_data)
+                root_cause_record = await RootCauseRepository(self.session).get_latest_for_chapter(chapter_id)
+                checkpoint["root_cause_segment"] = self._build_root_cause_segment(root_cause_record)
                 _metadata, writer_checkpoint = await WriterAgent(self.session, embedding_service).write_standalone(
                     novel_id,
                     chapter_context,
@@ -277,6 +280,20 @@ class ChapterRewriteService:
     @staticmethod
     def _should_run(stage: str, start_index: int) -> bool:
         return REWRITE_STAGES.index(stage) >= start_index
+
+    @staticmethod
+    def _build_root_cause_segment(root_cause_record) -> str:
+        if not root_cause_record:
+            return ""
+        actions = root_cause_record.suggested_actions.get("items", [])
+        lines = [
+            "## 上轮根因建议",
+            f"- summary: {root_cause_record.summary}",
+        ]
+        for a in actions:
+            lines.append(f"- 建议动作: {a.get('action', '')} (severity: {a.get('severity', 'unknown')})")
+        lines.append(f"- confidence: {root_cause_record.confidence}")
+        return "\n".join(lines)
 
     @staticmethod
     def _can_retry_continuity_block(checkpoint: dict, attempt: int) -> bool:
