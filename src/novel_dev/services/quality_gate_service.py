@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 import re
 from typing import Any
@@ -8,6 +9,9 @@ from novel_dev.schemas.quality import QualityIssue
 from novel_dev.schemas.review import FastReviewReport
 
 from novel_dev.config.quality_config import get_quality_config
+
+
+logger = logging.getLogger(__name__)
 
 
 QUALITY_UNCHECKED = "unchecked"
@@ -153,6 +157,8 @@ class QualityGateService:
         required_payoffs: list[str] | None = None,
         ending_driver_candidates: list[str] | None = None,
         acceptance_scope: str | None = None,
+        chapter_id: str | None = None,
+        novel_id: str | None = None,
     ) -> QualityGateResult:
         blocking: list[dict[str, Any]] = []
         warnings: list[dict[str, Any]] = []
@@ -227,6 +233,16 @@ class QualityGateService:
                 blocking.append(cls._item("review_note", note))
 
         if blocking:
+            logger.warning(
+                "Quality gate blocked chapter",
+                extra={
+                    "chapter_id": chapter_id,
+                    "novel_id": novel_id,
+                    "final_review_score": final_review_score,
+                    "blocking_items": [item.get("code") for item in blocking],
+                    "threshold": _publishable_score(),
+                },
+            )
             return QualityGateResult(
                 status=QUALITY_BLOCK,
                 blocking_items=cls._dedupe(blocking),
@@ -235,6 +251,19 @@ class QualityGateService:
             )
         if warnings:
             status = QUALITY_MANUAL_REVIEW_REQUIRED if cls._requires_manual_review(warnings) else QUALITY_WARN
+            if (
+                isinstance(final_review_score, (int, float))
+                and final_review_score < _publishable_score()
+            ):
+                logger.info(
+                    "Chapter below publishable threshold",
+                    extra={
+                        "chapter_id": chapter_id,
+                        "novel_id": novel_id,
+                        "final_review_score": final_review_score,
+                        "threshold": _publishable_score(),
+                    },
+                )
             return QualityGateResult(
                 status=status,
                 warning_items=cls._dedupe(warnings),

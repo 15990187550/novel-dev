@@ -1,3 +1,5 @@
+import logging
+
 from novel_dev.schemas.review import FastReviewReport
 from novel_dev.services.quality_gate_service import QualityGateResult, QualityGateService
 
@@ -502,3 +504,66 @@ def test_critical_min_returns_config_value(monkeypatch):
         },
     )
     assert _critical_min() == 77
+
+
+def test_quality_gate_logs_block(caplog):
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=False,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    with caplog.at_level(logging.WARNING, logger="novel_dev.services.quality_gate_service"):
+        gate = QualityGateService.evaluate_fast_review(
+            report,
+            target_word_count=1000,
+            polished_word_count=1000,
+            final_review_score=82,
+            polished_text="林照离开试炼林，夜色重新安静下来。",
+            chapter_id="ch-1",
+            novel_id="novel-1",
+            acceptance_scope="real-contract",
+        )
+
+    assert gate.status == "block"
+    block_records = [r for r in caplog.records if r.levelno == logging.WARNING and r.name == "novel_dev.services.quality_gate_service"]
+    assert block_records, "expected a WARNING log for block outcome"
+    record = next(r for r in block_records if getattr(r, "chapter_id", None) == "ch-1")
+    assert record.novel_id == "novel-1"
+    assert "consistency" in record.blocking_items
+    assert record.threshold == 82
+    assert record.final_review_score == 82
+
+
+def test_quality_gate_logs_below_publishable(caplog):
+    report = FastReviewReport(
+        word_count_ok=True,
+        consistency_fixed=True,
+        ai_flavor_reduced=True,
+        beat_cohesion_ok=True,
+        language_style_ok=True,
+        notes=[],
+    )
+
+    with caplog.at_level(logging.INFO, logger="novel_dev.services.quality_gate_service"):
+        gate = QualityGateService.evaluate_fast_review(
+            report,
+            target_word_count=1000,
+            polished_word_count=1000,
+            final_review_score=75,
+            polished_text="林照离开试炼林，夜色重新安静下来。",
+            chapter_id="ch-2",
+            novel_id="novel-2",
+            acceptance_scope="real-contract",
+        )
+
+    assert gate.status == "manual_review_required"
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO and r.name == "novel_dev.services.quality_gate_service"]
+    assert info_records, "expected an INFO log for below_publishable outcome"
+    record = next(r for r in info_records if getattr(r, "chapter_id", None) == "ch-2")
+    assert record.novel_id == "novel-2"
+    assert record.final_review_score == 75
+    assert record.threshold == 82
