@@ -403,3 +403,19 @@ issue_code_hints:
     severity: warn
     threshold: 1
     hint: "LLM 评分一致性偏低(variance_coefficient > 0.10),考虑降低 critic temperature 或增加 ensemble 投票"
+
+# === 阶段三:Prompt 工程化 配置 ===
+phase3:
+  root_cause_analyzer:
+    enabled: true
+    max_input_chars: 5000
+    llm_client: root_cause_analyzer
+  ab_test:
+    enabled: true
+    default_max_samples: 10
+    default_min_samples: 3
+    significance_alpha: 0.05
+  prompt_registry:
+    bootstrap_default: true
+  cold_start:
+    allow_hardcoded_fallback: true

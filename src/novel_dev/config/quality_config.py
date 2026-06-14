@@ -27,6 +27,11 @@ class ConfigError(Exception):
 
 
 @lru_cache(maxsize=1)
+def get_llm_config() -> dict[str, Any]:
+    return _load_yaml()
+
+
+@lru_cache(maxsize=1)
 def get_quality_config() -> dict[str, Any]:
     config = _load_yaml()
     quality = config.get("quality_thresholds", {})
@@ -42,6 +47,13 @@ def get_quality_config() -> dict[str, Any]:
 def get_issue_code_hints() -> dict[str, Any]:
     config = _load_yaml()
     return config.get("issue_code_hints", {})
+
+
+def get_phase3_config() -> dict:
+    cfg = get_llm_config()
+    if "phase3" not in cfg:
+        raise KeyError("Missing required section: phase3")
+    return cfg["phase3"]
 
 
 def _load_yaml() -> dict[str, Any]:
