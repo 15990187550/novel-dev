@@ -100,3 +100,78 @@ async def test_wirer_raises_config_error_when_key_missing(async_session, monkeyp
     monkeypatch.setattr("novel_dev.services.recommendation_wirer.get_quality_config", bad_config)
     with pytest.raises(ConfigError):
         RecommendationWirer(async_session)
+
+
+@pytest.mark.asyncio
+async def test_wirer_chapter_not_found(async_session):
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=None)):
+        result = await wirer.evaluate_and_dispatch("novel_1", "missing_ch")
+    assert result.action == "manual_review"
+    assert result.recommendation is None
+    assert result.rewrite_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_wirer_recommendation_service_exception(async_session):
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=_chapter_with("warn", 80, 0))):
+        with patch(
+            "novel_dev.services.recommendation_wirer.RecommendationService.recommend",
+            side_effect=RuntimeError("scoring failed"),
+        ):
+            result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
+    assert result.action == "manual_review"
+    assert result.recommendation is None
+
+
+@pytest.mark.asyncio
+async def test_wirer_rewrite_integrity_error_with_active_job(async_session):
+    from sqlalchemy.exc import IntegrityError
+
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    ch = _chapter_with("warn", 80, 0)
+    active_job = type("Job", (), {"id": "job_active"})()
+    with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=ch)):
+        with patch.object(
+            ChapterRewriteService,
+            "rewrite",
+            new=AsyncMock(side_effect=IntegrityError("insert", {}, None)),
+        ):
+            with patch.object(wirer.job_repo, "get_active", new=AsyncMock(return_value=active_job)):
+                result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
+    assert result.action == "auto_rewrite_queued"
+    assert result.rewrite_job_id == "job_active"
+
+
+@pytest.mark.asyncio
+async def test_wirer_rewrite_integrity_error_no_active_job(async_session):
+    from sqlalchemy.exc import IntegrityError
+
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    ch = _chapter_with("warn", 80, 0)
+    with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=ch)):
+        with patch.object(
+            ChapterRewriteService,
+            "rewrite",
+            new=AsyncMock(side_effect=IntegrityError("insert", {}, None)),
+        ):
+            with patch.object(wirer.job_repo, "get_active", new=AsyncMock(return_value=None)):
+                result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
+    assert result.action == "manual_review"
+    assert result.rewrite_job_id is None
+
+
+@pytest.mark.asyncio
+async def test_wirer_rewrite_generic_exception(async_session):
+    wirer = RecommendationWirer(async_session, max_auto_rewrites=2)
+    ch = _chapter_with("warn", 80, 0)
+    with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=ch)):
+        with patch.object(
+            ChapterRewriteService,
+            "rewrite",
+            new=AsyncMock(side_effect=RuntimeError("db down")),
+        ):
+            result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
+    assert result.action == "manual_review"
+    assert result.rewrite_job_id is None

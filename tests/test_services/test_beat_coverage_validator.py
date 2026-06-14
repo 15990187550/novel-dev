@@ -112,3 +112,47 @@ async def test_llm_exception_falls_back(async_session):
     assert len(results) == 1
     assert results[0].covered is True
     assert results[0].severity == "ok"
+
+
+@pytest.mark.asyncio
+async def test_warn_severity_to_issue_code():
+    from novel_dev.services.beat_coverage_validator import BeatCoverageResult
+
+    result = BeatCoverageResult(beat_index=0, covered=False, deviation="missing", severity="warn")
+    assert result.to_issue_code() == "EVENT_ORDER_DRIFT"
+
+
+@pytest.mark.asyncio
+async def test_ok_severity_to_issue_code_returns_none():
+    from novel_dev.services.beat_coverage_validator import BeatCoverageResult
+
+    result = BeatCoverageResult(beat_index=0, covered=True, deviation=None, severity="ok")
+    assert result.to_issue_code() is None
+
+
+@pytest.mark.asyncio
+async def test_block_severity_to_issue_code():
+    from novel_dev.services.beat_coverage_validator import BeatCoverageResult
+
+    result = BeatCoverageResult(beat_index=0, covered=False, deviation="forbidden", severity="block")
+    assert result.to_issue_code() == "BEAT_BOUNDARY_VIOLATION"
+
+
+@pytest.mark.asyncio
+async def test_llm_non_array_payload_falls_back(async_session):
+    validator = BeatCoverageValidator(async_session, use_llm=True)
+    fake_response = MagicMock()
+    fake_response.text = '{"beat_index":0,"covered":true}'
+    fake_response.usage = None
+    fake_response.finish_reason = None
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(return_value=fake_response)
+    with patch("novel_dev.services.beat_coverage_validator.llm_factory") as mock_factory:
+        mock_factory.get.return_value = fake_client
+        results = await validator.validate(
+            [BeatBoundaryCard(beat_index=0, must_cover=["陆照"], forbidden_materials=[])],
+            "陆照行动",
+        )
+    assert len(results) == 1
+    assert results[0].covered is True
+    assert results[0].severity == "ok"
