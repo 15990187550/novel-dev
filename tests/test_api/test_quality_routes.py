@@ -1366,3 +1366,90 @@ async def test_quality_runs_unknown_novel_returns_404(async_session):
     finally:
         app.dependency_overrides.clear()
 
+
+@pytest.mark.asyncio
+async def test_quality_runs_malformed_since_returns_400(async_session):
+    """Malformed `since` value -> 400, matching the validation contract."""
+    novel_id = "test-novel-runs-bad-since"
+    chapter_id = "ch-runs-bad-since"
+    volume_id = "vol-runs-bs"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id, volume_id=volume_id, chapter_number=1,
+            title="第一章 bad-since", novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    async_session.add(ChapterQualityMetric(
+        novel_id=novel_id, chapter_id=chapter_id, phase="final",
+        attempt_index=0, overall_score=80, gate_status="pass",
+    ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/runs",
+                params={"since": "not-a-date"},
+            )
+            assert resp.status_code == 400
+            body = resp.json()
+            assert "detail" in body
+            assert "since" in body["detail"].lower()
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_quality_runs_limit_caps_at_200(async_session):
+    """limit=999 with 250 rows present -> response contains exactly the 200
+    most recent rows (cap at 200)."""
+    novel_id = "test-novel-runs-limit-cap"
+    chapter_id = "ch-runs-limit-cap"
+    volume_id = "vol-runs-lc"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id, volume_id=volume_id, chapter_number=1,
+            title="第一章 limit-cap", novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    base = datetime(2026, 6, 1, 12, 0, 0)
+    metrics = []
+    for i in range(250):
+        m = ChapterQualityMetric(
+            novel_id=novel_id, chapter_id=chapter_id, phase="final",
+            attempt_index=i, overall_score=70 + (i % 30), gate_status="pass",
+        )
+        # Force created_at to a known ordering, strictly increasing
+        m.created_at = base + timedelta(seconds=i)
+        metrics.append(m)
+    async_session.add_all(metrics)
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                f"/api/novels/{novel_id}/quality/runs", params={"limit": 999}
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["runs"]) == 200
+            # Most recent 200: attempt_index 249, 248, ..., 50
+            attempt_indexes = [r["attempt_index"] for r in body["runs"]]
+            assert attempt_indexes == list(range(249, 49, -1))
+    finally:
+        app.dependency_overrides.clear()
+
