@@ -1,3 +1,4 @@
+import logging
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +23,9 @@ from novel_dev.services.flow_control_service import FlowControlService
 from novel_dev.services.chapter_run_state_service import ChapterRunStateService
 from novel_dev.services.log_service import log_service
 from novel_dev.services.quality_gate_service import QUALITY_BLOCK, quality_gate_stops_librarian
+from novel_dev.services.quality_metrics_service import QualityMetricsService, QualityMetricInput
+
+logger = logging.getLogger(__name__)
 
 
 REWRITE_STAGE_CONTEXT = "context"
@@ -253,10 +257,18 @@ class ChapterRewriteService:
                 can_resume=True,
                 rewrite_checkpoint=checkpoint,
             )
+            try:
+                await self._record_rewrite_metric(novel_id, chapter_id)
+            finally:
+                pass
             raise ChapterRewriteFailedError(result) from exc
 
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         log_service.add_log(novel_id, "ChapterRewriteService", f"独立重写章节完成: {chapter_id}")
+        try:
+            await self._record_rewrite_metric(novel_id, chapter_id)
+        finally:
+            pass
         return ChapterRewriteResult(
             novel_id=novel_id,
             chapter_id=chapter_id,
@@ -395,3 +407,45 @@ class ChapterRewriteService:
         if embedder is None:
             return None
         return EmbeddingService(self.session, embedder)
+
+    async def _record_rewrite_metric(self, novel_id: str, chapter_id: str):
+        chapter = await self.chapter_repo.get_by_id(chapter_id)
+        if not chapter or not chapter.novel_id:
+            return
+        try:
+            await QualityMetricsService(self.session).record(
+                QualityMetricInput(
+                    chapter_id=chapter_id,
+                    novel_id=novel_id,
+                    phase="rewrite",
+                    attempt_index=chapter.attempt_index + 1,
+                    overall_score=chapter.fast_review_score,
+                    gate_status=chapter.quality_status or "unchecked",
+                    issue_codes=self._extract_remaining_issues(chapter.fast_review_feedback),
+                    dimension_feedback=chapter.fast_review_feedback or {},
+                )
+            )
+        except Exception as exc:
+            logger.warning("rewrite_metric_record_failed", extra={"chapter_id": chapter_id, "error": repr(exc)})
+
+    @staticmethod
+    def _extract_remaining_issues(fast_review_feedback: dict | None) -> list[str]:
+        if not isinstance(fast_review_feedback, dict):
+            return []
+        notes = fast_review_feedback.get("notes") or []
+        if not isinstance(notes, list):
+            return []
+        # Simple keyword-based extraction; future Phase 3 can use issue_code hints
+        code_keywords = {
+            "BEAT_BOUNDARY_VIOLATION": ["边界", "后续 beat"],
+            "EVENT_ORDER_DRIFT": ["顺序", "跳过"],
+            "PLANNED_CHARACTER_DRIFT": ["人物", "角色"],
+            "WORD_COUNT_DRIFT": ["字数偏离"],
+        }
+        found: set[str] = set()
+        for note in notes:
+            text = str(note)
+            for code, keywords in code_keywords.items():
+                if any(kw in text for kw in keywords):
+                    found.add(code)
+        return list(found)

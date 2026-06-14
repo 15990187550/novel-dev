@@ -197,3 +197,54 @@ async def test_rewrite_retries_editor_with_continuity_rewrite_plan(async_session
     assert editor_checkpoints[1]["continuity_rewrite_plan"]["source"] == "continuity_audit"
     assert editor_checkpoints[1]["continuity_rewrite_plan"]["rewrite_all"] is True
     assert editor_checkpoints[1]["continuity_rewrite_plan"]["global_issues"][0]["code"] == "dead_entity_acted"
+
+
+@pytest.mark.asyncio
+async def test_rewrite_records_metric_on_completion(async_session):
+    """Verify QualityMetricsService.record is called when rewrite completes or raises."""
+    from unittest.mock import AsyncMock, patch, MagicMock
+
+    # Minimal chapter with all required attributes for the metric recording path
+    class FakeChapter:
+        id = "ch_1"
+        novel_id = "novel_1"
+        score_overall = 85
+        fast_review_score = 88
+        quality_status = "pass"
+        attempt_index = 1
+        raw_draft = "raw text"
+        polished_text = "polished text"
+        status = "drafted"
+        fast_review_feedback = {
+            "notes": ["边界问题：后续beat偏离", "人物刻画不足"]
+        }
+
+    service = ChapterRewriteService(async_session)
+
+    with patch.object(service.chapter_repo, "get_by_id", new=AsyncMock(return_value=FakeChapter())):
+        with patch.object(service.state_repo, "get_state", new=AsyncMock(return_value=MagicMock(
+            checkpoint_data={
+                "current_volume_plan": {
+                    "volume_id": "v1",
+                    "chapters": [{
+                        "chapter_id": "ch_1",
+                        "chapter_number": 1,
+                        "title": "Test",
+                        "target_word_count": 1000,
+                        "beats": [{"summary": "Beat", "target_mood": "tense"}],
+                    }]
+                }
+            }
+        ))):
+            with patch("novel_dev.services.chapter_rewrite_service.QualityMetricsService") as MockSvc:
+                instance = MockSvc.return_value
+                instance.record = AsyncMock()
+                # Force a ValueError by patching a method to raise it
+                with patch.object(
+                    service.flow_control,
+                    "raise_if_cancelled",
+                    new=AsyncMock(side_effect=ValueError("cancelled"))
+                ):
+                    with pytest.raises(Exception):
+                        await service.rewrite("novel_1", "ch_1")
+                instance.record.assert_awaited_once()
