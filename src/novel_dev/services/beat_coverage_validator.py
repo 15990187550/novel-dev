@@ -68,5 +68,39 @@ class BeatCoverageValidator:
         beat_cards: list[BeatBoundaryCard],
         draft_text: str,
     ) -> list[BeatCoverageResult]:
-        # Implemented in Task 4
-        raise NotImplementedError
+        results: list[BeatCoverageResult] = []
+        for card in beat_cards:
+            must_cover = card.must_cover or []
+            forbidden = card.forbidden_materials or []
+            matched = sum(1 for term in must_cover if term and term in draft_text)
+            has_forbidden = any(term and term in draft_text for term in forbidden)
+            if has_forbidden:
+                results.append(
+                    BeatCoverageResult(
+                        beat_index=card.beat_index,
+                        covered=False,
+                        deviation=f"forbidden material matched: {forbidden}",
+                        severity="block",
+                    )
+                )
+                continue
+            covered = not must_cover or (matched / len(must_cover) >= 0.6)
+            if covered:
+                results.append(
+                    BeatCoverageResult(
+                        beat_index=card.beat_index,
+                        covered=True,
+                        deviation=None,
+                        severity="ok",
+                    )
+                )
+            else:
+                results.append(
+                    BeatCoverageResult(
+                        beat_index=card.beat_index,
+                        covered=False,
+                        deviation=f"must_cover matched {matched}/{len(must_cover)}",
+                        severity="warn",
+                    )
+                )
+        return results
