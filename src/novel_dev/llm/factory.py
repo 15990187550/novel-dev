@@ -69,12 +69,37 @@ class RetryableDriver(BaseDriver):
 
 
 class LLMFactory:
-    def __init__(self, settings: Settings, usage_tracker: Optional[UsageTracker] = None):
+    def __init__(
+        self,
+        settings: Optional[Settings] = None,
+        usage_tracker: Optional[UsageTracker] = None,
+        session: Optional[object] = None,
+        agent_name: Optional[str] = None,
+        task: Optional[str] = None,
+    ):
+        if settings is None:
+            from novel_dev.config import settings as _default_settings
+            settings = _default_settings
         self.settings = settings
         self.usage_tracker = usage_tracker or LoggingUsageTracker()
         self._config = self._load_yaml(settings.llm_config_path)
         self._cache: dict[Tuple, BaseDriver] = {}
         self._http_client: Optional[httpx.AsyncClient] = None
+        self.session = session
+        self.agent_name = agent_name
+        self.task = task
+        self._current_chapter_id: Optional[str] = None
+        self._prompt_registry = None
+        self._ab_test_runner = None
+
+    def _original_get(self) -> BaseDriver:
+        """Default implementation used by get_with_metadata.
+
+        Routed through a class-level method (not an instance attribute) so tests
+        can patch it via ``patch.object(cls, "_original_get", ...)`` and have
+        ``get_with_metadata`` pick up the patch via attribute lookup.
+        """
+        return self.get(self.agent_name, self.task)
 
     def _get_http_client(self) -> httpx.AsyncClient:
         if self._http_client is None:
@@ -290,3 +315,44 @@ class LLMFactory:
             http_client=self._get_http_client(),
         )
         return OpenAIEmbedder(client=client, model=config.model, dimensions=config.dimensions)
+
+    def set_chapter_id(self, chapter_id: str) -> None:
+        self._current_chapter_id = chapter_id
+
+    async def get_with_metadata(self) -> Tuple[BaseDriver, dict]:
+        """Resolve prompt via PromptRegistry + A/B test, return (client, metadata).
+
+        Metadata keys: ``prompt_version``, ``prompt_content``.
+        """
+        if self.session is None:
+            raise RuntimeError(
+                "LLMFactory.get_with_metadata requires a session; "
+                "instantiate with session=..."
+            )
+        if not self.agent_name:
+            raise RuntimeError(
+                "LLMFactory.get_with_metadata requires agent_name; "
+                "instantiate with agent_name=..."
+            )
+
+        from novel_dev.services.prompt_registry import PromptRegistry
+        from novel_dev.services.ab_test_runner import ABTestRunner
+
+        if self._prompt_registry is None:
+            self._prompt_registry = PromptRegistry(self.session)
+        if self._ab_test_runner is None:
+            self._ab_test_runner = ABTestRunner(self.session)
+
+        chapter_id = self._current_chapter_id or ""
+        ab_version = await self._ab_test_runner.pick_version(self.agent_name, chapter_id)
+        if ab_version:
+            content = await self._prompt_registry.get_by_version(self.agent_name, ab_version)
+            prompt_version = ab_version
+        else:
+            content = await self._prompt_registry.get_active(self.agent_name)
+            prompt_version = await self._prompt_registry.get_active_version_name(self.agent_name)
+
+        await self._prompt_registry.increment_sample_count(self.agent_name, prompt_version)
+
+        client = self._original_get()
+        return client, {"prompt_version": prompt_version, "prompt_content": content}
