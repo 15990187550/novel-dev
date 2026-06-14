@@ -99,3 +99,67 @@ async def test_query_trends_prefers_metrics_table(service, sample_chapter, async
     assert len(trends) == 1
     assert trends[0]["value"] == 82
     assert trends[0]["source"] == "metrics"
+
+
+async def test_aggregate_issues_empty_novel(service):
+    agg = await service.aggregate_issues(novel_id="n_qm_empty")
+    assert agg == {"counts": {}, "total_chapters": 0}
+
+
+async def test_aggregate_issues_aggregates_counts(service, async_session):
+    for idx, num, codes in [
+        (0, 1, ["AI_FLAVOR_HIGH", "PACING_DRAG"]),
+        (1, 2, ["AI_FLAVOR_HIGH"]),
+        (2, 3, ["PACING_DRAG", "PACING_DRAG"]),
+    ]:
+        ch = Chapter(
+            id=f"ch_qm_agg_{idx}",
+            volume_id="v_qm_agg",
+            chapter_number=num,
+            title=f"ch{num}",
+            novel_id="n_qm_agg",
+        )
+        async_session.add(ch)
+        await async_session.commit()
+        await service.record(QualityMetricInput(
+            chapter_id=ch.id,
+            novel_id=ch.novel_id,
+            phase="final",
+            gate_status="pass",
+            issue_codes=codes,
+        ))
+        await async_session.commit()
+
+    agg = await service.aggregate_issues(novel_id="n_qm_agg")
+    assert agg["counts"] == {
+        "AI_FLAVOR_HIGH": 2,
+        "PACING_DRAG": 3,
+    }
+    assert agg["total_chapters"] == 3
+
+
+async def test_aggregate_issues_respects_chapter_range(service, async_session):
+    for idx, num in enumerate([1, 2, 3, 4], start=1):
+        ch = Chapter(
+            id=f"ch_qm_rng_{idx}",
+            volume_id="v_qm_rng",
+            chapter_number=num,
+            title=f"ch{num}",
+            novel_id="n_qm_rng",
+        )
+        async_session.add(ch)
+        await async_session.commit()
+        await service.record(QualityMetricInput(
+            chapter_id=ch.id,
+            novel_id=ch.novel_id,
+            phase="final",
+            gate_status="pass",
+            issue_codes=["AI_FLAVOR_HIGH"],
+        ))
+        await async_session.commit()
+
+    agg = await service.aggregate_issues(
+        novel_id="n_qm_rng", from_chapter=2, to_chapter=3
+    )
+    assert agg["total_chapters"] == 2
+    assert agg["counts"] == {"AI_FLAVOR_HIGH": 2}

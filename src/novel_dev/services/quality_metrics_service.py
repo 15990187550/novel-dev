@@ -124,6 +124,28 @@ class QualityMetricsService:
                     })
         return out
 
+    async def aggregate_issues(
+        self,
+        novel_id: str,
+        phase: str = "final",
+        from_chapter: Optional[int] = None,
+        to_chapter: Optional[int] = None,
+    ) -> dict:
+        """Aggregate issue_codes across metric rows for a novel, with chapter range filter.
+
+        Returns:
+            {
+                "counts": dict[str, int],  # code -> occurrences
+                "total_chapters": int,      # number of metric rows in range
+            }
+        """
+        metrics = await self._query_metrics(novel_id, phase, from_chapter, to_chapter)
+        counts: dict[str, int] = {}
+        for m in metrics:
+            for code in (m.issue_codes or []):
+                counts[code] = counts.get(code, 0) + 1
+        return {"counts": counts, "total_chapters": len(metrics)}
+
     async def _query_metrics(
         self,
         novel_id: str,

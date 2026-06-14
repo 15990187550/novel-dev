@@ -894,40 +894,17 @@ async def get_quality_issues(
     if not state:
         raise HTTPException(status_code=404, detail="Novel state not found")
 
-    # Pull metric rows for this novel + phase
-    metrics_stmt = select(ChapterQualityMetric).where(
-        ChapterQualityMetric.novel_id == novel_id,
-        ChapterQualityMetric.phase == phase,
-    )
-    metrics = list((await session.execute(metrics_stmt)).scalars().all())
+    service = QualityMetricsService(session)
+    agg = await service.aggregate_issues(novel_id, phase, from_chapter, to_chapter)
 
-    # Apply chapter range filter via Chapter.chapter_number lookup
-    if from_chapter is not None or to_chapter is not None:
-        ch_map_rows = (await session.execute(
-            select(Chapter.id, Chapter.chapter_number).where(Chapter.novel_id == novel_id)
-        )).all()
-        ch_map = {cid: num for cid, num in ch_map_rows}
-        metrics = [
-            m for m in metrics
-            if (num := ch_map.get(m.chapter_id)) is not None
-            and (from_chapter is None or num >= from_chapter)
-            and (to_chapter is None or num <= to_chapter)
-        ]
-
-    # Count issue code occurrences
-    counts: dict[str, int] = {}
-    for m in metrics:
-        for code in (m.issue_codes or []):
-            counts[code] = counts.get(code, 0) + 1
-
-    service = IssueHintsService()
-    hints = service.matched_hints(counts.items())
+    hints_service = IssueHintsService()
+    hints = hints_service.matched_hints(agg["counts"].items())
 
     return {
         "novel_id": novel_id,
         "phase": phase,
         "hints": [h.__dict__ for h in hints],
-        "total_chapters": len(metrics),
+        "total_chapters": agg["total_chapters"],
     }
 
 
