@@ -1,6 +1,7 @@
 import pytest
 from dataclasses import dataclass
 from unittest.mock import AsyncMock, patch
+from novel_dev.config.quality_config import ConfigError
 from novel_dev.services.recommendation_wirer import RecommendationWirer, WireResult
 from novel_dev.services.recommendation_service import RecommendationService, RecommendationType
 from novel_dev.services.chapter_rewrite_service import ChapterRewriteService
@@ -79,3 +80,12 @@ async def test_wirer_attempt_drift_detection(async_session):
     with patch.object(wirer.chapter_repo, "get_by_id", new=AsyncMock(return_value=ch)):
         result = await wirer.evaluate_and_dispatch("novel_1", "ch_1")
     assert result.action == "manual_review"
+
+
+@pytest.mark.asyncio
+async def test_wirer_raises_config_error_when_key_missing(async_session, monkeypatch):
+    def bad_config():
+        return {"recommendation": {}}
+    monkeypatch.setattr("novel_dev.services.recommendation_wirer.get_quality_config", bad_config)
+    with pytest.raises(ConfigError):
+        RecommendationWirer(async_session)
