@@ -1,5 +1,5 @@
 """Tests for /api/novels/{id}/quality/trends endpoint."""
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -839,3 +839,282 @@ async def test_quality_recommend_accept_with_warn_promotes_to_accept(async_sessi
             assert body["confidence"] == 1.0
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# /api/quality/judge-consistency tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_empty_db_returns_empty_reports(async_session):
+    """No ChapterQualityMetric rows -> reports: [] and thresholds echoed from config."""
+    from novel_dev.config.quality_config import get_quality_config
+
+    expected_cfg = get_quality_config()["judge_consistency"]
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/quality/judge-consistency")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["reports"] == []
+            assert body["thresholds"] == expected_cfg
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_single_model_multiple_attempts(async_session):
+    """3 ChapterQualityMetric rows for same chapter_id, same model, attempt_index 0,1,2
+    with overall_score 82, 85, 84 -> per_chapter entry with n=3, mean~83.67, stable."""
+    novel_id = "test-novel-jc-single"
+    chapter_id = "ch-jc-single-1"
+    volume_id = "vol-jc-single-1"
+    model = "kimi-k2-0711-preview"
+
+    async_session.add_all([
+        NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}),
+        Chapter(
+            id=chapter_id,
+            volume_id=volume_id,
+            chapter_number=1,
+            title="第一章",
+            novel_id=novel_id,
+        ),
+    ])
+    await async_session.flush()
+
+    async_session.add_all([
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            phase="final",
+            attempt_index=0,
+            overall_score=82,
+            dimension_scores={},
+            gate_status="pass",
+            model_version=model,
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            phase="final",
+            attempt_index=1,
+            overall_score=85,
+            dimension_scores={},
+            gate_status="pass",
+            model_version=model,
+        ),
+        ChapterQualityMetric(
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            phase="final",
+            attempt_index=2,
+            overall_score=84,
+            dimension_scores={},
+            gate_status="pass",
+            model_version=model,
+        ),
+    ])
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/quality/judge-consistency")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["reports"]) == 1
+            report = body["reports"][0]
+            assert report["model"] == model
+            assert report["n_samples"] == 1
+            assert len(report["per_chapter"]) == 1
+            per_ch = report["per_chapter"][0]
+            assert per_ch["chapter_id"] == chapter_id
+            assert per_ch["n"] == 3
+            assert per_ch["scores"] == [82, 85, 84]
+            assert per_ch["mean"] == pytest.approx(83.67, abs=0.01)
+            # std_dev of [82,85,84] = sqrt(((82-83.67)^2 + (85-83.67)^2 + (84-83.67)^2)/3)
+            # ~ sqrt((2.78 + 1.77 + 0.11)/3) = sqrt(1.55) ~ 1.25
+            assert per_ch["std_dev"] == pytest.approx(1.25, abs=0.02)
+            # CV = 1.25 / 83.67 ~ 0.015, which is well under 0.05 -> stable
+            assert per_ch["variance_coefficient"] == pytest.approx(0.015, abs=0.005)
+            assert per_ch["interpretation"] == "stable"
+            # Top-level report is also stable since mean_cv is the same
+            assert report["interpretation"] == "stable"
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_different_models_grouped_separately(async_session):
+    """2 metrics for model A, 2 for model B (different chapters) -> 2 separate report entries."""
+    novel_id = "test-novel-jc-two-models"
+    volume_id = "vol-jc-two-models"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    async_session.add_all([
+        Chapter(id="ch-jc-tm-a", volume_id=volume_id, chapter_number=1, title="第一章", novel_id=novel_id),
+        Chapter(id="ch-jc-tm-b", volume_id=volume_id, chapter_number=2, title="第二章", novel_id=novel_id),
+    ])
+    await async_session.flush()
+
+    # Model A: 3 attempts on ch-jc-tm-a (passes default min_n=3)
+    for i, score in enumerate([80, 82, 81]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-tm-a", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version="model-a",
+        ))
+    # Model B: 3 attempts on ch-jc-tm-b
+    for i, score in enumerate([75, 78, 76]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-tm-b", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version="model-b",
+        ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/quality/judge-consistency")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["reports"]) == 2
+            models = {r["model"] for r in body["reports"]}
+            assert models == {"model-a", "model-b"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_filter_by_model_version(async_session):
+    """?model_version=kimi-k2-0711-preview -> only matching model rows contribute."""
+    novel_id = "test-novel-jc-model-filter"
+    volume_id = "vol-jc-mf"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    async_session.add_all([
+        Chapter(id="ch-jc-mf-a", volume_id=volume_id, chapter_number=1, title="第一章", novel_id=novel_id),
+        Chapter(id="ch-jc-mf-b", volume_id=volume_id, chapter_number=2, title="第二章", novel_id=novel_id),
+    ])
+    await async_session.flush()
+
+    # kimi-k2: 3 attempts on ch-jc-mf-a (passes default min_n=3)
+    for i, score in enumerate([80, 82, 84]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-mf-a", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version="kimi-k2-0711-preview",
+        ))
+    # other-model: 3 attempts on ch-jc-mf-b
+    for i, score in enumerate([70, 72, 74]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-mf-b", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version="other-model-v1",
+        ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get(
+                "/api/quality/judge-consistency",
+                params={"model_version": "kimi-k2-0711-preview"},
+            )
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["reports"]) == 1
+            assert body["reports"][0]["model"] == "kimi-k2-0711-preview"
+            # Only the kimi chapter should appear
+            chapter_ids = {pc["chapter_id"] for pc in body["reports"][0]["per_chapter"]}
+            assert chapter_ids == {"ch-jc-mf-a"}
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_min_n_filter_excludes_short_chapters(async_session):
+    """?min_n=3: chapter with only 2 attempts is excluded from per_chapter.
+    The model still appears if at least one chapter has >= 3 attempts."""
+    novel_id = "test-novel-jc-min-n"
+    volume_id = "vol-jc-min-n"
+
+    async_session.add(NovelState(novel_id=novel_id, current_phase="completed", checkpoint_data={}))
+    async_session.add_all([
+        Chapter(id="ch-jc-mn-short", volume_id=volume_id, chapter_number=1, title="第一章", novel_id=novel_id),
+        Chapter(id="ch-jc-mn-long", volume_id=volume_id, chapter_number=2, title="第二章", novel_id=novel_id),
+    ])
+    await async_session.flush()
+
+    model = "min-n-test-model"
+    # short chapter: 2 attempts only
+    for i, score in enumerate([80, 85]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-mn-short", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version=model,
+        ))
+    # long chapter: 4 attempts
+    for i, score in enumerate([78, 80, 82, 79]):
+        async_session.add(ChapterQualityMetric(
+            novel_id=novel_id, chapter_id="ch-jc-mn-long", phase="final",
+            attempt_index=i, overall_score=score, dimension_scores={},
+            gate_status="pass", model_version=model,
+        ))
+    await async_session.commit()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/quality/judge-consistency", params={"min_n": 3})
+            assert resp.status_code == 200
+            body = resp.json()
+            assert len(body["reports"]) == 1
+            report = body["reports"][0]
+            # Model still appears because at least one chapter has >= 3
+            assert report["model"] == model
+            # n_samples counts the per-chapter entries that pass min_n
+            assert report["n_samples"] == 1
+            chapter_ids = {pc["chapter_id"] for pc in report["per_chapter"]}
+            assert chapter_ids == {"ch-jc-mn-long"}
+            assert len(report["per_chapter"][0]["scores"]) == 4
+    finally:
+        app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_judge_consistency_thresholds_echoed_from_config(async_session):
+    """thresholds block in response matches get_quality_config()['judge_consistency']."""
+    from novel_dev.config.quality_config import get_quality_config
+
+    expected = get_quality_config()["judge_consistency"]
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/quality/judge-consistency")
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body["thresholds"] == expected
+            assert "stable_max_cv" in body["thresholds"]
+            assert "moderate_max_cv" in body["thresholds"]
+    finally:
+        app.dependency_overrides.clear()
+

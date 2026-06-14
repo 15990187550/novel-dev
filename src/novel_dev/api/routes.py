@@ -1,6 +1,7 @@
 import asyncio
 import json
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -18,6 +19,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.storage.markdown_sync import MarkdownSync
 from novel_dev.storage.paths import StoragePaths
 from novel_dev.config import Settings
+from novel_dev.config.quality_config import get_quality_config
 from novel_dev.services.extraction_service import ExtractionService
 from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.repositories.pending_extraction_repo import PendingExtractionRepository
@@ -912,6 +914,85 @@ async def get_quality_issues(
         "phase": phase,
         "hints": [h.__dict__ for h in hints],
         "total_chapters": agg["total_chapters"],
+    }
+
+
+@router.get("/api/quality/judge-consistency")
+async def get_judge_consistency(
+    model_version: Optional[str] = None,
+    since: Optional[str] = None,
+    min_n: int = 3,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Admin/observability endpoint: aggregate judge consistency stats from existing
+    ChapterQualityMetric rows. Does NOT run the LLM.
+
+    For each model_version with at least one chapter that has >= min_n attempts
+    within the time window, returns per-chapter variance metrics and a model-level
+    mean_cv summary.
+    """
+    from novel_dev.llm.judge_consistency import compute_variance_metrics, interpret_cv
+
+    cfg = get_quality_config()
+    thresholds = cfg["judge_consistency"]
+
+    stmt = select(ChapterQualityMetric)
+    if model_version is not None:
+        stmt = stmt.where(ChapterQualityMetric.model_version == model_version)
+
+    if since is not None:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", "+00:00"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid since timestamp")
+        stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
+    else:
+        since_dt = datetime.now(timezone.utc) - timedelta(days=30)
+        stmt = stmt.where(ChapterQualityMetric.created_at >= since_dt)
+
+    rows = (await session.execute(stmt)).scalars().all()
+
+    # Group by model, then by chapter_id
+    by_model: dict = defaultdict(lambda: defaultdict(list))
+    for r in rows:
+        if r.overall_score is None:
+            continue
+        by_model[r.model_version or "unknown"][r.chapter_id].append(r.overall_score)
+
+    reports = []
+    for model, chapters in by_model.items():
+        per_chapter = []
+        cvs = []
+        for chapter_id, scores in chapters.items():
+            if len(scores) < min_n:
+                continue
+            metrics = compute_variance_metrics(scores)
+            cv = metrics["variance_coefficient"]
+            interp = interpret_cv(cv, thresholds)
+            per_chapter.append({
+                "chapter_id": chapter_id,
+                "n": len(scores),
+                "scores": scores,
+                **metrics,
+                "interpretation": interp,
+            })
+            cvs.append(cv)
+
+        if not cvs:
+            continue  # no chapter had enough samples
+
+        mean_cv = sum(cvs) / len(cvs)
+        reports.append({
+            "model": model,
+            "n_samples": len(cvs),
+            "mean_cv": mean_cv,
+            "interpretation": interpret_cv(mean_cv, thresholds),
+            "per_chapter": per_chapter,
+        })
+
+    return {
+        "reports": reports,
+        "thresholds": thresholds,
     }
 
 
