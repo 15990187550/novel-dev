@@ -80,6 +80,28 @@
       </div>
       <p v-else class="quality-recommendation-widget__empty">无额外操作建议</p>
 
+      <section v-if="rootCause" data-testid="root-cause-section" class="quality-recommendation-widget__root-cause">
+        <p class="quality-recommendation-widget__section-label">上轮根因分析</p>
+        <p data-testid="root-cause-summary" class="quality-recommendation-widget__root-cause-summary">
+          {{ rootCause.summary }}
+        </p>
+        <ul v-if="rootCause.suggested_actions && rootCause.suggested_actions.length" class="quality-recommendation-widget__root-cause-actions" data-testid="root-cause-actions">
+          <li
+            v-for="(a, i) in rootCause.suggested_actions"
+            :key="i"
+            :data-severity="a.severity"
+            data-testid="root-cause-action"
+            class="quality-recommendation-widget__root-cause-action"
+          >
+            {{ a.action }}
+            <span v-if="a.severity" class="quality-recommendation-widget__root-cause-severity">({{ a.severity }})</span>
+          </li>
+        </ul>
+        <small v-if="rootCause.confidence != null" class="quality-recommendation-widget__root-cause-confidence">
+          置信度: {{ Math.round(rootCause.confidence * 100) }}%
+        </small>
+      </section>
+
       <section class="quality-recommendation-widget__rationale">
         <button
           type="button"
@@ -130,6 +152,7 @@ const props = defineProps({
   currentAttempt: { type: Number, default: 1 },
   acceptWithWarn: { type: Boolean, default: false },
   recentIssueCounts: { type: Array, default: () => [] },
+  rootCause: { type: Object, default: null },
 })
 
 const loading = ref(false)
@@ -548,6 +571,47 @@ watch(
 
 :global(.dark) .quality-recommendation-widget__action-reason {
   color: #cbd5e1;
+}
+
+.quality-recommendation-widget__root-cause {
+  border-top: 1px dashed rgba(148, 163, 184, 0.4);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.quality-recommendation-widget__root-cause-summary {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: #334155;
+  line-height: 1.5;
+}
+
+:global(.dark) .quality-recommendation-widget__root-cause-summary { color: #cbd5e1; }
+
+.quality-recommendation-widget__root-cause-actions {
+  list-style: disc;
+  padding-left: 1.1rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.75rem;
+  color: #334155;
+}
+
+:global(.dark) .quality-recommendation-widget__root-cause-actions { color: #cbd5e1; }
+
+.quality-recommendation-widget__root-cause-severity {
+  margin-left: 0.25rem;
+  color: #b45309;
+  font-weight: 600;
+}
+
+.quality-recommendation-widget__root-cause-confidence {
+  font-size: 0.6875rem;
+  color: #64748b;
 }
 
 .quality-recommendation-widget__rationale {

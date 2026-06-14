@@ -162,6 +162,24 @@ describe('QualityRecommendationWidget', () => {
     expect(wrapper.emitted('continue-retry')).toBeTruthy()
   })
 
+  it('shows root cause when present', async () => {
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: {
+        novelId: 'n1', chapterId: 'c1',
+        rootCause: {
+          summary: 'beat 2 越界',
+          suggested_actions: [
+            { action: '重写 beat 2', target: 'beat:2', severity: 'high' },
+          ],
+          confidence: 0.85,
+        },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="root-cause-summary"]').text()).toContain('beat 2 越界')
+    expect(wrapper.findAll('[data-testid="root-cause-action"]').length).toBe(1)
+  })
+
   it('refetches when props change', async () => {
     const wrapper = mount(QualityRecommendationWidget, {
       props: { novelId: 'novel-1', chapterId: 'ch-1' },
