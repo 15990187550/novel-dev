@@ -105,6 +105,15 @@
         </ul>
         <p v-else-if="rationaleExpanded" class="quality-recommendation-widget__empty">无推理细节</p>
       </section>
+
+      <div v-if="isStopAndInspect" class="quality-recommendation-widget__manual-actions" data-testid="manual-review-actions">
+        <button type="button" data-testid="continue-retry-btn" @click="$emit('continue-retry')">
+          继续重试
+        </button>
+        <button type="button" data-testid="accept-version-btn" @click="$emit('accept-version')">
+          接受当前版本
+        </button>
+      </div>
     </template>
   </div>
 </template>
@@ -112,6 +121,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { recommendChapterQuality } from '@/api.js'
+
+const emit = defineEmits(['continue-retry', 'accept-version'])
 
 const props = defineProps({
   novelId: { type: String, required: true },

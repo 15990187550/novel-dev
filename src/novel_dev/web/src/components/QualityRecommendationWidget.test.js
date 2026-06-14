@@ -145,6 +145,23 @@ describe('QualityRecommendationWidget', () => {
     expect(wrapper.find('[data-testid="recommendation-error"]').text()).toContain('network down')
   })
 
+  it('emits continue-retry when clicked', async () => {
+    mockRecommend.mockResolvedValueOnce({
+      recommendation: 'stop_and_inspect',
+      confidence: 1,
+      rationale: [],
+      suggested_actions: [],
+    })
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: { novelId: 'n1', chapterId: 'c1', currentAttempt: 3 },
+    })
+    await flushPromises()
+    const btn = wrapper.find('[data-testid="continue-retry-btn"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    expect(wrapper.emitted('continue-retry')).toBeTruthy()
+  })
+
   it('refetches when props change', async () => {
     const wrapper = mount(QualityRecommendationWidget, {
       props: { novelId: 'novel-1', chapterId: 'ch-1' },
