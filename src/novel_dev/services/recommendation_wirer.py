@@ -11,7 +11,7 @@ from novel_dev.config.quality_config import ConfigError, get_quality_config
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.repositories.generation_job_repo import GenerationJobRepository
 from novel_dev.services.chapter_rewrite_service import ChapterRewriteService
-from novel_dev.services.recommendation_service import RecommendationService
+from novel_dev.services.recommendation_service import Recommendation, RecommendationService
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WireResult:
     action: Literal["accept", "auto_rewrite_queued", "manual_review"]
-    recommendation: RecommendationService | None
+    recommendation: Recommendation | None
     rewrite_job_id: str | None
 
 
