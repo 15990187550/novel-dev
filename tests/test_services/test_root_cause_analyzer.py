@@ -103,3 +103,39 @@ async def test_analyze_persists_result(async_session):
     latest = await RootCauseRepository(async_session).get_latest_for_chapter("ch_1")
     assert latest is not None
     assert latest.summary == "ok"
+
+
+@pytest.mark.asyncio
+async def test_get_llm_client_uses_injected(async_session):
+    fake = AsyncMock()
+    analyzer = RootCauseAnalyzer(async_session, llm_client=fake)
+    client = await analyzer._get_llm_client()
+    assert client is fake
+
+
+@pytest.mark.asyncio
+async def test_analyze_soft_degrades_when_prompt_load_fails(async_session):
+    analyzer = RootCauseAnalyzer(async_session)
+    analyzer.prompt_registry = AsyncMock()
+    analyzer.prompt_registry.get_active = AsyncMock(side_effect=RuntimeError("db down"))
+    result = await analyzer.analyze("n_1", "ch_1", "text", {}, [], [])
+    assert result.summary == "[分析失败,请人工]"
+    assert result.confidence == 0.0
+
+
+def test_format_beat_cards_empty():
+    from novel_dev.services.root_cause_analyzer import RootCauseAnalyzer
+    out = RootCauseAnalyzer.__new__(RootCauseAnalyzer)._format_beat_cards([])
+    assert out == "(none)"
+
+
+def test_format_beat_cards_formats_list():
+    from novel_dev.services.root_cause_analyzer import RootCauseAnalyzer
+    from novel_dev.schemas.quality import BeatBoundaryCard
+    cards = [
+        BeatBoundaryCard(beat_index=1, must_cover=["陆照"], forbidden_materials=["追兵"]),
+        BeatBoundaryCard(beat_index=2, must_cover=[], forbidden_materials=[]),
+    ]
+    out = RootCauseAnalyzer.__new__(RootCauseAnalyzer)._format_beat_cards(cards)
+    assert "beat 1: must_cover=[陆照], forbidden=[追兵]" in out
+    assert "beat 2: must_cover=[(no must_cover)], forbidden=[(no forbidden)]" in out

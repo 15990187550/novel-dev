@@ -35,3 +35,36 @@ async def test_mark_completed(async_session):
     assert found.status == "completed"
     assert found.winner == "challenger"
     assert found.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_list_all(async_session):
+    repo = ABTestRepository(async_session)
+    await repo.create("critic", "v1.0", "v2.0", {})
+    await repo.create("writer", "v1.0", "v2.0", {})
+    all_tests = await repo.list_all()
+    assert len(all_tests) == 2
+
+
+@pytest.mark.asyncio
+async def test_mark_completed_noop_when_missing(async_session):
+    repo = ABTestRepository(async_session)
+    # Should not raise
+    await repo.mark_completed("nonexistent", winner="challenger", ended_at=datetime.utcnow())
+
+
+@pytest.mark.asyncio
+async def test_mark_aborted(async_session):
+    repo = ABTestRepository(async_session)
+    ab = await repo.create("critic", "v1.0", "v2.0", {})
+    await repo.mark_aborted(ab.id)
+    found = await repo.get(ab.id)
+    assert found.status == "aborted"
+    assert found.ended_at is not None
+
+
+@pytest.mark.asyncio
+async def test_mark_aborted_noop_when_missing(async_session):
+    repo = ABTestRepository(async_session)
+    # Should not raise
+    await repo.mark_aborted("nonexistent")
