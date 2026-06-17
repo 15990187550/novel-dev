@@ -174,3 +174,18 @@ class QualityMetricsService:
                 continue
             out.append(m)
         return out
+
+    async def get_recent_issue_code_counts(self, novel_id: str, window: int = 5) -> dict:
+        """Return aggregated issue code counts from the most recent `window` metric rows."""
+        result = await self.session.execute(
+            select(ChapterQualityMetric)
+            .where(ChapterQualityMetric.novel_id == novel_id)
+            .order_by(ChapterQualityMetric.created_at.desc())
+            .limit(window)
+        )
+        metrics = list(result.scalars().all())
+        counts: dict[str, int] = {}
+        for m in metrics:
+            for code in (m.issue_codes or []):
+                counts[code] = counts.get(code, 0) + 1
+        return counts

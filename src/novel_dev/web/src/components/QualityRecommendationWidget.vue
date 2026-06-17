@@ -142,6 +142,7 @@
 
 <script setup>
 import { computed, ref, watch } from 'vue'
+import axios from 'axios'
 import { recommendChapterQuality } from '@/api.js'
 
 const emit = defineEmits(['continue-retry', 'accept-version'])
@@ -233,10 +234,17 @@ async function loadRecommendation() {
   errorMessage.value = ''
   rationaleExpanded.value = false
   try {
+    let recentIssueCounts = {}
+    try {
+      const countsResp = await axios.get(`/api/novels/${props.novelId}/chapters/recent-issue-counts?window=5`)
+      recentIssueCounts = countsResp.data?.counts || {}
+    } catch {
+      // silent fallback
+    }
     const payload = {
       current_attempt: props.currentAttempt,
       accept_with_warn: props.acceptWithWarn,
-      recent_issue_counts: props.recentIssueCounts,
+      recent_issue_counts: recentIssueCounts,
     }
     const data = await recommendChapterQuality(props.novelId, props.chapterId, payload)
     recommendation.value = data || null

@@ -2,12 +2,17 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import QualityRecommendationWidget from './QualityRecommendationWidget.vue'
 
-const { mockRecommend } = vi.hoisted(() => ({
+const { mockRecommend, mockAxiosGet } = vi.hoisted(() => ({
   mockRecommend: vi.fn(),
+  mockAxiosGet: vi.fn(),
 }))
 
 vi.mock('@/api.js', () => ({
   recommendChapterQuality: mockRecommend,
+}))
+
+vi.mock('axios', () => ({
+  default: { get: mockAxiosGet, post: vi.fn() },
 }))
 
 function buildResponse(overrides = {}) {
@@ -55,7 +60,7 @@ describe('QualityRecommendationWidget', () => {
     expect(mockRecommend).toHaveBeenCalledWith('novel-1', 'ch-1', {
       current_attempt: 1,
       accept_with_warn: false,
-      recent_issue_counts: [],
+      recent_issue_counts: {},
     })
   })
 
@@ -194,7 +199,20 @@ describe('QualityRecommendationWidget', () => {
     expect(mockRecommend).toHaveBeenLastCalledWith('novel-1', 'ch-2', {
       current_attempt: 1,
       accept_with_warn: true,
-      recent_issue_counts: [],
+      recent_issue_counts: {},
     })
+  })
+
+  it('fetches and sends recent issue counts from backend', async () => {
+    mockAxiosGet.mockResolvedValueOnce({
+      data: { counts: { BEAT_BOUNDARY_VIOLATION: 2, AI_FLAVOR_HIGH: 1 } },
+    })
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: { novelId: 'n1', chapterId: 'c1' },
+    })
+    await flushPromises()
+    expect(mockAxiosGet).toHaveBeenCalledWith('/api/novels/n1/chapters/recent-issue-counts?window=5')
+    const lastCall = mockRecommend.mock.calls.at(-1)
+    expect(lastCall[2].recent_issue_counts).toEqual({ BEAT_BOUNDARY_VIOLATION: 2, AI_FLAVOR_HIGH: 1 })
   })
 })

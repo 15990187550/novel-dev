@@ -920,6 +920,18 @@ async def get_quality_issues(
     }
 
 
+@router.get("/api/novels/{novel_id}/chapters/recent-issue-counts")
+async def get_recent_issue_counts(
+    novel_id: str,
+    window: int = 5,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Return aggregated issue code counts from the most recent `window` quality metric rows for a novel."""
+    svc = QualityMetricsService(session)
+    counts = await svc.get_recent_issue_code_counts(novel_id, window=window)
+    return {"novel_id": novel_id, "window": window, "counts": counts}
+
+
 @router.get("/api/novels/{novel_id}/quality/runs")
 async def get_quality_runs(
     novel_id: str,
