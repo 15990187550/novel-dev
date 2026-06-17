@@ -542,6 +542,23 @@ async def test_librarian_soft_state_uses_prompt_registry(async_session, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_librarian_persist_triggers_rcs_on_quality_block(async_session, monkeypatch):
+    from novel_dev.agents.librarian import LibrarianAgent
+    from novel_dev.services.rolling_chapter_synopsis_service import RollingChapterSynopsisService
+
+    called = []
+    async def mock_update(self, novel_id, chapter_id, trigger_event):
+        called.append((novel_id, chapter_id, trigger_event))
+    monkeypatch.setattr(RollingChapterSynopsisService, "update", mock_update)
+
+    agent = LibrarianAgent(async_session)
+    await agent.on_chapter_finalized(
+        novel_id="n_1", chapter_id="ch_5", gate_status="block",
+    )
+    assert len(called) == 1
+
+
+@pytest.mark.asyncio
 async def test_librarian_persist_policy_events_are_bounded_and_counted(async_session, monkeypatch):
     from novel_dev.repositories.entity_repo import EntityRepository
     from novel_dev.repositories.version_repo import EntityVersionRepository

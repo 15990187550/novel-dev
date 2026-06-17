@@ -338,6 +338,8 @@ class LibrarianAgent:
         novel_id: str,
         *,
         skip_world_state_review: bool = False,
+        gate_status: Optional[str] = None,
+        entity_state_changes: Optional[list[dict]] = None,
     ) -> None:
         log_agent_detail(
             novel_id,
@@ -579,6 +581,14 @@ class LibrarianAgent:
             node="librarian_persist_result",
             task="persist",
             metadata=persist_stats,
+        )
+
+        # Phase 4: 触发 RCS
+        await self.on_chapter_finalized(
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            gate_status=gate_status,
+            entity_state_changes=entity_state_changes,
         )
 
     async def _apply_entity_state_policy(
@@ -830,3 +840,54 @@ class LibrarianAgent:
             metadata=reason,
         )
         return None
+
+    async def on_chapter_finalized(
+        self,
+        novel_id: str,
+        chapter_id: str,
+        gate_status: str,
+        entity_state_changes: Optional[list[dict]] = None,
+        entities_introduced: Optional[list[str]] = None,
+        entities_removed: Optional[list[str]] = None,
+    ) -> None:
+        """章节归档后钩子:检测 RCS 触发条件"""
+        from novel_dev.services.rolling_chapter_synopsis_service import RollingChapterSynopsisService
+        from novel_dev.llm import llm_factory
+        from novel_dev.services.prompt_registry import PromptRegistry
+        from novel_dev.llm.models import ChatMessage
+
+        rcs = RollingChapterSynopsisService(self.session)
+
+        # 1. quality_block 触发
+        if gate_status == "block":
+            if await rcs.should_update(novel_id, chapter_id, "quality_block", {"gate_status": gate_status}):
+                await rcs.update(novel_id, chapter_id, trigger_event={"type": "block", "chapter_id": chapter_id})
+
+        # 2. entity_state_change 触发 (LLM 批量评估)
+        if entity_state_changes:
+            reg = PromptRegistry(self.session)
+            try:
+                template = await reg.get_active("entity_change_importance")
+            except Exception:
+                template = None
+            if template:
+                prompt = template.format(
+                    changes=json.dumps(entity_state_changes, ensure_ascii=False)
+                )
+                client = llm_factory.get("RootCauseAnalyzer")
+                response = await client.acomplete([ChatMessage(role="user", content=prompt)])
+                text = _MD_FENCE_RE.sub("", response.text.strip(), flags=re.IGNORECASE | re.MULTILINE)
+                try:
+                    evaluations = json.loads(text)
+                except Exception:
+                    evaluations = []
+                for ev in evaluations:
+                    if ev.get("is_important"):
+                        if await rcs.should_update(novel_id, chapter_id, "entity_state_change", ev):
+                            await rcs.update(novel_id, chapter_id, trigger_event={"type": "entity_state_change", **ev})
+
+        # 3. 实体引入/退出
+        for eid in (entities_introduced or []):
+            await rcs.update(novel_id, chapter_id, trigger_event={"type": "entity_introduced", "entity_id": eid})
+        for eid in (entities_removed or []):
+            await rcs.update(novel_id, chapter_id, trigger_event={"type": "entity_removed", "entity_id": eid})
