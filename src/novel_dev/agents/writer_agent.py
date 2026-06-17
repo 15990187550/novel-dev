@@ -151,7 +151,7 @@ class WriterAgent:
                 log_service.add_log(novel_id, "WriterAgent", f"从第 {start_idx + 1} 个节拍恢复写作")
 
         flow_control = FlowControlService(self.session)
-        whole_chapter_mode = self._should_generate_whole_chapter(checkpoint)
+        whole_chapter_mode = self._should_generate_whole_chapter(checkpoint.get("drafting_mode"))
         genre_template = await GenreTemplateService(self.session).resolve(
             novel_id,
             "WriterAgent",
@@ -421,9 +421,11 @@ class WriterAgent:
         return metadata
 
     @staticmethod
-    def _should_generate_whole_chapter(checkpoint: dict[str, Any]) -> bool:
-        drafting_mode = str(checkpoint.get("drafting_mode") or "").strip().lower()
-        return drafting_mode not in {"beat_legacy", "single_beat", "beat_by_beat"}
+    def _should_generate_whole_chapter(drafting_mode: str | None = None) -> bool:
+        # Phase 4: 强制 beat_by_beat 为默认,整章模式仅显式开启
+        if drafting_mode == "whole_chapter":
+            return True
+        return False
 
     @staticmethod
     def _insert_root_cause_segment(context: dict, segment: str) -> dict:

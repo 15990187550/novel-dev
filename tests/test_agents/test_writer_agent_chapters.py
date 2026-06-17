@@ -642,3 +642,9 @@ def test_writer_self_check_uses_genre_quality_config_for_modern_terms(async_sess
     )
 
     assert not any("KPI" in issue for issue in check.contradictions)
+
+
+def test_writer_default_drafting_mode_is_beat_by_beat():
+    from novel_dev.agents.writer_agent import WriterAgent
+    # _should_generate_whole_chapter should return False by default (None drafting_mode)
+    assert WriterAgent._should_generate_whole_chapter(drafting_mode=None) is False
