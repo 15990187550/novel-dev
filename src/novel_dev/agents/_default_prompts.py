@@ -342,6 +342,26 @@ ROOT_CAUSE_ANALYZER_PROMPT = (
     '{"summary": "...", "suggested_actions": [...], "confidence": 0.x}'
 )
 
+# ---------------------------------------------------------------------------
+# LibrarianAgent — soft-state pass: detect subtle relationship/tone shifts.
+# Source: src/novel_dev/agents/librarian.py:_build_soft_state_prompt
+# Task:   extract_soft_state
+# ---------------------------------------------------------------------------
+LIBRARIAN_SOFT_STATE_PROMPT = (
+    "你是一位小说关系分析师。请从以下章节文本中**只**提取隐性的角色情感与关系变化,"
+    "忽略已经被明确记录的事件/地点/新实体(第一 pass 已处理)。严格 JSON 返回,"
+    "格式为 {{\"character_updates\": [...], \"new_relationships\": [...]}}\n\n"
+    "## 抽取准则\n"
+    "- character_updates:关注角色内在状态(态度、信念、情绪基调、对某人看法)发生的**变化**,"
+    "不抽取首次出现的静态设定。每条 state 写成具体的键值(如 {{\"attitude_to_X\": \"从冷漠转为戒备\"}})。\n"
+    "- new_relationships:关注本章新建立或显著变更的角色间关系(信任、敌对、债务、师承、情感投射等),"
+    "relation_type 写具体词(如 trust/rival/debt/romantic_interest),不要抽象标签。\n"
+    "- 如果本章确无隐性变化,两个字段都可以是空数组。\n"
+    "- source_entity_id/target_entity_id/entity_id 用角色名字即可,后续会映射到实体 ID。\n\n"
+    "## 本章已识别实体(避免重复): {primary_names}\n\n"
+    "## 章节文本\n{polished_text}\n\n请返回 JSON:"
+)
+
 
 # ---------------------------------------------------------------------------
 # Registry: maps registry keys to the extracted default strings.
@@ -355,6 +375,7 @@ DEFAULT_PROMPTS: dict[str, str] = {
     "editor": EDITOR_PROMPT,
     "fast_review": FAST_REVIEW_PROMPT,
     "librarian": LIBRARIAN_PROMPT,
+    "librarian_soft_state": LIBRARIAN_SOFT_STATE_PROMPT,
     "root_cause_analyzer": ROOT_CAUSE_ANALYZER_PROMPT,
 }
 

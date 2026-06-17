@@ -145,30 +145,26 @@ class LibrarianAgent:
         response = await client.acomplete([ChatMessage(role="user", content=prompt)])
         return response.text
 
-    def _build_soft_state_prompt(self, polished_text: str, primary: ExtractionResult) -> str:
+    async def _get_soft_state_prompt(self) -> str:
+        """Return the active soft-state prompt template from the registry."""
+        return await self.prompt_registry.get_active("librarian_soft_state")
+
+    async def _build_soft_state_prompt(self, polished_text: str, primary: ExtractionResult) -> str:
         """第二 pass:专攻隐性的角色情感/关系变化,这些在一 pass 里容易被硬事实挤掉。"""
         primary_names = [e.name for e in primary.new_entities]
         primary_updates = [u.entity_id for u in primary.character_updates if u.entity_id]
-        return (
-            "你是一位小说关系分析师。请从以下章节文本中**只**提取隐性的角色情感与关系变化,"
-            "忽略已经被明确记录的事件/地点/新实体(第一 pass 已处理)。严格 JSON 返回,"
-            "格式为 {\"character_updates\": [...], \"new_relationships\": [...]}\n\n"
-            "## 抽取准则\n"
-            "- character_updates:关注角色内在状态(态度、信念、情绪基调、对某人看法)发生的**变化**,"
-            "不抽取首次出现的静态设定。每条 state 写成具体的键值(如 {\"attitude_to_X\": \"从冷漠转为戒备\"})。\n"
-            "- new_relationships:关注本章新建立或显著变更的角色间关系(信任、敌对、债务、师承、情感投射等),"
-            "relation_type 写具体词(如 trust/rival/debt/romantic_interest),不要抽象标签。\n"
-            "- 如果本章确无隐性变化,两个字段都可以是空数组。\n"
-            "- source_entity_id/target_entity_id/entity_id 用角色名字即可,后续会映射到实体 ID。\n\n"
-            f"## 本章已识别实体(避免重复): {primary_names + primary_updates}\n\n"
-            f"## 章节文本\n{polished_text}\n\n请返回 JSON:"
+        template = await self._get_soft_state_prompt()
+        return render_prompt_template(
+            template,
+            primary_names=primary_names + primary_updates,
+            polished_text=polished_text,
         )
 
     async def _extract_soft_state(
         self, polished_text: str, primary: ExtractionResult, novel_id: str = ""
     ) -> tuple[list, list]:
         """返回 (character_updates, new_relationships) 补充列表。失败时返回空以不影响硬事实抽取。"""
-        prompt = self._build_soft_state_prompt(polished_text, primary)
+        prompt = await self._build_soft_state_prompt(polished_text, primary)
 
         try:
             payload = await call_and_parse_model(

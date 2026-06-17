@@ -526,6 +526,22 @@ async def test_librarian_persist_policy_events_are_logged(async_session, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_librarian_soft_state_uses_prompt_registry(async_session, monkeypatch):
+    from novel_dev.agents import librarian as lib_module
+    from novel_dev.services.prompt_registry import PromptRegistry
+
+    # Bootstrap a custom soft-state prompt
+    reg = PromptRegistry(async_session)
+    await reg.create_version(
+        "librarian_soft_state", "v1.0", "CUSTOM SOFT STATE PROMPT", is_active=True,
+    )
+
+    agent = lib_module.LibrarianAgent(async_session)
+    prompt = await agent._get_soft_state_prompt()
+    assert "CUSTOM SOFT STATE PROMPT" in prompt
+
+
+@pytest.mark.asyncio
 async def test_librarian_persist_policy_events_are_bounded_and_counted(async_session, monkeypatch):
     from novel_dev.repositories.entity_repo import EntityRepository
     from novel_dev.repositories.version_repo import EntityVersionRepository
