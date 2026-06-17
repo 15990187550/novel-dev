@@ -1501,3 +1501,58 @@ async def test_fast_review_blocks_librarian_when_continuity_audit_finds_hard_con
     assert state.current_phase == Phase.FAST_REVIEWING.value
     assert state.checkpoint_data["continuity_audit"]["status"] == "block"
     assert state.checkpoint_data["quality_gate"]["blocking_items"][0]["code"] == "continuity_audit"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_invokes_beat_coverage_validator(async_session):
+    from novel_dev.agents.fast_review_agent import FastReviewAgent
+    from novel_dev.services.beat_coverage_validator import BeatCoverageValidator
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    fake_result = MagicMock()
+    fake_result.beat_index = 0
+    fake_result.covered = False
+    fake_result.severity = "block"
+    fake_result.deviation = "forbidden material matched: ['追兵']"
+    fake_result.to_issue_code = MagicMock(return_value="BEAT_BOUNDARY_VIOLATION")
+
+    fake_validator = MagicMock()
+    fake_validator.validate = AsyncMock(return_value=[fake_result])
+
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_beat_coverage",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 10},
+                "beats": [
+                    {
+                        "beat_index": 0,
+                        "must_cover": ["陆照"],
+                        "forbidden_materials": ["追兵"],
+                    }
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_beat_coverage",
+    )
+    await ChapterRepository(async_session).create("c_beat_coverage", "v1", 1, "Beat Coverage")
+    await ChapterRepository(async_session).update_text(
+        "c_beat_coverage",
+        raw_draft="陆照听见追兵的声音。",
+        polished_text="陆照听见追兵的声音。",
+    )
+
+    with patch('novel_dev.services.beat_coverage_validator.BeatCoverageValidator', return_value=fake_validator):
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_beat_coverage", "c_beat_coverage")
+
+    fake_validator.validate.assert_awaited_once()
+    # Check beat_coverage_results was set on report
+    assert hasattr(report, "beat_coverage_results")
+    assert len(report.beat_coverage_results) == 1
+    assert report.beat_coverage_results[0]["beat_index"] == 0
+    assert report.beat_coverage_results[0]["covered"] is False
+    assert report.beat_coverage_results[0]["severity"] == "block"

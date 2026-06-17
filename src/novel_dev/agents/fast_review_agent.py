@@ -30,7 +30,7 @@ from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.chapter_acceptance_service import ChapterAcceptanceService
 from novel_dev.services.chapter_obligation_service import ChapterObligationService
 from novel_dev.services.root_cause_analyzer import RootCauseAnalyzer
-from novel_dev.schemas.quality import QualityIssue
+from novel_dev.schemas.quality import BeatBoundaryCard, QualityIssue
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
 logger = logging.getLogger(__name__)
@@ -499,6 +499,33 @@ class FastReviewAgent:
                 ending_driver_candidates=self._ending_driver_candidates_from_context(checkpoint.get("chapter_context", {})),
                 acceptance_scope=checkpoint.get("acceptance_scope"),
             )
+            # Phase 4: BeatCoverageValidator
+            chapter_context = checkpoint.get("chapter_context", {})
+            beat_cards = [
+                BeatBoundaryCard(
+                    beat_index=b.get("beat_index", i),
+                    must_cover=b.get("must_cover", []),
+                    forbidden_materials=b.get("forbidden_materials", []),
+                )
+                for i, b in enumerate(chapter_context.get("beats", []))
+            ]
+            if beat_cards:
+                from novel_dev.config import settings
+                from novel_dev.services.beat_coverage_validator import BeatCoverageValidator
+                use_llm = bool(getattr(settings, "phase4_beat_coverage_use_llm", True))
+                validator = BeatCoverageValidator(self.session, use_llm=use_llm)
+                coverage = await validator.validate(beat_cards, polished)
+                for r in coverage:
+                    if r.severity == "block" and r.to_issue_code():
+                        gate.blocking_items.append({
+                            "code": r.to_issue_code(),
+                            "message": f"beat {r.beat_index}: {r.deviation}",
+                            "detail": {"beat_index": r.beat_index, "deviation": r.deviation},
+                        })
+                report.beat_coverage_results = [
+                    {"beat_index": r.beat_index, "covered": r.covered, "severity": r.severity}
+                    for r in coverage
+                ]
             continuity_audit = ContinuityAuditService.audit_chapter(
                 polished,
                 checkpoint.get("chapter_context", {}),
