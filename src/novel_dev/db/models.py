@@ -620,3 +620,44 @@ class ChapterQualityMetric(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), nullable=False
     )
+
+
+class ChapterSynopsis(Base):
+    __tablename__ = "chapter_synopsis"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    novel_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chapter_range_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    chapter_range_end: Mapped[int] = mapped_column(Integer, nullable=False)
+    narrative_prose: Mapped[str] = mapped_column(Text, nullable=False)
+    structured_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    trigger_event: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    prev_synopsis_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    analyzer_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1.0")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ThrillPoint(Base):
+    __tablename__ = "thrill_points"
+    __table_args__ = (Index("ix_thrill_points_chapter", "chapter_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    novel_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chapter_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    beat_idx: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    thrill_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    intensity: Mapped[str] = mapped_column(String(16), nullable=False)
+    evidence_quote: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    planner_predicted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fast_review_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ImageryInventory(Base):
+    __tablename__ = "imagery_inventory"
+    __table_args__ = (Index("ix_imagery_inventory_novel_chapter", "novel_id", "chapter_id"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    novel_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    chapter_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    item: Mapped[str] = mapped_column(String(255), nullable=False)
+    item_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    frequency_in_chapter: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    extracted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
