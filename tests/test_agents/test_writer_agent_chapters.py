@@ -54,7 +54,7 @@ async def test_multi_message_prompt_structure(async_session):
     await director.save_checkpoint(
         "novel_test_multi",
         phase=Phase.DRAFTING,
-        checkpoint_data={"chapter_context": context.model_dump()},
+        checkpoint_data={"chapter_context": context.model_dump(), "drafting_mode": "whole_chapter"},
         volume_id="vol_1",
         chapter_id="ch_multi",
     )
@@ -182,7 +182,7 @@ async def test_writer_prompt_carries_story_contract_goal(async_session):
     await director.save_checkpoint(
         "novel_test_contract",
         phase=Phase.DRAFTING,
-        checkpoint_data={"chapter_context": context.model_dump()},
+        checkpoint_data={"chapter_context": context.model_dump(), "drafting_mode": "whole_chapter"},
         volume_id="vol_1",
         chapter_id="ch_contract",
     )

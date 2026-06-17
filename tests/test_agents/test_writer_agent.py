@@ -66,7 +66,7 @@ async def test_write_draft_success(async_session):
     await director.save_checkpoint(
         "novel_test",
         phase=Phase.DRAFTING,
-        checkpoint_data={"chapter_context": context.model_dump()},
+        checkpoint_data={"chapter_context": context.model_dump(), "drafting_mode": "whole_chapter"},
         volume_id="vol_1",
         chapter_id="ch_1",
     )
@@ -147,6 +147,7 @@ async def test_longform_write_generates_whole_chapter_once(async_session):
         checkpoint_data={
             "chapter_context": context.model_dump(),
             "acceptance_scope": "real-longform-volume1",
+            "drafting_mode": "whole_chapter",
         },
         volume_id="vol_1",
         chapter_id="vol_1_ch_3",
@@ -209,7 +210,7 @@ async def test_write_generates_whole_chapter_by_default(async_session):
     await director.save_checkpoint(
         "novel_default_whole_chapter",
         phase=Phase.DRAFTING,
-        checkpoint_data={"chapter_context": context.model_dump()},
+        checkpoint_data={"chapter_context": context.model_dump(), "drafting_mode": "whole_chapter"},
         volume_id="vol_1",
         chapter_id="ch_default_whole",
     )
@@ -1516,6 +1517,7 @@ async def test_write_resets_stale_resume_progress_when_chapter_has_no_draft(asyn
             "chapter_context": context.model_dump(),
             "drafting_progress": {"beat_index": 3, "total_beats": 3, "current_word_count": 9999},
             "relay_history": [{"scene_state": "stale"}],
+            "drafting_mode": "whole_chapter",
         },
         volume_id="vol_1",
         chapter_id="ch_resume_reset",
