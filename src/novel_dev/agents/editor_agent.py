@@ -15,6 +15,11 @@ from novel_dev.services.log_service import agent_step, logged_agent_step, log_se
 from novel_dev.services.chapter_structure_guard_service import ChapterStructureGuardService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.prompt_registry import PromptRegistry
+
+
+class ChapterRewriteTriggered(Exception):
+    """Raised by _guard_editor_beat when structure guard fail-closed triggers a chapter rewrite."""
+    pass
 from novel_dev.services.story_quality_service import StoryQualityService
 from novel_dev.prompting.style_contract import StyleContractCompiler
 
@@ -127,152 +132,161 @@ class EditorAgent:
         polished_beats = []
         repair_task_outcomes: dict[tuple, dict[str, int]] = {}
         flow_control = FlowControlService(self.session)
-        for idx, beat_text in enumerate(beats):
-            await flow_control.raise_if_cancelled(novel_id)
-            logical_beat_index = None if whole_chapter_unit else idx
-            score_entry = self._score_entry_for_edit_unit(beat_scores, idx, whole_chapter_unit)
-            scores = score_entry.get("scores", {})
-            beat_level_issues = score_entry.get("issues", []) or []
-            chapter_issues = [] if whole_chapter_unit else issues_by_beat.get(idx, [])
-            beat_repair_tasks = (
-                self._repair_tasks_for_whole_chapter(repair_tasks)
-                if whole_chapter_unit
-                else self._repair_tasks_for_beat(repair_tasks, idx)
-            )
-            self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
-            all_issues = (
-                chapter_issues
-                + beat_level_issues
-                + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
-            )
-            hygiene_issues = self._prose_hygiene_issues(beat_text, logical_beat_index, chapter_context)
-            all_issues += hygiene_issues
-
-            # 章末钩子弱时强制改最后一个 beat,并注入一条章末改写指引
-            is_forced_last = force_last_beat_rewrite and idx == last_idx
-            if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
-                all_issues = all_issues + [{
-                    "dim": "hook_strength",
-                    "beat_idx": last_idx,
-                    "problem": f"章末钩子评分 {hook_score} 低于 {CRITICAL_HOOK_MIN_SCORE},结尾未能让读者想读下一章",
-                    "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
-                }]
-
-            needs_rewrite = (
-                any(s < 70 for s in scores.values())
-                or bool(all_issues)
-                or (whole_chapter_unit and bool(whole_chapter_issues))
-                or is_forced_last
-                or force_continuity_rewrite
-            )
-            if needs_rewrite:
-                log_agent_detail(
-                    novel_id,
-                    "EditorAgent",
-                    f"节拍 {idx + 1} 需要改写",
-                    node="polish_beat_decision",
-                    task="polish",
-                    status="started",
-                    metadata={
-                        "beat_index": logical_beat_index,
-                        "edit_unit": "whole_chapter" if whole_chapter_unit else "beat",
-                        "source_chars": len(beat_text),
-                        "scores": scores,
-                        "low_dimensions": [dim for dim, score in scores.items() if score < 70],
-                        "issues": all_issues[:12],
-                        "whole_chapter_issues": whole_chapter_issues[:6],
-                        "forced_last_beat": is_forced_last,
-                    },
+        rewrite_triggered = False
+        try:
+            for idx, beat_text in enumerate(beats):
+                await flow_control.raise_if_cancelled(novel_id)
+                logical_beat_index = None if whole_chapter_unit else idx
+                score_entry = self._score_entry_for_edit_unit(beat_scores, idx, whole_chapter_unit)
+                scores = score_entry.get("scores", {})
+                beat_level_issues = score_entry.get("issues", []) or []
+                chapter_issues = [] if whole_chapter_unit else issues_by_beat.get(idx, [])
+                beat_repair_tasks = (
+                    self._repair_tasks_for_whole_chapter(repair_tasks)
+                    if whole_chapter_unit
+                    else self._repair_tasks_for_beat(repair_tasks, idx)
                 )
-                async with agent_step(
-                    novel_id,
-                    "EditorAgent",
-                    f"改写第 {idx + 1} 个节拍",
-                    node="polish_beat",
-                    task="polish_beat",
-                    metadata={"beat_index": logical_beat_index, "source_words": len(beat_text)},
-                ):
-                    polished = await self._rewrite_beat(
-                        beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
-                        chapter_id=chapter_id,
+                self._record_repair_tasks_selected(repair_task_outcomes, beat_repair_tasks)
+                all_issues = (
+                    chapter_issues
+                    + beat_level_issues
+                    + [self._repair_task_to_issue(task) for task in beat_repair_tasks]
+                )
+                hygiene_issues = self._prose_hygiene_issues(beat_text, logical_beat_index, chapter_context)
+                all_issues += hygiene_issues
+
+                # 章末钩子弱时强制改最后一个 beat,并注入一条章末改写指引
+                is_forced_last = force_last_beat_rewrite and idx == last_idx
+                if is_forced_last and not any(it.get("dim") == "hook_strength" for it in all_issues):
+                    all_issues = all_issues + [{
+                        "dim": "hook_strength",
+                        "beat_idx": last_idx,
+                        "problem": f"章末钩子评分 {hook_score} 低于 {CRITICAL_HOOK_MIN_SCORE},结尾未能让读者想读下一章",
+                        "suggestion": "改写章末,先判断这一段最自然的牵引来源,让读者的关注点发生推进。",
+                    }]
+
+                needs_rewrite = (
+                    any(s < 70 for s in scores.values())
+                    or bool(all_issues)
+                    or (whole_chapter_unit and bool(whole_chapter_issues))
+                    or is_forced_last
+                    or force_continuity_rewrite
+                )
+                if needs_rewrite:
+                    log_agent_detail(
+                        novel_id,
+                        "EditorAgent",
+                        f"节拍 {idx + 1} 需要改写",
+                        node="polish_beat_decision",
+                        task="polish",
+                        status="started",
+                        metadata={
+                            "beat_index": logical_beat_index,
+                            "edit_unit": "whole_chapter" if whole_chapter_unit else "beat",
+                            "source_chars": len(beat_text),
+                            "scores": scores,
+                            "low_dimensions": [dim for dim, score in scores.items() if score < 70],
+                            "issues": all_issues[:12],
+                            "whole_chapter_issues": whole_chapter_issues[:6],
+                            "forced_last_beat": is_forced_last,
+                        },
                     )
-                if not whole_chapter_unit:
-                    polished = await self._guard_editor_beat(
-                        novel_id=novel_id,
-                        chapter_context=chapter_context,
-                        beat_index=idx,
-                        source_text=beat_text,
-                        polished_text=polished,
-                        checkpoint=checkpoint,
-                        retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
-                            source_text=beat_text,
-                            scores=scores,
-                            guard_evidence=evidence,
-                            whole_chapter_issues=whole_chapter_issues,
+                    async with agent_step(
+                        novel_id,
+                        "EditorAgent",
+                        f"改写第 {idx + 1} 个节拍",
+                        node="polish_beat",
+                        task="polish_beat",
+                        metadata={"beat_index": logical_beat_index, "source_words": len(beat_text)},
+                    ):
+                        polished = await self._rewrite_beat(
+                            beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                            chapter_id=chapter_id,
+                        )
+                    if not whole_chapter_unit:
+                        polished = await self._guard_editor_beat(
+                            novel_id=novel_id,
+                            chapter_id=chapter_id,
                             chapter_context=chapter_context,
-                        ),
-                    )
-                polished = self._clean_text_integrity_fragments(polished)
-                log_agent_detail(
-                    novel_id,
-                    "EditorAgent",
-                    f"节拍 {idx + 1} 改写完成：{len(beat_text)}→{len(polished)} 字",
-                    node="polish_beat_result",
-                    task="polish",
-                    metadata={
-                        "beat_index": logical_beat_index,
-                        "source_chars": len(beat_text),
-                        "polished_chars": len(polished),
-                        "preview": preview_text(polished, 300),
-                    },
-                )
-            else:
-                log_agent_detail(
-                    novel_id,
-                    "EditorAgent",
-                    f"节拍 {idx + 1} 无需改写",
-                    node="polish_beat_decision",
-                    task="polish",
-                    metadata={
-                        "beat_index": logical_beat_index,
-                        "source_chars": len(beat_text),
-                        "scores": scores,
-                        "issue_count": len(all_issues),
-                    },
-                )
-                polished = beat_text
-            polished = self._clean_text_integrity_fragments(polished)
-            if beat_repair_tasks and polished != beat_text:
-                unfinished_tasks = [
-                    task for task in beat_repair_tasks
-                    if not self._repair_task_completed_by_text(task, beat_text, polished)
-                ]
-                if unfinished_tasks:
-                    polished = await self._retry_unfinished_repair_tasks(
-                        source_text=beat_text,
-                        polished_text=polished,
-                        unfinished_tasks=unfinished_tasks,
-                        chapter_context=chapter_context,
-                    )
+                            beat_index=idx,
+                            source_text=beat_text,
+                            polished_text=polished,
+                            checkpoint=checkpoint,
+                            retry_factory=lambda evidence, idx=idx, beat_text=beat_text, scores=scores: self._retry_rewrite_beat_after_guard(
+                                source_text=beat_text,
+                                scores=scores,
+                                guard_evidence=evidence,
+                                whole_chapter_issues=whole_chapter_issues,
+                                chapter_context=chapter_context,
+                            ),
+                        )
                     polished = self._clean_text_integrity_fragments(polished)
-                completed = all(
-                    self._repair_task_completed_by_text(task, beat_text, polished)
-                    for task in beat_repair_tasks
-                )
-                if completed:
-                    self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
-                checkpoint.setdefault("repair_history", []).append(
-                    self._build_repair_history_entry(
-                        logical_beat_index,
-                        beat_repair_tasks,
-                        beat_text,
-                        polished,
-                        completed=completed,
-                        attempt=checkpoint.get("edit_attempt_count"),
+                    log_agent_detail(
+                        novel_id,
+                        "EditorAgent",
+                        f"节拍 {idx + 1} 改写完成：{len(beat_text)}→{len(polished)} 字",
+                        node="polish_beat_result",
+                        task="polish",
+                        metadata={
+                            "beat_index": logical_beat_index,
+                            "source_chars": len(beat_text),
+                            "polished_chars": len(polished),
+                            "preview": preview_text(polished, 300),
+                        },
                     )
-                )
-            polished_beats.append(polished)
-            await flow_control.raise_if_cancelled(novel_id)
+                else:
+                    log_agent_detail(
+                        novel_id,
+                        "EditorAgent",
+                        f"节拍 {idx + 1} 无需改写",
+                        node="polish_beat_decision",
+                        task="polish",
+                        metadata={
+                            "beat_index": logical_beat_index,
+                            "source_chars": len(beat_text),
+                            "scores": scores,
+                            "issue_count": len(all_issues),
+                        },
+                    )
+                    polished = beat_text
+                polished = self._clean_text_integrity_fragments(polished)
+                if beat_repair_tasks and polished != beat_text:
+                    unfinished_tasks = [
+                        task for task in beat_repair_tasks
+                        if not self._repair_task_completed_by_text(task, beat_text, polished)
+                    ]
+                    if unfinished_tasks:
+                        polished = await self._retry_unfinished_repair_tasks(
+                            source_text=beat_text,
+                            polished_text=polished,
+                            unfinished_tasks=unfinished_tasks,
+                            chapter_context=chapter_context,
+                        )
+                        polished = self._clean_text_integrity_fragments(polished)
+                    completed = all(
+                        self._repair_task_completed_by_text(task, beat_text, polished)
+                        for task in beat_repair_tasks
+                    )
+                    if completed:
+                        self._record_repair_tasks_changed(repair_task_outcomes, beat_repair_tasks)
+                    checkpoint.setdefault("repair_history", []).append(
+                        self._build_repair_history_entry(
+                            logical_beat_index,
+                            beat_repair_tasks,
+                            beat_text,
+                            polished,
+                            completed=completed,
+                            attempt=checkpoint.get("edit_attempt_count"),
+                        )
+                    )
+                polished_beats.append(polished)
+                await flow_control.raise_if_cancelled(novel_id)
+        except ChapterRewriteTriggered:
+            rewrite_triggered = True
+
+        if rewrite_triggered:
+            log_service.add_log(novel_id, "EditorAgent", "结构守卫失败闭门触发章节重写，跳过保存润色结果")
+            return
 
         polished_text = "\n\n".join(polished_beats)
         await self.chapter_repo.update_text(chapter_id, polished_text=polished_text)
@@ -389,6 +403,7 @@ class EditorAgent:
                 if not whole_chapter_unit:
                     polished = await self._guard_editor_beat(
                         novel_id=novel_id,
+                        chapter_id=chapter_id,
                         chapter_context=chapter_context,
                         beat_index=idx,
                         source_text=beat_text,
@@ -454,6 +469,7 @@ class EditorAgent:
         self,
         *,
         novel_id: str,
+        chapter_id: str,
         chapter_context: dict,
         beat_index: int,
         source_text: str,
@@ -486,6 +502,16 @@ class EditorAgent:
             level="warning",
             metadata=evidence,
         )
+
+        # Phase 4 Task 5: 如果是失败闭门，触发章节重写
+        if not result.conservative_fallback:
+            from novel_dev.services.chapter_rewrite_service import ChapterRewriteService
+            rewrite_service = ChapterRewriteService(self.session)
+            await rewrite_service.trigger_rewrite_from_guard_failure(novel_id, chapter_id, result)
+            raise ChapterRewriteTriggered(
+                f"节拍 {beat_index + 1} 结构守卫失败闭门，章节重写已触发"
+            )
+
         if retry_factory is not None:
             retry_text = await retry_factory(evidence)
             retry_result = await self.structure_guard.check_editor_beat(
