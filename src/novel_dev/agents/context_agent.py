@@ -1283,6 +1283,13 @@ class ContextAgent:
     def _narrative_source_from_checkpoint(checkpoint: dict) -> str:
         if not isinstance(checkpoint, dict):
             return ""
+        # Phase 4: 优先读 rolling_synopsis_cache
+        cache = checkpoint.get("rolling_synopsis_cache")
+        if isinstance(cache, dict):
+            prose = cache.get("narrative_prose")
+            if prose:
+                return str(prose)[:5000]
+        # 降级到旧 keys
         for key in (
             "expanded_story",
             "compressed_story",

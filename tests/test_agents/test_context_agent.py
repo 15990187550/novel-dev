@@ -307,6 +307,19 @@ def test_context_agent_extracts_narrative_source_from_checkpoint(async_session):
     assert "旧简介" not in source
 
 
+def test_context_agent_prefers_rolling_synopsis_cache():
+    # Test the static method directly - no DB needed
+    text = ContextAgent._narrative_source_from_checkpoint({
+        "rolling_synopsis_cache": {
+            "narrative_prose": "ROLLING SYNOPSIS PROSE",
+            "structured_json": {},
+        },
+        "expanded_story": "OLD STATIC SYNOPSIS",  # should be ignored
+    })
+    assert "ROLLING SYNOPSIS PROSE" in text
+    assert "OLD STATIC SYNOPSIS" not in text
+
+
 @pytest.mark.asyncio
 async def test_load_location_context_uses_orchestrated_scene_tools_when_configured(async_session, monkeypatch):
     from novel_dev.db.models import Entity, EntityVersion, NovelState
