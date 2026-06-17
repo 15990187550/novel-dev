@@ -14,6 +14,7 @@ def test_build_cards_from_chapter_plan_beats():
                 "summary": "主角藏起旧信并试探来人",
                 "goal": "不暴露旧信",
                 "conflict": "来人要求搜屋",
+                "required_open_question": "来人是否知道旧信的存在?",
             },
         ]
     }
@@ -29,11 +30,18 @@ def test_build_cards_from_chapter_plan_beats():
 
 
 def test_build_cards_handles_string_beats():
-    cards = BeatBoundaryService.build_cards({"beats": ["发现旧信", "藏起旧信"]})
+    cards = BeatBoundaryService.build_cards({
+        "beats": [
+            "发现旧信",
+            {"summary": "藏起旧信", "required_open_question": "来人是否知道旧信?"},
+        ]
+    })
 
     assert len(cards) == 2
     assert cards[0].must_cover == ["发现旧信"]
     assert cards[0].reveal_boundary
+    assert cards[1].is_last_beat is True
+    assert cards[1].required_open_question == "来人是否知道旧信?"
 
 
 def test_build_cards_handles_non_list_beats_and_dedupes_allowed_materials():
@@ -52,6 +60,7 @@ def test_build_cards_handles_non_list_beats_and_dedupes_allowed_materials():
                     "props": ["旧信", {"content": "铜钥匙"}],
                     "locations": ["老屋"],
                     "foreshadowings": [{"summary": "脚步声伏笔"}],
+                    "required_open_question": "旧信里藏着什么秘密?",
                 }
             ],
         }
@@ -67,6 +76,8 @@ def test_build_cards_handles_non_list_beats_and_dedupes_allowed_materials():
         "铜钥匙",
         "脚步声伏笔",
     ]
+    assert cards[0].is_last_beat is True
+    assert cards[0].required_open_question == "旧信里藏着什么秘密?"
 
 
 def test_build_cards_includes_real_plan_material_keys():
@@ -79,6 +90,7 @@ def test_build_cards_includes_real_plan_material_keys():
                     "summary": "发现旧信",
                     "key_entities": [{"title": "旧信"}, {"content": "铜钥匙"}],
                     "foreshadowings_to_embed": ["窗缝冷风", {"summary": "墨迹未干"}],
+                    "required_open_question": "旧信为何出现在这里?",
                 }
             ],
         }
@@ -92,6 +104,8 @@ def test_build_cards_includes_real_plan_material_keys():
         "铜钥匙",
         "墨迹未干",
     ]
+    assert cards[0].is_last_beat is True
+    assert cards[0].required_open_question == "旧信为何出现在这里?"
 
 
 def test_build_cards_sanitizes_abstract_ending_driver_from_must_cover():
@@ -106,6 +120,7 @@ def test_build_cards_sanitizes_abstract_ending_driver_from_must_cover():
                     ),
                     "goal": "主角确认残页仍在手里",
                     "key_entities": ["主角", "残页", "功法阁"],
+                    "required_open_question": "残页里还藏着什么?",
                 }
             ]
         }
@@ -118,3 +133,5 @@ def test_build_cards_sanitizes_abstract_ending_driver_from_must_cover():
     assert "困境停点" not in combined
     assert "未解决的阻力" not in combined
     assert "下一步继续处理" not in combined
+    assert cards[0].is_last_beat is True
+    assert cards[0].required_open_question == "残页里还藏着什么?"

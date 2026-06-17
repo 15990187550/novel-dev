@@ -2453,3 +2453,87 @@ async def test_extract_chapter_plan_merges_foreshadowings(async_session):
     )
     cp = agent._extract_chapter_plan(vb)
     assert cp["beats"][0]["foreshadowings_to_embed"] == ["fs_1"]
+
+
+@pytest.mark.asyncio
+async def test_expand_volume_plan_batch_preserves_required_open_question(async_session):
+    """Last beat's required_open_question is preserved through parsing."""
+    agent = VolumePlannerAgent(async_session)
+    blueprint = VolumePlanBlueprint(
+        volume_id="vol_1",
+        volume_number=1,
+        title="第一卷",
+        summary="卷总述",
+        total_chapters=1,
+        estimated_total_words=3000,
+        chapters=[{"chapter_number": 1, "title": "逃出灵谷", "summary": "陆照逃出灵谷。"}],
+    )
+    synopsis = SynopsisData(
+        title="道经照诸天",
+        logline="陆照争夺超脱路径。",
+        core_conflict="陆照 vs 末劫幕后布局者",
+        estimated_volumes=1,
+        estimated_total_chapters=1,
+        estimated_total_words=3000,
+    )
+    batch_with_open_question = [
+        {
+            "chapter_number": 1,
+            "target_word_count": 3000,
+            "target_mood": "tense",
+            "beats": [
+                {"summary": "陆照在灵谷遇险", "target_mood": "紧张"},
+                {
+                    "summary": "陆照逃出灵谷",
+                    "target_mood": "紧张",
+                    "required_open_question": "山门外的人是谁?",
+                },
+            ],
+        }
+    ]
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=__import__("json").dumps(batch_with_open_question, ensure_ascii=False)
+    )
+
+    with patch("novel_dev.agents._llm_helpers.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        chapters = await agent._expand_volume_plan_batches(
+            blueprint,
+            synopsis,
+            world_snapshot=None,
+            novel_id="n_open_question",
+        )
+
+    assert len(chapters) == 1
+    last_beat = chapters[0].beats[-1]
+    assert hasattr(last_beat, "required_open_question"), "BeatPlan should have required_open_question field"
+    assert last_beat.required_open_question == "山门外的人是谁?"
+
+
+@pytest.mark.asyncio
+async def test_beat_boundary_service_sets_is_last_beat_and_preserves_open_question(async_session):
+    """BeatBoundaryService marks last beat is_last_beat=True and preserves required_open_question."""
+    from novel_dev.services.beat_boundary_service import BeatBoundaryService
+    from novel_dev.schemas.context import BeatPlan, ChapterPlan
+
+    # Simulate a chapter plan with required_open_question on the last beat
+    chapter_plan_dict = {
+        "chapter_number": 1,
+        "title": "逃出灵谷",
+        "target_word_count": 3000,
+        "beats": [
+            {"summary": "陆照在灵谷遇险", "target_mood": "紧张"},
+            {
+                "summary": "陆照逃出灵谷",
+                "target_mood": "紧张",
+                "required_open_question": "山门外的人是谁?",
+            },
+        ],
+    }
+    cards = BeatBoundaryService.build_cards(chapter_plan_dict)
+
+    assert len(cards) == 2
+    last_card = cards[-1]
+    assert last_card.is_last_beat is True, "Last beat should have is_last_beat=True"
+    assert last_card.required_open_question == "山门外的人是谁?"

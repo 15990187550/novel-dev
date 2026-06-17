@@ -44,6 +44,7 @@ class BeatBoundaryService:
         if not isinstance(beats, list):
             return []
 
+        total = len(beats)
         return [
             BeatBoundaryCard(
                 beat_index=index,
@@ -53,6 +54,8 @@ class BeatBoundaryService:
                 forbidden_materials=list(cls._FORBIDDEN_MATERIALS),
                 reveal_boundary=cls._REVEAL_BOUNDARY,
                 ending_policy=cls._ending_policy(beat),
+                is_last_beat=(index == total - 1),
+                required_open_question=beat.get("required_open_question") if isinstance(beat, dict) else None,
             )
             for index, beat in enumerate(beats)
         ]

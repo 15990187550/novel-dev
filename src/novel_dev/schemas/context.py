@@ -13,6 +13,7 @@ class BeatPlan(BaseModel):
     target_word_count: Optional[int] = None
     key_entities: List[str] = Field(default_factory=list)
     foreshadowings_to_embed: List[str] = Field(default_factory=list)
+    required_open_question: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod

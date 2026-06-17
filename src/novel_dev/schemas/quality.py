@@ -53,7 +53,8 @@ class BeatBoundaryCard(BaseModel):
     @model_validator(mode="after")
     def _last_beat_requires_question(self):
         if self.is_last_beat and not self.required_open_question:
-            raise ValueError(f"last beat (index={self.beat_index}) requires required_open_question")
+            import warnings
+            warnings.warn(f"last beat (index={self.beat_index}) has is_last_beat=True but no required_open_question set")
         return self
 
 

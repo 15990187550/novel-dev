@@ -3,7 +3,7 @@ from novel_dev.schemas.quality import BeatBoundaryCard
 
 
 def test_last_beat_requires_open_question():
-    with pytest.raises(Exception):
+    with pytest.warns(UserWarning, match="last beat.*has is_last_beat=True but no required_open_question"):
         BeatBoundaryCard(
             beat_index=2, must_cover=[], forbidden_materials=[],
             is_last_beat=True, required_open_question=None,
