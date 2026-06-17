@@ -116,7 +116,7 @@ async def test_write_standalone_passes_root_cause_segment_to_prompt(async_sessio
 
     segment = "## 上轮根因建议\n- summary: beat 2 越界"
 
-    async def fake_generate(self, *, novel_id, context, rewrite_plan, genre_template=None, root_cause_segment=""):
+    async def fake_generate(self, *, novel_id, context, rewrite_plan, genre_template=None, root_cause_segment="", chapter_id=""):
         captured["rewrite_plan"] = rewrite_plan
         captured["root_cause_segment"] = root_cause_segment
         # Build the user content to verify the segment is at the top

@@ -194,6 +194,7 @@ class EditorAgent:
                 ):
                     polished = await self._rewrite_beat(
                         beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                        chapter_id=chapter_id,
                     )
                 if not whole_chapter_unit:
                     polished = await self._guard_editor_beat(
@@ -383,6 +384,7 @@ class EditorAgent:
             if needs_rewrite:
                 polished = await self._rewrite_beat(
                     beat_text, scores, all_issues, whole_chapter_issues, chapter_context,
+                    chapter_id=chapter_id,
                 )
                 if not whole_chapter_unit:
                     polished = await self._guard_editor_beat(
@@ -560,6 +562,7 @@ class EditorAgent:
         issues: list,
         whole_chapter_issues: list,
         chapter_context: dict,
+        chapter_id: str = "",
     ) -> str:
         low_dims = [k for k, v in scores.items() if v < 70]
         issue_lines = []
@@ -641,7 +644,10 @@ class EditorAgent:
         issue_lines_str = "\n".join(issue_lines) if issue_lines else ""
         whole_lines_str = "\n".join(whole_lines) if whole_lines else ""
 
-        template = await self.prompt_registry.get_active("editor")
+        if chapter_id:
+            template = await self.prompt_registry.get_active_for_chapter("editor", chapter_id)
+        else:
+            template = await self.prompt_registry.get_active("editor")
         version = await self.prompt_registry.get_active_version_name("editor")
         prompt = render_prompt_template(
             template,

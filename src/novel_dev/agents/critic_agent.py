@@ -56,7 +56,7 @@ class CriticAgent:
         if not context_data:
             raise ValueError("chapter_context missing in checkpoint_data")
 
-        score_result = await self._generate_score(ch.raw_draft or "", context_data, novel_id)
+        score_result = await self._generate_score(ch.raw_draft or "", context_data, novel_id, chapter_id)
         log_agent_detail(
             novel_id,
             "CriticAgent",
@@ -266,7 +266,7 @@ class CriticAgent:
             "beat_issues": beat_issues,
         }
 
-    async def _generate_score(self, raw_draft: str, context_data: dict, novel_id: str = "") -> ScoreResult:
+    async def _generate_score(self, raw_draft: str, context_data: dict, novel_id: str = "", chapter_id: str = "") -> ScoreResult:
         log_agent_detail(
             novel_id,
             "CriticAgent",
@@ -296,7 +296,10 @@ class CriticAgent:
             "genre_quality_config": context_data.get("genre_quality_config", {}),
         }
         genre_block = await self._build_genre_review_block(novel_id, context_data)
-        template = await self.prompt_registry.get_active("critic")
+        if chapter_id:
+            template = await self.prompt_registry.get_active_for_chapter("critic", chapter_id)
+        else:
+            template = await self.prompt_registry.get_active("critic")
         version = await self.prompt_registry.get_active_version_name("critic")
         style_contract_segment = (style_contract + "\n\n") if style_contract else ""
         prompt = render_prompt_template(
@@ -353,7 +356,7 @@ class CriticAgent:
         ch = await self.chapter_repo.get_by_id(chapter_id)
         if not ch:
             raise ValueError(f"Chapter not found: {chapter_id}")
-        score_result = await self._generate_score(ch.raw_draft or "", context_data, novel_id)
+        score_result = await self._generate_score(ch.raw_draft or "", context_data, novel_id, chapter_id)
         beat_scores = await self._generate_beat_scores(context_data, novel_id)
         await self.chapter_repo.update_scores(
             chapter_id,

@@ -218,13 +218,17 @@ class FastReviewAgent:
         chapter_context: dict,
         novel_id: str = "",
         genre_prompt_block: str = "",
+        chapter_id: str = "",
     ) -> FastReviewLLMCheck:
         genre_section = f"### 类型模板约束\n{genre_prompt_block}\n\n" if genre_prompt_block.strip() else ""
         style_contract = StyleContractCompiler.compile(chapter_context.get("style_profile", {})).render_prompt_block()
         style_contract_segment = (style_contract + "\n\n") if style_contract else ""
         visible_context = dict(chapter_context)
         visible_context.pop("style_profile", None)
-        template = await self.prompt_registry.get_active("fast_review")
+        if chapter_id:
+            template = await self.prompt_registry.get_active_for_chapter("fast_review", chapter_id)
+        else:
+            template = await self.prompt_registry.get_active("fast_review")
         version = await self.prompt_registry.get_active_version_name("fast_review")
         prompt = render_prompt_template(
             template,
@@ -258,6 +262,7 @@ class FastReviewAgent:
         chapter_context: dict,
         novel_id: str = "",
         genre_prompt_block: str = "",
+        chapter_id: str = "",
     ) -> FastReviewLLMCheck:
         try:
             return await self._llm_check_consistency_and_cohesion(
@@ -266,6 +271,7 @@ class FastReviewAgent:
                 chapter_context,
                 novel_id,
                 genre_prompt_block,
+                chapter_id,
             )
         except Exception as exc:
             log_agent_detail(
@@ -414,6 +420,7 @@ class FastReviewAgent:
                 trimmed_context,
                 novel_id,
                 genre_prompt_block,
+                chapter_id,
             )
             consistency_fixed = llm_result.consistency_fixed
             beat_cohesion_ok = llm_result.beat_cohesion_ok
@@ -1324,6 +1331,7 @@ class FastReviewAgent:
                 trimmed_context,
                 novel_id,
                 genre_prompt_block,
+                chapter_id,
             )
             consistency_fixed = llm_result.consistency_fixed
             beat_cohesion_ok = llm_result.beat_cohesion_ok

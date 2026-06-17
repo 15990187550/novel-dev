@@ -200,6 +200,7 @@ class WriterAgent:
             beat_text = await self._generate_beat(
                 beat, context, relay_history, last_beat_text,
                 idx, total_beats, is_last, novel_id, rewrite_plan, genre_template=genre_template,
+                chapter_id=chapter_id,
             )
             inner = _strip_anchors(beat_text)
             if len(inner) < 50:
@@ -217,6 +218,7 @@ class WriterAgent:
                     novel_id,
                     rewrite_plan,
                     genre_template=genre_template,
+                    chapter_id=chapter_id,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -258,6 +260,7 @@ class WriterAgent:
                     novel_id,
                     rewrite_plan,
                     genre_template=genre_template,
+                    chapter_id=chapter_id,
                 )
                 beat_text = f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
@@ -452,6 +455,7 @@ class WriterAgent:
             rewrite_plan=rewrite_plan,
             genre_template=genre_template,
             root_cause_segment=root_cause_segment,
+            chapter_id=chapter_id,
         )
         raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
         beat_coverage = self._anchored_beat_coverage(raw_draft, context)
@@ -517,8 +521,9 @@ class WriterAgent:
         rewrite_plan: dict | None,
         genre_template=None,
         root_cause_segment: str = "",
+        chapter_id: str = "",
     ) -> str:
-        system_prompt = await self._build_system_prompt(context, True, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, True, genre_template=genre_template, chapter_id=chapter_id)
         user_content = self._build_whole_chapter_context_message(
             context, rewrite_plan, root_cause_segment=root_cause_segment
         )
@@ -566,6 +571,7 @@ class WriterAgent:
             rewrite_plan=rewrite_plan,
             genre_template=genre_template,
             root_cause_segment=root_cause_segment,
+            chapter_id=chapter_id,
         )
         raw_draft = self._normalize_whole_chapter_output(raw_draft, context)
         clean_text = _strip_anchors(raw_draft)
@@ -612,6 +618,7 @@ class WriterAgent:
         novel_id: str = "",
         rewrite_plan: dict | None = None,
         genre_template=None,
+        chapter_id: str = "",
     ) -> str:
         if genre_template is None and novel_id:
             genre_template = await GenreTemplateService(self.session).resolve(
@@ -619,7 +626,7 @@ class WriterAgent:
                 "WriterAgent",
                 "generate_beat",
             )
-        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template, chapter_id=chapter_id)
         context_msg = self._build_context_message(
             beat, context, relay_history, last_beat_text, idx, total, is_last, rewrite_plan
         )
@@ -650,7 +657,7 @@ class WriterAgent:
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-    async def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None) -> str:
+    async def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None, chapter_id: str = "") -> str:
         """Layer 1: Rules. Goes in system message for highest LLM priority."""
         genre_block = ""
         if genre_template is not None:
@@ -663,7 +670,10 @@ class WriterAgent:
         # Load the writer system-prompt template from the registry; cold-start
         # fallback (hardcoded default) is handled by PromptRegistry.get_active()
         # if the table is empty.
-        template = await self.prompt_registry.get_active("writer")
+        if chapter_id:
+            template = await self.prompt_registry.get_active_for_chapter("writer", chapter_id)
+        else:
+            template = await self.prompt_registry.get_active("writer")
         return render_prompt_template(
             template,
             style_guide_block=self._build_style_guide_block(context),
@@ -1615,6 +1625,7 @@ class WriterAgent:
             novel_id,
             guard_rewrite_plan,
             genre_template=genre_template,
+            chapter_id=chapter_id,
         )
         retry = await self.structure_guard.check_writer_beat(
             novel_id=novel_id,
@@ -2382,6 +2393,7 @@ class WriterAgent:
         novel_id: str = "",
         rewrite_plan: dict | None = None,
         genre_template=None,
+        chapter_id: str = "",
     ) -> str:
         if genre_template is None and novel_id:
             genre_template = await GenreTemplateService(self.session).resolve(
@@ -2389,7 +2401,7 @@ class WriterAgent:
                 "WriterAgent",
                 "rewrite_beat",
             )
-        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template)
+        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template, chapter_id=chapter_id)
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
             idx, total, is_last, rewrite_plan,

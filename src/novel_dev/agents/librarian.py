@@ -124,8 +124,11 @@ class LibrarianAgent:
             "current_tick": current_tick,
         }
 
-    async def _build_prompt(self, polished_text: str, context: dict) -> str:
-        template = await self.prompt_registry.get_active("librarian")
+    async def _build_prompt(self, polished_text: str, context: dict, chapter_id: str = "") -> str:
+        if chapter_id:
+            template = await self.prompt_registry.get_active_for_chapter("librarian", chapter_id)
+        else:
+            template = await self.prompt_registry.get_active("librarian")
         version = await self.prompt_registry.get_active_version_name("librarian")
         prompt = render_prompt_template(
             template,
@@ -213,7 +216,7 @@ class LibrarianAgent:
             },
         )
         context = await self._load_context(novel_id, chapter_id)
-        prompt = await self._build_prompt(polished_text, context)
+        prompt = await self._build_prompt(polished_text, context, chapter_id)
         extraction = await call_and_parse_model(
             "LibrarianAgent",
             "extract",

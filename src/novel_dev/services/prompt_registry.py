@@ -105,3 +105,11 @@ class PromptRegistry:
     async def get_active_version_name(self, agent_name: str) -> str:
         pv = await self.repo.get_active(agent_name)
         return pv.version if pv else "v1.0"
+
+    async def get_active_for_chapter(self, agent_name: str, chapter_id: str) -> str:
+        from novel_dev.services.ab_test_runner import ABTestRunner
+        runner = ABTestRunner(self.session)
+        version = await runner.pick_version(agent_name, chapter_id)
+        if version:
+            return await self.get_by_version(agent_name, version)
+        return await self.get_active(agent_name)

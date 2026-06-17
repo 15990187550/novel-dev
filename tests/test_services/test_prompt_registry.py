@@ -135,3 +135,27 @@ async def test_increment_sample_count(async_session):
     from novel_dev.repositories.prompt_version_repo import PromptVersionRepository
     pv = await PromptVersionRepository(async_session).get_by_version("writer", "v1.0")
     assert pv.sample_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_active_for_chapter_no_ab_returns_active_version(async_session):
+    reg = PromptRegistry(async_session)
+    await reg.create_version("writer", "v1.0", "v1 content", is_active=True)
+    content = await reg.get_active_for_chapter("writer", "ch_1")
+    assert content == "v1 content"
+
+
+@pytest.mark.asyncio
+async def test_get_active_for_chapter_routes_via_ab_when_running(async_session):
+    from novel_dev.services.ab_test_runner import ABTestRunner
+    reg = PromptRegistry(async_session)
+    await reg.create_version("writer", "v1.0", "v1 content", is_active=True)
+    await reg.create_version("writer", "v2.0", "v2 content")
+    runner = ABTestRunner(async_session)
+    await runner.start("writer", "v1.0", "v2.0", max_samples=10, min_samples=3)
+
+    picked = set()
+    for i in range(100):
+        c = await reg.get_active_for_chapter("writer", f"ch_{i}")
+        picked.add(c)
+    assert picked == {"v1 content", "v2 content"}
