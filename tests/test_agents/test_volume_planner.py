@@ -2581,3 +2581,189 @@ async def test_beat_boundary_service_sets_is_last_beat_and_preserves_open_questi
     last_card = cards[-1]
     assert last_card.is_last_beat is True, "Last beat should have is_last_beat=True"
     assert last_card.required_open_question == "山门外的人是谁?"
+
+
+@pytest.mark.asyncio
+async def test_load_cheat_carriers_returns_only_entities_with_cheat_ability(async_session):
+    from novel_dev.db.models import Entity
+
+    # Two characters: one with cheat_ability, one without. Both scoped to the
+    # target novel so list_by_novel() picks them up.
+    novel_id = "novel_cheat_test"
+    async_session.add(
+        Entity(
+            id="e_with_cheat",
+            type="character",
+            name="陆照",
+            novel_id=novel_id,
+            cheat_ability="残玉空间 + 时间倒流",
+            cheat_activation_rules=["子时触摸玉佩"],
+            cheat_first_activation_chapter="ch_3",
+        )
+    )
+    async_session.add(
+        Entity(id="e_no_cheat", type="character", name="师姐", novel_id=novel_id)
+    )
+    await async_session.flush()
+
+    agent = VolumePlannerAgent(async_session)
+    carriers = await agent._load_cheat_carriers(novel_id)
+
+    assert len(carriers) == 1
+    assert carriers[0]["name"] == "陆照"
+    assert carriers[0]["ability"] == "残玉空间 + 时间倒流"
+    assert carriers[0]["rules"] == ["子时触摸玉佩"]
+    assert carriers[0]["first_activation_chapter"] == "ch_3"
+
+
+def test_enforce_cheat_activation_marks_chapter_when_carrier_appears_after_threshold():
+    """Post-process: if a cheat carrier's first_activation_chapter has been
+    reached and the chapter's key_entities include the carrier, mark
+    `cheat_activated=True` + populate the ability + beat_idx."""
+    agent = VolumePlannerAgent.__new__(VolumePlannerAgent)  # bypass __init__
+    chapters = [
+        VolumeBeat(
+            chapter_id="ch_3",
+            chapter_number=3,
+            title="道经初醒",
+            summary="陆照触动玉佩，金手指显形。",
+            target_word_count=2000,
+            target_mood="紧张",
+            key_entities=["陆照"],
+            beats=[
+                BeatPlan(summary="陆照摸索玉佩", target_mood="紧张", key_entities=["陆照"]),
+                BeatPlan(summary="玉佩内时间倒流", target_mood="震惊", key_entities=["陆照"]),
+            ],
+        ),
+        VolumeBeat(
+            chapter_id="ch_2",
+            chapter_number=2,
+            title="灵谷寻药",
+            summary="陆照潜入药库。",
+            target_word_count=2000,
+            target_mood="紧张",
+            key_entities=["陆照"],
+            beats=[BeatPlan(summary="陆照在药库被执事发现", target_mood="紧张", key_entities=["陆照"])],
+        ),
+    ]
+    carriers = [
+        {
+            "id": "e_luzhao",
+            "name": "陆照",
+            "ability": "残玉空间 + 时间倒流",
+            "rules": ["子时触摸玉佩"],
+            "first_activation_chapter": "ch_3",
+        }
+    ]
+
+    updated = agent._enforce_cheat_activation(chapters, carriers, novel_id="n_cheat")
+
+    # Chapter 3: threshold reached, carrier appears -> marked activated
+    assert updated[0].cheat_activated is True
+    assert updated[0].cheat_activated_ability == "残玉空间 + 时间倒流"
+    assert updated[0].cheat_activated_beat_idx == 0
+    # Chapter 2: before threshold -> must NOT be marked activated
+    assert updated[1].cheat_activated is False
+    assert updated[1].cheat_activated_ability == ""
+    assert updated[1].cheat_activated_beat_idx is None
+
+
+def test_enforce_cheat_activation_preserves_llm_filled_fields():
+    """If the LLM has already populated cheat_activated fields, do not overwrite them."""
+    agent = VolumePlannerAgent.__new__(VolumePlannerAgent)
+    chapters = [
+        VolumeBeat(
+            chapter_id="ch_4",
+            chapter_number=4,
+            title="空间显形",
+            summary="陆照开启残玉空间。",
+            target_word_count=2000,
+            target_mood="高燃",
+            key_entities=["陆照"],
+            cheat_activated=True,
+            cheat_activated_ability="原文描述的能力",
+            cheat_activated_beat_idx=1,
+            beats=[BeatPlan(summary="陆照对着玉佩屏息", target_mood="紧张", key_entities=["陆照"])],
+        ),
+    ]
+    carriers = [
+        {
+            "id": "e_luzhao",
+            "name": "陆照",
+            "ability": "残玉空间 + 时间倒流",
+            "rules": [],
+            "first_activation_chapter": "ch_3",
+        }
+    ]
+
+    updated = agent._enforce_cheat_activation(chapters, carriers, novel_id="n_cheat_2")
+
+    assert updated[0].cheat_activated is True
+    # LLM-provided value preserved (not overwritten by carrier default)
+    assert updated[0].cheat_activated_ability == "原文描述的能力"
+    assert updated[0].cheat_activated_beat_idx == 1
+
+
+def test_enforce_cheat_activation_with_no_carriers_is_passthrough():
+    agent = VolumePlannerAgent.__new__(VolumePlannerAgent)
+    chapters = [
+        VolumeBeat(
+            chapter_id="ch_1",
+            chapter_number=1,
+            title="开篇",
+            summary="无名少年。",
+            target_word_count=2000,
+            target_mood="紧张",
+            key_entities=["无名"],
+            beats=[BeatPlan(summary="少年睁眼", target_mood="紧张", key_entities=["无名"])],
+        )
+    ]
+    updated = agent._enforce_cheat_activation(chapters, [], novel_id="n_none")
+    assert updated == chapters
+    assert updated[0].cheat_activated is False
+
+
+def test_coerce_chapter_index_parses_various_formats():
+    agent = VolumePlannerAgent.__new__(VolumePlannerAgent)
+    assert agent._coerce_chapter_index("ch_3") == 3
+    assert agent._coerce_chapter_index("vol_1_ch_12") == 12
+    assert agent._coerce_chapter_index(" 7 ") == 7
+    assert agent._coerce_chapter_index("12") == 12
+    assert agent._coerce_chapter_index("") is None
+    assert agent._coerce_chapter_index(None) is None
+
+
+def test_volume_beat_includes_cheat_fields():
+    """Schema parity: VolumeBeat now carries the cheat_activated* fields."""
+    chapter = VolumeBeat(
+        chapter_id="ch_1",
+        chapter_number=1,
+        title="启程",
+        summary="陆照入局。",
+        target_word_count=2000,
+        target_mood="紧张",
+    )
+    assert hasattr(chapter, "cheat_activated")
+    assert hasattr(chapter, "cheat_activated_ability")
+    assert hasattr(chapter, "cheat_activated_beat_idx")
+    assert chapter.cheat_activated is False
+    assert chapter.cheat_activated_ability == ""
+    assert chapter.cheat_activated_beat_idx is None
+
+
+def test_volume_beat_expansion_includes_cheat_fields():
+    """Schema parity: VolumeBeatExpansion also carries the cheat_activated* fields."""
+    expansion = VolumeBeatExpansion(
+        chapter_id="ch_5",
+        chapter_number=5,
+        title="空间开启",
+        summary="陆照残玉空间首次展开。",
+        target_word_count=3000,
+        target_mood="高燃",
+        cheat_activated=True,
+        cheat_activated_ability="残玉空间 + 时间倒流",
+        cheat_activated_beat_idx=2,
+    )
+    assert expansion.cheat_activated is True
+    assert expansion.cheat_activated_ability == "残玉空间 + 时间倒流"
+    assert expansion.cheat_activated_beat_idx == 2

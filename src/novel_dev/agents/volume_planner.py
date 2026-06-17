@@ -264,6 +264,9 @@ class VolumeBeatExpansion(BaseModel):
     foreshadowings_to_recover: list[str] = Field(default_factory=list)
     expected_thrills: list[ExpectedThrill] = Field(default_factory=list)
     beats: list[BeatPlan] = Field(default_factory=list)
+    cheat_activated: bool = False
+    cheat_activated_ability: str = ""
+    cheat_activated_beat_idx: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -964,6 +967,14 @@ class VolumePlannerAgent:
                 f"未回收伏笔(本卷内应考虑回收部分):\n{world_snapshot.get('foreshadowings', '无')}\n"
                 f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
             )
+            cheat_carriers_text = (world_snapshot.get("cheat_carriers") or "").strip()
+            if cheat_carriers_text:
+                world_block = (
+                    world_block
+                    + "\n金手指角色(本章如登场须在 key_entities 写入名字,并按首次激活章标记):\n"
+                    + cheat_carriers_text
+                    + "\n"
+                )
         instruction_block = (
             "\n\n### 本次重新生成要求\n"
             f"{generation_instruction.strip()[:1200]}\n"
@@ -1103,6 +1114,14 @@ class VolumePlannerAgent:
             genre_prompt_block=genre_prompt_block,
             novel_id=novel_id,
         )
+        # 金手指激活标记:在卷纲生成后、组装 VolumePlan 之前,
+        # 根据数据库中携带 cheat_ability 的实体把对应章节标为已激活,
+        # 漏标则记录 cheat_marker 警告供后续 FastReview 与人工核验使用。
+        cheat_carriers = await self._load_cheat_carriers(novel_id)
+        if cheat_carriers:
+            detailed_chapters = self._enforce_cheat_activation(
+                detailed_chapters, cheat_carriers, novel_id=novel_id
+            )
         result = VolumePlan(
             volume_id=blueprint.volume_id,
             volume_number=blueprint.volume_number,
@@ -2068,6 +2087,14 @@ class VolumePlannerAgent:
                 f"未回收伏笔:\n{world_snapshot.get('foreshadowings', '无')}\n"
                 f"已推进时间线:\n{world_snapshot.get('timeline', '无')}\n"
             )
+            cheat_carriers_text = (world_snapshot.get("cheat_carriers") or "").strip()
+            if cheat_carriers_text:
+                world_block = (
+                    world_block
+                    + "金手指角色(若本批章节登场须写入 key_entities 并按下方规则标记):\n"
+                    + cheat_carriers_text
+                    + "\n"
+                )
         genre_block = f"\n\n### 类型模板约束\n{genre_prompt_block}" if genre_prompt_block.strip() else ""
         return (
             "你是一位小说分卷规划专家。请根据给定的卷纲骨架，补全一批章节的详细 VolumeBeatExpansion 数组。"
@@ -2094,6 +2121,14 @@ class VolumePlannerAgent:
             "强度: low / medium / high / peak\n"
             "示例: [{\"thrill_type\": \"face_slap\", \"intensity\": \"high\", \"beat_idx\": 2}, "
             "{\"thrill_type\": \"revelation\", \"intensity\": \"medium\", \"beat_idx\": 1}]。\n\n"
+            "## cheat 激活标记\n"
+            "如果金手指角色(cheat_carriers)出现在本章 key_entities 或任一 beat 的 key_entities 中,"
+            "且本章 chapter_number >= 该角色首次激活章,必须额外输出以下 3 个字段(数值/字符串):\n"
+            "- cheat_activated: true\n"
+            "- cheat_activated_ability: 该金手指的机制描述(原文照抄 cheat_carriers 里的 ability)\n"
+            "- cheat_activated_beat_idx: 0 开始的 beat 下标,标识具体在哪一拍首次明显呈现该能力\n"
+            "如果该章确实不涉及激活(如回忆/梦境/未公开登场),输出 cheat_activated: false 留空其它字段。"
+            "切勿给未到激活章的章节写 cheat_activated=true。\n\n"
             f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
             f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
             f"{constraint_block}\n\n"
@@ -2155,11 +2190,15 @@ class VolumePlannerAgent:
         try:
             entities = await self.entity_repo.list_by_novel(novel_id)
             entity_lines = []
+            cheat_lines = []
             for e in entities[:30]:
                 latest = await self.version_repo.get_latest(e.id)
                 state_str = str(latest.state) if latest else ""
                 entity_lines.append(f"- [{e.type}] {e.name}: {state_str[:200]}")
+                if (e.cheat_ability or "").strip():
+                    cheat_lines.append(self._format_cheat_line(e))
             entities_text = "\n".join(entity_lines) if entity_lines else "无"
+            cheat_text = "\n".join(cheat_lines) if cheat_lines else ""
 
             fs_list = await self.foreshadowing_repo.list_active(novel_id=novel_id)
             fs_lines = [f"- {fs.content}" for fs in fs_list[:30]]
@@ -2170,10 +2209,205 @@ class VolumePlannerAgent:
             tl_lines = [f"- tick={e.tick}: {e.narrative}" for e in events[:15]]
             tl_text = "\n".join(tl_lines) if tl_lines else "无"
 
-            return {"entities": entities_text, "foreshadowings": fs_text, "timeline": tl_text}
+            return {
+                "entities": entities_text,
+                "foreshadowings": fs_text,
+                "timeline": tl_text,
+                "cheat_carriers": cheat_text,
+            }
         except Exception as exc:
             log_service.add_log(novel_id, "VolumePlannerAgent", f"世界快照加载失败: {exc}", level="warning")
             return {}
+
+    @staticmethod
+    def _format_cheat_line(entity) -> str:
+        """Render a single cheat-carrier entity as a human-readable line."""
+        ability = (entity.cheat_ability or "").strip()
+        rules = entity.cheat_activation_rules or []
+        first_chapter = (entity.cheat_first_activation_chapter or "").strip()
+        rule_text = "；".join(rules) if rules else "无"
+        first_text = f"；首次激活章={first_chapter}" if first_chapter else ""
+        return (
+            f"- {entity.name}({entity.id}): 金手指={ability}；"
+            f"激活条件={rule_text}{first_text}"
+        )
+
+    async def _load_cheat_carriers(self, novel_id: str) -> list[dict]:
+        """Return the list of entities that carry a cheat ability for the novel.
+
+        Each entry is a dict with keys: id, name, ability, rules,
+        first_activation_chapter. Used by `_enforce_cheat_activation` to
+        mark VolumeBeat expansions when a cheat first appears in this volume.
+        """
+        try:
+            entities = await self.entity_repo.list_by_novel(novel_id)
+        except Exception as exc:
+            log_service.add_log(
+                novel_id, "VolumePlannerAgent", f"金手指角色加载失败: {exc}", level="warning"
+            )
+            return []
+        carriers: list[dict] = []
+        for entity in entities:
+            ability = (entity.cheat_ability or "").strip()
+            if not ability:
+                continue
+            carriers.append(
+                {
+                    "id": entity.id,
+                    "name": entity.name,
+                    "ability": ability,
+                    "rules": list(entity.cheat_activation_rules or []),
+                    "first_activation_chapter": (entity.cheat_first_activation_chapter or "").strip() or None,
+                }
+            )
+        return carriers
+
+    @staticmethod
+    def _coerce_chapter_index(value: Optional[str]) -> Optional[int]:
+        """Parse a chapter_id / chapter-number string into an int.
+
+        Accepts 'ch_3', 'vol_1_ch_3', '3', or None. Returns None on failure.
+        """
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        match = re.search(r"(\d+)\s*$", text)
+        if match:
+            try:
+                return int(match.group(1))
+            except ValueError:
+                return None
+        return None
+
+    def _enforce_cheat_activation(
+        self,
+        chapters: list[VolumeBeat],
+        carriers: list[dict],
+        novel_id: str = "",
+    ) -> list[VolumeBeat]:
+        """Post-process expanded chapters to fill `cheat_activated*` fields and
+        emit a `cheat_marker` log warning when activation is overdue.
+
+        Rules:
+        - A carrier appears in a chapter's key_entities or beats' key_entities.
+        - A chapter's number is >= the carrier's first_activation_chapter index
+          (when known) — that's where activation must be visible.
+        - The LLM may have already flagged `cheat_activated=True`; we only add
+          when missing AND the chapter index matches.
+        - If a chapter passes the first_activation_chapter threshold but
+          `cheat_activated` is still False, we emit a `cheat_marker` warning.
+        """
+        if not carriers:
+            return chapters
+
+        carriers_with_threshold: list[tuple[dict, Optional[int]]] = []
+        for carrier in carriers:
+            threshold = self._coerce_chapter_index(carrier.get("first_activation_chapter"))
+            carriers_with_threshold.append((carrier, threshold))
+
+        warnings: list[str] = []
+        updated: list[VolumeBeat] = []
+        for chapter in chapters:
+            chapter_number = chapter.chapter_number
+            if chapter_number is None:
+                updated.append(chapter)
+                continue
+
+            # Collect every name that "appears" in this chapter (chapter-level
+            # and per-beat key_entities).
+            entity_names: set[str] = set()
+            for name in chapter.key_entities or []:
+                if name and name.strip():
+                    entity_names.add(name.strip())
+            for beat in chapter.beats or []:
+                for name in beat.key_entities or []:
+                    if name and name.strip():
+                        entity_names.add(name.strip())
+
+            # Also fuzzy-match by carrier name OR id substring (key_entities
+            # may use the display name OR the entity id like "e_protagonist").
+            carriers_in_chapter: list[dict] = []
+            for carrier, threshold in carriers_with_threshold:
+                display = (carrier.get("name") or "").strip()
+                carrier_id = (carrier.get("id") or "").strip()
+                if (display and display in entity_names) or (carrier_id and carrier_id in entity_names):
+                    carriers_in_chapter.append((carrier, threshold))
+
+            if not carriers_in_chapter:
+                updated.append(chapter)
+                continue
+
+            # Determine the FIRST beat idx (if any) where the carrier's name
+            # appears in the beat's key_entities; fall back to the chapter's
+            # own index (chapter_number - 1) if not found.
+            payload = chapter.model_dump()
+            for carrier, threshold in carriers_in_chapter:
+                # Only auto-mark `cheat_activated=True` if the chapter is at
+                # or past the carrier's threshold. If threshold is unknown we
+                # still allow the LLM-provided / heuristically-inferred
+                # activation to take effect (carrier's first appearance is
+                # treated as the activation chapter).
+                if threshold is not None and chapter_number < threshold:
+                    continue
+                display = (carrier.get("name") or "").strip()
+                carrier_id = (carrier.get("id") or "").strip()
+
+                def appears_in_beat(beat) -> bool:
+                    names = beat.key_entities or []
+                    return (display and display in names) or (carrier_id and carrier_id in names)
+
+                activated_beat_idx: Optional[int] = None
+                for idx, beat in enumerate(chapter.beats or []):
+                    if appears_in_beat(beat):
+                        activated_beat_idx = idx
+                        break
+                if activated_beat_idx is None and (
+                    display in entity_names or carrier_id in entity_names
+                ):
+                    activated_beat_idx = max(0, (chapter_number or 1) - 1)
+
+                if not payload.get("cheat_activated"):
+                    payload["cheat_activated"] = True
+                payload["cheat_activated_ability"] = (
+                    payload.get("cheat_activated_ability") or carrier.get("ability") or ""
+                )
+                if payload.get("cheat_activated_beat_idx") is None:
+                    payload["cheat_activated_beat_idx"] = activated_beat_idx
+
+            # Overdue detection: for any carrier with a threshold that this
+            # chapter has reached but `cheat_activated` is still False on the
+            # payload, emit a warning.
+            for carrier, threshold in carriers_with_threshold:
+                if threshold is None:
+                    continue
+                if chapter_number < threshold:
+                    continue
+                if (display := (carrier.get("name") or "").strip()):
+                    if display in entity_names and not payload.get("cheat_activated"):
+                        warnings.append(
+                            f"第{chapter_number}章出现金手指角色 {display},"
+                            f"但未激活 (设定首次激活章={threshold})"
+                        )
+
+            updated.append(VolumeBeat.model_validate(payload))
+
+        if warnings:
+            summary = "; ".join(warnings[:5])
+            extra = f" 等{len(warnings)}处" if len(warnings) > 5 else ""
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                f"cheat_marker: {summary}{extra}",
+                level="warning",
+                event="agent.progress",
+                status="warning",
+                node="volume_cheat_activation",
+                task="enforce_cheat_activation",
+                metadata={"overdue_warnings": warnings},
+            )
+        return updated
 
     async def _generate_score(
         self,

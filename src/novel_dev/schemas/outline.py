@@ -311,6 +311,9 @@ class VolumeBeat(BaseModel):
     foreshadowings_to_recover: List[str] = Field(default_factory=list)
     expected_thrills: List[ExpectedThrill] = Field(default_factory=list)
     beats: List[BeatPlan] = Field(default_factory=list)
+    cheat_activated: bool = False
+    cheat_activated_ability: str = ""
+    cheat_activated_beat_idx: Optional[int] = None
 
     @model_validator(mode="before")
     @classmethod

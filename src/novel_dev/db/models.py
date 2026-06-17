@@ -65,6 +65,9 @@ class Entity(Base):
     archive_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     archived_by_consolidation_batch_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     archived_by_consolidation_change_id: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    cheat_ability: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    cheat_activation_rules: Mapped[List[str]] = mapped_column(JSON, nullable=False, default=list, server_default="[]")
+    cheat_first_activation_chapter: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
     versions: Mapped[List["EntityVersion"]] = relationship(back_populates="entity", order_by="EntityVersion.version")
 
