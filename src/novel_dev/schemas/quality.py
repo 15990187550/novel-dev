@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 QualityCategory = Literal[
@@ -47,6 +47,14 @@ class BeatBoundaryCard(BaseModel):
     forbidden_materials: list[str] = Field(default_factory=list)
     reveal_boundary: str = ""
     ending_policy: str = ""
+    is_last_beat: bool = False
+    required_open_question: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _last_beat_requires_question(self):
+        if self.is_last_beat and not self.required_open_question:
+            raise ValueError(f"last beat (index={self.beat_index}) requires required_open_question")
+        return self
 
 
 class RepairTask(BaseModel):
