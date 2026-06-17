@@ -2298,6 +2298,11 @@ class VolumePlannerAgent:
           when missing AND the chapter index matches.
         - If a chapter passes the first_activation_chapter threshold but
           `cheat_activated` is still False, we emit a `cheat_marker` warning.
+        - Carriers whose `first_activation_chapter` is empty/None are flagged
+          as `cheat_threshold_unset` at the carrier's first chapter appearance
+          (status: drift visible, threshold unspecified). This keeps the
+          FastReview/QA signal alive even when the brainstorm agent left the
+          threshold blank for VolumePlanner to determine.
         """
         if not carriers:
             return chapters
@@ -2307,9 +2312,17 @@ class VolumePlannerAgent:
             threshold = self._coerce_chapter_index(carrier.get("first_activation_chapter"))
             carriers_with_threshold.append((carrier, threshold))
 
+        # Track which threshold-unset carriers we've already surfaced so we
+        # emit at most one warning per carrier per volume (the first chapter
+        # where the carrier actually appears).
+        surfaced_threshold_unset: set[str] = set()
         warnings: list[str] = []
+        threshold_unset_warnings: list[str] = []
         updated: list[VolumeBeat] = []
         for chapter in chapters:
+            # VolumeBeat.chapter_number: int is non-Optional in the schema;
+            # this guard remains as a defense against partial/legacy data
+            # reaching the validator.
             chapter_number = chapter.chapter_number
             if chapter_number is None:
                 updated.append(chapter)
@@ -2391,6 +2404,27 @@ class VolumePlannerAgent:
                             f"但未激活 (设定首次激活章={threshold})"
                         )
 
+            # Threshold-unset drift detection: for any carrier whose
+            # first_activation_chapter is empty/None, surface a one-shot
+            # warning the first time the carrier appears in the volume so the
+            # FastReview/QA signal is not silently dropped when the brainstorm
+            # agent returned no specific chapter.
+            for carrier, threshold in carriers_with_threshold:
+                if threshold is not None:
+                    continue
+                display = (carrier.get("name") or "").strip()
+                carrier_id = (carrier.get("id") or "").strip()
+                carrier_key = carrier_id or display
+                if not carrier_key or carrier_key in surfaced_threshold_unset:
+                    continue
+                if not ((display and display in entity_names) or (carrier_id and carrier_id in entity_names)):
+                    continue
+                surfaced_threshold_unset.add(carrier_key)
+                threshold_unset_warnings.append(
+                    f"第{chapter_number}章出现金手指角色 {display or carrier_id},"
+                    f"但 cheat.first_activation_chapter 未设定 (cheat_threshold_unset)"
+                )
+
             updated.append(VolumeBeat.model_validate(payload))
 
         if warnings:
@@ -2406,6 +2440,27 @@ class VolumePlannerAgent:
                 node="volume_cheat_activation",
                 task="enforce_cheat_activation",
                 metadata={"overdue_warnings": warnings},
+            )
+        if threshold_unset_warnings:
+            summary = "; ".join(threshold_unset_warnings[:5])
+            extra = (
+                f" 等{len(threshold_unset_warnings)}处"
+                if len(threshold_unset_warnings) > 5
+                else ""
+            )
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                f"cheat_marker: {summary}{extra}",
+                level="warning",
+                event="agent.progress",
+                status="warning",
+                node="volume_cheat_activation",
+                task="enforce_cheat_activation",
+                metadata={
+                    "cheat_threshold_unset": threshold_unset_warnings,
+                    "status": "cheat_threshold_unset",
+                },
             )
         return updated
 
