@@ -175,6 +175,15 @@ def test_llm_config_enables_context_agent_orchestration():
     assert orchestration["repairer_subtask"] == "schema_repair"
 
 
+def test_context_agent_prompt_has_selection_principles():
+    from novel_dev.agents._default_prompts import CONTEXT_AGENT_PROMPT
+    assert "实体筛选" in CONTEXT_AGENT_PROMPT or "实体选择" in CONTEXT_AGENT_PROMPT
+    assert "文档检索" in CONTEXT_AGENT_PROMPT
+    assert "冲突" in CONTEXT_AGENT_PROMPT or "优先级" in CONTEXT_AGENT_PROMPT
+    # Few-shot
+    assert "示例" in CONTEXT_AGENT_PROMPT or "example" in CONTEXT_AGENT_PROMPT.lower()
+
+
 def test_context_agent_builds_writing_cards_from_chapter_plan(async_session):
     plan = ChapterPlan(
         chapter_number=1,
