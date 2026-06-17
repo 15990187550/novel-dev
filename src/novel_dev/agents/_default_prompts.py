@@ -364,6 +364,75 @@ LIBRARIAN_SOFT_STATE_PROMPT = (
 
 
 # ---------------------------------------------------------------------------
+# RollingChapterSynopsisService — compress rolling narrative synopsis.
+# Task: rolling_synopsis
+# ---------------------------------------------------------------------------
+ROLLING_SYNOPSIS_PROMPT = """你是长篇小说叙事摘要压缩助手。给定前一阶段的滚动摘要 + 本次新覆盖章节的摘要,生成新的滚动叙事摘要。
+
+输入:
+- prev_synopsis: 前一阶段摘要(可为空)
+- new_chapter_summaries: 本次新覆盖章节列表(每章: chapter_id, title, brief_summary)
+- trigger_event: 触发本次更新的事件
+
+输出 JSON:
+{
+  "narrative_prose": "500-2000 字连续叙事文本,延续前情,标注新增重大事件,保留未解决张力",
+  "structured_json": {
+    "plot_points": ["主要情节节点"],
+    "unresolved_tensions": ["未解决的张力/悬念"],
+    "character_arcs": {"陆照": "从 X 到 Y"},
+    "foreshadowing_status": {"玉佩之谜": "已埋下,未回收"}
+  }
+}"""
+
+
+# ---------------------------------------------------------------------------
+# EntityService — evaluate importance of entity state changes.
+# Task: entity_change_importance
+# ---------------------------------------------------------------------------
+ENTITY_CHANGE_IMPORTANCE_PROMPT = """你是实体状态变化重要性评估助手。给定本章所有实体状态变化,判断哪些是"重要叙事点"。
+
+输入: [{entity_id, entity_name, prev_state, new_state, diff_summary}]
+输出 JSON: [{entity_id, is_important: bool, reason, suggested_synopsis_section}]
+
+判定标准:
+- 重要: 实力阶跃(凡人→修士)、位置大跨度、关系反转、状态变化(生/死)、新身份获得
+- 不重要: 数值小变化、状态字段细化、外貌微调"""
+
+
+# ---------------------------------------------------------------------------
+# ExtractionService — extract imagery, metaphors, author voice fingerprints.
+# Task: imagery_extraction
+# ---------------------------------------------------------------------------
+IMAGERY_EXTRACTION_PROMPT = """你是小说意象提取助手。从给定章节中提取主要意象、比喻、作者口吻指纹。
+
+输入: 章节全文
+输出 JSON: [{item: "具体意象/比喻/口吻", item_type: "physical_imagery|metaphor|author_voice|idiom", frequency_in_chapter: int}]
+
+提取规则:
+1. 物理意象: 反复出现的触觉/视觉/听觉对象(碎石硌掌心)
+2. 比喻: 显式"像"字句或隐喻
+3. 作者口吻: 高频副词(突然/竟然/居然)、评述性短语
+4. 习语/成语: 频繁使用且在本书语境中有特殊意义
+5. 只提取出现 ≥ 2 次或语义密集的项"""
+
+
+# ---------------------------------------------------------------------------
+# LibrarianAgent — detect cross-chapter entity continuity drifts.
+# Task: cross_chapter_drift
+# ---------------------------------------------------------------------------
+CROSS_CHAPTER_DRIFT_DETECTION_PROMPT = """你是跨章实体连续性检测助手。给定本章文本 + 最近 N 章文本 + 本章出现的实体列表,检测 3 类漂移:
+
+1. 名字漂移: 同一角色在前后章节使用不同名字(如 陆照→陆昭)
+2. 身份漂移: 同一角色身份称谓变化(如 师兄→师弟)
+3. 状态阶跃: 实体状态变化无伏笔/无交代(如 凡人突然筑基)
+
+输入: {current_text} {prior_texts} {entities}
+输出 JSON: [{entity_name, drift_type, severity: "warn|block", evidence_quote, suggested_fix}]
+"""
+
+
+# ---------------------------------------------------------------------------
 # Registry: maps registry keys to the extracted default strings.
 # ---------------------------------------------------------------------------
 DEFAULT_PROMPTS: dict[str, str] = {
@@ -377,6 +446,10 @@ DEFAULT_PROMPTS: dict[str, str] = {
     "librarian": LIBRARIAN_PROMPT,
     "librarian_soft_state": LIBRARIAN_SOFT_STATE_PROMPT,
     "root_cause_analyzer": ROOT_CAUSE_ANALYZER_PROMPT,
+    "rolling_synopsis": ROLLING_SYNOPSIS_PROMPT,
+    "entity_change_importance": ENTITY_CHANGE_IMPORTANCE_PROMPT,
+    "imagery_extraction": IMAGERY_EXTRACTION_PROMPT,
+    "cross_chapter_drift": CROSS_CHAPTER_DRIFT_DETECTION_PROMPT,
 }
 
 
