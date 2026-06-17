@@ -154,6 +154,15 @@ WRITER_PROMPT = (
     "{prose_hygiene_rules}"
 )
 
+# Few-shot 示例
+WRITER_PROMPT = WRITER_PROMPT + """
+# Few-shot 示例
+差的开头:
+"陆照睁开眼睛,发现自己在一个陌生的地方。他想:这是哪里?"
+好的开头:
+"陆照的指尖碰到冰冷的玉佩——他这才发现,自己已经不在灵谷。"
+差异:差的开头用模板化"睁开眼睛+内心独白",好的开头用具象触感和悬念锚点。"""
+
 # ---------------------------------------------------------------------------
 # CriticAgent — primary prompt: score full chapter on 6 dimensions.
 # Source: src/novel_dev/agents/critic_agent.py:_generate_score
@@ -227,6 +236,12 @@ CRITIC_PROMPT = (
     "请评分:"
 )
 
+# Few-shot 评分示例
+CRITIC_PROMPT = CRITIC_PROMPT + """
+# Few-shot 评分示例
+humanity 维度高(90+): "陆照的母亲死在他面前,他没有哭。他只是把母亲的手放在自己掌心,一直握着,直到手凉了。"
+humanity 维度低(40-): "陆照非常伤心,因为母亲死了。他流下了眼泪。" """
+
 # ---------------------------------------------------------------------------
 # EditorAgent — primary prompt: rewrite a single beat to fix critic issues.
 # Source: src/novel_dev/agents/editor_agent.py:_polish_beat
@@ -258,6 +273,13 @@ EDITOR_PROMPT = (
     "{text}\n\n"
     "改写:"
 )
+
+# Few-shot 编辑示例
+EDITOR_PROMPT = EDITOR_PROMPT + """
+# Few-shot 编辑示例
+修前: "马管事笑得像石子投入枯井,响了一声,便没了回音。"
+修后: "马管事收了笑,没再说话。"
+差异:修后去掉了"作者替人物解释情绪"的套语,改为人物可观察的动作。"""
 
 # ---------------------------------------------------------------------------
 # FastReviewAgent — primary prompt: check consistency + beat cohesion.
