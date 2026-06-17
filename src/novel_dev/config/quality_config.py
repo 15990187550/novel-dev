@@ -56,6 +56,13 @@ def get_phase3_config() -> dict:
     return cfg["phase3"]
 
 
+def get_phase4_config() -> dict:
+    cfg = get_llm_config()
+    if "phase4" not in cfg:
+        raise KeyError("Missing required section: phase4")
+    return cfg["phase4"]
+
+
 def _load_yaml() -> dict[str, Any]:
     if not _CONFIG_PATH.exists():
         raise ConfigError(f"llm_config.yaml not found at {_CONFIG_PATH}")

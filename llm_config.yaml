@@ -419,3 +419,33 @@ phase3:
     bootstrap_default: true
   cold_start:
     allow_hardcoded_fallback: true
+
+# === 阶段四:质量优化 配置 ===
+phase4:
+  rcs:
+    enabled: true
+    trigger_window_chapters: 5
+    max_synopsis_chars: 2000
+    llm_client: root_cause_analyzer
+  cross_chapter_continuity:
+    enabled: true
+    pre_write_window: 3
+    post_write_window: 5
+    llm_client: root_cause_analyzer
+  imagery_inventory:
+    enabled: true
+    avoidance_window: 5
+    avoidance_top_n: 20
+    llm_client: root_cause_analyzer
+  beat_coverage_use_llm: true
+  web_novel:
+    chapter_archetypes: [action, setup, payoff, mixed]
+    mood_phases: [setup, tension, release, climax, cooldown]
+    thrill_types: [face_slap, show_off, level_up, reward_gain, revelation, revenge, plot_twist, recognition]
+    intensity_levels: [low, medium, high, peak]
+    imagery_item_types: [physical_imagery, metaphor, author_voice, idiom]
+  writer:
+    default_drafting_mode: beat_by_beat
+    temperature: 0.75
+  guard:
+    fail_open_on_timeout: false
