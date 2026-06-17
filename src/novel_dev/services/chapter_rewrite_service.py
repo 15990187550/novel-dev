@@ -419,6 +419,34 @@ class ChapterRewriteService:
             return None
         return EmbeddingService(self.session, embedder)
 
+    async def trigger_rewrite_from_guard_failure(
+        self,
+        novel_id: str,
+        chapter_id: str,
+        guard_result: "ChapterStructureGuardResult",  # type: ignore[name-defined]
+    ) -> ChapterRewriteResult | None:
+        """Phase 4: 检查结构守卫失败结果，如为失败闭门则触发章节重写。
+
+        当 guard_result.passed=False 且 guard_result.conservative_fallback=False 时，
+        表示失败闭门策略，需要触发章节重写。
+        """
+        if guard_result.passed:
+            logger.debug("guard_passed_no_rewrite_needed", extra={"chapter_id": chapter_id})
+            return None
+        if guard_result.conservative_fallback:
+            logger.debug("guard_failed_conservative_fallback_no_rewrite", extra={"chapter_id": chapter_id})
+            return None
+        # Phase 4: 失败闭门，触发重写
+        logger.warning(
+            "structure_guard_fail_closed_triggering_rewrite",
+            extra={
+                "chapter_id": chapter_id,
+                "issues": list(guard_result.issues),
+                "suggested_rewrite_focus": guard_result.suggested_rewrite_focus,
+            },
+        )
+        return await self.rewrite(novel_id, chapter_id)
+
     async def _record_rewrite_metric(self, novel_id: str, chapter_id: str):
         chapter = await self.chapter_repo.get_by_id(chapter_id)
         if not chapter or not chapter.novel_id:

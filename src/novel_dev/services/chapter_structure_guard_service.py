@@ -17,6 +17,7 @@ class ChapterStructureGuardResult(BaseModel):
     changed_event_order: bool = False
     issues: list[str] = Field(default_factory=list)
     suggested_rewrite_focus: str = ""
+    conservative_fallback: bool = True  # Phase 4: True=保守回退原文, False=失败闭门触发重写
 
     def evidence(self, *, beat_index: int, mode: str) -> dict[str, Any]:
         return {
@@ -29,6 +30,7 @@ class ChapterStructureGuardResult(BaseModel):
             "changed_event_order": self.changed_event_order,
             "issues": list(self.issues),
             "suggested_rewrite_focus": self.suggested_rewrite_focus,
+            "conservative_fallback": self.conservative_fallback,
         }
 
 
@@ -113,15 +115,19 @@ class ChapterStructureGuardService:
                 novel_id=novel_id,
                 max_wait_seconds=self.EDITOR_GUARD_TIMEOUT_SECONDS,
             )
-        except Exception:
+        except Exception as exc:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning("structure_guard_timeout", extra={"error": str(exc)})
             return ChapterStructureGuardResult(
                 passed=False,
                 completed_current_beat=True,
                 premature_future_beat=False,
                 introduced_plan_external_fact=True,
                 changed_event_order=False,
-                issues=["结构守卫超时或失败，保守回退原文"],
-                suggested_rewrite_focus="保留润色前文本，避免结构漂移",
+                issues=["结构守卫超时或失败，触发失败闭门"],
+                suggested_rewrite_focus="需要重写本节拍",
+                conservative_fallback=False,  # Phase 4: 失败闭门
             )
 
     @classmethod

@@ -153,9 +153,32 @@ async def test_editor_guard_times_out_to_closed_failure(monkeypatch):
     )
 
     assert result.passed is False
+    assert result.conservative_fallback is False  # Phase 4: 失败闭门
     assert result.introduced_plan_external_fact is True
-    assert result.issues == ["结构守卫超时或失败，保守回退原文"]
-    assert result.suggested_rewrite_focus == "保留润色前文本，避免结构漂移"
+    assert result.issues == ["结构守卫超时或失败，触发失败闭门"]
+    assert result.suggested_rewrite_focus == "需要重写本节拍"
+
+
+@pytest.mark.asyncio
+async def test_structure_guard_fail_closed_on_timeout(monkeypatch):
+    """编辑器守卫超时应当 fail-closed: passed=False, conservative_fallback=False"""
+    async def slow_check(*args, **kwargs):
+        raise TimeoutError("Request timed out")
+
+    monkeypatch.setattr(
+        "novel_dev.services.chapter_structure_guard_service.call_and_parse_model",
+        slow_check,
+    )
+    service = ChapterStructureGuardService()
+    result = await service.check_editor_beat(
+        novel_id="novel-guard-slow",
+        chapter_plan={"beats": [{"summary": "林照藏起玉佩"}]},
+        beat_index=0,
+        source_text="林照藏起玉佩。",
+        polished_text="林照藏起玉佩，呼吸一窒。",
+    )
+    assert result.passed is False
+    assert result.conservative_fallback is False  # Phase 4: 失败闭门
 
 
 def test_guard_normalizer_accepts_common_alias_fields():
