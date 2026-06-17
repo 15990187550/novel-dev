@@ -312,7 +312,6 @@ class CriticAgent:
         score_result = await call_and_parse_model(
             "CriticAgent", "score_chapter", prompt, ScoreResult, novel_id=novel_id
         )
-        await self.prompt_registry.increment_sample_count("critic", version)
         # Phase 4 / Task 18: plot_tension 爽点扣分 — 拉取本章未验证的
         # 规划预测爽点,每项扣 5 分,最多扣 20 分。
         score_result = await self._apply_thrill_point_plot_tension_adjustment(
@@ -320,6 +319,9 @@ class CriticAgent:
             novel_id=novel_id,
             chapter_id=chapter_id,
         )
+        # Increment A/B sample count AFTER the thrill point adjustment so the
+        # registry records the final, post-penalty score distribution.
+        await self.prompt_registry.increment_sample_count("critic", version)
         return score_result
 
     THRILL_POINT_PENALTY_PER_MISS = 5
@@ -385,10 +387,10 @@ class CriticAgent:
                     comment=detail,
                 )
             )
-        if not any(d.name == "plot_tension" for d in score_result.dimensions):
-            return score_result
-        if all(d.name != "plot_tension" for d in adjusted):
-            return score_result
+        # The loop above mirrors every original dimension into `adjusted`; if the
+        # original score_result contained no plot_tension, the early return above
+        # at `if not unverified` already covers the no-op case. No further guard
+        # is reachable here.
 
         # Recompute overall as the simple mean of dimension scores
         new_overall = round(sum(d.score for d in adjusted) / max(1, len(adjusted)))
