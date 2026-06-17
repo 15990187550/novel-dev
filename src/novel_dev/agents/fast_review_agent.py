@@ -44,6 +44,21 @@ MAX_QUALITY_GATE_REPAIR_ATTEMPTS = 1
 EXCELLENT_FINAL_REVIEW_SCORE = 90
 
 
+# Phase 4 / Task 18: 网文 8 类爽点的关键词字典。
+# 匹配策略:对 polished_text 做一次"任一关键词命中即认为达成"扫描,
+# 命中后回写 evidence_quote(关键词所在上下文 16 字切片),供 CriticAgent 扣分参考。
+THRILL_TYPE_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "face_slap": ("反手一巴掌", "一巴掌", "啪啪", "耳光", "打脸", "众目睽睽", "跪下", "磕头"),
+    "show_off": ("全场哗然", "众人惊叹", "惊艳", "震惊", "一片死寂", "倒吸一口凉气", "满座皆惊"),
+    "level_up": ("突破", "晋级", "境界提升", "修为大涨", "破境", "凝结", "成就", "晋升"),
+    "reward_gain": ("收获", "夺得", "得到", "捡到", "获得", "赏赐", "应得", "天材地宝", "灵石"),
+    "revelation": ("真相", "原来", "竟然是他", "赫然", "浮出水面", "显露", "揭秘", "真容"),
+    "revenge": ("报仇", "血债血偿", "讨回", "仇人", "雪耻", "以牙还牙", "复仇", "清算"),
+    "plot_twist": ("出乎意料", "万万没想到", "峰回路转", "反将一军", "反转", "变数", "意外", "骤变"),
+    "recognition": ("刮目相看", "认可", "拜服", "心服口服", "认输", "佩服", "赞誉", "点头赞许", "引为同道"),
+}
+
+
 def _apply_continuity_audit_to_gate(gate, audit):
     if audit.status == QUALITY_BLOCK:
         gate.status = QUALITY_BLOCK
@@ -478,6 +493,16 @@ class FastReviewAgent:
             feedback=report.model_dump(),
         )
 
+        # Phase 4 / Task 18: 爽点达成验证需要在 gate 构建之前先做,以便
+        # 失败回到 editing 时 miss 仍能写入 report.notes。
+        await self._apply_thrill_point_verification(
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+            gate=None,
+            polished=polished,
+            report=report,
+        )
+
         edit_attempts = checkpoint.get("edit_attempt_count", 0)
         max_edit_attempts = self._max_edit_attempts(checkpoint)
         if passed or edit_attempts >= max_edit_attempts:
@@ -539,6 +564,21 @@ class FastReviewAgent:
                 chapter_context.get("beats", []) if isinstance(chapter_context, dict) else [],
                 polished,
             )
+            # Phase 4 / Task 18: 把爽点达成验证 miss 同步到 gate.warning_items,
+            # 这样下游 quality_issues / checkpoint.quality_gate 都能感知。
+            # (DB 标记动作在 review() 入口已先做,这里只补 gate 写回。)
+            try:
+                from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+                _tp_repo = ThrillPointRepository(self.session)
+                _unverified = await _tp_repo.list_unverified(novel_id, chapter_id=chapter_id)
+                if _unverified:
+                    self._apply_thrill_point_check_to_gate(gate, _unverified, polished)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "thrill_point_gate_promotion_failed",
+                    extra={"chapter_id": chapter_id, "error": repr(exc)},
+                )
             # Persist updated report with beat_coverage_results after validator runs
             await self.chapter_repo.update_fast_review(
                 chapter_id,
@@ -867,6 +907,163 @@ class FastReviewAgent:
             if "open_question_missing" not in existing_codes:
                 gate.warning_items.append(item)
         return gate
+
+    @staticmethod
+    def _find_thrill_keyword_evidence(thrill_type: str, polished_text: str) -> str | None:
+        """Return a short evidence slice (≤16 字) when any keyword for
+        ``thrill_type`` appears in ``polished_text``.  Returns None when
+        the polished text does not exhibit a recognizable signal of the
+        thrill type.
+
+        The check is intentionally shallow (keyword presence) — the goal
+        is to flag obvious misses for CriticAgent to deduct plot_tension
+        points, not to certify the quality of a thrill delivery.
+        """
+        if not polished_text or not thrill_type:
+            return None
+        keywords = THRILL_TYPE_KEYWORDS.get(thrill_type)
+        if not keywords:
+            return None
+        for kw in keywords:
+            idx = polished_text.find(kw)
+            if idx < 0:
+                continue
+            start = max(0, idx - 4)
+            end = min(len(polished_text), idx + len(kw) + 12)
+            return polished_text[start:end]
+        return None
+
+    @classmethod
+    def _apply_thrill_point_check_to_gate(cls, gate, thrills: list, polished_text: str) -> list[dict]:
+        """Add ``thrill_point_missing`` warning items for each unverified
+        predicted thrill and return a list of evidence-snapshot dicts so
+        callers can persist ``fast_review_verified`` + ``evidence_quote``
+        on the underlying ``ThrillPoint`` rows.
+
+        ``thrills`` is a list of :class:`ThrillPoint` ORM objects.  Returns
+        ``[{thrill_point_id, verified, evidence_quote}]`` so the caller
+        can flip the verified flag in the database.
+        """
+        if not thrills:
+            return []
+        snapshots: list[dict] = []
+        existing_codes = {
+            str(w.get("code"))
+            for w in gate.warning_items
+            if isinstance(w, dict) and w.get("code")
+        }
+        for tp in thrills:
+            thrill_type = getattr(tp, "thrill_type", "")
+            tp_id = getattr(tp, "id", None)
+            evidence = cls._find_thrill_keyword_evidence(thrill_type, polished_text)
+            if evidence is not None:
+                snapshots.append(
+                    {
+                        "thrill_point_id": tp_id,
+                        "verified": True,
+                        "evidence_quote": evidence,
+                    }
+                )
+                continue
+            snapshots.append({"thrill_point_id": tp_id, "verified": False, "evidence_quote": None})
+            if "thrill_point_missing" in existing_codes:
+                continue
+            item = {
+                "code": "thrill_point_missing",
+                "message": f"章节未呈现规划预测的爽点类型 {thrill_type} (强度 {getattr(tp, 'intensity', '')})",
+                "detail": {
+                    "thrill_type": thrill_type,
+                    "intensity": getattr(tp, "intensity", ""),
+                    "beat_idx": getattr(tp, "beat_idx", None),
+                    "thrill_point_id": tp_id,
+                },
+            }
+            gate.warning_items.append(item)
+            existing_codes.add("thrill_point_missing")
+        return snapshots
+
+    async def _apply_thrill_point_verification(
+        self,
+        *,
+        novel_id: str,
+        chapter_id: str,
+        gate,
+        polished: str,
+        report: "FastReviewReport | None" = None,
+    ) -> None:
+        """Phase 4 / Task 18: 拉取本章未验证的爽点预测,扫描成稿关键词,
+        对命中的调用 ``ThrillPointRepository.mark_verified`` 写入证据;
+        未命中项加入 ``thrill_point_missing`` 告警。
+
+        当 ``gate`` 为 None 时(快速评审失败回到 editing 阶段),
+        miss 列表会回填到 ``report.notes`` 以便下游 UI 仍能感知。
+        任何异常都被吞掉并记 warning,确保不破坏主评审路径。
+        """
+        if not novel_id or not chapter_id:
+            return
+        try:
+            from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+            repo = ThrillPointRepository(self.session)
+            thrills = await repo.list_unverified(novel_id, chapter_id=chapter_id)
+            if not thrills:
+                return
+            if gate is not None:
+                snapshots = self._apply_thrill_point_check_to_gate(gate, thrills, polished)
+            else:
+                snapshots = self._apply_thrill_point_check_to_report(report, thrills, polished)
+            for snap in snapshots:
+                if not snap.get("verified"):
+                    continue
+                tp_id = snap.get("thrill_point_id")
+                if not tp_id:
+                    continue
+                await repo.mark_verified(
+                    tp_id,
+                    evidence_quote=snap.get("evidence_quote"),
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "thrill_point_verification_failed",
+                extra={"chapter_id": chapter_id, "error": repr(exc)},
+            )
+
+    @classmethod
+    def _apply_thrill_point_check_to_report(
+        cls,
+        report,
+        thrills: list,
+        polished_text: str,
+    ) -> list[dict]:
+        """回退路径:没有 ``gate`` 时,把未命中的爽点写入 ``report.notes``。
+
+        与 ``_apply_thrill_point_check_to_gate`` 行为一致,只是把 warning
+        容器从 gate 换到 FastReviewReport.notes。
+        """
+        if not thrills:
+            return []
+        snapshots: list[dict] = []
+        for tp in thrills:
+            thrill_type = getattr(tp, "thrill_type", "")
+            tp_id = getattr(tp, "id", None)
+            evidence = cls._find_thrill_keyword_evidence(thrill_type, polished_text)
+            if evidence is not None:
+                snapshots.append(
+                    {
+                        "thrill_point_id": tp_id,
+                        "verified": True,
+                        "evidence_quote": evidence,
+                    }
+                )
+                continue
+            snapshots.append({"thrill_point_id": tp_id, "verified": False, "evidence_quote": None})
+            if report is not None and not any(
+                isinstance(n, str) and n.startswith("[thrill_point_missing]") for n in (report.notes or [])
+            ):
+                report.notes.append(
+                    f"[thrill_point_missing] {thrill_type} (强度 {getattr(tp, 'intensity', '')}) 未在成稿中识别"
+                )
+        return snapshots
 
     @staticmethod
     def _clear_terminal_quality_metadata(checkpoint: dict) -> None:

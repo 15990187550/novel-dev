@@ -5,6 +5,52 @@ from novel_dev.agents._llm_helpers import coerce_to_str_list, coerce_to_text
 from novel_dev.schemas.context import BeatPlan
 
 
+VALID_THRILL_TYPES = frozenset({
+    "face_slap",
+    "show_off",
+    "level_up",
+    "reward_gain",
+    "revelation",
+    "revenge",
+    "plot_twist",
+    "recognition",
+})
+VALID_THRILL_INTENSITIES = frozenset({"low", "medium", "high", "peak"})
+
+
+class ExpectedThrill(BaseModel):
+    """Web-novel 爽点预测:卷纲阶段声明本章应当出现的高潮类型与强度。
+
+    thrill_type 取值见 :data:`VALID_THRILL_TYPES`;intensity 取值见
+    :data:`VALID_THRILL_INTENSITIES`。beat_idx 指该爽点预期出现的节拍,
+    留空表示不绑定具体节拍。
+    """
+
+    thrill_type: str
+    intensity: str
+    beat_idx: Optional[int] = None
+
+    @field_validator("thrill_type")
+    @classmethod
+    def _validate_type(cls, value: str) -> str:
+        cleaned = (value or "").strip()
+        if cleaned not in VALID_THRILL_TYPES:
+            raise ValueError(
+                f"invalid thrill_type {value!r}; must be one of {sorted(VALID_THRILL_TYPES)}"
+            )
+        return cleaned
+
+    @field_validator("intensity")
+    @classmethod
+    def _validate_intensity(cls, value: str) -> str:
+        cleaned = (value or "").strip().lower()
+        if cleaned not in VALID_THRILL_INTENSITIES:
+            raise ValueError(
+                f"invalid intensity {value!r}; must be one of {sorted(VALID_THRILL_INTENSITIES)}"
+            )
+        return cleaned
+
+
 class CharacterArc(BaseModel):
     name: str
     arc_summary: str
@@ -263,6 +309,7 @@ class VolumeBeat(BaseModel):
     key_entities: List[str] = Field(default_factory=list)
     foreshadowings_to_embed: List[str] = Field(default_factory=list)
     foreshadowings_to_recover: List[str] = Field(default_factory=list)
+    expected_thrills: List[ExpectedThrill] = Field(default_factory=list)
     beats: List[BeatPlan] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -311,6 +358,26 @@ class VolumeBeat(BaseModel):
     @classmethod
     def _coerce_string_list_fields(cls, value: Any) -> List[str]:
         return coerce_to_str_list(value)
+
+    @field_validator("expected_thrills", mode="before")
+    @classmethod
+    def _coerce_expected_thrills(cls, value: Any) -> List[ExpectedThrill]:
+        if value is None or value == "":
+            return []
+        if isinstance(value, list):
+            normalized: List[ExpectedThrill] = []
+            for item in value:
+                if isinstance(item, ExpectedThrill):
+                    normalized.append(item)
+                    continue
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    normalized.append(ExpectedThrill.model_validate(item))
+                except Exception:
+                    continue
+            return normalized
+        return []
 
 
 class VolumePlan(BaseModel):

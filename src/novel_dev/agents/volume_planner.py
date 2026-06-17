@@ -11,6 +11,7 @@ from novel_dev.schemas.outline import (
     VolumeBeat,
     VolumeScoreResult,
     SynopsisData,
+    ExpectedThrill,
 )
 from novel_dev.schemas.context import BeatPlan, ChapterPlan
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
@@ -261,6 +262,7 @@ class VolumeBeatExpansion(BaseModel):
     key_entities: list[str] = Field(default_factory=list)
     foreshadowings_to_embed: list[str] = Field(default_factory=list)
     foreshadowings_to_recover: list[str] = Field(default_factory=list)
+    expected_thrills: list[ExpectedThrill] = Field(default_factory=list)
     beats: list[BeatPlan] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -531,8 +533,15 @@ class VolumePlannerAgent:
         return volume_plan
 
     async def _persist_volume_plan_artifacts(self, novel_id: str, volume_plan: VolumePlan) -> None:
+        from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
         for chapter_plan in volume_plan.chapters:
             await self.chapter_repo.ensure_from_plan(novel_id, volume_plan.volume_id, chapter_plan)
+            await self._persist_predicted_thrills(
+                novel_id=novel_id,
+                chapter_id=chapter_plan.chapter_id,
+                thrills=list(chapter_plan.expected_thrills or []),
+            )
         await self.doc_repo.create(
             doc_id=f"doc_{uuid.uuid4().hex[:8]}",
             novel_id=novel_id,
@@ -540,6 +549,46 @@ class VolumePlannerAgent:
             title=f"{volume_plan.title}",
             content=volume_plan.model_dump_json(),
         )
+
+    async def _persist_predicted_thrills(
+        self,
+        novel_id: str,
+        chapter_id: str,
+        thrills: list,
+    ) -> None:
+        """把章节规划阶段声明的爽点预测写入 ThrillPointRepository。
+
+        写入时 planner_predicted=True,fast_review_verified=False,
+        供下游 FastReviewAgent 在成稿精修后回查和验证。
+        入参数据可能来自旧的 plan(无 expected_thrills 字段),此时安全跳过。
+        """
+        if not thrills:
+            return
+        from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+        repo = ThrillPointRepository(self.session)
+        for thrill in thrills:
+            thrill_type = getattr(thrill, "thrill_type", None)
+            intensity = getattr(thrill, "intensity", None)
+            if not thrill_type or not intensity:
+                continue
+            beat_idx = getattr(thrill, "beat_idx", None)
+            try:
+                await repo.create(
+                    novel_id=novel_id,
+                    chapter_id=chapter_id,
+                    beat_idx=beat_idx,
+                    thrill_type=thrill_type,
+                    intensity=intensity,
+                    planner_predicted=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                log_service.add_log(
+                    novel_id,
+                    "VolumePlannerAgent",
+                    f"写入爽点预测失败 chapter={chapter_id} type={thrill_type}: {exc}",
+                    level="warning",
+                )
 
     # Overall 只要及格,但关键维度(爽点分布、人物与情节契合)必须达标,否则是"虚高"。
     OVERALL_THRESHOLD = 75
@@ -2039,6 +2088,12 @@ class VolumePlannerAgent:
             "禁止使用“资源限制、身份压力或对手试探”“现场规矩和旁人审视”“推进当前目标”“当前事件”等模板句。\n"
             "11. 选择与代价必须依附本章证物、人物动作、短对话或环境变化，不能只写抽象判断。\n"
             "12. 不要输出 Markdown，不要解释。\n\n"
+            "## expected_thrills 爽点预测\n"
+            "每章必须输出 expected_thrills 列表(数组,1-4 项),声明本章应当出现的高潮类型、强度和预期 beat_idx。\n"
+            "类型: face_slap / show_off / level_up / reward_gain / revelation / revenge / plot_twist / recognition\n"
+            "强度: low / medium / high / peak\n"
+            "示例: [{\"thrill_type\": \"face_slap\", \"intensity\": \"high\", \"beat_idx\": 2}, "
+            "{\"thrill_type\": \"revelation\", \"intensity\": \"medium\", \"beat_idx\": 1}]。\n\n"
             f"### 整卷骨架\n{blueprint.model_dump_json()[:8000]}\n\n"
             f"### 整体大纲\n{synopsis.model_dump_json()[:8000]}\n\n"
             f"{constraint_block}\n\n"

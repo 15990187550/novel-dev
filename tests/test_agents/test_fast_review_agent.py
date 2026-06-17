@@ -1670,3 +1670,153 @@ async def test_fast_review_warns_when_open_question_keyword_missing(async_sessio
     )
     assert warning_item["detail"]["beat_index"] == 0
     assert "山门外的人是谁" in warning_item["message"]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 / Task 18: thrill point 验证测试
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thrill_point_verification_marks_matched_and_warns_missing(async_session):
+    """FastReview 命中关键词的 thrill_point 调 mark_verified,未命中加 thrill_point_missing 告警。"""
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+    polished = (
+        "陆照反手一巴掌，抽在沈云脸上，全场哗然。"
+        "掌门点头赞许，破格收他为内门弟子。"
+    )
+
+    director = NovelDirector(session=async_session)
+    # target_word_count matches the polished text length so the word_count check
+    # passes and the review enters the gate-building branch.
+    await director.save_checkpoint(
+        "novel_thrill",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": len(polished)}}},
+        volume_id="v1",
+        chapter_id="c_thrill",
+    )
+    await ChapterRepository(async_session).create("c_thrill", "v1", 1, "Thrill")
+    await ChapterRepository(async_session).update_text("c_thrill", raw_draft=polished, polished_text=polished)
+
+    repo = ThrillPointRepository(async_session)
+    # face_slap / recognition should match; level_up should miss.
+    await repo.create(
+        novel_id="novel_thrill",
+        chapter_id="c_thrill",
+        beat_idx=2,
+        thrill_type="face_slap",
+        intensity="high",
+        planner_predicted=True,
+    )
+    await repo.create(
+        novel_id="novel_thrill",
+        chapter_id="c_thrill",
+        beat_idx=3,
+        thrill_type="recognition",
+        intensity="medium",
+        planner_predicted=True,
+    )
+    await repo.create(
+        novel_id="novel_thrill",
+        chapter_id="c_thrill",
+        beat_idx=3,
+        thrill_type="level_up",
+        intensity="peak",
+        planner_predicted=True,
+    )
+    await async_session.flush()
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_thrill", "c_thrill")
+    # Force-flush the session to ensure any uncommitted writes from review() are
+    # visible to the test's subsequent query (the fixture rolls back at teardown).
+    await async_session.flush()
+
+    # After review: face_slap + recognition should be verified, level_up still unverified.
+    remaining = await repo.list_unverified("novel_thrill", chapter_id="c_thrill")
+    remaining_types = {tp.thrill_type for tp in remaining}
+    assert "level_up" in remaining_types
+    assert "face_slap" not in remaining_types
+    assert "recognition" not in remaining_types
+
+    # Quality gate should contain a thrill_point_missing warning.
+    state = await director.resume("novel_thrill")
+    gate = state.checkpoint_data.get("quality_gate") or {}
+    warning_codes = {
+        str(item.get("code"))
+        for item in gate.get("warning_items", [])
+        if isinstance(item, dict) and item.get("code")
+    }
+    assert "thrill_point_missing" in warning_codes
+    missing_item = next(
+        item for item in gate.get("warning_items", [])
+        if isinstance(item, dict) and item.get("code") == "thrill_point_missing"
+    )
+    assert missing_item["detail"]["thrill_type"] == "level_up"
+
+
+@pytest.mark.asyncio
+async def test_thrill_point_verification_records_miss_in_report_notes_on_edit_retry(async_session):
+    """快速评审未通过回到 editing 阶段时,miss 应写入 report.notes。"""
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+    director = NovelDirector(session=async_session)
+    # Intentionally small target so word_count_ok is False → goes to editing branch
+    await director.save_checkpoint(
+        "novel_thrill_retry",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={"chapter_context": {"chapter_plan": {"target_word_count": 4}}},
+        volume_id="v1",
+        chapter_id="c_thrill_retry",
+    )
+    await ChapterRepository(async_session).create("c_thrill_retry", "v1", 1, "Retry")
+    polished = "陆照轻轻一推，众弟子皆已倒地。掌门点头赞许。"
+    await ChapterRepository(async_session).update_text("c_thrill_retry", raw_draft=polished, polished_text=polished)
+
+    repo = ThrillPointRepository(async_session)
+    await repo.create(
+        novel_id="novel_thrill_retry",
+        chapter_id="c_thrill_retry",
+        beat_idx=0,
+        thrill_type="level_up",
+        intensity="peak",
+        planner_predicted=True,
+    )
+    await async_session.flush()
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_thrill_retry", "c_thrill_retry")
+    await async_session.flush()
+
+    # On edit-retry path the gate is not built, so miss lives in report.notes
+    assert any("[thrill_point_missing]" in n for n in (report.notes or []))
+    # level_up thrill stays unverified in DB
+    remaining = await repo.list_unverified("novel_thrill_retry", chapter_id="c_thrill_retry")
+    assert {tp.thrill_type for tp in remaining} == {"level_up"}
+
+
+def test_find_thrill_keyword_evidence_returns_slice_or_none():
+    # Match returns a slice around the keyword
+    text = "全场哗然，无人敢出声。"
+    ev = FastReviewAgent._find_thrill_keyword_evidence("show_off", text)
+    assert ev is not None and "全场哗然" in ev
+    # No match returns None
+    assert FastReviewAgent._find_thrill_keyword_evidence("plot_twist", "普通日常叙事。") is None
+    # Unknown thrill type returns None
+    assert FastReviewAgent._find_thrill_keyword_evidence("unknown_type", "anything") is None

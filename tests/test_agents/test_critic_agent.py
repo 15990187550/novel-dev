@@ -472,3 +472,88 @@ async def test_review_max_attempts_forces_editing_for_real_longform(async_sessio
     assert state.checkpoint_data["draft_attempt_count"] == 3
     assert state.checkpoint_data["critic_forced_editing"]["overall"] == 55
     assert state.checkpoint_data["draft_rewrite_plan"]["rewrite_all"] is True
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 / Task 18: plot_tension 爽点扣分
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_plot_tension_deducts_for_unverified_thrills_with_cap(async_session):
+    """CriticAgent 对每个未验证爽点扣 5 分,封顶 20 分;overall 取维度均值。"""
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+    repo = ThrillPointRepository(async_session)
+    # 6 项未验证(>4 项触发封顶 20)
+    for i, t in enumerate(["face_slap", "show_off", "level_up", "revelation", "revenge", "plot_twist"]):
+        await repo.create(
+            novel_id="n_crit_thrill",
+            chapter_id="c_crit",
+            beat_idx=i,
+            thrill_type=t,
+            intensity="medium",
+            planner_predicted=True,
+        )
+    await async_session.flush()
+
+    original = ScoreResult(
+        overall=80,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment="原始"),
+            DimensionScore(name="characterization", score=80, comment=""),
+            DimensionScore(name="readability", score=80, comment=""),
+            DimensionScore(name="consistency", score=80, comment=""),
+            DimensionScore(name="humanity", score=80, comment=""),
+        ],
+        summary_feedback="原始反馈。",
+    )
+    agent = CriticAgent(async_session)
+    adjusted = await agent._apply_thrill_point_plot_tension_adjustment(
+        original, novel_id="n_crit_thrill", chapter_id="c_crit"
+    )
+    plot_dim = next(d for d in adjusted.dimensions if d.name == "plot_tension")
+    # cap = 20; 6 * 5 = 30, capped at 20
+    assert plot_dim.score == 65
+    assert "plot_tension_adjustment=-20" in plot_dim.comment
+    assert "missing=6" in plot_dim.comment
+    # overall = (65+80+80+80+80)/5 = 77
+    assert adjusted.overall == 77
+    # summary feedback includes penalty note
+    assert "未达成爽点 6 项" in adjusted.summary_feedback
+    assert "扣 20 分" in adjusted.summary_feedback
+
+
+@pytest.mark.asyncio
+async def test_plot_tension_no_penalty_when_all_verified(async_session):
+    """没有未验证爽点时,plot_tension 与 overall 保持不变。"""
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+    repo = ThrillPointRepository(async_session)
+    tp = await repo.create(
+        novel_id="n_crit_thrill_clean",
+        chapter_id="c_crit_clean",
+        beat_idx=0,
+        thrill_type="face_slap",
+        intensity="high",
+        planner_predicted=True,
+    )
+    await repo.mark_verified(tp.id, evidence_quote="...")
+    await async_session.flush()
+
+    original = ScoreResult(
+        overall=80,
+        dimensions=[
+            DimensionScore(name="plot_tension", score=85, comment="原始"),
+            DimensionScore(name="characterization", score=80, comment=""),
+        ],
+        summary_feedback="无调整。",
+    )
+    agent = CriticAgent(async_session)
+    adjusted = await agent._apply_thrill_point_plot_tension_adjustment(
+        original, novel_id="n_crit_thrill_clean", chapter_id="c_crit_clean"
+    )
+    plot_dim = next(d for d in adjusted.dimensions if d.name == "plot_tension")
+    assert plot_dim.score == 85
+    assert "plot_tension_adjustment" not in plot_dim.comment
+    assert adjusted.overall == 80

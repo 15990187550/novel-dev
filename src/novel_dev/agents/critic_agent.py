@@ -3,7 +3,7 @@ from typing import List
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from novel_dev.schemas.review import ScoreResult
+from novel_dev.schemas.review import ScoreResult, DimensionScore
 from novel_dev.repositories.novel_state_repo import NovelStateRepository
 from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
@@ -313,7 +313,110 @@ class CriticAgent:
             "CriticAgent", "score_chapter", prompt, ScoreResult, novel_id=novel_id
         )
         await self.prompt_registry.increment_sample_count("critic", version)
+        # Phase 4 / Task 18: plot_tension 爽点扣分 — 拉取本章未验证的
+        # 规划预测爽点,每项扣 5 分,最多扣 20 分。
+        score_result = await self._apply_thrill_point_plot_tension_adjustment(
+            score_result,
+            novel_id=novel_id,
+            chapter_id=chapter_id,
+        )
         return score_result
+
+    THRILL_POINT_PENALTY_PER_MISS = 5
+    THRILL_POINT_PENALTY_CAP = 20
+
+    async def _apply_thrill_point_plot_tension_adjustment(
+        self,
+        score_result: ScoreResult,
+        *,
+        novel_id: str,
+        chapter_id: str,
+    ) -> ScoreResult:
+        """Phase 4 / Task 18: 在 plot_tension 维度扣分未达成的爽点预测。
+
+        - 拉取 ``ThrillPointRepository.list_unverified(novel_id, chapter_id=...)``;
+        - 每项未验证的 thrill_type 扣 ``THRILL_POINT_PENALTY_PER_MISS`` 分;
+        - 累计扣分上限 ``THRILL_POINT_PENALTY_CAP``;
+        - 调整后的 plot_tension 写回 ``DimensionScore.score``;
+        - ``overall`` 重新按维度平均;
+        - 把扣分明细写入 ``DimensionScore.comment`` 后缀与 ``summary_feedback`` 末尾,
+          便于 UI 直接展示。
+        """
+        if not novel_id or not chapter_id:
+            return score_result
+        try:
+            from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+
+            repo = ThrillPointRepository(self.session)
+            unverified = await repo.list_unverified(novel_id, chapter_id=chapter_id)
+        except Exception as exc:  # noqa: BLE001
+            log_service.add_log(
+                novel_id,
+                "CriticAgent",
+                f"拉取未验证爽点失败,跳过 plot_tension 调整: {exc}",
+                level="warning",
+            )
+            return score_result
+        if not unverified:
+            return score_result
+
+        miss_count = len(unverified)
+        penalty = min(
+            self.THRILL_POINT_PENALTY_PER_MISS * miss_count,
+            self.THRILL_POINT_PENALTY_CAP,
+        )
+        miss_types = sorted({tp.thrill_type for tp in unverified if getattr(tp, "thrill_type", None)})
+
+        adjusted: list[DimensionScore] = []
+        for dim in score_result.dimensions:
+            if dim.name != "plot_tension":
+                adjusted.append(dim)
+                continue
+            original = dim.score
+            new_score = max(0, min(100, original - penalty))
+            detail = (
+                f"{dim.comment} | plot_tension_adjustment=-{penalty} "
+                f"(missing={miss_count}, types={','.join(miss_types) or '-'})"
+            ).strip(" |")
+            adjusted.append(
+                DimensionScore(
+                    name=dim.name,
+                    score=new_score,
+                    comment=detail,
+                )
+            )
+        if not any(d.name == "plot_tension" for d in score_result.dimensions):
+            return score_result
+        if all(d.name != "plot_tension" for d in adjusted):
+            return score_result
+
+        # Recompute overall as the simple mean of dimension scores
+        new_overall = round(sum(d.score for d in adjusted) / max(1, len(adjusted)))
+        new_summary = score_result.summary_feedback
+        if penalty > 0:
+            new_summary = (
+                f"{new_summary}\n\n爽点缺失调整: 未达成爽点 {miss_count} 项 "
+                f"({','.join(miss_types) or '-'}), plot_tension 扣 {penalty} 分。"
+            ).strip()
+        log_agent_detail(
+            novel_id,
+            "CriticAgent",
+            f"plot_tension 爽点扣分: -{penalty} (missing={miss_count})",
+            node="plot_tension_thrill_penalty",
+            task="score_chapter",
+            metadata={
+                "chapter_id": chapter_id,
+                "missing_thrill_count": miss_count,
+                "missing_thrill_types": miss_types,
+                "penalty": penalty,
+            },
+        )
+        return ScoreResult(
+            overall=new_overall,
+            dimensions=adjusted,
+            summary_feedback=new_summary,
+            per_dim_issues=score_result.per_dim_issues,
+        )
 
     async def _build_genre_review_block(self, novel_id: str, context_data: dict) -> str:
         genre_block = str(context_data.get("genre_prompt_block") or "").strip()

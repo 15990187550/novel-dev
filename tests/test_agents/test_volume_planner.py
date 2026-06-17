@@ -1402,6 +1402,50 @@ def test_build_volume_plan_batch_prompt_includes_genre_rules(async_session):
     assert "类型模板约束" in prompt
     assert "信息披露边界必须公平" in prompt
     assert "每个 beat" in prompt
+    # Phase 4 / Task 18: expected_thrills 段必须出现在批量扩展 prompt 中
+    assert "expected_thrills" in prompt
+    assert "face_slap" in prompt and "recognition" in prompt
+    assert "intensity" in prompt
+
+
+def test_persist_predicted_thrills_writes_rows_to_thrill_point_repo(async_session):
+    """Phase 4 / Task 18: planner 声明的 expected_thrills 落库 planner_predicted=True。"""
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+    from novel_dev.schemas.outline import ExpectedThrill, VolumeBeat
+
+    agent = VolumePlannerAgent(async_session)
+    chapter = VolumeBeat(
+        chapter_id="vol_1_ch_1",
+        chapter_number=1,
+        title="初战立威",
+        summary="主角在考核中一鸣惊人。",
+        target_word_count=3000,
+        target_mood="tense",
+        expected_thrills=[
+            ExpectedThrill(thrill_type="face_slap", intensity="high", beat_idx=2),
+            ExpectedThrill(thrill_type="recognition", intensity="medium", beat_idx=2),
+        ],
+    )
+
+    import asyncio
+    asyncio.get_event_loop().run_until_complete(
+        agent._persist_predicted_thrills(
+            novel_id="n_thrill",
+            chapter_id=chapter.chapter_id,
+            thrills=list(chapter.expected_thrills),
+        )
+    )
+    asyncio.get_event_loop().run_until_complete(async_session.flush())
+
+    repo = ThrillPointRepository(async_session)
+    rows = asyncio.get_event_loop().run_until_complete(
+        repo.list_unverified("n_thrill", chapter_id="vol_1_ch_1")
+    )
+    assert len(rows) == 2
+    types = {row.thrill_type for row in rows}
+    assert types == {"face_slap", "recognition"}
+    assert all(row.planner_predicted is True for row in rows)
+    assert all(row.fast_review_verified is False for row in rows)
 
 
 @pytest.mark.asyncio
