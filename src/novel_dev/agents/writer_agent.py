@@ -525,7 +525,17 @@ class WriterAgent:
         root_cause_segment: str = "",
         chapter_id: str = "",
     ) -> str:
-        system_prompt = await self._build_system_prompt(context, True, genre_template=genre_template, chapter_id=chapter_id)
+        # Phase 4 / Task 21: pull chapter-level archetype (whole-chapter mode
+        # has no single beat, so mood_phase is omitted).
+        archetype = getattr(context.chapter_plan, "archetype", "") or ""
+        system_prompt = await self._build_system_prompt(
+            context,
+            True,
+            genre_template=genre_template,
+            chapter_id=chapter_id,
+            archetype=archetype,
+            mood_phase=None,
+        )
         user_content = self._build_whole_chapter_context_message(
             context, rewrite_plan, root_cause_segment=root_cause_segment
         )
@@ -628,7 +638,17 @@ class WriterAgent:
                 "WriterAgent",
                 "generate_beat",
             )
-        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template, chapter_id=chapter_id)
+        # Phase 4 / Task 21: chapter archetype + per-beat mood_phase style hints.
+        archetype = getattr(context.chapter_plan, "archetype", "") or ""
+        beat_mood_phase = getattr(beat, "mood_phase", None)
+        system_prompt = await self._build_system_prompt(
+            context,
+            is_last,
+            genre_template=genre_template,
+            chapter_id=chapter_id,
+            archetype=archetype,
+            mood_phase=beat_mood_phase,
+        )
         context_msg = self._build_context_message(
             beat, context, relay_history, last_beat_text, idx, total, is_last, rewrite_plan
         )
@@ -659,7 +679,15 @@ class WriterAgent:
         inner = _strip_anchors(response.text)
         return f"<!--BEAT:{idx}-->\n{inner}\n<!--/BEAT:{idx}-->"
 
-    async def _build_system_prompt(self, context: ChapterContext, is_last: bool, genre_template=None, chapter_id: str = "") -> str:
+    async def _build_system_prompt(
+        self,
+        context: ChapterContext,
+        is_last: bool,
+        genre_template=None,
+        chapter_id: str = "",
+        archetype: str = "",
+        mood_phase: str | None = None,
+    ) -> str:
         """Layer 1: Rules. Goes in system message for highest LLM priority."""
         genre_block = ""
         if genre_template is not None:
@@ -679,7 +707,9 @@ class WriterAgent:
         return render_prompt_template(
             template,
             style_guide_block=self._build_style_guide_block(context),
-            writing_rules_block=self._build_writing_rules_block(is_last),
+            writing_rules_block=self._build_writing_rules_block(
+                is_last, archetype=archetype, mood_phase=mood_phase
+            ),
             genre_block=genre_block,
             prose_hygiene_rules=ProseHygieneService.prompt_rules(self._prose_hygiene_context(context, genre_template)),
         )
@@ -2337,7 +2367,12 @@ class WriterAgent:
             f"{sp_text}\n"
         )
 
-    def _build_writing_rules_block(self, is_last: bool) -> str:
+    def _build_writing_rules_block(
+        self,
+        is_last: bool,
+        archetype: str = "",
+        mood_phase: str | None = None,
+    ) -> str:
         hook_clause = (
             "- **章末钩子/牵引**:这是本章最后一个节拍,让读者获得更具体的阅读期待。"
             "期待可以来自信息差、关系变化、行动压力、情绪余波、环境异常或人物选择,"
@@ -2346,6 +2381,23 @@ class WriterAgent:
             "- **节拍停点**:结尾让当前目标、阻力或选择产生自然余波,把读者顺势带到下一个节拍；"
             "不要为了推进而机械添加疑问或冲突。\n"
         )
+        # Phase 4 / Task 21: chapter-level archetype + per-beat mood_phase as
+        # style/rhythm hints. Defaults are empty/None so older plans (pre-Task 20)
+        # still get a clean rules block.
+        archetype_hint = ""
+        if archetype:
+            archetype_hint = (
+                f"- **本章节奏定位(archetype = {archetype})**:本章是 {archetype} 章节,"
+                "聚焦对应节奏(详见下表)。让章内的目标、阻力、选择和停点都自然落在"
+                f"\"{archetype}\"应有的密度与重心上,避免把任何节奏硬压成其它形态。\n"
+            )
+        mood_hint = ""
+        if mood_phase:
+            mood_hint = (
+                f"- **本拍情绪基线(mood_phase = {mood_phase})**:本拍 mood_phase = {mood_phase},"
+                f"情绪基线:{mood_phase}。正文的人物状态、对话、身体反应、场景压迫都要"
+                f"服务这一拍\"{mood_phase}\"应有的强度,不要从其它节奏借词。\n"
+            )
         return (
             "### 写作方向\n"
             "- **反模板判断**:不要为了满足形式要求机械添加对话、动作、感官或悬念；"
@@ -2373,6 +2425,8 @@ class WriterAgent:
             "相近句式连续出现时主动换成动作、短对白或具象物件。\n"
             "- **视点一致**:全章保持设定视点(默认紧贴主角),通过主角可感知的信息组织场景。\n"
             "- **开场多样性**:用动作、对话、具象物件或反常细节切入,让第一段立刻形成当下事件。\n"
+            f"{archetype_hint}"
+            f"{mood_hint}"
             f"{hook_clause}"
             "- **线索兑现**:章末或关键停点优先用既有线索、当场后果、下一步疑问或风险余波、人物关系变化形成牵引。\n"
             "- **字数**:按用户消息中的当前节拍目标字数写作,允许 ±20%。\n"
@@ -2403,7 +2457,18 @@ class WriterAgent:
                 "WriterAgent",
                 "rewrite_beat",
             )
-        system_prompt = await self._build_system_prompt(context, is_last, genre_template=genre_template, chapter_id=chapter_id)
+        # Phase 4 / Task 21: same archetype/mood_phase injection as the
+        # forward pass so rewrites stay anchored to chapter rhythm + beat mood.
+        archetype = getattr(context.chapter_plan, "archetype", "") or ""
+        beat_mood_phase = getattr(beat, "mood_phase", None)
+        system_prompt = await self._build_system_prompt(
+            context,
+            is_last,
+            genre_template=genre_template,
+            chapter_id=chapter_id,
+            archetype=archetype,
+            mood_phase=beat_mood_phase,
+        )
         context_msg = self._build_context_message(
             beat, context, relay_history or [], last_beat_text,
             idx, total, is_last, rewrite_plan,

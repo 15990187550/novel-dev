@@ -648,3 +648,104 @@ def test_writer_default_drafting_mode_is_beat_by_beat():
     from novel_dev.agents.writer_agent import WriterAgent
     # _should_generate_whole_chapter should return False by default (None drafting_mode)
     assert WriterAgent._should_generate_whole_chapter(drafting_mode=None) is False
+
+
+@pytest.mark.asyncio
+async def test_writer_receives_archetype_and_mood_phase_in_prompt(async_session):
+    """Task 21: WriterAgent injects chapter-level archetype and per-beat mood_phase
+    into the writing prompt as style/rhythm hints.
+    """
+    from novel_dev.agents.writer_agent import WriterAgent
+    from novel_dev.schemas.context import (
+        BeatPlan,
+        ChapterContext,
+        ChapterPlan,
+        LocationContext,
+    )
+
+    captured: dict = {}
+
+    async def fake_generate(messages, config=None):
+        captured["system"] = messages[0].content
+        captured["user"] = messages[1].content
+        return type("Resp", (), {"text": "他按住呼吸，沿着既定规则推进。"})
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.side_effect = fake_generate
+
+    agent = WriterAgent(async_session)
+    beat = BeatPlan(
+        summary="主角在压力下做出选择。",
+        target_mood="紧张",
+        target_word_count=300,
+        mood_phase="climax",
+    )
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="第一章",
+        target_word_count=800,
+        beats=[beat],
+        archetype="action",
+    )
+    context = ChapterContext(
+        chapter_plan=chapter_plan,
+        style_profile={},
+        worldview_summary="",
+        active_entities=[],
+        location_context=LocationContext(current="测试场景"),
+        timeline_events=[],
+        pending_foreshadowings=[],
+        story_contract={},
+    )
+    with patch("novel_dev.llm.llm_factory.get", return_value=mock_client), patch(
+        "novel_dev.llm.llm_factory._resolve_config",
+        return_value={},
+    ):
+        await agent._generate_beat(
+            beat, context, [], "", 0, 1, True, novel_id="n_writer_archetype"
+        )
+
+    system = captured["system"]
+    user = captured["user"]
+    combined = system + "\n" + user
+    # Archetype (chapter-level) must be injected.
+    assert "action" in combined
+    assert "本章是 action 章节" in combined
+    # mood_phase (per-beat) must be injected.
+    assert "climax" in combined
+    assert "mood_phase = climax" in combined
+    # Should not break the existing writing-rules header.
+    assert "写作方向" in system
+    assert "读者读感" in system
+
+
+def test_writer_writing_rules_block_includes_archetype_and_mood_phase(async_session):
+    """Static check: _build_writing_rules_block accepts archetype/mood_phase."""
+    from novel_dev.agents.writer_agent import WriterAgent
+
+    agent = WriterAgent(async_session)
+
+    block_with_archetype = agent._build_writing_rules_block(
+        is_last=False, archetype="action"
+    )
+    assert "action" in block_with_archetype
+    assert "本章是 action 章节" in block_with_archetype
+
+    block_with_mood = agent._build_writing_rules_block(
+        is_last=False, mood_phase="climax"
+    )
+    assert "climax" in block_with_mood
+    assert "mood_phase = climax" in block_with_mood
+
+    # Without args: nothing extra added, header preserved.
+    block_empty = agent._build_writing_rules_block(is_last=False)
+    assert "action" not in block_empty
+    assert "climax" not in block_empty
+    assert "写作方向" in block_empty
+
+    # Backward compat: empty string archetype / None mood_phase is treated as missing.
+    block_empty_string = agent._build_writing_rules_block(
+        is_last=False, archetype="", mood_phase=None
+    )
+    assert "action" not in block_empty_string
+    assert "climax" not in block_empty_string
