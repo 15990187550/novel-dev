@@ -442,6 +442,7 @@ class FastReviewAgent:
             beat_cohesion_ok=beat_cohesion_ok,
             language_style_ok=language_style_ok,
             notes=notes,
+            beat_coverage_results=[],
         )
 
         passed = all([word_count_ok, consistency_fixed, ai_flavor_reduced, beat_cohesion_ok, language_style_ok])
@@ -510,22 +511,34 @@ class FastReviewAgent:
                 for i, b in enumerate(chapter_context.get("beats", []))
             ]
             if beat_cards:
-                from novel_dev.config import settings
-                from novel_dev.services.beat_coverage_validator import BeatCoverageValidator
-                use_llm = bool(getattr(settings, "phase4_beat_coverage_use_llm", True))
-                validator = BeatCoverageValidator(self.session, use_llm=use_llm)
-                coverage = await validator.validate(beat_cards, polished)
-                for r in coverage:
-                    if r.severity == "block" and r.to_issue_code():
-                        gate.blocking_items.append({
-                            "code": r.to_issue_code(),
-                            "message": f"beat {r.beat_index}: {r.deviation}",
-                            "detail": {"beat_index": r.beat_index, "deviation": r.deviation},
-                        })
-                report.beat_coverage_results = [
-                    {"beat_index": r.beat_index, "covered": r.covered, "severity": r.severity}
-                    for r in coverage
-                ]
+                try:
+                    from novel_dev.config import settings
+                    from novel_dev.services.beat_coverage_validator import BeatCoverageValidator
+                    use_llm = bool(getattr(settings, "phase4_beat_coverage_use_llm", True))
+                    validator = BeatCoverageValidator(self.session, use_llm=use_llm)
+                    coverage = await validator.validate(beat_cards, polished)
+                    for r in coverage:
+                        if r.severity == "block" and r.to_issue_code():
+                            gate.blocking_items.append({
+                                "code": r.to_issue_code(),
+                                "message": f"beat {r.beat_index}: {r.deviation}",
+                                "detail": {"beat_index": r.beat_index, "deviation": r.deviation},
+                            })
+                    report.beat_coverage_results = [
+                        {"beat_index": r.beat_index, "covered": r.covered, "severity": r.severity}
+                        for r in coverage
+                    ]
+                except Exception as exc:
+                    logger.warning(
+                        "beat_coverage_validator_failed",
+                        extra={"error": repr(exc), "chapter_id": chapter_id},
+                    )
+            # Persist updated report with beat_coverage_results after validator runs
+            await self.chapter_repo.update_fast_review(
+                chapter_id,
+                score=FAST_REVIEW_PASS_SCORE if passed else FAST_REVIEW_FAIL_SCORE,
+                feedback=report.model_dump(),
+            )
             continuity_audit = ContinuityAuditService.audit_chapter(
                 polished,
                 checkpoint.get("chapter_context", {}),

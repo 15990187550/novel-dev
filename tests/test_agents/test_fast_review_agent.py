@@ -1556,3 +1556,7 @@ async def test_fast_review_invokes_beat_coverage_validator(async_session):
     assert report.beat_coverage_results[0]["beat_index"] == 0
     assert report.beat_coverage_results[0]["covered"] is False
     assert report.beat_coverage_results[0]["severity"] == "block"
+    # Check gate.blocking_items was populated with beat coverage entry
+    state = await director.resume("novel_fr_beat_coverage")
+    assert len(state.checkpoint_data["quality_gate"]["blocking_items"]) > 0
+    assert state.checkpoint_data["quality_gate"]["blocking_items"][0]["code"] == "BEAT_BOUNDARY_VIOLATION"
