@@ -533,6 +533,12 @@ class FastReviewAgent:
                         "beat_coverage_validator_failed",
                         extra={"error": repr(exc), "chapter_id": chapter_id},
                     )
+            # Phase 4: 钩子达成验证 — 末拍 required_open_question 关键词需在成稿中可被感知
+            self._apply_open_question_check_to_gate(
+                gate,
+                chapter_context.get("beats", []) if isinstance(chapter_context, dict) else [],
+                polished,
+            )
             # Persist updated report with beat_coverage_results after validator runs
             await self.chapter_repo.update_fast_review(
                 chapter_id,
@@ -803,6 +809,63 @@ class FastReviewAgent:
         if genre_quality_issues:
             gate.status = QUALITY_BLOCK
             gate.summary = "存在阻断级质量问题，停止归档和世界状态入库。"
+        return gate
+
+    @staticmethod
+    def _extract_open_question_keywords(question: str) -> list[str]:
+        """从末拍 required_open_question 中抽取用于钩子达成的关键词。
+
+        简化策略:剥离常见标点后,取所有 2 字滑动窗口作为关键词。
+        对于 "山门外的人是谁?" -> ["山门外", "门外", "外的", "的人", "人是", "是谁"]。
+        任何关键词出现在成稿中即视为达成。
+        """
+        if not question:
+            return []
+        cleaned = re.sub(r"[？?。.!！,，;；:：、\s]+", "", question)
+        if len(cleaned) < 2:
+            return []
+        return [cleaned[i : i + 2] for i in range(len(cleaned) - 1)]
+
+    @classmethod
+    def _apply_open_question_check_to_gate(cls, gate, beats: list, polished_text: str):
+        """Phase 4: 钩子达成验证。
+
+        遍历 chapter_context.beats,若某节拍为末拍且带有 required_open_question,
+        但成稿 polished_text 中未出现该问题的任何 2 字关键词,则向 gate.warning_items
+        追加一条 open_question_missing 告警。同步记录 beat_index,供 EditorAgent 定点修补。
+        """
+        if not isinstance(beats, list) or not beats:
+            return gate
+        for b in beats:
+            if not isinstance(b, dict):
+                continue
+            if not b.get("is_last_beat"):
+                continue
+            question = b.get("required_open_question")
+            if not question:
+                continue
+            keywords = cls._extract_open_question_keywords(str(question))
+            if not keywords:
+                continue
+            text = polished_text or ""
+            if any(kw in text for kw in keywords):
+                continue
+            item = {
+                "code": "open_question_missing",
+                "message": f"末拍未围绕 required_open_question ({question}) 收束",
+                "detail": {
+                    "question": str(question),
+                    "beat_index": b.get("beat_index"),
+                    "keywords": keywords,
+                },
+            }
+            existing_codes = {
+                str(w.get("code"))
+                for w in gate.warning_items
+                if isinstance(w, dict) and w.get("code")
+            }
+            if "open_question_missing" not in existing_codes:
+                gate.warning_items.append(item)
         return gate
 
     @staticmethod

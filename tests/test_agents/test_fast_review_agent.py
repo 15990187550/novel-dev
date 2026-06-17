@@ -1560,3 +1560,113 @@ async def test_fast_review_invokes_beat_coverage_validator(async_session):
     state = await director.resume("novel_fr_beat_coverage")
     assert len(state.checkpoint_data["quality_gate"]["blocking_items"]) > 0
     assert state.checkpoint_data["quality_gate"]["blocking_items"][0]["code"] == "BEAT_BOUNDARY_VIOLATION"
+
+
+@pytest.mark.asyncio
+async def test_fast_review_does_not_warn_when_open_question_keyword_present(async_session):
+    """Phase 4: 钩子达成验证 — 末拍文本含问题关键词时不应产生 open_question_missing 告警。"""
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_hook_present",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 2,
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 18},
+                "beats": [
+                    {
+                        "beat_index": 0,
+                        "is_last_beat": True,
+                        "required_open_question": "山门外的人是谁?",
+                        "must_cover": [],
+                        "forbidden_materials": [],
+                    }
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_hook_present",
+    )
+    await ChapterRepository(async_session).create("c_hook_present", "v1", 1, "Hook Present")
+    await ChapterRepository(async_session).update_text(
+        "c_hook_present",
+        raw_draft="陆照逃出灵谷,但山门外有人等着他。",
+        polished_text="陆照逃出灵谷,但山门外有人等着他。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_hook_present", "c_hook_present")
+
+    state = await director.resume("novel_fr_hook_present")
+    gate = state.checkpoint_data.get("quality_gate") or {}
+    warning_codes = {
+        str(item.get("code"))
+        for item in gate.get("warning_items", [])
+        if isinstance(item, dict) and item.get("code")
+    }
+    assert "open_question_missing" not in warning_codes
+
+
+@pytest.mark.asyncio
+async def test_fast_review_warns_when_open_question_keyword_missing(async_session):
+    """Phase 4: 钩子达成验证 — 末拍文本未触及 required_open_question 关键词时应产生告警。"""
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_hook_missing",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 2,
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 12},
+                "beats": [
+                    {
+                        "beat_index": 0,
+                        "is_last_beat": True,
+                        "required_open_question": "山门外的人是谁?",
+                        "must_cover": [],
+                        "forbidden_materials": [],
+                    }
+                ],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_hook_missing",
+    )
+    await ChapterRepository(async_session).create("c_hook_missing", "v1", 1, "Hook Missing")
+    await ChapterRepository(async_session).update_text(
+        "c_hook_missing",
+        raw_draft="陆照回到厢房，倒了一杯凉茶。",
+        polished_text="陆照回到厢房，倒了一杯凉茶。",
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        await agent.review("novel_fr_hook_missing", "c_hook_missing")
+
+    state = await director.resume("novel_fr_hook_missing")
+    gate = state.checkpoint_data.get("quality_gate") or {}
+    warning_codes = {
+        str(item.get("code"))
+        for item in gate.get("warning_items", [])
+        if isinstance(item, dict) and item.get("code")
+    }
+    assert "open_question_missing" in warning_codes
+    warning_item = next(
+        item for item in gate.get("warning_items", [])
+        if isinstance(item, dict) and item.get("code") == "open_question_missing"
+    )
+    assert warning_item["detail"]["beat_index"] == 0
+    assert "山门外的人是谁" in warning_item["message"]
