@@ -14,6 +14,10 @@ class BeatPlan(BaseModel):
     key_entities: List[str] = Field(default_factory=list)
     foreshadowings_to_embed: List[str] = Field(default_factory=list)
     required_open_question: Optional[str] = None
+    # Phase 4 / Task 20: per-beat mood phase (e.g. "tension", "release",
+    # "climax", "calm", "rising"). Optional, defaults to None for backward
+    # compat with plans produced before this field was introduced.
+    mood_phase: Optional[str] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -40,7 +44,7 @@ class BeatPlan(BaseModel):
                     break
         return normalized
 
-    @field_validator("summary", "target_mood", mode="before")
+    @field_validator("summary", "target_mood", "mood_phase", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)
@@ -60,6 +64,11 @@ class ChapterPlan(BaseModel):
     writability_status: dict[str, Any] = Field(default_factory=dict)
     chapter_plan_sanity_report: dict[str, Any] = Field(default_factory=dict)
     quality_preflight_report: dict[str, Any] = Field(default_factory=dict)
+    # Phase 4 / Task 20: chapter-level archetype (e.g. "action", "intrigue",
+    # "filler", "transition", "climax", "setup", "twist"). Open string so
+    # existing plans / LLM outputs are not rejected; downstream (Task 21) can
+    # constrain further. Defaults to empty string for backward compat.
+    archetype: str = ""
 
     @field_validator("title", mode="before")
     @classmethod

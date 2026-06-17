@@ -267,6 +267,9 @@ class VolumeBeatExpansion(BaseModel):
     cheat_activated: bool = False
     cheat_activated_ability: str = ""
     cheat_activated_beat_idx: Optional[int] = None
+    # Phase 4 / Task 20: chapter-level archetype. Default empty for
+    # backward compat; LLM prompt below asks for it explicitly.
+    archetype: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -2121,6 +2124,27 @@ class VolumePlannerAgent:
             "强度: low / medium / high / peak\n"
             "示例: [{\"thrill_type\": \"face_slap\", \"intensity\": \"high\", \"beat_idx\": 2}, "
             "{\"thrill_type\": \"revelation\", \"intensity\": \"medium\", \"beat_idx\": 1}]。\n\n"
+            "## archetype 章节类型(Phase 4 / Task 20)\n"
+            "每章必须输出 archetype 字段(字符串,小写英文短词),声明本章在整卷节奏中的功能定位。\n"
+            "允许值(任选其一):\n"
+            "  setup  — 铺陈设定、引入人物或势力\n"
+            "  intrigue — 阴谋、算计、情报博弈\n"
+            "  action — 战斗、追逐、可量化冲突\n"
+            "  transition — 场景/视角过渡,推进但不出大事件\n"
+            "  filler — 日常、修炼、巩固,允许节奏放缓\n"
+            "  twist — 反转、伏笔揭露、认知颠覆\n"
+            "  climax — 本卷/本章高潮,需要情绪与情节双峰\n"
+            "若本章功能不属于以上类别,选择最接近的标签,不要自创新值。\n\n"
+            "## mood_phase 节拍情绪相位(Phase 4 / Task 20)\n"
+            "每个 beat 必须输出 mood_phase 字段(字符串,小写英文短词),声明本拍在章节情绪曲线上的相位。\n"
+            "允许值(任选其一):\n"
+            "  calm   — 静止/低张力,常用于铺陈或节奏缓冲\n"
+            "  rising — 缓慢爬升,疑问/压力/潜流\n"
+            "  tension — 明确对峙/冲突前夜\n"
+            "  climax — 拍内情绪顶点,必须在 climax 章节使用至少一拍\n"
+            "  release — 紧张释放、问题暂时落地\n"
+            "  twist  — 认知反转或新信息揭露\n"
+            "若本拍不属于以上相位,选择最接近的标签,不要自创新值。\n\n"
             "## cheat 激活标记\n"
             "如果金手指角色(cheat_carriers)出现在本章 key_entities 或任一 beat 的 key_entities 中,"
             "且本章 chapter_number >= 该角色首次激活章,必须额外输出以下 3 个字段(数值/字符串):\n"

@@ -314,6 +314,11 @@ class VolumeBeat(BaseModel):
     cheat_activated: bool = False
     cheat_activated_ability: str = ""
     cheat_activated_beat_idx: Optional[int] = None
+    # Phase 4 / Task 20: chapter-level archetype (e.g. "action", "climax",
+    # "transition"). Mirrors ChapterPlan.archetype for plans that flow
+    # through VolumeBeat first. Optional / empty default for backward
+    # compat with stored plans.
+    archetype: str = ""
 
     @model_validator(mode="before")
     @classmethod
