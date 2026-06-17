@@ -44,7 +44,7 @@ class BeatPlan(BaseModel):
                     break
         return normalized
 
-    @field_validator("summary", "target_mood", "mood_phase", mode="before")
+    @field_validator("summary", "target_mood", mode="before")
     @classmethod
     def _coerce_text_fields(cls, value: Any) -> str:
         return coerce_to_text(value)

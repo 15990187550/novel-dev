@@ -42,8 +42,15 @@ def test_chapter_plan_archetype_defaults_to_empty_string():
 def test_beat_plan_has_optional_mood_phase():
     from novel_dev.schemas.context import BeatPlan
 
+    # Provided value is preserved as-is
     bp = BeatPlan(beat_index=0, summary="...", target_mood="tense", mood_phase="climax")
     assert bp.mood_phase == "climax"
+
+    # Omitted value must remain None (Optional[str] = None contract), NOT be
+    # silently coerced to "" by the text-coercion validator. Downstream code
+    # (Task 21) keys off None to mean "not set" vs "" for "explicitly empty".
+    bp_default = BeatPlan(beat_index=1, summary="...", target_mood="calm")
+    assert bp_default.mood_phase is None
 
 
 def test_beat_plan_mood_phase_defaults_to_none():
