@@ -128,6 +128,75 @@
         <p v-else-if="rationaleExpanded" class="quality-recommendation-widget__empty">无推理细节</p>
       </section>
 
+      <section class="quality-recommendation-widget__breakdown">
+        <button
+          type="button"
+          class="quality-recommendation-widget__breakdown-toggle"
+          data-testid="show-breakdown-btn"
+          :aria-expanded="showBreakdown"
+          @click="toggleBreakdown"
+        >
+          {{ showBreakdown ? '收起' : '查看' }}评分明细
+        </button>
+        <div
+          v-if="showBreakdown"
+          class="quality-recommendation-widget__breakdown-panel"
+          data-testid="critic-breakdown"
+        >
+          <p
+            v-if="breakdownLoading"
+            class="quality-recommendation-widget__empty"
+            data-testid="breakdown-loading"
+          >
+            加载评分明细中...
+          </p>
+          <template v-else-if="hasBreakdownData">
+            <p
+              v-if="breakdown.overall_score != null"
+              class="quality-recommendation-widget__breakdown-overall"
+              data-testid="breakdown-overall"
+            >
+              综合分:{{ breakdown.overall_score }}
+              <span v-if="breakdown.attempt_index != null" class="quality-recommendation-widget__breakdown-attempt">
+                · 第 {{ breakdown.attempt_index + 1 }} 次
+              </span>
+            </p>
+            <ul
+              class="quality-recommendation-widget__breakdown-list"
+              data-testid="breakdown-list"
+            >
+              <li
+                v-for="(score, dim) in breakdown.dimensions"
+                :key="dim"
+                class="quality-recommendation-widget__breakdown-item"
+                :data-testid="`breakdown-dim-${dim}`"
+              >
+                <div class="quality-recommendation-widget__breakdown-row">
+                  <span class="quality-recommendation-widget__breakdown-dim">{{ dimensionLabel(dim) }}</span>
+                  <span
+                    class="quality-recommendation-widget__breakdown-score"
+                    :data-testid="`breakdown-score-${dim}`"
+                    :class="dimensionScoreClass(score)"
+                  >
+                    {{ score }}
+                  </span>
+                </div>
+                <p
+                  v-if="breakdown.dimension_feedback && breakdown.dimension_feedback[dim]"
+                  class="quality-recommendation-widget__breakdown-feedback"
+                  :data-testid="`breakdown-feedback-${dim}`"
+                >
+                  {{ breakdown.dimension_feedback[dim] }}
+                </p>
+              </li>
+            </ul>
+          </template>
+          <p v-else class="quality-recommendation-widget__empty" data-testid="breakdown-empty">
+            暂无评分明细
+          </p>
+        </div>
+      </section>
+
       <div v-if="isStopAndInspect" class="quality-recommendation-widget__manual-actions" data-testid="manual-review-actions">
         <button type="button" data-testid="continue-retry-btn" @click="$emit('continue-retry')">
           继续重试
@@ -161,6 +230,10 @@ const errorMessage = ref('')
 const recommendation = ref(null)
 const rationaleExpanded = ref(false)
 
+const breakdown = ref({ dimensions: {}, dimension_feedback: {}, overall_score: null, attempt_index: null })
+const showBreakdown = ref(false)
+const breakdownLoading = ref(false)
+
 const hasError = computed(() => Boolean(errorMessage.value))
 
 const recommendationType = computed(() => recommendation.value?.recommendation || 'accept')
@@ -189,6 +262,11 @@ const suggestedActions = computed(() => {
 })
 
 const isStopAndInspect = computed(() => recommendationType.value === 'stop_and_inspect')
+
+const hasBreakdownData = computed(() => {
+  const dims = breakdown.value?.dimensions
+  return Boolean(dims) && Object.keys(dims).length > 0
+})
 
 const RECOMMENDATION_LABELS = {
   accept: '可发布',
@@ -228,6 +306,38 @@ function scopeLabel(scope) {
   return SCOPE_LABELS[scope] || scope
 }
 
+function dimensionLabel(dim) {
+  return SCOPE_LABELS[dim] || dim
+}
+
+function dimensionScoreClass(score) {
+  const n = Number(score)
+  if (!Number.isFinite(n)) return ''
+  if (n >= 85) return 'quality-recommendation-widget__breakdown-score--high'
+  if (n >= 75) return 'quality-recommendation-widget__breakdown-score--mid'
+  return 'quality-recommendation-widget__breakdown-score--low'
+}
+
+async function loadBreakdown() {
+  if (!props.chapterId) return
+  breakdownLoading.value = true
+  try {
+    const resp = await axios.get(`/api/chapters/${props.chapterId}/critic-breakdown`)
+    breakdown.value = resp.data || { dimensions: {}, dimension_feedback: {}, overall_score: null, attempt_index: null }
+  } catch {
+    breakdown.value = { dimensions: {}, dimension_feedback: {}, overall_score: null, attempt_index: null }
+  } finally {
+    breakdownLoading.value = false
+  }
+}
+
+async function toggleBreakdown() {
+  showBreakdown.value = !showBreakdown.value
+  if (showBreakdown.value && !hasBreakdownData.value && !breakdownLoading.value) {
+    await loadBreakdown()
+  }
+}
+
 async function loadRecommendation() {
   if (!props.novelId || !props.chapterId) return
   loading.value = true
@@ -262,6 +372,18 @@ watch(
     loadRecommendation()
   },
   { deep: true, immediate: true },
+)
+
+watch(
+  () => props.chapterId,
+  () => {
+    // Reset cached breakdown whenever the chapter changes so stale data from the
+    // previous chapter doesn't flash when the user expands the panel.
+    breakdown.value = { dimensions: {}, dimension_feedback: {}, overall_score: null, attempt_index: null }
+    if (showBreakdown.value) {
+      loadBreakdown()
+    }
+  },
 )
 </script>
 
@@ -668,5 +790,147 @@ watch(
   margin: 0;
   font-size: 0.75rem;
   color: #94a3b8;
+}
+
+.quality-recommendation-widget__breakdown {
+  border-top: 1px dashed rgba(148, 163, 184, 0.4);
+  padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.quality-recommendation-widget__breakdown-toggle {
+  align-self: flex-start;
+  background: transparent;
+  border: none;
+  padding: 0;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #2563eb;
+  cursor: pointer;
+}
+
+.quality-recommendation-widget__breakdown-toggle:hover {
+  text-decoration: underline;
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-toggle {
+  color: #93c5fd;
+}
+
+.quality-recommendation-widget__breakdown-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.quality-recommendation-widget__breakdown-overall {
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+.quality-recommendation-widget__breakdown-attempt {
+  margin-left: 0.25rem;
+  font-weight: 400;
+  color: #64748b;
+  font-size: 0.75rem;
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-overall {
+  color: #e2e8f0;
+}
+
+.quality-recommendation-widget__breakdown-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.quality-recommendation-widget__breakdown-item {
+  padding: 0.4rem 0.55rem;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-item {
+  background: rgba(30, 41, 59, 0.55);
+  border-color: rgba(71, 85, 105, 0.65);
+}
+
+.quality-recommendation-widget__breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.quality-recommendation-widget__breakdown-dim {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-dim {
+  color: #e2e8f0;
+}
+
+.quality-recommendation-widget__breakdown-score {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 0.05rem 0.4rem;
+  border-radius: 6px;
+  min-width: 2rem;
+  text-align: center;
+}
+
+.quality-recommendation-widget__breakdown-score--high {
+  color: #15803d;
+  background: rgba(34, 197, 94, 0.15);
+}
+
+.quality-recommendation-widget__breakdown-score--mid {
+  color: #b45309;
+  background: rgba(245, 158, 11, 0.15);
+}
+
+.quality-recommendation-widget__breakdown-score--low {
+  color: #b91c1c;
+  background: rgba(220, 38, 38, 0.15);
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-score--high {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.22);
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-score--mid {
+  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.25);
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-score--low {
+  color: #fca5a5;
+  background: rgba(220, 38, 38, 0.3);
+}
+
+.quality-recommendation-widget__breakdown-feedback {
+  margin: 0;
+  font-size: 0.6875rem;
+  color: #475569;
+  line-height: 1.4;
+}
+
+:global(.dark) .quality-recommendation-widget__breakdown-feedback {
+  color: #cbd5e1;
 }
 </style>

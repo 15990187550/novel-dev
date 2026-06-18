@@ -3845,3 +3845,32 @@ async def get_root_cause(chapter_id: str, session: AsyncSession = Depends(get_se
         "confidence": latest.confidence,
         "created_at": latest.created_at.isoformat(),
     }
+
+
+@router.get("/api/chapters/{chapter_id}/critic-breakdown")
+async def get_critic_breakdown(chapter_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    """Return the latest attempt's per-dimension critic score breakdown for a chapter.
+
+    Used by the QualityRecommendationWidget to surface what the critic scored on
+    each dimension (plot_tension, humanity, hook_strength, etc.) when the user
+    expands the "查看评分明细" panel. Returns an empty `dimensions` payload (200)
+    when the chapter has no metric rows yet.
+    """
+    svc = QualityMetricsService(session)
+    metrics = await svc.get_by_chapter(chapter_id)
+    if not metrics:
+        return {
+            "chapter_id": chapter_id,
+            "overall_score": None,
+            "dimensions": {},
+            "dimension_feedback": {},
+            "attempt_index": None,
+        }
+    latest = metrics[-1]
+    return {
+        "chapter_id": chapter_id,
+        "overall_score": latest.overall_score,
+        "dimensions": latest.dimension_scores or {},
+        "dimension_feedback": latest.dimension_feedback or {},
+        "attempt_index": latest.attempt_index,
+    }

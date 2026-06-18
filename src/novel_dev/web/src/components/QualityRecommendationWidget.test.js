@@ -215,4 +215,112 @@ describe('QualityRecommendationWidget', () => {
     const lastCall = mockRecommend.mock.calls.at(-1)
     expect(lastCall[2].recent_issue_counts).toEqual({ BEAT_BOUNDARY_VIOLATION: 2, AI_FLAVOR_HIGH: 1 })
   })
+
+  it('expands to show critic breakdown when the show-breakdown button is clicked', async () => {
+    // First axios.get is the recent-issue-counts call inside loadRecommendation;
+    // second is the breakdown fetch triggered by clicking the toggle.
+    mockAxiosGet
+      .mockResolvedValueOnce({ data: { counts: {} } })
+      .mockResolvedValueOnce({
+        data: {
+          chapter_id: 'ch-1',
+          overall_score: 80,
+          dimensions: { plot_tension: 75, humanity: 88, hook_strength: 70 },
+          dimension_feedback: { plot_tension: '张力不足', humanity: '人物鲜活' },
+          attempt_index: 0,
+        },
+      })
+
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: { novelId: 'novel-1', chapterId: 'ch-1' },
+    })
+    await flushPromises()
+
+    // Panel hidden initially
+    expect(wrapper.find('[data-testid="critic-breakdown"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="show-breakdown-btn"]').text()).toBe('查看评分明细')
+
+    // Click to expand
+    await wrapper.find('[data-testid="show-breakdown-btn"]').trigger('click')
+    await flushPromises()
+
+    // Endpoint hit with the correct chapterId
+    const breakdownCalls = mockAxiosGet.mock.calls.filter(
+      ([url]) => url === '/api/chapters/ch-1/critic-breakdown'
+    )
+    expect(breakdownCalls.length).toBeGreaterThanOrEqual(1)
+
+    // Toggle label flipped and panel is now rendered
+    expect(wrapper.find('[data-testid="show-breakdown-btn"]').text()).toBe('收起评分明细')
+    const breakdown = wrapper.find('[data-testid="critic-breakdown"]')
+    expect(breakdown.exists()).toBe(true)
+
+    // Overall + attempt info present
+    expect(wrapper.find('[data-testid="breakdown-overall"]').text()).toContain('80')
+    expect(wrapper.find('[data-testid="breakdown-overall"]').text()).toContain('第 1 次')
+
+    // Each dimension renders as a list item with its score
+    expect(wrapper.find('[data-testid="breakdown-dim-plot_tension"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="breakdown-score-plot_tension"]').text()).toBe('75')
+    expect(wrapper.find('[data-testid="breakdown-score-humanity"]').text()).toBe('88')
+    expect(wrapper.find('[data-testid="breakdown-score-hook_strength"]').text()).toBe('70')
+    // Feedback for one of the dimensions renders
+    expect(wrapper.find('[data-testid="breakdown-feedback-plot_tension"]').text()).toBe('张力不足')
+    // Human label is mapped via SCOPE_LABELS
+    expect(wrapper.find('[data-testid="breakdown-dim-plot_tension"]').text()).toContain('情节张力')
+  })
+
+  it('collapses the critic breakdown panel when the toggle is clicked twice', async () => {
+    mockAxiosGet
+      .mockResolvedValueOnce({ data: { counts: {} } })
+      .mockResolvedValueOnce({
+        data: {
+          chapter_id: 'ch-1',
+          overall_score: 80,
+          dimensions: { plot_tension: 75 },
+          dimension_feedback: {},
+          attempt_index: 0,
+        },
+      })
+
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: { novelId: 'novel-1', chapterId: 'ch-1' },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="show-breakdown-btn"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="critic-breakdown"]').exists()).toBe(true)
+
+    await wrapper.find('[data-testid="show-breakdown-btn"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="critic-breakdown"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="show-breakdown-btn"]').text()).toBe('查看评分明细')
+  })
+
+  it('shows the empty-breakdown message when the API returns no dimensions', async () => {
+    mockAxiosGet
+      .mockResolvedValueOnce({ data: { counts: {} } })
+      .mockResolvedValueOnce({
+        data: {
+          chapter_id: 'ch-1',
+          overall_score: null,
+          dimensions: {},
+          dimension_feedback: {},
+          attempt_index: null,
+        },
+      })
+
+    const wrapper = mount(QualityRecommendationWidget, {
+      props: { novelId: 'novel-1', chapterId: 'ch-1' },
+    })
+    await flushPromises()
+
+    await wrapper.find('[data-testid="show-breakdown-btn"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="critic-breakdown"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="breakdown-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="breakdown-empty"]').text()).toBe('暂无评分明细')
+  })
 })

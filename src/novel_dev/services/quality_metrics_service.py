@@ -189,3 +189,17 @@ class QualityMetricsService:
             for code in (m.issue_codes or []):
                 counts[code] = counts.get(code, 0) + 1
         return counts
+
+    async def get_by_chapter(self, chapter_id: str) -> list[ChapterQualityMetric]:
+        """Return all ChapterQualityMetric rows for a chapter, ordered by attempt_index ascending.
+
+        Used by the critic-breakdown endpoint to surface the latest attempt's
+        per-dimension score breakdown and feedback. Returns an empty list when the
+        chapter has no metric rows.
+        """
+        result = await self.session.execute(
+            select(ChapterQualityMetric)
+            .where(ChapterQualityMetric.chapter_id == chapter_id)
+            .order_by(ChapterQualityMetric.attempt_index.asc())
+        )
+        return list(result.scalars().all())
