@@ -43,6 +43,8 @@ export const getJudgeConsistency = (params = {}) =>
   api.get(`/quality/judge-consistency`, { params }).then(r => r.data)
 export const getQualityRuns = (id, params = {}) =>
   api.get(`/novels/${id}/quality/runs`, { params }).then(r => r.data)
+export const getChapterSynopses = (id) =>
+  api.get(`/novels/${id}/chapter-synopses`).then(r => r.data)
 export const resolveChapterQualityManualReview = (nid, cid, payload) =>
   api.post(`/novels/${nid}/chapters/${cid}/quality/manual_review`, payload).then(r => r.data)
 export const getEntities = (id, params = {}) => api.get(`/novels/${id}/entities`, { params }).then(r => r.data)

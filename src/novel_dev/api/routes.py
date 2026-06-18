@@ -1600,6 +1600,27 @@ async def list_foreshadowings(novel_id: str, session: AsyncSession = Depends(get
     return {"items": items}
 
 
+@router.get("/api/novels/{novel_id}/chapter-synopses")
+async def list_chapter_synopses(novel_id: str, session: AsyncSession = Depends(get_session)) -> dict:
+    from novel_dev.repositories.chapter_synopsis_repo import ChapterSynopsisRepository
+    repo = ChapterSynopsisRepository(session)
+    synopses = await repo.list_all(novel_id)
+    return {
+        "novel_id": novel_id,
+        "synopses": [
+            {
+                "id": s.id,
+                "chapter_range": [s.chapter_range_start, s.chapter_range_end],
+                "narrative_prose": s.narrative_prose,
+                "structured_json": s.structured_json,
+                "trigger_event": s.trigger_event,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in synopses
+        ],
+    }
+
+
 @router.get("/api/novels/{novel_id}/chapters")
 async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_session)):
     state_repo = NovelStateRepository(session)
