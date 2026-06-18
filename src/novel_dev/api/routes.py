@@ -893,6 +893,124 @@ async def get_quality_trends(
     }
 
 
+@router.get("/api/novels/{novel_id}/quality-trends-v2")
+async def get_quality_trends_v2(
+    novel_id: str,
+    window: int = 20,
+    dimension: str = "overall",
+    phase: str = "final",
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Cross-metric aggregation for QualityTrendsView v2.
+
+    Returns three sections in addition to the standard per-chapter trend points:
+
+    * thrills_planned / thrills_verified / thrills_achievement_rate
+      (planned = ``planner_predicted=True`` rows; verified = additionally
+      ``fast_review_verified=True``; rate = verified / planned).
+    * imagery_repeat_top5 — top 5 imagery items by ``chapter_count * freq_sum``
+      across the most recent ``window`` chapters worth of inventory rows.
+    * hook_achievement_trend — per-chapter ``hook_strength`` dimension score
+      from the same trend points, used to surface whether chapter-end hooks
+      are hitting their target. When no metric rows have a hook_strength
+      dimension score yet, this field is ``None`` and the UI shows a
+      "data not yet collected" stub.
+
+    The endpoint reuses :meth:`QualityMetricsService.get_trends` so the line
+    chart on the v2 page stays in sync with the standard quality/trends view.
+    """
+    from novel_dev.repositories.thrill_point_repo import ThrillPointRepository
+    from novel_dev.repositories.imagery_inventory_repo import ImageryInventoryRepository
+
+    repo = NovelStateRepository(session)
+    state = await repo.get_state(novel_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="Novel state not found")
+
+    qm_svc = QualityMetricsService(session)
+    trends = await qm_svc.get_trends(
+        novel_id=novel_id,
+        dimension=dimension,
+        phase=phase,
+    )
+
+    # --- Thrill point achievement rate ---
+    tp_repo = ThrillPointRepository(session)
+    all_thrills = await tp_repo.list_all(novel_id)
+    thrills_planned = sum(1 for t in all_thrills if t.planner_predicted)
+    thrills_verified = sum(
+        1 for t in all_thrills if t.planner_predicted and t.fast_review_verified
+    )
+    thrills_achievement_rate = (
+        (thrills_verified / thrills_planned) if thrills_planned else 0.0
+    )
+
+    # --- Cross-chapter imagery top 5 ---
+    imagery_repo = ImageryInventoryRepository(session)
+    recent_imagery = await imagery_repo.get_recent(novel_id, limit=window * 20)
+
+    img_agg: dict = {}
+    for i in recent_imagery:
+        key = i.item
+        entry = img_agg.get(key)
+        if entry is None:
+            entry = {
+                "item": i.item,
+                "type": i.item_type,
+                "chapters": set(),
+                "freq_sum": 0,
+            }
+            img_agg[key] = entry
+        entry["chapters"].add(i.chapter_id)
+        entry["freq_sum"] += int(i.frequency_in_chapter or 0)
+
+    imagery_top = sorted(
+        (
+            {
+                "item": v["item"],
+                "type": v["type"],
+                "chapter_count": len(v["chapters"]),
+                "freq_sum": v["freq_sum"],
+            }
+            for v in img_agg.values()
+        ),
+        key=lambda x: x["chapter_count"] * x["freq_sum"],
+        reverse=True,
+    )[:5]
+
+    # --- Hook achievement trend (per-chapter hook_strength from metric rows) ---
+    hook_points = await qm_svc.get_trends(
+        novel_id=novel_id,
+        dimension="hook_strength",
+        phase=phase,
+    )
+    hook_achievement_trend = [
+        {
+            "chapter_id": p["chapter_id"],
+            "chapter_number": p["chapter_number"],
+            "value": p["value"],
+            "source": p["source"],
+        }
+        for p in hook_points
+        if p.get("value") is not None
+    ]
+    if not hook_achievement_trend:
+        hook_achievement_trend = None
+
+    return {
+        "novel_id": novel_id,
+        "window": window,
+        "dimension": dimension,
+        "phase": phase,
+        "trends": trends,
+        "thrills_planned": thrills_planned,
+        "thrills_verified": thrills_verified,
+        "thrills_achievement_rate": thrills_achievement_rate,
+        "imagery_repeat_top5": imagery_top,
+        "hook_achievement_trend": hook_achievement_trend,
+    }
+
+
 @router.get("/api/novels/{novel_id}/quality/issues")
 async def get_quality_issues(
     novel_id: str,

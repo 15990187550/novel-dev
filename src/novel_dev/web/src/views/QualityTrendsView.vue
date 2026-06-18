@@ -89,6 +89,106 @@
         autoresize
       />
     </section>
+
+    <section
+      class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm"
+      data-testid="thrills-achievement"
+    >
+      <header class="mb-3 flex items-center justify-between">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">爽点达成率</h3>
+        <span class="text-xs text-gray-500 dark:text-gray-400">规划 vs FastReview 验证</span>
+      </header>
+      <div v-if="thrillsSummary" class="grid grid-cols-3 gap-4 text-center">
+        <div>
+          <div class="text-2xl font-bold text-gray-900 dark:text-gray-100" data-testid="thrills-planned">
+            {{ thrillsSummary.planned }}
+          </div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">规划爽点</div>
+        </div>
+        <div>
+          <div class="text-2xl font-bold text-green-600" data-testid="thrills-verified">
+            {{ thrillsSummary.verified }}
+          </div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">已验证</div>
+        </div>
+        <div>
+          <div class="text-2xl font-bold text-blue-600" data-testid="thrills-rate">
+            {{ formatRate(thrillsSummary.rate) }}
+          </div>
+          <div class="text-xs text-gray-500 dark:text-gray-400">达成率</div>
+        </div>
+      </div>
+      <div v-else class="text-sm text-gray-500 dark:text-gray-400" data-testid="thrills-achievement-empty">
+        暂无爽点数据
+      </div>
+    </section>
+
+    <section
+      class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm"
+      data-testid="imagery-top5"
+    >
+      <header class="mb-3 flex items-center justify-between">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">跨章意象 top 5</h3>
+        <span class="text-xs text-gray-500 dark:text-gray-400">最近 {{ window }} 章</span>
+      </header>
+      <div v-if="imageryTop5.length === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="imagery-top5-empty">
+        暂无跨章意象数据
+      </div>
+      <table v-else class="w-full text-sm">
+        <thead>
+          <tr class="text-left text-xs text-gray-500 dark:text-gray-400">
+            <th class="py-1">意象</th>
+            <th class="py-1">类型</th>
+            <th class="py-1 text-right">出现章数</th>
+            <th class="py-1 text-right">频次合计</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="(row, idx) in imageryTop5"
+            :key="`${row.item}-${idx}`"
+            class="border-t border-gray-100 dark:border-gray-700"
+            :data-testid="`imagery-top5-row-${idx}`"
+          >
+            <td class="py-1 text-gray-900 dark:text-gray-100">{{ row.item }}</td>
+            <td class="py-1 text-gray-700 dark:text-gray-300">{{ row.type }}</td>
+            <td class="py-1 text-right text-gray-700 dark:text-gray-300">{{ row.chapter_count }}</td>
+            <td class="py-1 text-right text-gray-700 dark:text-gray-300">{{ row.freq_sum }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section
+      class="rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 shadow-sm"
+      data-testid="hook-achievement"
+    >
+      <header class="mb-3 flex items-center justify-between">
+        <h3 class="text-base font-semibold text-gray-900 dark:text-gray-100">钩子达成趋势</h3>
+        <span class="text-xs text-gray-500 dark:text-gray-400">章末 hook_strength 维度</span>
+      </header>
+      <div
+        v-if="hookTrendStatus === 'unavailable'"
+        class="text-sm text-gray-500 dark:text-gray-400"
+        data-testid="hook-achievement-empty"
+      >
+        数据尚未收集 (待 FastReview 钩子验证落库后展示)
+      </div>
+      <div v-else-if="hookTrend.length === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="hook-achievement-empty">
+        暂无钩子评分
+      </div>
+      <ul v-else class="space-y-1 text-sm">
+        <li
+          v-for="(row, idx) in hookTrend"
+          :key="`${row.chapter_id}-${idx}`"
+          class="flex items-center justify-between"
+          :data-testid="`hook-achievement-row-${idx}`"
+        >
+          <span class="text-gray-700 dark:text-gray-300">第{{ row.chapter_number }}章</span>
+          <span class="font-mono text-gray-900 dark:text-gray-100">{{ row.value ?? '-' }}</span>
+        </li>
+      </ul>
+    </section>
   </div>
 </template>
 
@@ -106,7 +206,7 @@ import {
 } from 'echarts/components'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
-import { getQualityTrends } from '@/api.js'
+import { getQualityTrends, getQualityTrendsV2 } from '@/api.js'
 
 use([
   CanvasRenderer,
@@ -136,9 +236,16 @@ const dimensionOptions = [
 const dimension = ref('overall')
 const fromChapter = ref(null)
 const toChapter = ref(null)
+const window = ref(20)
 const loading = ref(false)
 const errorMessage = ref('')
 const points = ref([])
+
+// V2 cross-metric aggregation state
+const thrillsSummary = ref(null) // { planned, verified, rate } | null
+const imageryTop5 = ref([]) // [{ item, type, chapter_count, freq_sum }]
+const hookTrend = ref([]) // [{ chapter_id, chapter_number, value, source }]
+const hookTrendStatus = ref('unavailable') // 'unavailable' | 'ready'
 
 const gateStatusColor = {
   pass: '#22c55e',
@@ -245,6 +352,7 @@ const chartOption = computed(() => {
 async function fetchTrends() {
   if (!props.novelId) {
     points.value = []
+    resetV2State()
     return
   }
   loading.value = true
@@ -255,14 +363,62 @@ async function fetchTrends() {
     if (toChapter.value) params.to_chapter = toChapter.value
     const response = await getQualityTrends(props.novelId, params)
     points.value = Array.isArray(response?.points) ? response.points : []
+    await fetchV2()
   } catch (error) {
     points.value = []
+    resetV2State()
     const detail = error?.response?.data?.detail
     errorMessage.value = detail || error?.message || '质量趋势加载失败'
     ElMessage.error(errorMessage.value)
   } finally {
     loading.value = false
   }
+}
+
+async function fetchV2() {
+  if (!props.novelId) {
+    resetV2State()
+    return
+  }
+  try {
+    const params = { window: window.value, dimension: dimension.value, phase: 'final' }
+    if (fromChapter.value) params.from_chapter = fromChapter.value
+    if (toChapter.value) params.to_chapter = toChapter.value
+    const response = await getQualityTrendsV2(props.novelId, params)
+    thrillsSummary.value = {
+      planned: Number(response?.thrills_planned ?? 0),
+      verified: Number(response?.thrills_verified ?? 0),
+      rate: Number(response?.thrills_achievement_rate ?? 0),
+    }
+    imageryTop5.value = Array.isArray(response?.imagery_repeat_top5) ? response.imagery_repeat_top5 : []
+    if (Array.isArray(response?.hook_achievement_trend)) {
+      hookTrend.value = response.hook_achievement_trend
+      hookTrendStatus.value = 'ready'
+    } else {
+      hookTrend.value = []
+      hookTrendStatus.value = 'unavailable'
+    }
+  } catch (error) {
+    // Don't surface an ElMessage toast here — the main fetch already errored.
+    // Just reset to safe defaults so the sections render an empty stub.
+    thrillsSummary.value = null
+    imageryTop5.value = []
+    hookTrend.value = []
+    hookTrendStatus.value = 'unavailable'
+  }
+}
+
+function resetV2State() {
+  thrillsSummary.value = null
+  imageryTop5.value = []
+  hookTrend.value = []
+  hookTrendStatus.value = 'unavailable'
+}
+
+function formatRate(rate) {
+  const value = Number(rate ?? 0)
+  if (!Number.isFinite(value)) return '0%'
+  return `${Math.round(value * 100)}%`
 }
 
 function handleRefresh() {

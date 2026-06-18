@@ -33,6 +33,29 @@ class ThrillPointRepository:
         await self.session.flush()
         return tp
 
+    async def list_all(
+        self,
+        novel_id: str,
+        *,
+        chapter_id: Optional[str] = None,
+    ) -> list[ThrillPoint]:
+        """Return all thrill point rows for a novel (or single chapter).
+
+        Used by cross-metric aggregations that need to compute planned-vs-verified
+        ratios. Unlike :meth:`list_unverified`, this method does not filter on
+        ``planner_predicted`` / ``fast_review_verified`` — callers decide which
+        subset to count.
+        """
+        stmt = select(ThrillPoint).where(ThrillPoint.novel_id == novel_id)
+        if chapter_id is not None:
+            stmt = stmt.where(ThrillPoint.chapter_id == chapter_id)
+        stmt = stmt.order_by(
+            ThrillPoint.chapter_id.asc(),
+            ThrillPoint.beat_idx.asc(),
+        )
+        result = await self.session.execute(stmt)
+        return list(result.scalars().all())
+
     async def list_unverified(
         self,
         novel_id: str,

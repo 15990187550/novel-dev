@@ -35,6 +35,8 @@ export const getChapterText = (nid, cid) => api.get(`/novels/${nid}/chapters/${c
 export const getChapterQuality = (nid, cid) => api.get(`/novels/${nid}/chapters/${cid}/quality`).then(r => r.data)
 export const getQualityTrends = (id, params = {}) =>
   api.get(`/novels/${id}/quality/trends`, { params }).then(r => r.data)
+export const getQualityTrendsV2 = (id, params = {}) =>
+  api.get(`/novels/${id}/quality-trends-v2`, { params }).then(r => r.data)
 export const getQualityIssues = (id, params = {}) =>
   api.get(`/novels/${id}/quality/issues`, { params }).then(r => r.data)
 export const recommendChapterQuality = (nid, cid, payload) =>
