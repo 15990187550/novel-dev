@@ -388,6 +388,7 @@ class ContextAgent:
                 checkpoint,
                 chapter_plan,
                 novel_id=novel_id,
+                chapter_id=chapter_id,
             ),
             genre_quality_config=genre_template.quality_config,
             genre_prompt_block=genre_prompt_block,
@@ -1314,6 +1315,7 @@ class ContextAgent:
         chapter_plan: ChapterPlan,
         *,
         novel_id: str,
+        chapter_id: str,
     ) -> str:
         """Build the narrative_source string with Phase 4 cross-chapter
         entity continuity constraints appended.
@@ -1333,23 +1335,38 @@ class ContextAgent:
                 key_names, novel_id=novel_id,
             )
             if not entity_ids:
-                return base
-            continuity_svc = CrossChapterContinuityService(self.session)
-            constraints = await continuity_svc.build_pre_write_constraints(
-                novel_id,
-                entity_ids,
-            )
+                continuity_block = ""
+            else:
+                continuity_svc = CrossChapterContinuityService(self.session)
+                continuity_block = await continuity_svc.build_pre_write_constraints(
+                    novel_id,
+                    entity_ids,
+                ) or ""
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "context_agent_continuity_constraints_failed",
                 extra={"error": str(exc)},
             )
-            return base
-        if not constraints:
-            return base
-        if base:
-            return f"{base}\n\n{constraints}"
-        return constraints
+            continuity_block = ""
+
+        # Phase 4: 意象避免列表
+        try:
+            from novel_dev.services.imagery_inventory_service import ImageryInventoryService
+            imagery_svc = ImageryInventoryService(self.session)
+            avoidance_block = await imagery_svc.build_avoidance_list(
+                novel_id, chapter_id, window=5,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "context_imagery_avoidance_failed",
+                extra={"error": str(exc), "chapter_id": chapter_id},
+            )
+            avoidance_block = ""
+
+        parts = [p for p in (base, continuity_block, avoidance_block) if p]
+        if not parts:
+            return ""
+        return "\n\n".join(parts)
 
     async def _resolve_entity_ids_by_names(
         self,
