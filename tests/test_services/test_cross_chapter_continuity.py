@@ -7,6 +7,7 @@ from novel_dev.services.cross_chapter_continuity_service import (
     CrossChapterContinuityService,
     DriftIssue,
 )
+from novel_dev.services.prompt_registry import PromptRegistry
 
 
 @pytest.mark.asyncio
@@ -153,3 +154,150 @@ def test_drift_issue_dataclass_defaults():
     assert issue.entity_name == "主角A"
     assert issue.drift_type == "identity_drift"
     assert issue.severity == "block"
+
+
+# ---------------------------------------------------------------------------
+# Negative-path tests covering the previously-uncovered error branches.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_dedups_entities_when_multiple_versions_exist(async_session, monkeypatch):
+    """Lines 122-126: entity loop must dedup by entity id (pick the latest
+    version, skip older rows)."""
+    from novel_dev.llm import llm_factory
+    from novel_dev.db.models import Entity, EntityVersion
+
+    e = Entity(id="e_dup", type="character", name="重复实体")
+    async_session.add(e)
+    await async_session.flush()
+    async_session.add(EntityVersion(
+        entity_id="e_dup", version=1, state={"power_level": 0, "identity_role": "old"},
+    ))
+    async_session.add(EntityVersion(
+        entity_id="e_dup", version=2, state={"power_level": 9, "identity_role": "new"},
+    ))
+    await async_session.flush()
+
+    fake_response = MagicMock()
+    fake_response.text = json.dumps([
+        {"entity_name": "重复实体", "drift_type": "identity_drift",
+         "severity": "block", "evidence_quote": "x", "suggested_fix": "y"},
+    ])
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(return_value=fake_response)
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_dup"])
+    assert len(drifts) == 1
+    # Confirm only the latest version (v2) was sent to the LLM: the entities
+    # payload should contain identity_role "new", not "old".
+    sent_prompt = fake_client.acomplete.call_args.args[0][0].content
+    assert '"identity_role": "new"' in sent_prompt
+    assert '"identity_role": "old"' not in sent_prompt
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_returns_empty_when_prompt_registry_raises(async_session, monkeypatch):
+    """Lines 136-141: when PromptRegistry.get_active raises (any exception),
+    detect_drift must log and return [] without calling the LLM."""
+    from novel_dev.llm import llm_factory
+
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(
+        side_effect=AssertionError("LLM must not be called when registry raises"),
+    )
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    async def boom(*a, **kw):
+        raise RuntimeError("registry unavailable")
+
+    monkeypatch.setattr(PromptRegistry, "get_active", boom)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_x"])
+    assert drifts == []
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_returns_empty_when_prompt_template_is_empty(async_session, monkeypatch):
+    """Lines 143-144: when the registry returns an empty template, detect_drift
+    must return [] without calling the LLM."""
+    from novel_dev.llm import llm_factory
+
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(
+        side_effect=AssertionError("LLM must not be called when template is empty"),
+    )
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    async def empty_template(*a, **kw):
+        return ""
+
+    monkeypatch.setattr(PromptRegistry, "get_active", empty_template)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_x"])
+    assert drifts == []
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_returns_empty_when_llm_call_raises(async_session, monkeypatch):
+    """Lines 163-168: when the LLM call itself raises (ConnectionError, etc.),
+    detect_drift must log and return []."""
+    from novel_dev.llm import llm_factory
+
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(side_effect=ConnectionError("network down"))
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_x"])
+    assert drifts == []
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_returns_empty_when_payload_is_not_a_list(async_session, monkeypatch):
+    """Lines 188-192: when the LLM returns valid JSON but not a list
+    (e.g. a dict), detect_drift must log and return []."""
+    from novel_dev.llm import llm_factory
+
+    fake_response = MagicMock()
+    fake_response.text = json.dumps({"entity_name": "主角A"})  # dict, not list
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(return_value=fake_response)
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_x"])
+    assert drifts == []
+
+
+@pytest.mark.asyncio
+async def test_detect_drift_skips_non_dict_items_in_payload(async_session, monkeypatch):
+    """Line 197: when the LLM returns a list with non-dict items (e.g. strings),
+    those items must be skipped, not crash. Dict items are still kept."""
+    from novel_dev.llm import llm_factory
+
+    fake_response = MagicMock()
+    fake_response.text = json.dumps([
+        "not a dict",  # skipped
+        42,            # skipped
+        None,          # skipped
+        {              # kept
+            "entity_name": "主角A",
+            "drift_type": "name_drift",
+            "severity": "block",
+            "evidence_quote": "x",
+            "suggested_fix": "y",
+        },
+    ])
+    fake_client = AsyncMock()
+    fake_client.acomplete = AsyncMock(return_value=fake_response)
+    monkeypatch.setattr(llm_factory, "get", lambda *a, **kw: fake_client)
+
+    svc = CrossChapterContinuityService(async_session)
+    drifts = await svc.detect_drift("n_1", "ch_5", "文本。", ["e_x"])
+    assert len(drifts) == 1
+    assert drifts[0].entity_name == "主角A"
