@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -100,3 +101,48 @@ class PromptVersionRepository:
         if target:
             target.sample_count += 1
             await self.session.flush()
+
+    async def update_experiment_state(
+        self,
+        prompt_version_id: str,
+        state: str,
+        last_score: float | None = None,
+        decision_at: datetime | None = None,
+    ) -> None:
+        pv = await self.session.get(PromptVersion, prompt_version_id)
+        if not pv:
+            return
+        pv.experiment_state = state
+        if last_score is not None:
+            pv.last_score = last_score
+        if decision_at is not None:
+            pv.last_decision_at = decision_at
+        await self.session.flush()
+
+    async def list_by_ab_test_id(self, ab_test_id: str) -> list[PromptVersion]:
+        result = await self.session.execute(
+            select(PromptVersion).where(PromptVersion.ab_test_id == ab_test_id)
+        )
+        return list(result.scalars().all())
+
+    async def get_previous_stable(
+        self, agent_name: str, exclude_version: str
+    ) -> PromptVersion | None:
+        result = await self.session.execute(
+            select(PromptVersion)
+            .where(PromptVersion.agent_name == agent_name)
+            .where(PromptVersion.experiment_state == "stable")
+            .where(PromptVersion.version != exclude_version)
+            .order_by(PromptVersion.last_decision_at.desc())
+            .limit(1)
+        )
+        return result.scalars().first()
+
+    async def append_history(self, prompt_version_id: str, event: dict) -> None:
+        pv = await self.session.get(PromptVersion, prompt_version_id)
+        if not pv:
+            return
+        history = list(pv.experiment_history or [])
+        history.append(event)
+        pv.experiment_history = history
+        await self.session.flush()
