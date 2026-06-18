@@ -109,7 +109,7 @@
       - 启动 24h 回滚监控窗口(写 ab_decisions)
       - 返回 "ACCEPTED"
    c. 否则 winner 是 baseline → 停止 challenger,标记 "no_improvement"
-5. 写 ab_decisions(action="evaluate", p_value, scores, decision)
+5. 写 ab_decisions(action="evaluate", p_value, scores, decision) — `decision` 字段值: `"accepted" | "rejected" | "no_action"(样本不足或未达显著) | "skipped"(评分缺失或异常)`
 ```
 
 ### 2.5 `ABAcceptanceSweeper`(定时)
@@ -327,7 +327,8 @@ T+7d  实验已运行 7 天,累积样本 v1=140, v2=140
 - 筛选:by status / by agent / by date
 
 ### 6.3 Toast 通知
-关键事件发生时弹 toast:
+触发方式:**前端每 30 秒轮询** `GET /api/ab-decisions/recent?window=5m`,对比已显示的事件 ID 集合,新事件则弹 toast(简单可靠,避免引入 WebSocket)。
+关键事件:
 - `auto_accepted` — "writer v2 已自动采纳为 active"
 - `early_stopped` — "writer v2 已早停,writer v1 保持 active"
 - `rolled_back` — "writer v2 24h 内表现下降,已回滚到 writer v1"
