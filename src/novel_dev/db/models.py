@@ -668,3 +668,23 @@ class ImageryInventory(Base):
     item_type: Mapped[str] = mapped_column(String(32), nullable=False)
     frequency_in_chapter: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     extracted_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class ABDecision(Base):
+    __tablename__ = "ab_decisions"
+    __table_args__ = (
+        Index("ix_ab_decisions_experiment", "experiment_id"),
+        Index("ix_ab_decisions_action", "action"),
+        Index("ix_ab_decisions_decision_at", "decision_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    experiment_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    prompt_version_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    decision_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    p_value: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    scores: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    effect_size: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    meta: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
