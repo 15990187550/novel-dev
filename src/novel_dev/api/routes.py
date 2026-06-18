@@ -1621,6 +1621,31 @@ async def list_chapter_synopses(novel_id: str, session: AsyncSession = Depends(g
     }
 
 
+@router.get("/api/novels/{novel_id}/imagery-inventory")
+async def get_imagery_inventory(
+    novel_id: str,
+    window: int = 5,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    from novel_dev.services.imagery_inventory_service import ImageryInventoryService
+
+    svc = ImageryInventoryService(session)
+    items = await svc.get_recent(novel_id, window=window)
+    return {
+        "novel_id": novel_id,
+        "window": window,
+        "items": [
+            {
+                "item": i.item,
+                "item_type": i.item_type,
+                "chapter_id": i.chapter_id,
+                "frequency_in_chapter": i.frequency_in_chapter,
+            }
+            for i in items
+        ],
+    }
+
+
 @router.get("/api/novels/{novel_id}/chapters")
 async def list_chapters(novel_id: str, session: AsyncSession = Depends(get_session)):
     state_repo = NovelStateRepository(session)
