@@ -269,6 +269,10 @@ class PromptVersion(Base):
     sample_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     parent_version: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     ab_test_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    experiment_state: Mapped[str] = mapped_column(String(32), nullable=False, default="none", index=True)
+    last_decision_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    experiment_history: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
 
 class QualityRootCause(Base):
