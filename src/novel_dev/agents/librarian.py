@@ -876,7 +876,7 @@ class LibrarianAgent:
                 )
                 client = llm_factory.get("RootCauseAnalyzer")
                 response = await client.acomplete([ChatMessage(role="user", content=prompt)])
-                text = _MD_FENCE_RE.sub("", response.text.strip(), flags=re.IGNORECASE | re.MULTILINE)
+                text = _MD_FENCE_RE.sub("", response.text.strip())
                 try:
                     evaluations = json.loads(text)
                 except Exception:
