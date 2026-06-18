@@ -26,6 +26,7 @@ from novel_dev.services.quality_gate_service import (
 from novel_dev.services.quality_issue_service import QualityIssueService
 from novel_dev.services.repair_planner_service import RepairPlanner
 from novel_dev.services.continuity_audit_service import ContinuityAuditService
+from novel_dev.services.cross_chapter_continuity_service import CrossChapterContinuityService
 from novel_dev.services.prose_hygiene_service import ProseHygieneService
 from novel_dev.services.chapter_acceptance_service import ChapterAcceptanceService
 from novel_dev.services.chapter_obligation_service import ChapterObligationService
@@ -585,6 +586,46 @@ class FastReviewAgent:
                 score=FAST_REVIEW_PASS_SCORE if passed else FAST_REVIEW_FAIL_SCORE,
                 feedback=report.model_dump(),
             )
+            # Phase 4 / Task 23: cross-chapter entity drift detection
+            # (post-write). Uses entity_ids surfaced by ContextAgent; falls
+            # back to scanning active_entities for matching ids when none
+            # were pre-staged.
+            drift_entity_ids = chapter_context.get("entity_ids") or []
+            if not drift_entity_ids:
+                drift_entity_ids = await self._resolve_drift_entity_ids(
+                    chapter_context,
+                    novel_id=novel_id,
+                )
+            try:
+                continuity_svc = CrossChapterContinuityService(self.session)
+                drifts = await continuity_svc.detect_drift(
+                    novel_id=novel_id,
+                    chapter_id=chapter_id,
+                    polished_text=polished,
+                    entity_ids=drift_entity_ids,
+                )
+                if drifts:
+                    self._apply_cross_chapter_drift_to_gate(gate, drifts)
+                report.cross_chapter_drift = [
+                    {
+                        "entity": d.entity_name,
+                        "type": d.drift_type,
+                        "severity": d.severity,
+                    }
+                    for d in drifts
+                ]
+                if drifts and not passed:
+                    report.notes.append(
+                        "[cross_chapter_drift] "
+                        + "；".join(
+                            f"{d.entity_name}({d.drift_type})" for d in drifts[:4]
+                        )
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "cross_chapter_drift_detection_failed",
+                    extra={"chapter_id": chapter_id, "error": repr(exc)},
+                )
             continuity_audit = ContinuityAuditService.audit_chapter(
                 polished,
                 checkpoint.get("chapter_context", {}),
@@ -850,6 +891,90 @@ class FastReviewAgent:
             gate.status = QUALITY_BLOCK
             gate.summary = "存在阻断级质量问题，停止归档和世界状态入库。"
         return gate
+
+    @staticmethod
+    def _apply_cross_chapter_drift_to_gate(gate, drifts) -> None:
+        """Phase 4 / Task 23: route drift issues into the gate.
+
+        Block-severity drifts are appended to ``blocking_items`` and force
+        the gate into ``QUALITY_BLOCK``; warn-severity drifts land in
+        ``warning_items``. The gate's ``summary`` is updated when the
+        first drift item lands so downstream consumers see a coherent
+        reason string.
+        """
+        for d in drifts:
+            code = f"cross_chapter_{d.drift_type}"
+            item = {
+                "code": code,
+                "message": f"{d.entity_name} 跨章{d.drift_type}: {d.evidence_quote}",
+                "detail": {
+                    "evidence": d.evidence_quote,
+                    "fix": d.suggested_fix,
+                    "entity": d.entity_name,
+                    "drift_type": d.drift_type,
+                },
+            }
+            if d.severity == "block":
+                if not any(
+                    existing.get("code") == code
+                    for existing in gate.blocking_items
+                    if isinstance(existing, dict)
+                ):
+                    gate.blocking_items.append(item)
+                gate.status = QUALITY_BLOCK
+                gate.summary = "存在阻断级质量问题，停止归档和世界状态入库。"
+            else:
+                if not any(
+                    existing.get("code") == code
+                    for existing in gate.warning_items
+                    if isinstance(existing, dict)
+                ):
+                    gate.warning_items.append(item)
+
+    async def _resolve_drift_entity_ids(
+        self,
+        chapter_context: dict,
+        *,
+        novel_id: str,
+    ) -> list[str]:
+        """Resolve ``entity_ids`` for cross-chapter drift detection by
+        looking up the ``Entity.name`` values from
+        ``chapter_context.active_entities``.
+
+        Falls back to an empty list on any failure so the post-write
+        detection is non-fatal.
+        """
+        if not isinstance(chapter_context, dict) or not novel_id:
+            return []
+        names: list[str] = []
+        for entity in chapter_context.get("active_entities") or []:
+            if not isinstance(entity, dict):
+                continue
+            name = str(entity.get("name") or "").strip()
+            if name:
+                names.append(name)
+        if not names:
+            return []
+        try:
+            from novel_dev.repositories.entity_repo import EntityRepository
+
+            entities = await EntityRepository(self.session).find_by_names(
+                names, novel_id=novel_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "cross_chapter_drift_resolve_entity_ids_failed",
+                extra={"novel_id": novel_id, "error": repr(exc)},
+            )
+            return []
+        ids: list[str] = []
+        seen: set[str] = set()
+        for entity in entities:
+            eid = str(getattr(entity, "id", "") or "")
+            if eid and eid not in seen:
+                seen.add(eid)
+                ids.append(eid)
+        return ids
 
     @staticmethod
     def _extract_open_question_keywords(question: str) -> list[str]:

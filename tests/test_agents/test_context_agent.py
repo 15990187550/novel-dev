@@ -432,3 +432,89 @@ async def test_load_location_context_uses_orchestrated_scene_tools_when_configur
     result = await agent._load_location_context(plan, "n_ctx_orch")
 
     assert result.current == "青云宗"
+
+
+@pytest.mark.asyncio
+async def test_context_agent_includes_pre_write_continuity_constraints(async_session, monkeypatch):
+    """Phase 4 / Task 23: 实体连续性约束注入 narrative_source。
+
+    准备一个有 主角A 的实体,带最新 EntityVersion(state 中含 power_level +
+    identity_role)。在 assemble_for_chapter 完成后,narrative_source 中应包含
+    "实体连续性约束(本章不得违背)" 段及 "主角A" 的最新状态行。
+    """
+    from novel_dev.db.models import Entity, EntityVersion
+
+    async_session.add(
+        Entity(id="e_zhujue_a", name="主角A", type="character", novel_id="n_ctx_cont")
+    )
+    async_session.add(
+        EntityVersion(
+            entity_id="e_zhujue_a",
+            version=1,
+            state={"power_level": 3, "identity_role": "内门弟子"},
+        )
+    )
+    await async_session.flush()
+
+    chapter_plan = ChapterPlan(
+        chapter_number=1,
+        title="测试",
+        target_word_count=3000,
+        beats=[
+            BeatPlan(
+                summary="主角A 为了夺回失落的玉佩,冒险与同门冲突,选择正面对峙,失败代价是被逐出宗门。",
+                target_mood="tense",
+                key_entities=["主角A"],
+            ),
+            BeatPlan(
+                summary="主角A 面对强敌追击,被迫选择退避,失败代价是错失最后机会。悬念留在殿外是否有人跟踪。",
+                target_mood="tense",
+                key_entities=["主角A"],
+            ),
+        ],
+    )
+
+    async def fake_analyze_context_needs(self, plan, novel_id_arg=""):
+        return {
+            "locations": [],
+            "entities": ["主角A"],
+            "time_range": {"start_tick": -1, "end_tick": 1},
+            "foreshadowing_keywords": [],
+        }
+
+    monkeypatch.setattr(
+        ContextAgent,
+        "_analyze_context_needs",
+        fake_analyze_context_needs,
+    )
+
+    class _FakeGenre:
+        quality_config: dict = {}
+        genre = type("G", (), {"model_dump": staticmethod(lambda: {})})()
+        matched_templates: list = []
+        warnings: list = []
+
+        def render_prompt_block(self, *args, **kwargs):
+            return ""
+
+    async def fake_resolve(self, *args, **kwargs):
+        return _FakeGenre()
+
+    monkeypatch.setattr(
+        "novel_dev.agents.context_agent.GenreTemplateService.resolve",
+        fake_resolve,
+    )
+
+    agent = ContextAgent(async_session)
+    ctx = await agent.assemble_for_chapter(
+        "n_ctx_cont",
+        "c_ctx_cont",
+        chapter_plan,
+        volume_id="v1",
+        checkpoint={},
+    )
+
+    assert "实体连续性约束" in ctx.narrative_source
+    assert "主角A" in ctx.narrative_source
+    assert "内门弟子" in ctx.narrative_source
+    assert "3" in ctx.narrative_source  # power_level value

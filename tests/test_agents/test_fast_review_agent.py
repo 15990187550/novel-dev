@@ -1820,3 +1820,95 @@ def test_find_thrill_keyword_evidence_returns_slice_or_none():
     assert FastReviewAgent._find_thrill_keyword_evidence("plot_twist", "普通日常叙事。") is None
     # Unknown thrill type returns None
     assert FastReviewAgent._find_thrill_keyword_evidence("unknown_type", "anything") is None
+
+
+@pytest.mark.asyncio
+async def test_fast_review_detects_cross_chapter_drift(async_session, monkeypatch):
+    """Phase 4 / Task 23: FastReview 调用 CrossChapterContinuityService.detect_drift,
+    把 block-severity 漂移写入 report + gate.blocking_items,warn-severity 写入
+    gate.warning_items,所有漂移存入 report.cross_chapter_drift。
+    """
+    from unittest.mock import AsyncMock, MagicMock
+    from novel_dev.services.cross_chapter_continuity_service import DriftIssue
+
+    director = NovelDirector(session=async_session)
+    await director.save_checkpoint(
+        "novel_fr_drift",
+        phase=Phase.FAST_REVIEWING,
+        checkpoint_data={
+            "edit_attempt_count": 5,
+            "chapter_context": {
+                "chapter_plan": {"target_word_count": 10},
+                "entity_ids": ["e_zhujue_a"],
+            },
+        },
+        volume_id="v1",
+        chapter_id="c_drift",
+    )
+    await ChapterRepository(async_session).create("c_drift", "v1", 1, "Drift")
+    await ChapterRepository(async_session).update_text(
+        "c_drift",
+        raw_draft="主角B听见追兵的声音。",
+        polished_text="主角B听见追兵的声音。",
+    )
+
+    block_issue = DriftIssue(
+        entity_name="主角A",
+        drift_type="name_drift",
+        severity="block",
+        evidence_quote="主角B听见追兵",
+        suggested_fix="统一为主角A",
+    )
+    warn_issue = DriftIssue(
+        entity_name="主角A",
+        drift_type="state_jump",
+        severity="warn",
+        evidence_quote="凡人突然筑基",
+        suggested_fix="补一段突破描写",
+    )
+
+    fake_service = MagicMock()
+    fake_service.detect_drift = AsyncMock(return_value=[block_issue, warn_issue])
+
+    def _fake_factory(*args, **kwargs):
+        return fake_service
+
+    monkeypatch.setattr(
+        "novel_dev.agents.fast_review_agent.CrossChapterContinuityService",
+        _fake_factory,
+    )
+
+    mock_client = AsyncMock()
+    mock_client.acomplete.return_value = LLMResponse(
+        text=json.dumps({"consistency_fixed": True, "beat_cohesion_ok": True, "notes": []})
+    )
+
+    with patch("novel_dev.llm.llm_factory") as mock_factory:
+        mock_factory.get.return_value = mock_client
+        agent = FastReviewAgent(async_session)
+        report = await agent.review("novel_fr_drift", "c_drift")
+
+    fake_service.detect_drift.assert_awaited()
+    # Schema field should hold both drifts
+    assert hasattr(report, "cross_chapter_drift")
+    assert len(report.cross_chapter_drift) == 2
+    drift_types = {d["type"] for d in report.cross_chapter_drift}
+    assert drift_types == {"name_drift", "state_jump"}
+    severities = {d["severity"] for d in report.cross_chapter_drift}
+    assert severities == {"block", "warn"}
+
+    # Verify gate blocked due to name_drift
+    state = await director.resume("novel_fr_drift")
+    gate = state.checkpoint_data.get("quality_gate") or {}
+    block_codes = {
+        str(item.get("code"))
+        for item in (gate.get("blocking_items") or [])
+        if isinstance(item, dict) and item.get("code")
+    }
+    warn_codes = {
+        str(item.get("code"))
+        for item in (gate.get("warning_items") or [])
+        if isinstance(item, dict) and item.get("code")
+    }
+    assert any(c.startswith("cross_chapter_") for c in block_codes)
+    assert any(c.startswith("cross_chapter_") for c in warn_codes)

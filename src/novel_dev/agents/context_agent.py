@@ -25,6 +25,7 @@ from novel_dev.repositories.chapter_repo import ChapterRepository
 from novel_dev.agents.director import NovelDirector, Phase
 from novel_dev.agents._log_helpers import log_agent_detail, preview_text
 from novel_dev.services.beat_boundary_service import BeatBoundaryService
+from novel_dev.services.cross_chapter_continuity_service import CrossChapterContinuityService
 from novel_dev.services.genre_template_service import GenreTemplateService
 from novel_dev.services.log_service import logged_agent_step, log_service
 from novel_dev.services.quality_preflight_service import QualityPreflightService
@@ -383,7 +384,11 @@ class ContextAgent:
                 ),
                 chapter_plan,
             ),
-            narrative_source=self._narrative_source_from_checkpoint(checkpoint),
+            narrative_source=await self._build_narrative_source(
+                checkpoint,
+                chapter_plan,
+                novel_id=novel_id,
+            ),
             genre_quality_config=genre_template.quality_config,
             genre_prompt_block=genre_prompt_block,
             genre_template_warnings=genre_template.warnings,
@@ -1302,6 +1307,79 @@ class ContextAgent:
             if text:
                 return text[:5000]
         return ""
+
+    async def _build_narrative_source(
+        self,
+        checkpoint: dict,
+        chapter_plan: ChapterPlan,
+        *,
+        novel_id: str,
+    ) -> str:
+        """Build the narrative_source string with Phase 4 cross-chapter
+        entity continuity constraints appended.
+
+        Base text comes from ``_narrative_source_from_checkpoint``; the
+        constraints block is produced by
+        :class:`CrossChapterContinuityService.build_pre_write_constraints`
+        using ``entity_ids`` resolved from the active entities already
+        loaded for the chapter plan. Any failure (missing service, empty
+        entity set, LLM error) is swallowed so a degraded experience still
+        produces a usable narrative_source.
+        """
+        base = self._narrative_source_from_checkpoint(checkpoint)
+        try:
+            key_names = self._extract_key_entities_from_plan(chapter_plan)
+            entity_ids = await self._resolve_entity_ids_by_names(
+                key_names, novel_id=novel_id,
+            )
+            if not entity_ids:
+                return base
+            continuity_svc = CrossChapterContinuityService(self.session)
+            constraints = await continuity_svc.build_pre_write_constraints(
+                novel_id,
+                entity_ids,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "context_agent_continuity_constraints_failed",
+                extra={"error": str(exc)},
+            )
+            return base
+        if not constraints:
+            return base
+        if base:
+            return f"{base}\n\n{constraints}"
+        return constraints
+
+    async def _resolve_entity_ids_by_names(
+        self,
+        names: List[str],
+        *,
+        novel_id: str,
+    ) -> List[str]:
+        """Look up entity ids by their ``Entity.name`` values.
+
+        Used by the Phase 4 pre-write continuity constraints path; failures
+        or empty results are non-fatal (we just skip constraint injection).
+        """
+        if not names or not novel_id:
+            return []
+        try:
+            entities = await self.entity_repo.find_by_names(names, novel_id=novel_id)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "context_agent_resolve_entity_ids_failed",
+                extra={"novel_id": novel_id, "error": str(exc)},
+            )
+            return []
+        seen: set[str] = set()
+        ids: List[str] = []
+        for entity in entities:
+            eid = str(getattr(entity, "id", "") or "")
+            if eid and eid not in seen:
+                seen.add(eid)
+                ids.append(eid)
+        return ids
 
     @staticmethod
     def _narrative_source_text(value) -> str:

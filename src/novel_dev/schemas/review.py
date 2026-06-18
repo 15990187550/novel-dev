@@ -97,6 +97,11 @@ class FastReviewReport(BaseModel):
     language_style_ok: bool = True
     notes: List[str] = Field(default_factory=list)
     beat_coverage_results: List[dict] = Field(default_factory=list)
+    # Phase 4 / Task 23: cross-chapter entity continuity drift summary.
+    # Each item: {"entity": str, "type": str, "severity": "warn"|"block"}.
+    # Persisted alongside beat_coverage_results so downstream callers can
+    # surface drift counts without re-running detection.
+    cross_chapter_drift: List[dict] = Field(default_factory=list)
 
     @field_validator("notes", mode="before")
     @classmethod
