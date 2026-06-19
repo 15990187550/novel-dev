@@ -4100,3 +4100,45 @@ async def trigger_ab_sweeper(session: AsyncSession = Depends(get_session)) -> di
     decisions = await sweeper.tick()
     await session.commit()
     return {"decisions": decisions, "count": len(decisions)}
+
+
+@router.get("/api/judge-prompt-versions")
+async def list_judge_prompt_versions(session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from novel_dev.db.models import JudgePromptVersion
+    result = await session.execute(select(JudgePromptVersion).order_by(JudgePromptVersion.created_at.desc()))
+    return [
+        {
+            "id": pv.id,
+            "version": pv.version,
+            "agent_name": pv.agent_name,
+            "is_active": pv.is_active,
+            "experiment_state": pv.experiment_state,
+            "last_score": pv.last_score,
+            "last_decision_at": pv.last_decision_at.isoformat() if pv.last_decision_at else None,
+            "created_at": pv.created_at.isoformat(),
+        }
+        for pv in result.scalars().all()
+    ]
+
+
+@router.post("/api/judge-prompt-versions", status_code=201)
+async def create_judge_prompt_version(payload: dict, session: AsyncSession = Depends(get_session)):
+    from novel_dev.db.models import JudgePromptVersion
+    pv = JudgePromptVersion(
+        version=payload["version"],
+        agent_name=payload.get("agent_name", "judge_agent"),
+        prompt_text=payload["prompt_text"],
+        is_active=False,
+    )
+    session.add(pv)
+    await session.flush()
+    return {"id": pv.id, "version": pv.version, "is_active": False}
+
+
+@router.post("/api/judge-prompt-versions/{pv_id}/activate")
+async def activate_judge_prompt_version(pv_id: str, session: AsyncSession = Depends(get_session)):
+    from novel_dev.repositories.judge_prompt_version_repo import JudgePromptVersionRepository
+    repo = JudgePromptVersionRepository(session)
+    await repo.set_active(pv_id)
+    return {"ok": True}
