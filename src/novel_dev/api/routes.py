@@ -4038,3 +4038,56 @@ async def get_critic_breakdown(chapter_id: str, session: AsyncSession = Depends(
         "dimension_feedback": latest.dimension_feedback or {},
         "attempt_index": latest.attempt_index,
     }
+
+
+@router.get("/api/ab-decisions/recent")
+async def list_recent_decisions(
+    window_minutes: int = 60, session: AsyncSession = Depends(get_session),
+) -> dict:
+    from novel_dev.repositories.ab_decision_repo import ABDecisionRepository
+    repo = ABDecisionRepository(session)
+    decisions = await repo.list_recent(window_minutes=window_minutes)
+    return {
+        "decisions": [
+            {
+                "id": d.id,
+                "experiment_id": d.experiment_id,
+                "action": d.action,
+                "decision_at": d.decision_at.isoformat(),
+                "p_value": d.p_value,
+                "scores": d.scores,
+                "effect_size": d.effect_size,
+            }
+            for d in decisions
+        ],
+    }
+
+
+@router.get("/api/ab-decisions/by-experiment/{experiment_id}")
+async def list_decisions_by_experiment(
+    experiment_id: str, session: AsyncSession = Depends(get_session),
+) -> dict:
+    from novel_dev.repositories.ab_decision_repo import ABDecisionRepository
+    repo = ABDecisionRepository(session)
+    decisions = await repo.list_by_experiment(experiment_id)
+    return {
+        "experiment_id": experiment_id,
+        "decisions": [
+            {
+                "id": d.id,
+                "action": d.action,
+                "decision_at": d.decision_at.isoformat(),
+                "p_value": d.p_value,
+                "scores": d.scores,
+            }
+            for d in decisions
+        ],
+    }
+
+
+@router.post("/api/ab-sweeper/tick")
+async def trigger_ab_sweeper(session: AsyncSession = Depends(get_session)) -> dict:
+    from novel_dev.services.ab_acceptance_sweeper import ABAcceptanceSweeper
+    sweeper = ABAcceptanceSweeper(session)
+    decisions = await sweeper.tick()
+    return {"decisions": decisions, "count": len(decisions)}
