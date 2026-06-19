@@ -81,6 +81,7 @@
 
           <div class="surface-card surface-card--main">
             <div class="h-full overflow-auto px-4 py-4 sm:px-6 sm:py-5 lg:px-8">
+              <ExperimentToast />
               <router-view v-slot="{ Component }">
                 <div :key="route.fullPath" class="page-shell">
                   <component :is="Component" />
@@ -102,6 +103,7 @@ import { useNovelStore } from '@/stores/novel.js'
 import { useRealtimeLog } from '@/composables/useRealtimeLog.js'
 import NovelSelector from '@/components/NovelSelector.vue'
 import DarkModeToggle from '@/components/DarkModeToggle.vue'
+import ExperimentToast from '@/components/ExperimentToast.vue'
 
 const route = useRoute()
 const novelStore = useNovelStore()

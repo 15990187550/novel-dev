@@ -29,6 +29,11 @@
       />
     </section>
 
+    <section class="surface-card rounded-[1.4rem] p-5">
+      <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100">A/B 实验状态</h2>
+      <ExperimentWidget />
+    </section>
+
     <div class="flex flex-wrap items-center justify-between gap-3">
       <DashboardNextActions class="flex-1" :actions="recommendedActions" @action="handleAction" />
       <el-button
@@ -73,6 +78,7 @@ import DashboardVolumeSummary from '@/components/dashboard/DashboardVolumeSummar
 import DashboardNextActions from '@/components/dashboard/DashboardNextActions.vue'
 import DashboardInsights from '@/components/dashboard/DashboardInsights.vue'
 import QualityRecommendationWidget from '@/components/QualityRecommendationWidget.vue'
+import ExperimentWidget from '@/components/ExperimentWidget.vue'
 import { formatBeijingDateTime } from '@/utils/time.js'
 import {
   buildChapterSummary,
