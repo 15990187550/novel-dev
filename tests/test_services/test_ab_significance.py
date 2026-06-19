@@ -38,3 +38,28 @@ def test_zero_variance_returns_not_significant():
     tester = SignificanceTester()
     result = tester.test({"v1": [80.0] * 50, "v2": [80.0] * 50})
     assert result.is_significant is False
+
+
+def test_needs_exactly_two_versions():
+    tester = SignificanceTester()
+    result = tester.test({"v1": [80.0] * 50})
+    assert result.is_significant is False
+    assert result.reason == "need_exactly_two_versions"
+
+
+def test_needs_exactly_two_versions_three_versions():
+    tester = SignificanceTester()
+    result = tester.test({"v1": [80.0] * 50, "v2": [82.0] * 50, "v3": [84.0] * 50})
+    assert result.is_significant is False
+    assert result.reason == "need_exactly_two_versions"
+
+
+def test_reset_restores_strict_mode():
+    tester = SignificanceTester(initial_mode="strict")
+    # Use 3 unsuccessful attempts to trigger relaxed mode
+    for _ in range(3):
+        tester.test({"v1": [80.0] * 10, "v2": [80.5] * 10})
+    assert tester.current_mode == "relaxed"
+    tester.reset()
+    assert tester.current_mode == "strict"
+    assert tester._unsuccessful_attempts == 0
