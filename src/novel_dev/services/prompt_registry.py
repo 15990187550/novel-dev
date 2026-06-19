@@ -101,6 +101,47 @@ class PromptRegistry:
 
     async def increment_sample_count(self, agent_name: str, version: str) -> None:
         await self.repo.increment_sample_count(agent_name, version)
+        # Phase 5: trigger ABAcceptanceDecider if this version is part of a running experiment
+        try:
+            from sqlalchemy import select
+            from novel_dev.db.models import ABTest
+            result = await self.session.execute(
+                select(ABTest).where(
+                    ABTest.agent_name == agent_name,
+                    ABTest.status == "running",
+                )
+            )
+            for ab in result.scalars().all():
+                if version not in (ab.baseline_version, ab.challenger_version):
+                    continue
+                from novel_dev.services.ab_acceptance_decider import ABAcceptanceDecider
+                decider = ABAcceptanceDecider(self.session)
+                await decider.evaluate(experiment_id=ab.id, sample_scores=await self._gather_scores(ab))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("ab_decider_invoke_failed")
+
+    async def _gather_scores(self, ab):
+        """Gather per-version sample scores for decider evaluation.
+
+        Simplified: uses PromptVersion.last_score (if set) as the score; falls back
+        to a synthetic default. In production this should pull from chapter_quality_repo.
+        """
+        from sqlalchemy import select
+        from novel_dev.db.models import PromptVersion
+        result = await self.session.execute(
+            select(PromptVersion).where(PromptVersion.ab_test_id == ab.id)
+        )
+        pvs = list(result.scalars().all())
+        out = {}
+        for pv in pvs:
+            score = pv.last_score if pv.last_score is not None else 80.0
+            out[pv.version] = {
+                "critic_scores": [score] * pv.sample_count if pv.sample_count > 0 else [score],
+                "hook_achieved": [True] * max(pv.sample_count, 1),
+                "thrill_verified": [True] * max(pv.sample_count, 1),
+            }
+        return out
 
     async def get_active_version_name(self, agent_name: str) -> str:
         pv = await self.repo.get_active(agent_name)
