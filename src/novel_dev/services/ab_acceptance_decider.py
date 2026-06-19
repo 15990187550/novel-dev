@@ -12,11 +12,13 @@ from novel_dev.agents.judge_agent import JudgeAgent, JudgeParseError, NoActiveVe
 from novel_dev.config.ab_judge_config import JudgeConfig, get_ab_judge_config
 from novel_dev.db.models import ABTest, PromptVersion
 from novel_dev.repositories.ab_decision_repo import ABDecisionRepository
+from novel_dev.repositories.judge_call_log_repo import JudgeCallLogRepository
 from novel_dev.repositories.judge_prompt_version_repo import JudgePromptVersionRepository
 from novel_dev.repositories.prompt_version_repo import PromptVersionRepository
 from novel_dev.services.ab_significance import SignificanceTester
 from novel_dev.services.ab_weighted_score import WeightedScoreCalculator
 from novel_dev.services.ab_decision_recorder import ABDecisionRecorder
+from novel_dev.services.judge_cost_guard import JudgeCostGuard
 from novel_dev.services.tie_random import tie_random_pick
 
 logger = logging.getLogger(__name__)
@@ -49,6 +51,8 @@ class ABAcceptanceDecider:
         self.decision_repo = ABDecisionRepository(session)
         self.recorder = ABDecisionRecorder(session)
         self.judge_config = judge_config if judge_config is not None else get_ab_judge_config()
+        self.call_log_repo = JudgeCallLogRepository(session)
+        self.cost_guard = JudgeCostGuard(self.judge_config, self.call_log_repo)
 
     async def evaluate(
         self, experiment_id: str, sample_scores: dict,
@@ -173,6 +177,10 @@ class ABAcceptanceDecider:
 
         if not self.judge_config.enabled:
             return self._tie_random_decide(ab, scores, "judge_disabled")
+
+        cost_check = await self.cost_guard.check_can_call(ab.id)
+        if not cost_check.allow:
+            return self._tie_random_decide(ab, scores, cost_check.reason)
 
         # 调 judge
         try:

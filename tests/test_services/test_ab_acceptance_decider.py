@@ -162,3 +162,43 @@ async def test_evaluate_tie_falls_back_to_random_when_judge_fails(async_session)
     assert result.winner == "v1"  # baseline (deterministic via experiment_id hash)
     assert result.judge_triggered is False
     assert result.judge_error == "parse_failed"
+
+
+@pytest.mark.asyncio
+async def test_evaluate_tie_blocked_by_cost_cap(async_session, monkeypatch):
+    """experiment cost 已超 cap → 不调 judge,降级到 tie_random。"""
+    pv_baseline = PromptVersion(agent_name="writer", version="v1", content="a", is_active=True, ab_test_id="ab_1", sample_count=50)
+    pv_challenger = PromptVersion(agent_name="writer", version="v2", content="b", is_active=False, ab_test_id="ab_1", sample_count=50)
+    ab = ABTest(id="ab_1", agent_name="writer", baseline_version="v1", challenger_version="v2", status="running")
+    jpv = JudgePromptVersion(version="judge-v1", agent_name="judge_agent", prompt_text="{chapter_text}", is_active=True)
+    async_session.add_all([pv_baseline, pv_challenger, ab, jpv])
+    await async_session.flush()
+
+    decider = ABAcceptanceDecider(async_session, judge_config=JudgeConfig(max_cost_per_experiment_usd=0.10))
+    decider.significance_tester = MagicMock()
+    decider.significance_tester.test = MagicMock(return_value=MagicMock(is_significant=False, p_value=0.6, effect_size=0.1, threshold_used="strict", reason="not_significant"))
+    decider.weighted_calc = MagicMock()
+    decider.weighted_calc.compute_batch = MagicMock(return_value={"v1": 75.1, "v2": 75.5})
+
+    # Mock cost guard 报超 cap
+    from novel_dev.services.judge_cost_guard import JudgeCostGuard, CostCheckResult
+    decider.cost_guard = MagicMock(spec=JudgeCostGuard)
+    decider.cost_guard.check_can_call = AsyncMock(return_value=CostCheckResult(allow=False, reason="experiment_cost_cap", current=0.50))
+
+    # 注入历史 cost log
+    from novel_dev.db.models import JudgeCallLog
+    log = JudgeCallLog(
+        experiment_id="ab_1", prompt_version_id=jpv.id, model="claude-sonnet-4-6",
+        input_tokens=100, output_tokens=10, latency_ms=100, cost_usd=0.50,
+    )
+    async_session.add(log)
+    await async_session.flush()
+
+    result = await decider.evaluate(experiment_id="ab_1", sample_scores={
+        "v1": {"critic_scores": [80.0]*50, "hook_achieved": [True]*50, "thrill_verified": [False]*50},
+        "v2": {"critic_scores": [80.5]*50, "hook_achieved": [True]*50, "thrill_verified": [False]*50},
+    })
+
+    assert result.judge_triggered is False
+    assert result.judge_error == "experiment_cost_cap"
+    assert result.winner in ["v1", "v2"]  # tie_random 选一个
