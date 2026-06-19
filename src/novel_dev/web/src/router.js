@@ -19,6 +19,7 @@ const routes = [
   { path: '/quality/runs', component: () => import('@/views/QualityRunsView.vue') },
   { path: '/novels/:novelId/rcs-viewer', component: () => import('@/views/RCSViewerView.vue') },
   { path: '/novels/:novelId/imagery-inventory', component: () => import('@/views/ImageryInventoryView.vue') },
+  { path: '/ab-experiments', component: () => import('@/views/ExperimentView.vue') },
 ]
 
 export default createRouter({ history: createWebHistory(), routes })

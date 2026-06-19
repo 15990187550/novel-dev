@@ -195,3 +195,7 @@ export const saveDocumentVersion = (id, documentId, payload) =>
   api.post(`/novels/${id}/documents/${documentId}/versions`, payload).then(r => r.data)
 export const reindexDocument = (id, documentId) =>
   api.post(`/novels/${id}/documents/${documentId}/reindex`).then(r => r.data)
+export const listABExperiments = () => api.get('/api/ab-tests').then(r => r.data);
+export const listDecisionsByExperiment = (id) => api.get(`/api/ab-decisions/by-experiment/${id}`).then(r => r.data);
+export const getRecentABDecisions = (windowMinutes = 60) =>
+  api.get('/api/ab-decisions/recent', { params: { window_minutes: windowMinutes } }).then(r => r.data);
