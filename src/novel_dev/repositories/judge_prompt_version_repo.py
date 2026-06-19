@@ -65,3 +65,10 @@ class JudgePromptVersionRepository:
         history.append(entry)
         pv.experiment_history = history
         await self.session.flush()
+
+    async def set_ab_test_id(self, pv_id: str, ab_test_id: str) -> None:
+        pv = await self.session.get(JudgePromptVersion, pv_id)
+        if pv is None:
+            return
+        pv.ab_test_id = ab_test_id
+        await self.session.flush()
