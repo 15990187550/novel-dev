@@ -305,6 +305,26 @@ class ABTest(Base):
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
 
+class JudgePromptVersion(Base):
+    __tablename__ = "judge_prompt_versions"
+    __table_args__ = (
+        UniqueConstraint("agent_name", "version", name="uq_judge_prompt_versions_agent_version"),
+        Index("ix_judge_prompt_versions_active", "is_active"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    version: Mapped[str] = mapped_column(String(32), nullable=False)
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    prompt_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    ab_test_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True, index=True)
+    experiment_state: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
+    last_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    last_decision_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    experiment_history: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class GenerationJob(Base):
     __tablename__ = "generation_jobs"
     __table_args__ = (
