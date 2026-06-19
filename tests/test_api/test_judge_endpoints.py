@@ -68,3 +68,30 @@ async def test_activate_judge_prompt_version(async_session):
         assert pv.is_active is True
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_get_judge_call_stats(async_session):
+    from novel_dev.db.models import JudgeCallLog
+    from datetime import datetime, timedelta
+    for i in range(3):
+        log = JudgeCallLog(
+            decision_id=f"d{i}", experiment_id="exp_1",
+            prompt_version_id="p", model="claude-sonnet-4-6",
+            input_tokens=1000, output_tokens=100, latency_ms=2000, cost_usd=0.01,
+            called_at=datetime.utcnow() - timedelta(hours=i),
+        )
+        async_session.add(log)
+    await async_session.flush()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.get("/api/judge-call-stats?experiment_id=exp_1&window_days=14")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["total_calls"] == 3
+        assert abs(data["total_cost_usd"] - 0.03) < 1e-6
+    finally:
+        app.dependency_overrides.clear()

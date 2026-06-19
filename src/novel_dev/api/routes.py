@@ -4142,3 +4142,28 @@ async def activate_judge_prompt_version(pv_id: str, session: AsyncSession = Depe
     repo = JudgePromptVersionRepository(session)
     await repo.set_active(pv_id)
     return {"ok": True}
+
+
+@router.get("/api/judge-call-stats")
+async def get_judge_call_stats(
+    experiment_id: Optional[str] = None,
+    window_days: int = 14,
+    session: AsyncSession = Depends(get_session),
+):
+    from datetime import datetime, timedelta
+    from sqlalchemy import select
+    from novel_dev.db.models import JudgeCallLog
+
+    cutoff = datetime.utcnow() - timedelta(days=window_days)
+    stmt = select(JudgeCallLog).where(JudgeCallLog.called_at >= cutoff)
+    if experiment_id is not None:
+        stmt = stmt.where(JudgeCallLog.experiment_id == experiment_id)
+    result = await session.execute(stmt)
+    logs = list(result.scalars().all())
+    return {
+        "total_calls": len(logs),
+        "total_cost_usd": sum(l.cost_usd for l in logs),
+        "total_input_tokens": sum(l.input_tokens for l in logs),
+        "total_output_tokens": sum(l.output_tokens for l in logs),
+        "avg_latency_ms": (sum(l.latency_ms for l in logs) / len(logs)) if logs else 0,
+    }
