@@ -325,6 +325,39 @@ class JudgePromptVersion(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class JudgeABTest(Base):
+    __tablename__ = "judge_ab_tests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    agent_name: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    baseline_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    challenger_version: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running", index=True)
+    config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    winner: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+
+
+class JudgeCallLog(Base):
+    __tablename__ = "judge_call_log"
+    __table_args__ = (
+        Index("ix_judge_call_log_decision", "decision_id"),
+        Index("ix_judge_call_log_experiment_called", "experiment_id", "called_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    decision_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    experiment_id: Mapped[Optional[str]] = mapped_column(String(36), nullable=True)
+    prompt_version_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    model: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    called_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class GenerationJob(Base):
     __tablename__ = "generation_jobs"
     __table_args__ = (
