@@ -19,10 +19,10 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    op.add_column('prompt_versions', sa.Column('experiment_state', sa.String(length=32), nullable=False))
+    op.add_column('prompt_versions', sa.Column('experiment_state', sa.String(length=32), nullable=False, server_default='none'))
     op.add_column('prompt_versions', sa.Column('last_decision_at', sa.DateTime(), nullable=True))
     op.add_column('prompt_versions', sa.Column('last_score', sa.Float(), nullable=True))
-    op.add_column('prompt_versions', sa.Column('experiment_history', sa.JSON(), nullable=False))
+    op.add_column('prompt_versions', sa.Column('experiment_history', sa.JSON(), nullable=False, server_default='[]'))
     op.create_index(op.f('ix_prompt_versions_experiment_state'), 'prompt_versions', ['experiment_state'], unique=False)
 
 

@@ -3,6 +3,8 @@ from httpx import AsyncClient, ASGITransport
 from fastapi import FastAPI
 
 from novel_dev.api.routes import router, get_session
+from novel_dev.db.engine import async_session_maker
+from novel_dev.db.models import PromptVersion
 
 app = FastAPI()
 app.include_router(router)
@@ -47,6 +49,23 @@ async def test_create_version(async_session):
         assert resp.status_code == 201
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_create_version_persists_after_request_without_session_override():
+    app.dependency_overrides.clear()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/prompts/writer/versions",
+            json={"version": "v1.0", "content": "persist me", "is_active": True},
+        )
+
+    assert resp.status_code == 201
+    async with async_session_maker() as session:
+        found = await session.get(PromptVersion, resp.json()["id"])
+        assert found is not None
+        assert found.content == "persist me"
 
 
 @pytest.mark.asyncio

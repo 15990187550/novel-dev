@@ -3869,13 +3869,15 @@ async def create_prompt_version(
 ):
     reg = PromptRegistry(session)
     try:
-        return await reg.create_version(
+        result = await reg.create_version(
             agent_name=agent_name,
             version=payload["version"],
             content=payload["content"],
             is_active=payload.get("is_active", False),
             created_by=payload.get("created_by", "user"),
         )
+        await session.commit()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
 
@@ -3890,6 +3892,7 @@ async def update_prompt_version(
     reg = PromptRegistry(session)
     if payload.get("is_active"):
         await reg.set_active(agent_name, version)
+        await session.commit()
     return {"status": "ok"}
 
 
@@ -3902,6 +3905,7 @@ async def delete_prompt_version(
     reg = PromptRegistry(session)
     try:
         await reg.delete_version(agent_name, version)
+        await session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -3920,6 +3924,7 @@ async def start_ab_test(
             max_samples=payload.get("max_samples", 10),
             min_samples=payload.get("min_samples", 3),
         )
+        await session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"id": ab.id, "status": ab.status, "agent_name": ab.agent_name}
@@ -3954,6 +3959,7 @@ async def get_ab_test(
     if not ab:
         raise HTTPException(status_code=404, detail="A/B test not found")
     results = await runner.results(test_id)
+    await session.commit()
     return {
         "id": ab.id,
         "agent_name": ab.agent_name,
@@ -3978,6 +3984,7 @@ async def stop_ab_test(
 ):
     runner = ABTestRunner(session)
     await runner.stop(test_id)
+    await session.commit()
     return {"status": "aborted"}
 
 
@@ -3990,6 +3997,7 @@ async def declare_ab_winner(
     runner = ABTestRunner(session)
     try:
         await runner.declare_winner(test_id, payload["winner"])
+        await session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "ok"}
@@ -4090,4 +4098,5 @@ async def trigger_ab_sweeper(session: AsyncSession = Depends(get_session)) -> di
     from novel_dev.services.ab_acceptance_sweeper import ABAcceptanceSweeper
     sweeper = ABAcceptanceSweeper(session)
     decisions = await sweeper.tick()
+    await session.commit()
     return {"decisions": decisions, "count": len(decisions)}

@@ -127,26 +127,26 @@
 class PromptRegistry:
     async def get_active(self, agent_name: str) -> str:
         """拿当前 is_active 的 content,空则 fallback 到 hardcoded 默认值(冷启动)"""
-    
+
     async def get_by_version(self, agent_name: str, version: str) -> str:
         """拿指定版本,用于 A/B 跑 challenger"""
-    
+
     async def list_versions(self, agent_name: str) -> list[PromptVersion]:
         """列出所有版本(按 created_at 倒序)"""
-    
+
     async def create_version(
         self, agent_name: str, version: str, content: str,
         is_active: bool = False, created_by: str = "user",
         parent_version: str | None = None,
     ) -> PromptVersion:
         """创建新版本,默认不激活"""
-    
+
     async def set_active(self, agent_name: str, version: str) -> None:
         """原子切换默认版本:旧 active 关 + 新 active 开(同事务)"""
-    
+
     async def rollback(self, agent_name: str, to_version: str) -> None:
         """回滚,等价于 set_active(agent_name, to_version)"""
-    
+
     async def delete_version(self, agent_name: str, version: str) -> None:
         """只能删非 is_active,active 版本保护"""
 ```
@@ -163,10 +163,10 @@ class PromptRegistry:
 - 调用追踪和指标落库都在 LLM 边界,A/B 自然能复用到指标体系
 
 ```
-Agent.llm_call() → 
-  PromptRegistry.get_active(agent_name) → "v1.0 content" 
+Agent.llm_call() →
+  PromptRegistry.get_active(agent_name) → "v1.0 content"
                               ↓
-                ABTestMiddleware(agent_name) 
+                ABTestMiddleware(agent_name)
                               ↓
               if A/B running for this agent:
                   return (baseline_or_challenger, version)
@@ -210,13 +210,13 @@ class ABTestRunner:
         max_samples: int = 10, min_samples: int = 3,
     ) -> ABTest:
         """注册一个 A/B test,但不立即生效。生效靠 ABTestMiddleware 在每次 LLM 调用时检查"""
-    
+
     async def stop(self, test_id: str) -> ABTest:
         """停 A/B,所有 agent 调用回到单版本模式"""
-    
+
     async def results(self, test_id: str) -> ABTestResult:
         """计算 baseline vs challenger 的指标对比(score 均值/方差, issue_codes 分布)"""
-    
+
     async def declare_winner(
         self, test_id: str, winner: str  # "baseline" | "challenger"
     ) -> None:
@@ -233,14 +233,14 @@ class RootCauseAnalyzer:
         self.session = session
         self.llm_factory = llm_factory
         self.prompt_registry = prompt_registry
-    
+
     async def analyze(
         self, novel_id: str, chapter_id: str,
         chapter_text: str, score_breakdown: dict,
         issue_codes: list[str], beat_boundary_cards: list[BeatBoundaryCard],
     ) -> RootCauseResult:
         """读最新根因分析器 prompt 版本,跑 LLM,持久化结果"""
-        
+
         prompt_template = await self.prompt_registry.get_active("root_cause_analyzer")
         prompt = prompt_template.format(
             chapter_text=chapter_text[:5000],  # 截断保护成本
@@ -248,7 +248,7 @@ class RootCauseAnalyzer:
             issue_codes=", ".join(issue_codes),
             beat_cards=format_beat_cards(beat_boundary_cards),
         )
-        
+
         # 同步 LLM 调用,失败软降级
         try:
             response = await self.llm_factory.get("RootCauseAnalyzer").acomplete(...)
@@ -256,7 +256,7 @@ class RootCauseAnalyzer:
         except Exception as exc:
             logger.warning("root_cause_analysis_failed", extra={...})
             return RootCauseResult(summary="[分析失败,请人工]", suggested_actions=[], confidence=0.0)
-        
+
         # 持久化(成功 + 失败都记)
         await self._persist(novel_id, chapter_id, result)
         return result

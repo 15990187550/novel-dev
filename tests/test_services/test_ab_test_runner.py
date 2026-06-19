@@ -2,8 +2,18 @@ import pytest
 from novel_dev.services.ab_test_runner import ABTestRunner
 
 
+async def _seed_prompt_versions(async_session, agent_name="critic", baseline="v1.0", challenger="v2.0"):
+    from novel_dev.services.prompt_registry import PromptRegistry
+
+    registry = PromptRegistry(async_session)
+    await registry.create_version(agent_name, baseline, f"{baseline} content", is_active=True)
+    await registry.create_version(agent_name, challenger, f"{challenger} content")
+    return registry
+
+
 @pytest.mark.asyncio
 async def test_start_creates_test_record(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     ab = await runner.start(
         agent_name="critic",
@@ -15,7 +25,25 @@ async def test_start_creates_test_record(async_session):
 
 
 @pytest.mark.asyncio
+async def test_start_links_prompt_versions_to_experiment(async_session):
+    registry = await _seed_prompt_versions(async_session)
+
+    runner = ABTestRunner(async_session)
+    ab = await runner.start(
+        agent_name="critic",
+        baseline_version="v1.0",
+        challenger_version="v2.0",
+    )
+
+    baseline = await registry.repo.get_by_version("critic", "v1.0")
+    challenger = await registry.repo.get_by_version("critic", "v2.0")
+    assert baseline.ab_test_id == ab.id
+    assert challenger.ab_test_id == ab.id
+
+
+@pytest.mark.asyncio
 async def test_pick_version_is_stable_per_chapter(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     await runner.start("critic", "v1.0", "v2.0", max_samples=10, min_samples=3)
     v1 = await runner.pick_version("critic", "ch_1")
@@ -25,6 +53,7 @@ async def test_pick_version_is_stable_per_chapter(async_session):
 
 @pytest.mark.asyncio
 async def test_pick_version_distributes_across_chapters(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     await runner.start("critic", "v1.0", "v2.0", max_samples=10, min_samples=3)
     baseline_count = 0
@@ -60,6 +89,7 @@ async def test_results_calculates_p_value(async_session):
         chapters.append(ch)
     await async_session.flush()
 
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     await runner.start("critic", "v1.0", "v2.0", max_samples=10, min_samples=3)
 
@@ -87,6 +117,7 @@ async def test_results_calculates_p_value(async_session):
 
 @pytest.mark.asyncio
 async def test_results_inconclusive_when_too_few_samples(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     ab = await runner.start("critic", "v1.0", "v2.0", max_samples=10, min_samples=3)
     result = await runner.results(ab.id)
@@ -96,6 +127,7 @@ async def test_results_inconclusive_when_too_few_samples(async_session):
 
 @pytest.mark.asyncio
 async def test_start_raises_when_running_exists(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     await runner.start("critic", "v1.0", "v2.0")
     with pytest.raises(ValueError, match="already has a running"):
@@ -104,6 +136,7 @@ async def test_start_raises_when_running_exists(async_session):
 
 @pytest.mark.asyncio
 async def test_stop_marks_aborted(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     ab = await runner.start("critic", "v1.0", "v2.0")
     result = await runner.stop(ab.id)
@@ -113,6 +146,8 @@ async def test_stop_marks_aborted(async_session):
 
 @pytest.mark.asyncio
 async def test_list_all_returns_all(async_session):
+    await _seed_prompt_versions(async_session, agent_name="critic")
+    await _seed_prompt_versions(async_session, agent_name="writer")
     runner = ABTestRunner(async_session)
     ab = await runner.start("critic", "v1.0", "v2.0")
     await runner.stop(ab.id)  # one aborted
@@ -150,6 +185,7 @@ async def test_results_marks_completed_when_threshold_met(async_session):
         chapters.append(ch)
     await async_session.flush()
 
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     ab = await runner.start("critic", "v1.0", "v2.0", max_samples=2, min_samples=4)
 
@@ -189,6 +225,7 @@ async def test_declare_winner_sets_active(async_session):
 
 @pytest.mark.asyncio
 async def test_declare_winner_raises_on_invalid(async_session):
+    await _seed_prompt_versions(async_session)
     runner = ABTestRunner(async_session)
     ab = await runner.start("critic", "v1.0", "v2.0")
     with pytest.raises(ValueError, match="Invalid winner"):

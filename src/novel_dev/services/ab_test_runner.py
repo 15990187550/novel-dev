@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from novel_dev.db.models import ABTest, ChapterQualityMetric
 from novel_dev.repositories.ab_test_repo import ABTestRepository
+from novel_dev.repositories.prompt_version_repo import PromptVersionRepository
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,23 @@ class ABTestRunner:
             raise ValueError(
                 f"Agent {agent_name} already has a running A/B test ({running[0].id})"
             )
+        if baseline_version == challenger_version:
+            raise ValueError("Baseline and challenger versions must differ")
+        prompt_repo = PromptVersionRepository(self.session)
+        baseline = await prompt_repo.get_by_version(agent_name, baseline_version)
+        challenger = await prompt_repo.get_by_version(agent_name, challenger_version)
+        missing = [
+            version
+            for version, prompt_version in (
+                (baseline_version, baseline),
+                (challenger_version, challenger),
+            )
+            if prompt_version is None
+        ]
+        if missing:
+            raise ValueError(
+                f"Prompt version(s) not found for {agent_name}: {', '.join(missing)}"
+            )
         ab = await self.repo.create(
             agent_name=agent_name,
             baseline_version=baseline_version,
@@ -59,6 +77,11 @@ class ABTestRunner:
                 "scope_filter": scope_filter or {},
             },
         )
+        baseline.ab_test_id = ab.id
+        challenger.ab_test_id = ab.id
+        baseline.experiment_state = "running"
+        challenger.experiment_state = "running"
+        await self.session.flush()
         logger.info("ab_test_started", extra={
             "test_id": ab.id, "agent_name": agent_name,
             "baseline_version": baseline_version,
