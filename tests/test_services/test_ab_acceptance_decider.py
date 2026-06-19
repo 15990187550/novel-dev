@@ -202,3 +202,30 @@ async def test_evaluate_tie_blocked_by_cost_cap(async_session, monkeypatch):
     assert result.judge_triggered is False
     assert result.judge_error == "experiment_cost_cap"
     assert result.winner in ["v1", "v2"]  # tie_random 选一个
+
+
+@pytest.mark.asyncio
+async def test_evaluate_tie_blocked_by_per_decision_cost(async_session):
+    """单次 judge 调用估算成本 > per-decision cap → 降级。"""
+    pv_baseline = PromptVersion(agent_name="writer", version="v1", content="a", is_active=True, ab_test_id="ab_1", sample_count=50)
+    pv_challenger = PromptVersion(agent_name="writer", version="v2", content="b", is_active=False, ab_test_id="ab_1", sample_count=50)
+    ab = ABTest(id="ab_1", agent_name="writer", baseline_version="v1", challenger_version="v2", status="running")
+    jpv = JudgePromptVersion(version="judge-v1", agent_name="judge_agent", prompt_text="{chapter_text}", is_active=True)
+    async_session.add_all([pv_baseline, pv_challenger, ab, jpv])
+    await async_session.flush()
+
+    # max_cost_per_decision_usd=0.001 极小,任何调用都超
+    decider = ABAcceptanceDecider(async_session, judge_config=JudgeConfig(max_cost_per_decision_usd=0.001, max_cost_per_experiment_usd=10.0))
+    decider.significance_tester = MagicMock()
+    decider.significance_tester.test = MagicMock(return_value=MagicMock(is_significant=False, p_value=0.6, effect_size=0.1, threshold_used="strict", reason="not_significant"))
+    decider.weighted_calc = MagicMock()
+    decider.weighted_calc.compute_batch = MagicMock(return_value={"v1": 75.1, "v2": 75.5})
+
+    result = await decider.evaluate(experiment_id="ab_1", sample_scores={
+        "v1": {"critic_scores": [80.0]*50, "hook_achieved": [True]*50, "thrill_verified": [False]*50},
+        "v2": {"critic_scores": [80.5]*50, "hook_achieved": [True]*50, "thrill_verified": [False]*50},
+    })
+
+    assert result.judge_triggered is False
+    assert result.judge_error == "cost_cap"
+    assert result.winner in ["v1", "v2"]

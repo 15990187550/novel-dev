@@ -182,6 +182,10 @@ class ABAcceptanceDecider:
         if not cost_check.allow:
             return self._tie_random_decide(ab, scores, cost_check.reason)
 
+        # 粗估 per-decision cost(假设 input=4000, output=400)— 实际 LLM 调用后再精算
+        if not self.cost_guard.allow_single_call(input_tokens=4000, output_tokens=400):
+            return self._tie_random_decide(ab, scores, "cost_cap")
+
         # 调 judge
         try:
             judge = JudgeAgent(self.session, self.judge_config)
