@@ -4167,3 +4167,13 @@ async def get_judge_call_stats(
         "total_output_tokens": sum(l.output_tokens for l in logs),
         "avg_latency_ms": (sum(l.latency_ms for l in logs) / len(logs)) if logs else 0,
     }
+
+
+@router.post("/api/judge-sweeper/tick")
+async def post_judge_sweeper_tick(session: AsyncSession = Depends(get_session)):
+    from novel_dev.config.ab_judge_config import get_ab_judge_config
+    from novel_dev.services.judge_acceptance_sweeper import JudgeAcceptanceSweeper
+    config = get_ab_judge_config()
+    sweeper = JudgeAcceptanceSweeper(session, config)
+    decisions = await sweeper.tick()
+    return {"decisions": decisions, "count": len(decisions)}

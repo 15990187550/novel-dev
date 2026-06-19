@@ -95,3 +95,28 @@ async def test_get_judge_call_stats(async_session):
         assert abs(data["total_cost_usd"] - 0.03) < 1e-6
     finally:
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_post_judge_sweeper_tick(async_session):
+    from novel_dev.db.models import JudgeABTest
+    ab = JudgeABTest(
+        baseline_version="v1",
+        challenger_version="v2",
+        agent_name="judge_agent",
+        status="running",
+    )
+    async_session.add(ab)
+    await async_session.flush()
+
+    app.dependency_overrides[get_session] = _override_session(async_session)
+    transport = ASGITransport(app=app)
+    try:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            resp = await client.post("/api/judge-sweeper/tick")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "decisions" in data
+        assert isinstance(data["decisions"], list)
+    finally:
+        app.dependency_overrides.clear()
