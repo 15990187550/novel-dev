@@ -199,3 +199,8 @@ export const listABExperiments = () => api.get('/api/ab-tests').then(r => r.data
 export const listDecisionsByExperiment = (id) => api.get(`/api/ab-decisions/by-experiment/${id}`).then(r => r.data);
 export const getRecentABDecisions = (windowMinutes = 60) =>
   api.get('/api/ab-decisions/recent', { params: { window_minutes: windowMinutes } }).then(r => r.data);
+export const fetchJudgePromptVersions = () => api.get('/api/judge-prompt-versions').then(r => r.data);
+export const createJudgePromptVersion = (payload) => api.post('/api/judge-prompt-versions', payload).then(r => r.data);
+export const activateJudgePromptVersion = (pvId) => api.post(`/api/judge-prompt-versions/${pvId}/activate`).then(r => r.data);
+export const fetchJudgeCallStats = (params = {}) => api.get('/api/judge-call-stats', { params }).then(r => r.data);
+export const triggerJudgeSweeperTick = () => api.post('/api/judge-sweeper/tick').then(r => r.data);
