@@ -96,6 +96,10 @@ class ABAcceptanceSweeper:
         elapsed = datetime.utcnow() - ab.ended_at
         if elapsed > timedelta(hours=monitoring_hours):
             return None
+        # Manual override guard: if winner was manually changed, skip auto-rollback
+        for pv in await self._get_pvs(ab):
+            if pv.version == ab.winner and pv.experiment_state == "manual_override":
+                return None
         scores = await self._compute_recent_scores(ab)
         if scores is None or not ab.winner:
             return None
