@@ -1,0 +1,69 @@
+# Test Run phase6-smoke-20260620
+
+- Entrypoint: `scripts/verify_generation_real.sh`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real`
+- Duration: `0.0s`
+
+## Artifacts
+
+- `fixture_title`: `Codex 最小生成验收`
+- `contract_scope`: `real-longform-volume1`
+- `acceptance_scope`: `real-longform-volume1`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `1`
+- `run_chapter_limit`: `1`
+- `chapter_target_word_count`: `1667`
+- `target_volume_word_count`: `1667`
+- `source_dir`: `/private/tmp/phase6-smoke-source`
+- `source_material_count`: `4`
+- `source_material_char_count`: `1340`
+- `source_material_byte_count`: `3165`
+- `source_materials_json`: `[{"filename": "世界观.md", "path": "/private/tmp/phase6-smoke-source/世界观.md", "status": "discovered", "char_count": 325, "byte_count": 831}, {"filename": "力量体系.md", "path": "/private/tmp/phase6-smoke-source/力量体系.md", "status": "discovered", "char_count": 308, "byte_count": 732}, {"filename": "道照诸天_brief.md", "path": "/private/tmp/phase6-smoke-source/道照诸天_brief.md", "status": "discovered", "char_count": 305, "byte_count": 692}, {"filename": "金手指设计.md", "path": "/private/tmp/phase6-smoke-source/金手指设计.md", "status": "discovered", "char_count": 402, "byte_count": 910}]`
+- `novel_id`: `novel-5d35`
+- `genre_template_summary`: `{"genre": "玄幻 / 诸天文", "template_layers": 3, "template_warnings": [], "template_evidence_available": true}`
+- `generation_snapshot_json`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620/artifacts/generation_snapshot.json`
+- `quality_summary_json`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620/quality-summary/summary.json`
+- `quality_summary_md`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620/quality-summary/summary.md`
+- `quality_summary_status`: `failed`
+- `quality_summary_run_id`: `phase6-smoke-20260620-quality-summary`
+
+## Issues
+
+### SYSTEM_BUG-upload_source_materials `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `upload_source_materials`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: Server error '500 Internal Server Error' for url 'http://127.0.0.1:8000/api/novels/novel-5d35/documents/upload'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500
+- Evidence: http_status=500, response_text=Internal Server Error
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage upload_source_materials`
+
+### SYSTEM_BUG-export_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `export_contract`
+- External blocker: `False`
+- Real LLM: `False`
+- Fake rerun status: `None`
+- Message: Exported novel file missing: exported_path not returned
+- Evidence: archived_chapter_count=0
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export`
+
+### SYNOPSIS-QUALITY-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `brainstorm`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 总纲质量门禁未通过。
+- Evidence: passed=False, structure_score=60, marketability_score=60, conflict_score=45, character_arc_score=60, writability_score=45, blocking_issues[0]=总纲缺少具体对抗关系，需要写清谁与谁为了什么发生冲突。, warning_issues[0]=主要人物弧光转折不足，正文容易缺少人物选择。, warning_issues[1]=总纲可识别结构转折不足 4 个，当前识别到 0 个。, warning_issues[2]=缺少卷级承诺，卷纲生成时容易偏题。, repair_suggestions[0]=将 core_conflict 改成『主角 vs 具体阻力，为争夺具体目标』。, repair_suggestions[1]=为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

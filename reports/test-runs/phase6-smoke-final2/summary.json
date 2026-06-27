@@ -1,0 +1,89 @@
+{
+  "run_id": "phase6-smoke-final2",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 897.2786120830569,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-longform-volume1",
+    "acceptance_scope": "real-longform-volume1",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "run_chapter_limit": "67",
+    "chapter_target_word_count": "1667",
+    "target_volume_word_count": "111689",
+    "source_dir": "/private/tmp/phase6-smoke-source",
+    "source_material_count": "4",
+    "source_material_char_count": "1340",
+    "source_material_byte_count": "3165",
+    "source_materials_json": "[{\"filename\": \"世界观.md\", \"path\": \"/private/tmp/phase6-smoke-source/世界观.md\", \"pending_id\": \"pe_43c1cc40\", \"status\": \"approved\", \"char_count\": 325, \"byte_count\": 831}, {\"filename\": \"力量体系.md\", \"path\": \"/private/tmp/phase6-smoke-source/力量体系.md\", \"pending_id\": \"pe_615d447a\", \"status\": \"approved\", \"char_count\": 308, \"byte_count\": 732}, {\"filename\": \"道照诸天_brief.md\", \"path\": \"/private/tmp/phase6-smoke-source/道照诸天_brief.md\", \"pending_id\": \"pe_26b6447e\", \"status\": \"approved\", \"char_count\": 305, \"byte_count\": 692}, {\"filename\": \"金手指设计.md\", \"path\": \"/private/tmp/phase6-smoke-source/金手指设计.md\", \"pending_id\": \"pe_c230bc80\", \"status\": \"approved\", \"char_count\": 402, \"byte_count\": 910}]",
+    "novel_id": "novel-80ee",
+    "genre_template_summary": "{\"genre\": \"玄幻 / 诸天文\", \"template_layers\": 3, \"template_warnings\": [], \"template_evidence_available\": true}",
+    "source_material_uploaded_count": "4",
+    "source_material_pending_ids": "pe_43c1cc40,pe_615d447a,pe_26b6447e,pe_c230bc80",
+    "source_material_approved_count": "4",
+    "setting_session_id": "sgs_e80f47a702f2463fbbbd5cfaedc3940a",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "1",
+    "review_batch_id": "d0cacfc7a03948df8d9a8e0675f359c2",
+    "generated_setting_change_count": "5",
+    "generated_setting_approvable_change_count": "5",
+    "generated_setting_conflict_change_count": "0",
+    "generated_setting_rejected_conflict_change_count": "0",
+    "generated_setting_approved_change_ids": "b3f66bc0098b45869b85b14a4e8fab1b,1125a20979014a4793487fcd18e9fcbc,a56fcadc18c54e57a3dc9c98df9dcb40,74da6636c8ee41b9a9b400eee1153c25,a4778b192d80421bbc7f7f0073a87ad8",
+    "generated_setting_batch_status": "approved",
+    "setting_consolidation_job_id": "job_64fc4e700db7",
+    "setting_consolidation_batch_id": "d95cc9c644184dcb88490a44b3962ec6",
+    "consolidated_setting_change_count": "13",
+    "consolidated_setting_approvable_change_count": "13",
+    "consolidated_setting_conflict_change_count": "0",
+    "consolidated_setting_rejected_conflict_change_count": "0",
+    "consolidated_setting_approved_change_ids": "3048b76191ae44a9aaffcdbc8a71c5e0,2361bbdcb4234c1bbb951ff0676ab07f,307ed3edbc8d4f6fb7baae47c0ddc1dc,acc12121685748728041bf56b0ec56f5,d4c1b0ecc63a47b8b7788e9823fb8114,c203e5e8e65141f08bb6d91346c9afd0,1b1c206401e449a9b919ebd8d14d4ee2,5c6893b42f454328ae8838a8200b3d7f,aca12326b690410db4bebf1f59fc84ac,641d84576d034b34a4dee4babade6f7a,a658ae58500d4584b316664774d44d7c,8e951f75e10c4dc9b0328f720d0aa7f4,636b1d51eed14ff9b2f6ad7a190d6323",
+    "consolidated_setting_batch_status": "approved",
+    "generation_snapshot_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final2/artifacts/generation_snapshot.json",
+    "quality_summary_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final2/quality-summary/summary.json",
+    "quality_summary_md": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final2/quality-summary/summary.md",
+    "quality_summary_status": "passed",
+    "quality_summary_run_id": "phase6-smoke-final2-quality-summary"
+  },
+  "details": [],
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-volume_plan",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "volume_plan",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "Client error '400 Bad Request' for url 'http://127.0.0.1:8000/api/novels/novel-80ee/volume_plan'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400",
+      "evidence": [
+        "http_status=400",
+        "response_text={\"detail\":\"generate_volume_plan semantic conflicts remain after repair: ch_001~ch_005 摘要中写\\\"本章按设定链推进至炼气节点/筑基节点/金丹节点/元婴节点/化神节点\\\"，即主角在第1卷前5章就跨越炼气→筑基→金丹→元婴→化神五个大境界直接突破为化神级修士。这与 [hard/fact] \\\"凡人陈渊 / 观天镜持有者 / Lv1窥视初醒\\\"严重冲突：设定明确主角是凡人，本卷只能完成\\\"观天镜Lv1窥视初醒\\\"，不得跃升修行境界。；ch_066 卷级高潮写\\\"凡人之躯断后护至亲撤退的替身引走追兵，自己沦为弃子仓促逃入荒野\\\"。这与 [hard/fact] 卷级总览\\\"他护至亲撤离、暴露异能,在凡人夹缝中仓促出逃\\\"中\\\"护至亲撤离\\\"的设定直接矛盾——设定是至亲被陈渊带走撤离，本卷骨架却写成至亲成功撤入安全处、陈渊沦为弃子独自流亡，事实写反。；ch_066 中\\\"青鳞与赵都尉方联手围堵\\\"违反 [hard/fact] 核心冲突三方设定：异族探子'青鳞'(外族)与王朝内应'赵都尉'(暗通异族)本应是在暗线上同谋的阵营，不应在卷级高潮被写成正面\\\"联手围堵\\\"陈渊的对立联合体；更严重的是这等于让本卷不可正面对抗的化神级'青鳞'在第1卷高潮就直接下场围猎凡人主角，触发\\\"阶段越界\\\"。；ch_051~ch_052 写\\\"'青鳞'化神级远景对峙,对方未出手,只留一句警告离去\\\"以及\\\"从对峙残压中拾取一缕化神气息样本……初步坐实暗通之实\\\"——让主角以Lv1窥视余光直接接触并采样化神级残留气息并用于拼合证据，越过了Lv1的代价边界（ch_041 已明写首次明确体感代价边界），构成能力跳跃。；ch_024 \\\"玉佩忽与远方一道气机共振,陈渊神识中浮现元婴级幻象一瞥\\\"、ch_048 \\\"梦中再现金丹执事..."
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage volume_plan"
+    },
+    {
+      "id": "SYSTEM_BUG-export_contract",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "export_contract",
+      "is_external_blocker": false,
+      "real_llm": false,
+      "fake_rerun_status": null,
+      "message": "Exported novel file missing: exported_path not returned",
+      "evidence": [
+        "archived_chapter_count=0"
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export"
+    }
+  ]
+}

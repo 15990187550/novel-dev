@@ -1,0 +1,1144 @@
+{
+  "run_id": "phase6-smoke-final",
+  "novel_id": "novel-bcc6",
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-longform-volume1",
+    "acceptance_scope": "real-longform-volume1",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "run_chapter_limit": "67",
+    "chapter_target_word_count": "1667",
+    "target_volume_word_count": "111689",
+    "source_dir": "/private/tmp/phase6-smoke-source",
+    "source_material_count": "4",
+    "source_material_char_count": "1340",
+    "source_material_byte_count": "3165",
+    "source_materials_json": "[{\"filename\": \"世界观.md\", \"path\": \"/private/tmp/phase6-smoke-source/世界观.md\", \"pending_id\": \"pe_31dc9ca3\", \"status\": \"approved\", \"char_count\": 325, \"byte_count\": 831}, {\"filename\": \"力量体系.md\", \"path\": \"/private/tmp/phase6-smoke-source/力量体系.md\", \"pending_id\": \"pe_ae776c65\", \"status\": \"approved\", \"char_count\": 308, \"byte_count\": 732}, {\"filename\": \"道照诸天_brief.md\", \"path\": \"/private/tmp/phase6-smoke-source/道照诸天_brief.md\", \"pending_id\": \"pe_9af3bbfd\", \"status\": \"approved\", \"char_count\": 305, \"byte_count\": 692}, {\"filename\": \"金手指设计.md\", \"path\": \"/private/tmp/phase6-smoke-source/金手指设计.md\", \"pending_id\": \"pe_dd033c26\", \"status\": \"approved\", \"char_count\": 402, \"byte_count\": 910}]",
+    "novel_id": "novel-bcc6",
+    "genre_template_summary": "{\"genre\": \"玄幻 / 诸天文\", \"template_layers\": 3, \"template_warnings\": [], \"template_evidence_available\": true}",
+    "source_material_uploaded_count": "4",
+    "source_material_pending_ids": "pe_31dc9ca3,pe_ae776c65,pe_9af3bbfd,pe_dd033c26",
+    "source_material_approved_count": "4",
+    "setting_session_id": "sgs_4f398f73ebff493793e0285e36731891",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "5",
+    "review_batch_id": "b525d16975194890ad13910737660ada",
+    "generated_setting_change_count": "21",
+    "generated_setting_approvable_change_count": "21",
+    "generated_setting_conflict_change_count": "0",
+    "generated_setting_rejected_conflict_change_count": "0",
+    "generated_setting_approved_change_ids": "1354db3605e94467ba856ba0e0045552,af1573d2dafa4ed1ae5bcfdf1ed16b5f,e743c51bcab54423a9cd8f7276db3a34,fd66423d3b77459d96615b28fac317c5,5e4668dd675b49e39d58cdcc98c86b51,f91be0cc1f994eb5abcd6fdb4d25de41,ef86e86a934a4c4096cab427819dc05e,5fb92dc5d1e04e1f968236f7003d43ac,d22da06c64414b85aebf8cf62ff941b7,ebe4c220691e4aa8b22219dd27901930,e830a4cf9a9c4a9787a5d399dc3bb9bc,d6adb42abe6647b8a90fdf8388f9c636,decaa9b651364ac49b223cd63b2b8310,489f99c311964494ac83178c32b5e4cb,c53ae785b3cb4e60af3c73a7d1015889,04271519b66d4bfeac8862a456c4ec56,addd1cf60fe547aaa46cee0f6596a6e2,e14cb265ae37428bac1e1b739271fe1d,9e9b188164d440cdb70c4a4dfa5b6a65,4fafdfdc6be94558943043bb9c62e7df,9b8dfccf3e6648dd9b164ddc35505eff",
+    "generated_setting_batch_status": "approved",
+    "setting_consolidation_job_id": "job_ef3d7994e98c",
+    "setting_consolidation_batch_id": "1eeb3eb6c360475088093f19f8ecbe7c",
+    "consolidated_setting_change_count": "0",
+    "consolidated_setting_approvable_change_count": "0",
+    "consolidated_setting_conflict_change_count": "0",
+    "consolidated_setting_rejected_conflict_change_count": "0",
+    "consolidated_setting_batch_status": "pending"
+  },
+  "checkpoint": {
+    "novel_title": "世界观 长篇生成",
+    "genre": {
+      "primary_slug": "xuanhuan",
+      "primary_name": "玄幻",
+      "secondary_slug": "zhutian",
+      "secondary_name": "诸天文"
+    },
+    "synopsis_data": {
+      "title": "凡人少年陈渊怀揣上古观天镜残片踏入修行界，必须在",
+      "logline": "凡人少年陈渊怀揣上古观天镜残片踏入修行界，必须在五大圣地之一的青冥圣地与异族的夹缝中以残镜因果之力自保，并为被灭门的陈氏一族复仇——败则族仇永埋、自身沦为弃子，胜方能撬动圣地把柄、为家人讨回血债。",
+      "core_conflict": "陈渊（凡人少年，持观天镜残片） vs 青冥圣地长老慕容晦及其门下\"暗辰\"派系 + 暗中勾连的异族渗透者。核心对抗：陈渊以残镜逐级追查家族覆灭真相，每进一步都直接撼动慕容晦在青冥圣地的权位与封口布局；青冥圣地则借宗门规矩与异族里应外合的双重绞杀，逼迫陈渊交出残镜或永绝后患。赌注：陈氏血仇能否昭雪、观天镜残片落入谁手、凡人界边陲数城生民。",
+      "themes": [
+        "凡人逆袭与代价",
+        "天道规则下的克制与抉择",
+        "金手指的代价与边界",
+        "信息差与布局胜过蛮力",
+        "势力夹缝中的生存与忠诚",
+        "家族血仇与上古真相的逐步揭开"
+      ],
+      "character_arcs": [],
+      "milestones": [
+        {
+          "act": "第一幕·边陲起风",
+          "summary": "陈渊于边陲小城察觉灵气潮汐异常，初次激活观天镜Lv1窥视，目睹家族覆灭的异常物浮现，与沈青禾联手追溯线索却遭围杀，被迫逃入凡人界荒野。",
+          "climax_event": "陈渊被迫逃亡，亲历家族沦为废墟，族人败亡。"
+        },
+        {
+          "act": "第一幕·边陲起风",
+          "summary": "陈渊入玄元诸宗以求庇护，初次进入宗门试炼被诬为异族奸细，遭逐并陷入陷阱，关键时刻以观天镜Lv2追溯证据浮出水面自救。",
+          "climax_event": "陈渊被逐出宗门后遭追杀，以观天镜揭穿陷害真相反证清白，拔剑指向幕后弟子反被宗门高层压下。"
+        },
+        {
+          "act": "第二幕·宗门风云",
+          "summary": "陈渊辗转结识赵玄策，与其结盟探查异族渗透之事，逐步获得势力庇护却发现盟友亦怀私心，在一次刺杀中受伤，被迫选择以观天镜Lv3共鸣对抗强敌，反噬致神识重伤。",
+          "climax_event": "陈渊在围杀中被逼入死角，强行催动观天镜Lv3共鸣反杀异族首领，神识受反噬，盟友关系破裂。"
+        },
+        {
+          "act": "第二幕·宗门风云",
+          "summary": "真相逐渐揭开：家族覆灭背后牵涉五大圣地中某方（青冥圣地暗辰派系）的阴谋与异族里应外合，王朝旧臣线索浮现，陈渊确认自身处境已与天道异变深度绑定，被迫做出以凡人之躯承担更大风险的抉择。",
+          "climax_event": "陈渊在王朝密档中发现关于上古观天镜与天道封印的证据，锁定幕后主使为青冥圣地长老慕容晦，代价是放弃继续潜伏的安全。"
+        },
+        {
+          "act": "第三幕·天道异变（内在转变）",
+          "summary": "天道异变爆发，三千小世界门户开启，异族大举渗透，五大圣地被迫联手却又彼此算计。陈渊与沈青禾、赵玄策结盟，以观天镜Lv4推演敌我布局，夺得关键资源——上古封印碎片，却在虚天界入口被青冥圣地代理人借规则反将一军——这是他第一次醒悟『残镜能照见因果，却照不见人心；外力再强也替我做不了抉择』。",
+          "climax_event": "陈渊在虚天界入口争夺中击败异族强者，夺取封印碎片并暴露实力，却被青冥圣地代理人依宗门规矩反将一军；陈渊于濒危中悟出外力不可恃，立誓不再以残镜硬撼天道。"
+        },
+        {
+          "act": "第三幕·天道异变",
+          "summary": "异族以整个玄元大陆边陲为代价设下陷阱，陈渊必须选择以残破观天镜Lv5照见之力与天道短暂共鸣，否则三千大世界秩序根基将被撼动。",
+          "climax_event": "陈渊以凡人之躯强行施展Lv5照见，与天道共鸣反制异族，世界边界停止崩塌，但自身寿元与神识几近燃尽，沦为近乎废人。"
+        },
+        {
+          "act": "第四幕·余烬与新局",
+          "summary": "异族退却，但五大圣地以陈渊伤重为由试图拿下观天镜，王朝背弃盟友背叛盟约。陈渊被迫逃亡之际，被逐的旧宗门弟子舍命相护，沈青禾与赵玄策押上身份护他，关系彻底重塑。",
+          "climax_event": "旧宗门弟子护陈渊突围而重伤濒死，五大圣地拔剑指向陈渊，王朝宣告毁约，陈渊以濒死之躯得知下一处天道异变节点位置。"
+        },
+        {
+          "act": "第四幕·余烬与新局",
+          "summary": "陈渊在三千小世界边缘苏醒，悟出观天镜真正的代价——每次照见都将重塑宿主的命运，必须以自身修为为锚重立根基。他立下新誓：不再以凡人之躯硬撼天道，而是以布局撬动三千大世界规则。",
+          "climax_event": "陈渊拒绝接受圣地招安，选择踏入三千小世界寻找天道异变的下一源头——然而他在三千小世界边缘的断壁残垣上，看到了一个不该存在的图腾：青冥圣地失传近千年的禁制纹路，与他颈间残镜上那缕无人能解的纹路严丝合缝——这意味着，慕容晦背后还有一位『更早就在等这面镜子醒来的人』。"
+        }
+      ],
+      "estimated_volumes": 18,
+      "estimated_total_chapters": 1200,
+      "estimated_total_words": 2000000,
+      "volume_outlines": [
+        {
+          "volume_number": 1,
+          "title": "太玄历末年，灵气潮汐暗涌，边陲小城落",
+          "summary": "太玄历末年，灵气潮汐暗涌，边陲小城落魄世家子陈渊偶然触及祖传玉佩，觉醒观天镜残片。他目睹异象浮现，与女修沈青禾联手追溯家族异常，却遭不明修士围杀，被迫护族出逃，沦为无依无靠的求存之人。",
+          "narrative_role": "立主基调：建立陈渊凡人之身、观天镜代价机制、边陲势力格局与异族渗透的初步印象，引出修行界入口。",
+          "main_goal": "在家族覆灭危机中以观天镜Lv1窥视、初步拼出真相碎片，并带残余族人逃出边陲小城，踏入宗门或王朝庇护的入口。",
+          "main_conflict": "陈渊（凡人觉醒者） vs 边陲渗透的异族与暗中推波助澜的未知修士；外部压迫来自异族渗透小队与不明追杀者，内部压力来自族人安危与自身能力不足。",
+          "start_state": "陈渊为边陲小城落魄世家子，持有祖传玉佩，不知观天镜真相，灵气潮汐初现异常，家族尚算安稳。",
+          "end_state": "陈渊亲眼目睹家族沦为废墟，族人败亡，他携少量族人与沈青禾遁入凡人界边陲荒野，怀揣观天镜Lv1残余窥视所得的模糊线索，决意踏入玄元大陆诸宗以图自保。",
+          "climax": "围杀夜中，异族渗透者以诡异术法突袭陈氏祖宅，陈渊在绝望中强行触发观天镜Lv1窥视，看清敌方布置但无力回天，族人败亡，他护着幼弟与沈青禾断后撤退。",
+          "hook_to_next": "异族渗透者留下的符箓残片指向青冥圣地暗辰派系的术法痕迹；观天镜在窥视时闪回一帧模糊画面，似与上古封印有关；沈青禾识出异族术法与青冥圣地暗辰派系外门弟子所习有关。",
+          "key_entities": [
+            "陈渊：边陲小城落魄世家子，观天镜持有者",
+            "沈青禾：边陲女修，与陈渊从存疑到并肩",
+            "陈氏族人：被灭门的家族残余，幼弟托付于陈渊",
+            "边陲渗透异族小队：未现身真容的杀手，使用不属于玄元正统的术法",
+            "青冥圣地暗辰派系：伏线中的幕后黑手指向，尚未具名",
+            "祖传玉佩：观天镜平时嵌于其中",
+            "灵气潮汐异常物：边陲浮现的异象先兆"
+          ],
+          "relationship_shifts": [
+            "陈渊与沈青禾：由各自提防到联手护族退敌",
+            "陈渊与陈氏族人：被迫担起主心骨，关系由依赖转为托付",
+            "陈渊与边陲旧交：因家族覆灭而信任崩塌"
+          ],
+          "foreshadowing_setup": [
+            "观天镜Lv1窥视时闪回的上古封印一帧画面",
+            "异族符箓残片所蕴含的青冥圣地暗辰派系术法痕迹",
+            "灵气潮汐异常物的来源与异族渗透时间线吻合",
+            "祖传玉佩在危机中异动的规律"
+          ],
+          "foreshadowing_payoff": [],
+          "target_chapter_range": "1-67"
+        },
+        {
+          "volume_number": 2,
+          "title": "陈渊入玄元诸宗以求庇护，却在入门试炼",
+          "summary": "陈渊入玄元诸宗以求庇护，却在入门试炼中被诬为异族奸细，遭逐并陷入追杀。他以观天镜Lv2追溯证据自救反证清白，却触怒宗门高层；辗转结识王朝旧臣赵玄策，在夹缝中结盟追查异族渗透，却因盟友私心与异族围杀而身受重伤，被迫以Lv3共鸣反杀强敌。",
+          "narrative_role": "扩展地图至玄元大陆诸宗与王朝线，揭示宗门内部派系与异族里应外合的暗面，推进陈渊能力Lv1→Lv3，铺垫青冥圣地与王朝密档伏笔。",
+          "main_goal": "在宗门内借观天镜Lv2自证清白并锁定陷害真凶（青冥圣地暗辰派系外门弟子），同时借赵玄策之力探明异族渗透的宗门内部线，代价是承受Lv3共鸣反噬与盟友关系裂痕。",
+          "main_conflict": "陈渊 vs 宗门内部陷害他的暗辰派系外门弟子与暗中渗透的异族；外部压力来自王朝旧臣赵玄策的利益试探与异族小队对证人的灭口追杀。",
+          "start_state": "陈渊携族人残部与沈青禾逃入玄元大陆边陲，怀揣观天镜Lv1窥视的模糊线索与指向暗辰派系的符箓残片，投奔玄元诸宗以求庇护。",
+          "end_state": "陈渊在围杀中强行催动观天镜Lv3共鸣反杀异族首领，神识与寿元骤损，赵玄策因利益考量暂退，沈青禾负伤随行；陈渊在王朝密档边缘觅得上古观天镜与天道封印的初步记载，锁定幕后主使为青冥圣地长老慕容晦，确认自己已与天道异变深度绑定。",
+          "climax": "陈渊被逼入死角，强行催动观天镜Lv3共鸣，短暂调动天道之力反杀异族首领，自身神识受反噬几近崩裂，盟友赵玄策目睹此景后选择按兵不动。",
+          "hook_to_next": "王朝密档中关于上古观天镜与天道封印的只言片语；暗辰派系外门弟子供出『长老亲令』三字后暴毙；赵玄策留下的王朝密令残页。",
+          "key_entities": [
+            "陈渊：观天镜持有者，能力进阶至Lv3",
+            "沈青禾：从旁观者转为同路女修",
+            "赵玄策：王朝旧臣后裔，利益试探者",
+            "青冥圣地暗辰派系外门弟子：陷害陈渊的内鬼，伏线指向长老慕容晦",
+            "异族渗透者：渗透宗门的异族细作",
+            "观天镜Lv2/Lv3：追溯证据与短暂天道共鸣",
+            "王朝密令残页：赵玄策接触陈渊的凭证"
+          ],
+          "relationship_shifts": [
+            "陈渊与沈青禾：由护族同路转为共同破局的同伴",
+            "陈渊与赵玄策：由被试探转为有限合作",
+            "陈渊与宗门：由借力庇护转为被逐追杀",
+            "陈渊与异族：由被动受害转为主动对抗",
+            "陈渊与青冥圣地暗辰派系：从暗处被算计转为正面锁定真凶"
+          ],
+          "foreshadowing_setup": [
+            "青冥圣地暗辰派系与异族里应外合的传闻（仅作传闻）",
+            "王朝密档中关于天道封印与上古观天镜的记载",
+            "陈氏家族覆灭与暗辰派系外门弟子的关联线索",
+            "观天镜Lv3共鸣反噬的代价机制"
+          ],
+          "foreshadowing_payoff": [
+            "观天镜Lv2追溯证据浮出水面，反证陈渊清白",
+            "异族渗透宗门的具体人证与符箓证据链"
+          ],
+          "target_chapter_range": "41-80"
+        },
+        {
+          "volume_number": 3,
+          "title": "天道异变正式爆发，灵气潮汐加剧，三千",
+          "summary": "天道异变正式爆发，灵气潮汐加剧，三千小世界门户微启，异族大举渗透。陈渊与沈青禾、赵玄策结盟，以观天镜Lv4推演敌我布局，在虚天界入口争夺中击败异族强者夺得上古封印碎片，自身实力暴露，五大圣地开始将他视为必须拉拢或拿下的人；亦在虚天界入口被青冥圣地代理人事先埋伏借规则反将一军，触发陈渊关键内在转变。",
+          "narrative_role": "全面引爆天道异变背景，将战场从宗门扩展至虚天界入口与青冥圣地正面台面，完成观天镜Lv1→Lv4的能力阶梯，抬升陈渊的棋手地位，并落实他从『靠残镜升级』到『悟出外力不可恃』的内在转变。",
+          "main_goal": "在青冥圣地与异族先遣军双面夹击中以Lv4推演争夺上古封印碎片，并借圣地把柄为陈氏残余与同伴谋得安全落脚点。",
+          "main_conflict": "陈渊联盟 vs 异族大举渗透的先遣军与青冥圣地暗辰派系的代理人；外部压力来自天道异变下秩序根基动摇与圣地的招安/灭口双轨策略。",
+          "start_state": "陈渊神识受Lv3反噬未愈，与沈青禾、赵玄策暂结脆弱同盟，怀揣王朝密档残页与指向慕容晦的暗辰派系口供，得知天道异变迫近。",
+          "end_state": "陈渊以Lv4推演击败异族强者，夺得上古封印碎片，实力暴露引青冥圣地注目；却在虚天界入口被暗辰派系代理人借宗门规矩反将一军，悟出『残镜能照见因果，却照不见人心』，立誓不再以残镜硬撼天道；赵玄策将王朝隐藏的天道封印线索交予陈渊，沈青禾以修行代价换取陈渊施展Lv3共鸣的窗口期，联盟得以维持但已被圣地盯上。",
+          "climax": "虚天界入口争夺战中，陈渊以Lv4推演出异族先遣军与暗辰派系代理人的布局破绽，强行突入核心夺得封印碎片，身负重创仍全身而退——却在他喘息未定时，被埋伏已久的暗辰派系代理人依宗门规矩反将一军，几近束手就擒；陈渊于生死一线悟出外力不可恃，立下新誓。",
+          "hook_to_next": "青冥圣地暗中调令试探陈渊，并下最后通牒；异族以整个玄元大陆边陲为饵的传闻落实为陷阱；上古封印碎片与观天镜残片隐隐共鸣。",
+          "key_entities": [
+            "陈渊：观天镜持有者，能力进阶至Lv4",
+            "沈青禾：以修行代价换取Lv3窗口期",
+            "赵玄策：交出天道封印线索，押上王朝旧臣身份",
+            "异族先遣军首领：天道异变中渗透的强者",
+            "青冥圣地暗辰派系代理人：暗中角逐，借规则反将陈渊一军",
+            "上古封印碎片：虚天界入口争夺的关键资源",
+            "观天镜Lv4推演：敌我布局推演能力"
+          ],
+          "relationship_shifts": [
+            "陈渊与沈青禾：以命相托的信任",
+            "陈渊与赵玄策：试探期结束，进入同路阶段",
+            "陈渊与青冥圣地：从被暗中算计变为被正面瞄准的关键人物",
+            "陈渊与异族：从被动对抗转为主动布局",
+            "陈渊与自身：完成从『依赖残镜升级』到『悟出外力不可恃』的内在转变"
+          ],
+          "foreshadowing_setup": [
+            "异族以玄元边陲为饵设陷阱的传闻",
+            "青冥圣地高层（慕容晦）对观天镜的觊觎",
+            "上古封印碎片与观天镜残片的共鸣",
+            "天道异变下虚天界更深层的开启迹象"
+          ],
+          "foreshadowing_payoff": [
+            "王朝密档中天道封印与上古观天镜的线索由传闻落实为线索",
+            "陈氏家族覆灭背后牵涉青冥圣地暗辰派系（慕容晦）的初步印证（仍为间接）"
+          ],
+          "target_chapter_range": "81-120"
+        },
+        {
+          "volume_number": 4,
+          "title": "异族以玄元大陆边陲为代价设下陷阱，陈",
+          "summary": "异族以玄元大陆边陲为代价设下陷阱，陈渊以残破观天镜强行施展Lv5照见与天道短暂共鸣，止住世界边界崩塌，自身寿元与神识几近燃尽。青冥圣地与王朝相继背弃，他被迫逃亡，被逐的旧宗门弟子舍命相护，沈青禾与赵玄策押上身份护他突围，关系彻底重塑。",
+          "narrative_role": "完成第一阶段观天镜五级能力闭环，承重代价塑造陈渊新的人格与行事逻辑，揭开异族退却后青冥圣地与王朝的真面目，留下『观天镜真正主人』与『慕容晦背后那位更早就在等这面镜子醒来的人』的双重悬念。",
+          "main_goal": "在身负濒死重伤、被多方背叛的绝境中借Lv5照见止住天道异变第一波冲击，并带同伴与族人残部突围，求得下一阶段的生存与布局空间。",
+          "main_conflict": "陈渊（近乎废人） vs 异族陷阱与背弃盟约的青冥圣地暗辰派系、王朝；外部压力来自圣地拔剑指向与王朝毁约，内部压力来自Lv5照见的燃尽代价与同伴的重伤。",
+          "start_state": "陈渊手握上古封印碎片，实力暴露并立下新誓，青冥圣地开始将他视为必须拉拢或拿下的人，联盟表面维持。",
+          "end_state": "陈渊在三千小世界边缘苏醒，悟出观天镜真正代价是重塑宿主命运，他拒绝圣地招安，押上濒死之躯踏入三千小世界寻找天道异变下一源头；沈青禾与赵玄策因护他付出巨大代价，关系彻底重塑为以命相托的同路之人，旧宗门弟子重伤濒死——并发现三千小世界边缘的禁制纹路与残镜严丝合缝，指向慕容晦背后『更早就在等这面镜子醒来的人』。",
+          "climax": "陈渊以凡人之躯强行施展观天镜Lv5照见，与天道短暂共鸣反制异族陷阱，世界边界停止崩塌，自身寿元与神识几近燃尽；青冥圣地拔剑指向陈渊，王朝宣告毁约，旧宗门弟子护他突围而重伤濒死。",
+          "hook_to_next": "三千小世界边缘醒来的陈渊得知下一处天道异变节点位置；观天镜『真正主人』悬念与慕容晦背后那位『更早就在等这面镜子醒来的人』双重伏笔；旧宗门弟子重伤濒死需救助。",
+          "key_entities": [
+            "陈渊：观天镜持有者，能力触及Lv5，濒死",
+            "沈青禾：押上身份护陈渊突围",
+            "赵玄策：放弃世袭爵位护陈渊退入边陲",
+            "旧宗门弟子：舍命相护，重伤濒死",
+            "青冥圣地高层（慕容晦）：拔剑指向陈渊，并下死手",
+            "王朝：背弃盟约，宣告毁约",
+            "观天镜Lv5照见：与天道短暂共鸣的极限能力",
+            "上古封印碎片：与观天镜残片共鸣",
+            "三千小世界边缘禁制纹路：与残镜纹路严丝合缝，指向更深的幕后"
+          ],
+          "relationship_shifts": [
+            "陈渊与沈青禾：以命相托的彻底信任",
+            "陈渊与赵玄策：从盟约破裂到重立信任",
+            "陈渊与青冥圣地：从被瞄准到被拔剑指向",
+            "陈渊与王朝：从合作到被彻底背叛",
+            "陈渊与观天镜：从工具升为宿命关系",
+            "陈渊与三千小世界：从隔绝到主动踏入"
+          ],
+          "foreshadowing_setup": [
+            "观天镜『真正主人』悬念",
+            "慕容晦背后『更早就在等这面镜子醒来的人』",
+            "下一处天道异变节点位置",
+            "旧宗门弟子重伤濒死需救助",
+            "陈渊悟出观天镜代价即重塑宿主命运"
+          ],
+          "foreshadowing_payoff": [
+            "观天镜五级能力完整闭环（窥视→追溯→共鸣→推演→照见）",
+            "陈氏家族覆灭与青冥圣地暗辰派系（慕容晦）阴谋的间接印证（仍为线索层面）",
+            "陈渊『不再依赖外力，以自身布局撬动三千大世界规则』的立誓成形"
+          ],
+          "target_chapter_range": "121-160"
+        }
+      ],
+      "entity_highlights": {
+        "item": [
+          "characters: item: 陈渊：边陲小城落魄世家子，观天镜持有者\n沈青禾：边陲女修，与陈渊并肩作战的同伴\n赵玄策：王朝旧臣后裔，从合作者转为同路人\n慕容晦：青冥圣地长老，暗辰派系主使，家族覆灭幕后黑手（伏线至第三卷具名）\n青冥圣地暗辰派系：暗中角逐，依宗门规矩与异族里应外合的反派派系\n异族渗透者：天道异变期间渗透凡人界的敌对势力",
+          "item: factions: item: 青冥圣地：玄元大陆五大圣地之一，暗辰派系与陈渊正面对抗\n玄元大陆诸宗：除五大圣地外的众多宗门\n王朝：凡人世俗政权，与修行界并存\n异族：随天道异变渗透的异世界生物势力\n陈氏世家：边陲小城落魄世家，陈渊出身所在\nitem: items: item: 祖传玉佩：陈渊家传玉佩，观天镜平时嵌于其中\n观天镜残片：上古至宝残片，五级能力的核心载体\n上古封印碎片：虚天界入口争夺所得的关键资源\n王朝密档：记载天道封印与上古观天镜线索的旧档\n灵气潮汐异常物：边陲起风时浮现的天道异变先兆\n三千小世界边缘禁制纹路：与残镜纹路严丝合缝，指向更深的幕后\nlocations: item: 边陲小城：陈渊出身与家族覆灭之地\n玄元大陆：凡人界主大陆，宗门林立\n虚天界：天道交汇之处，异变期间开启\n三千小世界：天道异变后方能抵达的异域\n青冥圣地山门：玄元大陆五大圣地之一，暗辰派系所在"
+        ]
+      },
+      "relationship_highlights": [
+        "陈渊与沈青禾：从存疑对手到联手护族，最终以命相托",
+        "陈渊与赵玄策：从利益试探到盟约破裂再重立信任",
+        "陈渊与慕容晦（青冥圣地暗辰派系）：从暗处被算计到被正面拔剑指向的宿命对手",
+        "陈渊与王朝：从合作到被背叛，再到拒绝招安",
+        "陈渊与观天镜：从被动持有到主动承担代价，关系由工具升为宿命",
+        "沈青禾与赵玄策：因陈渊结盟，从互相提防到共押身份",
+        "陈渊与异族：由被动受害到主动布局对抗",
+        "陈渊与三千小世界：从隔绝到主动踏入，留下续作钩子"
+      ],
+      "review_status": {
+        "status": "accepted",
+        "reason": "总纲评分通过。",
+        "attempt": 2,
+        "score": {
+          "overall": 82,
+          "logline_specificity": 88,
+          "conflict_concreteness": 90,
+          "character_arc_depth": 78,
+          "structural_turns": 85,
+          "hook_strength": 82,
+          "summary_feedback": "亮点:Logline 含角色(陈渊)、欲望(自保+复仇)、阻力(青冥圣地+异族)、赌注(族仇/弃子/生民),核心对抗具名慕容晦及其暗辰派系,落到人vs人层面,milestones 含能力阶梯与内在转变节点,末卷以双重伏笔收束续作钩子。需改进:1)character_arcs 字段为空,主角弧光只能从 milestones/relationship_highlights 反推,缺结构化 key_turning_points 清单,虽描述有 5 个转折但未标注内在转变性质,建议显式列出。2)主角从『依赖残镜』到『悟出外力不可恃』的转变集中在第三幕末,但第三幕前两段转折(Lv1→Lv2→Lv3)皆为能力升级,真正内在转变只有一个节点,深度略单薄,可在第二幕加入一次代价观动摇的心理转折以形成内在转变的递进。3)hook_strength 中『观天镜真正主人』与『更早就在等的人』两悬念并行,需在后文清晰区分指向避免读者混淆,建议在第四卷明确二者的因果层级。"
+        },
+        "synopsis_quality_report": {
+          "passed": false,
+          "structure_score": 85,
+          "marketability_score": 85,
+          "conflict_score": 85,
+          "character_arc_score": 60,
+          "writability_score": 60,
+          "blocking_issues": [],
+          "warning_issues": [
+            "主要人物弧光转折不足，正文容易缺少人物选择。"
+          ],
+          "repair_suggestions": [
+            "为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。"
+          ]
+        },
+        "optimization_suggestion": "评审意见: 亮点:Logline 含角色(陈渊)、欲望(自保+复仇)、阻力(青冥圣地+异族)、赌注(族仇/弃子/生民),核心对抗具名慕容晦及其暗辰派系,落到人vs人层面,milestones 含能力阶梯与内在转变节点,末卷以双重伏笔收束续作钩子。需改进:1)character_arcs 字段为空,主角弧光只能从 milestones/relationship_highlights 反推,缺结构化 key_turning_points 清单,虽描述有 5 个转折但未标注内在转变性质,建议显式列出。2)主角从『依赖残镜』到『悟出外力不可恃』的转变集中在第三幕末,但第三幕前两段转折(Lv1→Lv2→Lv3)皆为能力升级,真正内在转变只有一个节点,深度略单薄,可在第二幕加入一次代价观动摇的心理转折以形成内在转变的递进。3)hook_strength 中『观天镜真正主人』与『更早就在等的人』两悬念并行,需在后文清晰区分指向避免读者混淆,建议在第四卷明确二者的因果层级。"
+      }
+    },
+    "synopsis_doc_id": "doc_47030fc0",
+    "genre_template": {
+      "genre": {
+        "primary_slug": "xuanhuan",
+        "primary_name": "玄幻",
+        "secondary_slug": "zhutian",
+        "secondary_name": "诸天文"
+      },
+      "matched_templates": [
+        "builtin:global:*:*:*:v1",
+        "builtin:primary:xuanhuan:*:*:v1",
+        "builtin:secondary:zhutian:*:*:v1"
+      ],
+      "warnings": [],
+      "quality_config_summary": {
+        "modern_terms_policy": "block",
+        "foreign_terms_policy": "contextual",
+        "blocking_rules": {
+          "source_conflict": true,
+          "type_drift": true,
+          "source_domain_conflict": true
+        },
+        "required_setting_dimensions": [
+          "power_system",
+          "social_order",
+          "resource_rules",
+          "domain_boundaries",
+          "power_mapping"
+        ]
+      }
+    },
+    "acceptance_scope": "real-longform-volume1",
+    "longform_target": {
+      "target_volumes": 18,
+      "target_chapters": 1200,
+      "target_word_count": 2000000,
+      "target_volume_number": 1,
+      "target_volume_chapters": 67,
+      "run_chapter_limit": 67,
+      "chapter_target_word_count": 1667,
+      "target_volume_word_count": 111689
+    },
+    "story_contract": {
+      "protagonist_goal": "在家族覆灭危机中以观天镜Lv1窥视、初步拼出真相碎片，并带残余族人逃出边陲小城，踏入宗门或王朝庇护的入口。",
+      "current_stage_goal": "在家族覆灭危机中以观天镜Lv1窥视、初步拼出真相碎片，并带残余族人逃出边陲小城，踏入宗门或王朝庇护的入口。",
+      "first_chapter_goal": "# 第一章可执行目标（纯骨架版）\n\n## 第一章核心任务（保守推进）\n1. 完成世界观铺设：交代太玄历末年、天道异变前夜、玄元大陆·边陲小城的基本时空坐标。\n2. 完成主角起手：陈渊在边陲小城觉醒观天镜（具体触发事件待确认）。\n3. 完成金手指首秀：以'窥视 Lv1'应对一次可被资料支撑的小型危机（资料仅支撑'看穿修为/术法等级'，不支撑具体对手与事件形态）。\n4. 完成动机确立：表层动机（为家族复仇、证明自己）与深层动机（寻求天道真相）在第一章末同时埋下伏笔。\n5. 完成伏笔埋设：灵气潮汐暗涌 + 异族渗透异常传闻（仅以'异常现象/目击传闻'形式呈现，不正式登场）。\n\n## 第一章禁止事项（与资料边界对齐）\n- 不写五大圣地具体名号、立场、代表人物。\n- 不写王朝国号。\n- 不写异族正面冲突与具体形态。\n- 不写观天镜 Lv2 及以上能力。\n- 不写陈渊跨入炼气境界。\n- 不写家族覆灭具体经过（首卷起点事件形态待确认）。\n\n## 待确认（不补写）\n- 第一章是否直接以'家族覆灭之夜'开局。\n- 第一章是否出现女性同行者。\n- 第一章是否引入五大圣地/王朝具名势力。\n- 第一章首秀的对手层级。",
+      "core_conflict": "陈渊（凡人少年，持观天镜残片） vs 青冥圣地长老慕容晦及其门下\"暗辰\"派系 + 暗中勾连的异族渗透者。核心对抗：陈渊以残镜逐级追查家族覆灭真相，每进一步都直接撼动慕容晦在青冥圣地的权位与封口布局；青冥圣地则借宗门规矩与异族里应外合的双重绞杀，逼迫陈渊交出残镜或永绝后患。赌注：陈氏血仇能否昭雪、观天镜残片落入谁手、凡人界边陲数城生民。",
+      "key_clues": [
+        "寻求天道真相",
+        "查家族覆灭真相",
+        "目标",
+        "真相",
+        "第一章可执行目标"
+      ],
+      "antagonistic_pressure": "青冥圣地长老慕容晦及其门下\"暗辰\"派系 + 暗中勾连的异族渗透者。核心对抗：陈渊以残镜逐级追查家族覆灭真相，每进一步都直接撼动慕容晦在青冥圣地的权位与封口布局；青冥圣地则借宗门规矩与异族里应外合的双重绞杀，逼迫陈渊交出残镜或永绝后患。赌注：陈氏血仇能否昭雪、观天镜残片落入谁手、凡人界边陲数城生民。",
+      "must_carry_forward": [
+        "寻求天道真相",
+        "查家族覆灭真相",
+        "目标",
+        "真相",
+        "第一章可执行目标"
+      ],
+      "source_status": {
+        "setting_review_batch_status": null,
+        "setting_change_count": 21
+      }
+    },
+    "cross_stage_quality": {
+      "passed": true,
+      "warnings": [],
+      "blocking_issues": [],
+      "contract_fields_present": [
+        "antagonistic_pressure",
+        "core_conflict",
+        "current_stage_goal",
+        "first_chapter_goal",
+        "key_clues",
+        "must_carry_forward",
+        "protagonist_goal"
+      ]
+    },
+    "current_phase": "volume_planning",
+    "current_volume_id": null,
+    "current_chapter_id": null
+  },
+  "chapters": [],
+  "acceptance_target": {
+    "target_volumes": 18,
+    "target_chapters": 1200,
+    "target_word_count": 2000000,
+    "target_volume_number": 1,
+    "target_volume_chapters": 67,
+    "target_volume_word_count": 111689,
+    "chapter_target_word_count": 1667
+  },
+  "source_materials": [
+    {
+      "filename": "世界观.md",
+      "path": "/private/tmp/phase6-smoke-source/世界观.md",
+      "pending_id": "pe_31dc9ca3",
+      "status": "approved",
+      "char_count": 325,
+      "byte_count": 831
+    },
+    {
+      "filename": "力量体系.md",
+      "path": "/private/tmp/phase6-smoke-source/力量体系.md",
+      "pending_id": "pe_ae776c65",
+      "status": "approved",
+      "char_count": 308,
+      "byte_count": 732
+    },
+    {
+      "filename": "道照诸天_brief.md",
+      "path": "/private/tmp/phase6-smoke-source/道照诸天_brief.md",
+      "pending_id": "pe_9af3bbfd",
+      "status": "approved",
+      "char_count": 305,
+      "byte_count": 692
+    },
+    {
+      "filename": "金手指设计.md",
+      "path": "/private/tmp/phase6-smoke-source/金手指设计.md",
+      "pending_id": "pe_dd033c26",
+      "status": "approved",
+      "char_count": 402,
+      "byte_count": 910
+    }
+  ],
+  "setting_review_batch": {
+    "id": "b525d16975194890ad13910737660ada",
+    "status": "approved",
+    "source_type": "ai_session",
+    "summary": "正式长篇设定生成批次：基于已导入资料（世界观.md / 力量体系.md / 道照诸天_brief.md / 金手指设计.md）生成纯骨架（A 形态）待审核设定批次。所有 10 项澄清点统一按用户最终口径'全部待确认'处理；产出形态=纯骨架，未支持细节一律写'待确认'，不带任何占位符（如不写'圣地甲'、'同行者·待定'等）。批次覆盖：世界观、力量体系、金手指、首卷剧情梗概、核心冲突、第一章可执行目标；同时按当前已生效设定上下文中既有的实体/关系给出 update（仅做与新生成设定对齐的字段补全，不引入新事实、不覆盖既有 ID 与关系拓扑），并按需新增 chapter-level 冲突落点 entity（均以 real_id 形式记录于 conflict_hints，待用户后续替换）。",
+    "input_snapshot": {
+      "setting_quality_report": {
+        "passed": true,
+        "missing_sections": [],
+        "conflicts": [],
+        "weaknesses": [],
+        "source_evidence_issues": [],
+        "repair_suggestions": []
+      }
+    },
+    "error_message": null
+  },
+  "setting_review_changes": [
+    {
+      "id": "1354db3605e94467ba856ba0e0045552",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "worldview",
+        "title": "世界观（基于已导入资料）",
+        "content": "# 世界观（纯骨架版，所有未支持细节标注待确认）\n\n## 大背景\n- 凡人界之上存在「三千大世界」，大世界之间由「天道」相连（来源：世界观.md）。\n- 天道周期性发生「天道异变」，异变期间大世界互通，修士可穿梭诸天（来源：世界观.md）。\n- 「三千小世界」为天道异变后方能抵达的异域（来源：世界观.md）。\n- 「虚天界」为天道交汇之处，异变期间对外开启（来源：世界观.md）。\n\n## 时代背景\n- 故事开端为「太玄历末年」，处于天道异变前夜（来源：世界观.md）。\n- 灵气潮汐暗涌，各宗明哲保身又暗中备战（来源：世界观.md）。\n\n## 地理格局（仅已确认名号）\n- 玄元大陆：凡人界主大陆，宗门林立，以五大圣地为首（来源：世界观.md）。\n- 虚天界：天道交汇之处（来源：世界观.md）。\n- 三千小世界：异变后方能抵达（来源：世界观.md）。\n- 三千大世界：凡人界之上的大世界群（来源：世界观.md；待确认：是否包含玄元大陆所属层级）。\n\n## 叙事调性\n- 正剧向、有厚重感、有成长但不卖惨（来源：世界观.md）。\n- 主角靠头脑 + 金手指双线推进；情感克制；女性角色有自己的立场与命运（来源：世界观.md）。\n\n## 待确认（不补写）\n- 五大圣地具体名号、立场、代表人物、地理位置。\n- 王朝国号、与五大圣地的关系。\n- 三千大世界与三千小世界的具体数量、命名规则、彼此关系。\n- 太玄历的纪年长度与历法背景。\n- 「天道」运转的具体机制（仅可知'相连'与'周期性异变'两点）。\n- 凡人界除玄元大陆外是否存在其他大陆。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "五大圣地、王朝具体名号与立场：资料未给出，按'全部待确认'处理，不以占位符替代。"
+        },
+        {
+          "type": "source_gap",
+          "message": "三千大世界与玄元大陆的层级关系：仅世界观.md 提到'凡人界之上有三千大世界'，未明确玄元大陆是否属于三千大世界之一。"
+        },
+        {
+          "type": "source_gap",
+          "message": "天道异变的周期、触发条件、持续时长：资料未给出。"
+        }
+      ]
+    },
+    {
+      "id": "af1573d2dafa4ed1ae5bcfdf1ed16b5f",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "power_system",
+        "title": "力量体系（基于已导入资料）",
+        "content": "# 力量体系（纯骨架版）\n\n## 修为境界（来源：力量体系.md）\n凡人 → 炼气 → 筑基 → 金丹 → 元婴 → 化神 → 炼虚 → 合体 → 大乘 → 渡劫（飞升）\n- 每境界分前 / 中 / 后 / 圆满 四阶。\n- 修士一生通常止步于元婴（资料原文）。\n\n## 法宝等级（来源：力量体系.md）\n凡器 → 灵器 → 法器 → 灵宝 → 古宝 → 至宝\n\n## 特殊能力\n- 观天镜（来源：金手指设计.md / 力量体系.md）：窥视天道运转、识破术法本质、追溯因果；消耗神识与寿元。\n- 天道共鸣（来源：力量体系.md）：在异变期间可短暂调动天道之力，代价巨大。\n\n## 观天镜能力分级（来源：金手指设计.md）\n- 窥视 Lv1：看穿对手修为、术法等级。\n- 追溯 Lv2：回溯近 7 日内某地的因果片段。\n- 共鸣 Lv3：与天道产生短暂共鸣，获取关键信息。\n- 推演 Lv4：推演未来 7 日内的可能走向（极耗神识）。\n- 照见 Lv5：完整看穿一位生灵的'道'（终极，主角后期方能触及）。\n\n## 限制（来源：力量体系.md / 金手指设计.md）\n- 跨境界战斗极难，主角需靠金手指弥补硬实力。\n- 神识与寿元是稀有资源，不能滥用；过度使用损寿元。\n- 主角不能直接'无敌'，需在合理范围逐步提升。\n- 每次升级需要特定的'天材地宝'或'机缘事件'。\n- 异世界生物对观天镜有感应，可能引来追杀。\n- 观天镜不能直接杀人或改变已发生之事。\n\n## 待确认（不补写）\n- 首卷陈渊终点境界（凡人 → 炼气前期 / 中期 / 后期 / 圆满 / 筑基，全部待确认）。\n- 首卷观天镜可启用等级上限（仅 Lv1 / Lv1+卷末解锁 Lv2 / Lv1+Lv2+伏笔 Lv3，全部待确认）。\n- 各境界对应的寿元、神识量级、术法威力范围。\n- '天材地宝'与'机缘事件'的具体目录。\n- 神识消耗的可量化标准（每次使用对应多少神识、对应何种生理反馈）。\n- 跨境界战斗的可行边界（如越一阶、越两阶的具体难度系数）。\n- '天道共鸣'对使用者的境界门槛与反噬细则。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "首卷境界范围：资料未限定，标记待确认。"
+        },
+        {
+          "type": "source_gap",
+          "message": "首卷观天镜可启用等级：资料未限定，标记待确认。"
+        },
+        {
+          "type": "source_gap",
+          "message": "各境界寿元/神识量级与战斗边界：资料未给出量化标准。"
+        }
+      ]
+    },
+    {
+      "id": "e743c51bcab54423a9cd8f7276db3a34",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "character_profile",
+        "title": "主角档案·陈渊（基于已导入资料）",
+        "content": "# 主角档案·陈渊（纯骨架版）\n\n## 身份与出身（来源：世界观.md / 金手指设计.md）\n- 凡人少年；边陲小城出身；落魄世家子。\n- 因祖传玉佩觉醒'观天镜'异能。\n\n## 性格（来源：金手指设计.md）\n- 谨慎不冲动，先观察再出手。\n- 有同理心但不滥情，关键抉择果断。\n- 喜欢用信息差与布局获胜，而不是硬拼。\n- 对女性角色尊重但不依附，有自己的节奏。\n\n## 双线动机（来源：道照诸天_brief.md）\n- 表层：为家族复仇、证明自己。\n- 深层：寻求天道真相，理解'异变'本质。\n\n## 与既有实体的关系（基于已生效上下文实体）\n- 持有 ent_b139a086 '凡人少年(主角)' 节点（与陈渊同人，待与 ent_e139a70b '陈渊' 实体对齐）。\n- 持有 ent_8ebc4313 '祖传玉佩'。\n- 持有 ent_e10a7256 '观天镜'（金手指核心）。\n- 持有 ent_543c0960 '上古观天镜残片'。\n- 敌对 ent_9e824945 '异族'。\n- 周旋于 ent_ed8c7d87 '王朝' 政权。\n- 周旋于 ent_46065beb '五大圣地' 纷争。\n- 出身地 ent_ef612273 '边陲小城'（亦为 ent_e139a70b '陈渊' 的出身地）。\n\n## 待确认（不补写）\n- 家族覆灭的具体经过、仇家身份、世家旧事。\n- 是否有同行者/幸存族人（女性同行者数量与身份全部待确认）。\n- 首卷起点事件（家族覆灭之夜觉醒并逃亡 / 觉醒后被招募 / 觉醒后独自前往某地 / 其他）。\n- 主角在首卷中的具体名号与外貌（资料仅称'少年陈渊'）。\n- ent_b139a086 '凡人少年(主角)' 与 ent_e139a70b '陈渊' 是否同人实体的两个版本（当前上下文两个实体并存，未给出合并指令）。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "家族仇恨与仇家身份：资料仅提及表层动机，未给出仇家、覆灭经过。"
+        },
+        {
+          "type": "source_gap",
+          "message": "首卷起点事件：资料未指定。"
+        },
+        {
+          "type": "source_gap",
+          "message": "女性同行者与同行者名单：资料未指定。"
+        },
+        {
+          "type": "entity_duplication",
+          "message": "ent_b139a086 '凡人少年(主角)' 与 ent_e139a70b '陈渊' 并存，关系拓扑均挂载；后续需用户给出合并/区分指令。"
+        }
+      ]
+    },
+    {
+      "id": "fd66423d3b77459d96615b28fac317c5",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "core_conflict",
+        "title": "核心冲突（基于已导入资料）",
+        "content": "# 核心冲突（纯骨架版）\n\n## 主冲突线（来源：道照诸天_brief.md）\n1. 生存压力：主角起步太低，需快速成长但不能违反规则。\n2. 宗门内斗：五大圣地明争暗斗，主角被卷入。\n3. 异族威胁：异世界生物随天道异变渗透。\n4. 天道真相：观天镜背后隐藏的天道之秘。\n\n## 首卷冲突落点（待确认）\n- 首卷主要承载上述 4 条中的哪一条作为主线、其余作为伏笔：资料未指定，全部待确认。\n- 当前保守推进：四条线均作为'首卷大纲骨架内的伏笔落点'，不指定主线优先序。\n\n## 跨线联动机制（基于已生效设定上下文）\n- 异族 → 观天镜：异族对观天镜有感应，可能引来追杀（来源：金手指设计.md；对应已生效关系 2459）。\n- 异族 → 三千大世界：异族渗透入侵三千大世界（已生效关系 2455）。\n- 五大圣地 → 玄元大陆诸宗：五大圣地统率/为首玄元大陆诸宗（已生效关系 2446、2444）。\n- 五大圣地 → 玄元大陆：所在势力范围（已生效关系 2444）。\n\n## 待确认（不补写）\n- 首卷主线选取（A=生存+复仇 / B=卷入圣地争斗 / C=异族危机 / D=多线并行，全部待确认）。\n- 异族形态、能力、对观天镜感应的具体方式。\n- 首卷是否出现低阶异族正面冲突。\n- 首卷对手/反派层级（同阶散修家族仇人 / 某小宗门弟子 / 异族低阶个体 / 圣地外围代理人，全部待确认）。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "首卷主线选取：资料未指定。"
+        },
+        {
+          "type": "source_gap",
+          "message": "异族形态与威胁等级：资料仅称'异世界生物随异变渗透'，未给具体形态与对标境界。"
+        },
+        {
+          "type": "source_gap",
+          "message": "首卷对手层级：资料未指定。"
+        }
+      ]
+    },
+    {
+      "id": "5e4668dd675b49e39d58cdcc98c86b51",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "plot",
+        "title": "剧情梗概·首卷（基于已导入资料）",
+        "content": "# 剧情梗概·首卷（纯骨架版）\n\n## 一句话简介（来源：道照诸天_brief.md）\n凡人少年持上古观天镜残片，在天道异变前夜踏入修行界，以己身之力周旋于宗门、王朝、异族之间，渐次窥见三千大世界背后的真相。\n\n## 首卷开篇设定（来源：世界观.md / 道照诸天_brief.md）\n- 时代：太玄历末年，天道异变前夜。\n- 地点：玄元大陆·边陲小城。\n- 主角状态：落魄世家子陈渊，因祖传玉佩觉醒观天镜异能。\n- 环境氛围：灵气潮汐暗涌，各宗明哲保身又暗中备战。\n\n## 首卷总目标（来源：道照诸天_brief.md / 金手指设计.md）\n- 表层目标：为家族复仇、证明自己（首卷起点事件待确认）。\n- 深层目标：寻求天道真相，理解'异变'本质。\n- 力量线：从凡人起步，在合理范围内逐步提升（首卷终点境界待确认）。\n- 金手指线：观天镜从残片状态逐层唤醒（首卷可启用等级待确认）。\n\n## 体量（来源：道照诸天_brief.md）\n- 单卷 18-25 万字；首卷 8-12 章；完整长篇 18 卷约 350 万字。\n\n## 保守推进下的首卷大纲骨架（不指定主线、不引入占位符）\n- 引子：陈渊在边陲小城觉醒观天镜（首卷起点事件具体形态待确认）。\n- 上升：陈渊以'窥视 Lv1'应对起步阶段的危机，逐步接触玄元大陆修行界生态。\n- 节点：陈渊被卷入五大圣地明争暗斗的某一具体事件（具体事件与圣地名称待确认）。\n- 伏笔：天道异变前夜的灵气潮汐出现异象；异族渗透的异常传闻出现于玄元大陆诸宗视野。\n- 收束：陈渊在首卷末获得一个与'观天镜下一层解锁'或'修为跨入炼气'相关的阶段性成果（具体落点待确认）。\n\n## 待确认（不补写）\n- 首卷 8-12 章逐章梗概（颗粒度按用户选 A=纯骨架，不展开到章级）。\n- 首卷起点事件具体形态。\n- 首卷终点境界与金手指等级。\n- 五大圣地、王朝具体名号。\n- 同行者与女性角色登场方式。\n- 首卷对手层级。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "章节目要：颗粒度按 A=纯骨架处理，不生成逐章梗概。"
+        },
+        {
+          "type": "source_gap",
+          "message": "首卷起点事件：资料未指定。"
+        },
+        {
+          "type": "source_gap",
+          "message": "首卷终点境界与金手指等级：资料未指定。"
+        }
+      ]
+    },
+    {
+      "id": "f91be0cc1f994eb5abcd6fdb4d25de41",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "plot",
+        "title": "第一章可执行目标（基于已导入资料）",
+        "content": "# 第一章可执行目标（纯骨架版）\n\n## 第一章核心任务（保守推进）\n1. 完成世界观铺设：交代太玄历末年、天道异变前夜、玄元大陆·边陲小城的基本时空坐标。\n2. 完成主角起手：陈渊在边陲小城觉醒观天镜（具体触发事件待确认）。\n3. 完成金手指首秀：以'窥视 Lv1'应对一次可被资料支撑的小型危机（资料仅支撑'看穿修为/术法等级'，不支撑具体对手与事件形态）。\n4. 完成动机确立：表层动机（为家族复仇、证明自己）与深层动机（寻求天道真相）在第一章末同时埋下伏笔。\n5. 完成伏笔埋设：灵气潮汐暗涌 + 异族渗透异常传闻（仅以'异常现象/目击传闻'形式呈现，不正式登场）。\n\n## 第一章禁止事项（与资料边界对齐）\n- 不写五大圣地具体名号、立场、代表人物。\n- 不写王朝国号。\n- 不写异族正面冲突与具体形态。\n- 不写观天镜 Lv2 及以上能力。\n- 不写陈渊跨入炼气境界。\n- 不写家族覆灭具体经过（首卷起点事件形态待确认）。\n\n## 待确认（不补写）\n- 第一章是否直接以'家族覆灭之夜'开局。\n- 第一章是否出现女性同行者。\n- 第一章是否引入五大圣地/王朝具名势力。\n- 第一章首秀的对手层级。"
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "第一章开局事件形态：资料未指定。"
+        },
+        {
+          "type": "source_gap",
+          "message": "第一章首秀对手层级：资料未指定。"
+        }
+      ]
+    },
+    {
+      "id": "ef86e86a934a4c4096cab427819dc05e",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_b139a086",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "character",
+        "name": "凡人少年(主角)"
+      },
+      "after_snapshot": {
+        "type": "character",
+        "name": "凡人少年(主角)",
+        "state": {
+          "name": "凡人少年(主角)",
+          "identity": "玄元大陆·边陲小城出身的落魄世家子（来源：世界观.md）",
+          "personality": "谨慎不冲动，先观察再出手；有同理心但不滥情；喜欢用信息差与布局获胜；对女性角色尊重但不依附（来源：金手指设计.md）",
+          "goal": {
+            "surface": "为家族复仇、证明自己（来源：道照诸天_brief.md）",
+            "deep": "寻求天道真相，理解'异变'本质（来源：道照诸天_brief.md）"
+          },
+          "motivation": "祖传玉佩觉醒观天镜后得以窥见天道运转奥秘（来源：世界观.md）",
+          "appearance": "待确认",
+          "background": "边陲小城·落魄世家；家族覆灭具体经过待确认",
+          "ability": "观天镜·窥视 Lv1（首卷可启用等级待确认）",
+          "realm": "凡人起步（首卷终点境界待确认）",
+          "relationships": [
+            "持有 ent_e10a7256 观天镜（已生效关系 2456）",
+            "持有 ent_543c0960 上古观天镜残片（已生效关系 2452）",
+            "持有 ent_8ebc4313 祖传玉佩（已生效关系 2439，间接通过 ent_e139a70b）",
+            "敌对 ent_9e824945 异族（已生效关系 2451）",
+            "周旋于 ent_ed8c7d87 王朝（已生效关系 2450）",
+            "周旋于 ent_46065beb 五大圣地（已生效关系 2449）",
+            "活动于 ent_4f886183 三千大世界（已生效关系 2454）"
+          ],
+          "resources": [
+            "观天镜",
+            "上古观天镜残片",
+            "祖传玉佩（间接持有）"
+          ],
+          "secrets": "观天镜背后隐藏的天道之秘（来源：道照诸天_brief.md）",
+          "conflict": "起步太低 vs 需快速成长但不违反规则；金手指使用消耗神识与寿元；异族对观天镜有感应可能引来追杀",
+          "constraints": [
+            "跨境界战斗极难（来源：力量体系.md）",
+            "神识与寿元不可滥用（来源：力量体系.md / 金手指设计.md）",
+            "观天镜不能直接杀人或改变已发生之事（来源：金手指设计.md）",
+            "每次升级需特定天材地宝或机缘事件（来源：金手指设计.md）"
+          ],
+          "_entity_duplication_note": "与 ent_e139a70b '陈渊' 同人实体并行存在，待用户确认合并或区分"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "entity_duplication",
+          "message": "ent_b139a086 '凡人少年(主角)' 与 ent_e139a70b '陈渊' 同人并存；本次 update 仅补充 state 字段对齐已导入资料，不做合并或删除，等待用户指令。"
+        }
+      ]
+    },
+    {
+      "id": "5fb92dc5d1e04e1f968236f7003d43ac",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_e139a70b",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "character",
+        "name": "陈渊"
+      },
+      "after_snapshot": {
+        "type": "character",
+        "name": "陈渊",
+        "state": {
+          "name": "陈渊",
+          "identity": "边陲小城出身的落魄世家子（来源：世界观.md）",
+          "personality": "谨慎不冲动；先观察再出手；有同理心但不滥情；喜欢用信息差与布局获胜；对女性角色尊重但不依附（来源：金手指设计.md）",
+          "goal": {
+            "surface": "为家族复仇、证明自己（来源：道照诸天_brief.md）",
+            "deep": "寻求天道真相，理解'异变'本质（来源：道照诸天_brief.md）"
+          },
+          "motivation": "因祖传玉佩觉醒观天镜异能（来源：世界观.md）",
+          "appearance": "待确认",
+          "background": "边陲小城·落魄世家（来源：世界观.md；家族覆灭经过待确认）",
+          "ability": "观天镜所拥异能（已生效关系 2441）",
+          "realm": "凡人起步（首卷终点境界待确认）",
+          "relationships": [
+            "出身于 ent_ef612273 边陲小城（已生效关系 2442）",
+            "所拥异能 ent_e10a7256 观天镜（已生效关系 2441）",
+            "持有 ent_8ebc4313 祖传玉佩（已生效关系 2439）"
+          ],
+          "resources": [
+            "观天镜",
+            "祖传玉佩"
+          ],
+          "secrets": "观天镜背后隐藏的天道之秘（来源：道照诸天_brief.md）",
+          "conflict": "起步太低 vs 需快速成长但不违反规则；金手指使用消耗神识与寿元；异族对观天镜有感应可能引来追杀",
+          "constraints": [
+            "跨境界战斗极难（来源：力量体系.md）",
+            "神识与寿元不可滥用（来源：力量体系.md / 金手指设计.md）",
+            "观天镜不能直接杀人或改变已发生之事（来源：金手指设计.md）"
+          ],
+          "_entity_duplication_note": "与 ent_b139a086 '凡人少年(主角)' 同人实体并行存在，待用户确认合并或区分"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "entity_duplication",
+          "message": "ent_e139a70b '陈渊' 与 ent_b139a086 '凡人少年(主角)' 同人并存；本次 update 仅补充 state 字段对齐已导入资料，不做合并或删除，等待用户指令。"
+        }
+      ]
+    },
+    {
+      "id": "d22da06c64414b85aebf8cf62ff941b7",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_e10a7256",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "item",
+        "name": "观天镜"
+      },
+      "after_snapshot": {
+        "type": "item",
+        "name": "观天镜",
+        "state": {
+          "name": "观天镜",
+          "description": "残破古镜，平时嵌于主角颈间玉佩之中，神识触动时显化（来源：金手指设计.md）；法宝等级为上古至宝残片（来源：力量体系.md）",
+          "significance": "主角核心金手指；可窥视天道运转、识破术法本质、追溯因果；能力分级 Lv1 窥视 / Lv2 追溯 / Lv3 共鸣 / Lv4 推演 / Lv5 照见（来源：金手指设计.md）",
+          "ability_levels": {
+            "Lv1_窥视": "看穿对手修为、术法等级（来源：金手指设计.md）",
+            "Lv2_追溯": "回溯近 7 日内某地的因果片段（来源：金手指设计.md）",
+            "Lv3_共鸣": "与天道产生短暂共鸣，获取关键信息（来源：金手指设计.md）",
+            "Lv4_推演": "推演未来 7 日内的可能走向，极耗神识（来源：金手指设计.md）",
+            "Lv5_照见": "完整看穿一位生灵的'道'，终极，主角后期方能触及（来源：金手指设计.md）"
+          },
+          "constraints": [
+            "每次使用消耗神识（来源：金手指设计.md）",
+            "过度使用损寿元（来源：金手指设计.md）",
+            "不能直接杀人或改变已发生之事（来源：金手指设计.md）",
+            "每次升级需要特定天材地宝或机缘事件（来源：金手指设计.md）",
+            "异世界生物对观天镜有感应，可能引来追杀（来源：金手指设计.md）"
+          ],
+          "载体": "ent_2b97c163 颈间玉佩（已生效关系 2457 / 2458）",
+          "残片归属": "ent_543c0960 上古观天镜残片（已生效关系 2453）",
+          "_first_volume_enabled_level": "首卷可启用等级待确认"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "观天镜首卷可启用等级：资料未限定，标记待确认。"
+        }
+      ]
+    },
+    {
+      "id": "ebe4c220691e4aa8b22219dd27901930",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_46065beb",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "faction",
+        "name": "五大圣地"
+      },
+      "after_snapshot": {
+        "type": "faction",
+        "name": "五大圣地",
+        "state": {
+          "name": "五大圣地",
+          "description": "玄元大陆上以五大圣地为首统率玄元大陆诸宗（来源：世界观.md / 已生效关系 2446）",
+          "relationship_with_protagonist": "陈渊周旋于五大圣地纷争（已生效关系 2449）；首卷具体卷入事件待确认",
+          "势力范围": "ent_a386d8e8 玄元大陆（已生效关系 2444）",
+          "下属": "ent_63871e40 玄元大陆诸宗（已生效关系 2446，统率/为首）",
+          "_names_pending": "五大圣地具体名号、立场、代表人物：资料未给出，按'全部待确认'处理，不以占位符替代"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "五大圣地具体名号与立场：资料未给出，标记待确认。"
+        }
+      ]
+    },
+    {
+      "id": "e830a4cf9a9c4a9787a5d399dc3bb9bc",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_ed8c7d87",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "faction",
+        "name": "王朝"
+      },
+      "after_snapshot": {
+        "type": "faction",
+        "name": "王朝",
+        "state": {
+          "name": "王朝",
+          "description": "玄元大陆凡人政权（来源：道照诸天_brief.md 提及'王朝'）",
+          "relationship_with_protagonist": "陈渊周旋于其政权（已生效关系 2450）；具体周旋事件待确认",
+          "_names_pending": "王朝国号、与五大圣地的关系：资料未给出，按'全部待确认'处理，不以占位符替代"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "王朝国号与立场：资料未给出，标记待确认。"
+        }
+      ]
+    },
+    {
+      "id": "d6adb42abe6647b8a90fdf8388f9c636",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_9e824945",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "faction",
+        "name": "异族"
+      },
+      "after_snapshot": {
+        "type": "faction",
+        "name": "异族",
+        "state": {
+          "name": "异族",
+          "description": "随天道异变渗透的异世界生物，构成外部威胁（来源：道照诸天_brief.md）",
+          "relationship_with_protagonist": "陈渊敌对（已生效关系 2451）；异族对观天镜有感应，可能追杀陈渊（来源：金手指设计.md；已生效关系 2459）",
+          "渗透范围": "ent_4f886183 三千大世界（已生效关系 2455）",
+          "_forms_pending": "异族形态、能力、境界对标：资料未给出，按'全部待确认'处理"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "异族形态与威胁等级：资料仅称'异世界生物'，未给具体形态与境界对标。"
+        },
+        {
+          "type": "source_gap",
+          "message": "异族首卷是否登场/正面冲突：资料未指定，标记待确认。"
+        }
+      ]
+    },
+    {
+      "id": "decaa9b651364ac49b223cd63b2b8310",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_ef612273",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "location",
+        "name": "边陲小城"
+      },
+      "after_snapshot": {
+        "type": "location",
+        "name": "边陲小城",
+        "state": {
+          "name": "边陲小城",
+          "description": "玄元大陆上的边陲小城；陈渊出身地与首卷开局地点（来源：世界观.md / 已生效关系 2442）",
+          "region": "ent_a386d8e8 玄元大陆（已生效关系 2443）",
+          "_specifics_pending": "具体城名、规模、所在方位、与五大圣地/王朝的行政隶属：资料未给出，标记待确认"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "边陲小城具体城名与方位：资料未给出，标记待确认。"
+        }
+      ]
+    },
+    {
+      "id": "489f99c311964494ac83178c32b5e4cb",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_a386d8e8",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "location",
+        "name": "玄元大陆"
+      },
+      "after_snapshot": {
+        "type": "location",
+        "name": "玄元大陆",
+        "state": {
+          "name": "玄元大陆",
+          "description": "凡人界主大陆，宗门林立，以五大圣地为首（来源：世界观.md）",
+          "region": "凡人界",
+          "所在势力": [
+            "ent_63871e40 玄元大陆诸宗（已生效关系 2445）",
+            "ent_46065beb 五大圣地（已生效关系 2444）"
+          ],
+          "下属地点": [
+            "ent_ef612273 边陲小城（已生效关系 2443）"
+          ],
+          "_layer_pending": "玄元大陆与三千大世界的层级关系：资料仅说'凡人界之上有三千大世界'，未明确玄元大陆是否属于三千大世界之一"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "玄元大陆与三千大世界的层级归属：资料未明确。"
+        }
+      ]
+    },
+    {
+      "id": "c53ae785b3cb4e60af3c73a7d1015889",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_8ebc4313",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "item",
+        "name": "祖传玉佩"
+      },
+      "after_snapshot": {
+        "type": "item",
+        "name": "祖传玉佩",
+        "state": {
+          "name": "祖传玉佩",
+          "description": "陈渊家传之物；观天镜觉醒媒介（来源：世界观.md / 金手指设计.md）",
+          "significance": "陈渊因祖传玉佩觉醒观天镜异能（来源：世界观.md）；为观天镜觉醒媒介（已生效关系 2440）",
+          "持有者": "ent_e139a70b 陈渊（已生效关系 2439）",
+          "_identical_to_jade_pending": "与 ent_2b97c163 '颈间玉佩' 是否为同一物件：当前两个实体并存，待用户确认合并或区分"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "entity_duplication",
+          "message": "ent_8ebc4313 '祖传玉佩' 与 ent_2b97c163 '颈间玉佩' 描述高度相似（均为承载观天镜的玉佩），当前两个实体并存，待用户确认。"
+        }
+      ]
+    },
+    {
+      "id": "04271519b66d4bfeac8862a456c4ec56",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_2b97c163",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "item",
+        "name": "颈间玉佩"
+      },
+      "after_snapshot": {
+        "type": "item",
+        "name": "颈间玉佩",
+        "state": {
+          "name": "颈间玉佩",
+          "description": "观天镜平时嵌于其内，神识触动时显化（来源：金手指设计.md）",
+          "significance": "观天镜载体/镶嵌（已生效关系 2457）",
+          "藏身": "ent_e10a7256 观天镜藏身于颈间玉佩、以玉佩形态佩戴（已生效关系 2458）",
+          "_identical_to_zuchuan_pending": "与 ent_8ebc4313 '祖传玉佩' 是否为同一物件：当前两个实体并存，待用户确认合并或区分"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "entity_duplication",
+          "message": "ent_2b97c163 '颈间玉佩' 与 ent_8ebc4313 '祖传玉佩' 描述高度相似，待用户确认。"
+        }
+      ]
+    },
+    {
+      "id": "addd1cf60fe547aaa46cee0f6596a6e2",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_543c0960",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "item",
+        "name": "上古观天镜残片"
+      },
+      "after_snapshot": {
+        "type": "item",
+        "name": "上古观天镜残片",
+        "state": {
+          "name": "上古观天镜残片",
+          "description": "上古至宝观天镜的残片形态（来源：力量体系.md：法宝等级中至宝最高，主角的观天镜为上古至宝残片）",
+          "significance": "观天镜当前以残片形式存在，需逐层唤醒（来源：金手指设计.md / 力量体系.md）；残片归属 ent_e10a7256 观天镜（已生效关系 2453）",
+          "持有者": "ent_b139a086 凡人少年(主角)（已生效关系 2452）",
+          "唤醒条件": "每次升级需要特定的'天材地宝'或'机缘事件'（来源：金手指设计.md）；具体唤醒路径待确认"
+        }
+      },
+      "conflict_hints": []
+    },
+    {
+      "id": "e14cb265ae37428bac1e1b739271fe1d",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_e696fd43",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "location",
+        "name": "虚天界"
+      },
+      "after_snapshot": {
+        "type": "location",
+        "name": "虚天界",
+        "state": {
+          "name": "虚天界",
+          "description": "天道交汇之处，异变期间对外开启（来源：世界观.md）",
+          "region": "天道交汇层（不归凡人界）",
+          "关系": "作为 ent_7734ccf0 三千小世界天道交汇/异变通达节点（已生效关系 2447）",
+          "_opening_window_pending": "异变开启/关闭的具体时间窗：资料未给出，标记待确认"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "虚天界开启时间窗：资料未给出。"
+        }
+      ]
+    },
+    {
+      "id": "9e9b188164d440cdb70c4a4dfa5b6a65",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_7734ccf0",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "location",
+        "name": "三千小世界"
+      },
+      "after_snapshot": {
+        "type": "location",
+        "name": "三千小世界",
+        "state": {
+          "name": "三千小世界",
+          "description": "天道异变后方能抵达的异域（来源：世界观.md）",
+          "region": "异域（凡人界之外）",
+          "可达性": "天道异变后开启（来源：世界观.md）",
+          "关系": "ent_e696fd43 虚天界为其天道交汇/异变通达节点（已生效关系 2447）",
+          "_details_pending": "三千小世界具体命名、彼此关系、对主角可进入条件：资料未给出，标记待确认"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "三千小世界具体细节：资料未给出。"
+        }
+      ]
+    },
+    {
+      "id": "4fafdfdc6be94558943043bb9c62e7df",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_4f886183",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "location",
+        "name": "三千大世界"
+      },
+      "after_snapshot": {
+        "type": "location",
+        "name": "三千大世界",
+        "state": {
+          "name": "三千大世界",
+          "description": "凡人界之上的大世界群；大世界之间由天道相连（来源：世界观.md）",
+          "region": "凡人界之上",
+          "威胁": "异族渗透入侵三千大世界（来源：道照诸天_brief.md；已生效关系 2455）",
+          "活动者": "ent_b139a086 凡人少年(主角)活动于其中（已生效关系 2454）",
+          "_quantity_pending": "三千是否实指三千、彼此命名规则、玄元大陆归属：资料未明确"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "三千大世界是否实数与玄元大陆归属：资料未明确。"
+        }
+      ]
+    },
+    {
+      "id": "9b8dfccf3e6648dd9b164ddc35505eff",
+      "object_type": "entity",
+      "target_type": "entity",
+      "operation": "update",
+      "target_id": "ent_63871e40",
+      "status": "approved",
+      "before_snapshot": {
+        "type": "faction",
+        "name": "玄元大陆诸宗"
+      },
+      "after_snapshot": {
+        "type": "faction",
+        "name": "玄元大陆诸宗",
+        "state": {
+          "name": "玄元大陆诸宗",
+          "description": "玄元大陆上宗门林立的诸宗统称（来源：世界观.md）",
+          "relationship_with_protagonist": "陈渊在首卷逐步接触玄元大陆修行界生态；具体与诸宗的互动待确认",
+          "所在势力范围": "ent_a386d8e8 玄元大陆（已生效关系 2445）",
+          "统率": "由 ent_46065beb 五大圣地统率/为首（已生效关系 2446）",
+          "_names_pending": "诸宗具体名号与立场：资料未给出，按'全部待确认'处理"
+        }
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "玄元大陆诸宗具体名号：资料未给出。"
+        }
+      ]
+    }
+  ]
+}

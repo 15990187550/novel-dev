@@ -1,0 +1,94 @@
+{
+  "run_id": "phase6-smoke-20260620-rerun",
+  "entrypoint": "scripts/verify_generation_real.sh",
+  "status": "failed",
+  "duration_seconds": 4.095199750037864,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {
+    "api_base_url": "http://127.0.0.1:8000"
+  },
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-longform-volume1",
+    "acceptance_scope": "real-longform-volume1",
+    "target_stage": "upload_source_materials",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "run_chapter_limit": "67",
+    "chapter_target_word_count": "1667",
+    "target_volume_word_count": "111689",
+    "source_dir": "/private/tmp/phase6-smoke-source",
+    "source_material_count": "4",
+    "source_material_char_count": "1340",
+    "source_material_byte_count": "3165",
+    "source_materials_json": "[{\"filename\": \"世界观.md\", \"path\": \"/private/tmp/phase6-smoke-source/世界观.md\", \"status\": \"discovered\", \"char_count\": 325, \"byte_count\": 831}, {\"filename\": \"力量体系.md\", \"path\": \"/private/tmp/phase6-smoke-source/力量体系.md\", \"status\": \"discovered\", \"char_count\": 308, \"byte_count\": 732}, {\"filename\": \"道照诸天_brief.md\", \"path\": \"/private/tmp/phase6-smoke-source/道照诸天_brief.md\", \"status\": \"discovered\", \"char_count\": 305, \"byte_count\": 692}, {\"filename\": \"金手指设计.md\", \"path\": \"/private/tmp/phase6-smoke-source/金手指设计.md\", \"status\": \"discovered\", \"char_count\": 402, \"byte_count\": 910}]",
+    "novel_id": "novel-56cc",
+    "genre_template_summary": "{\"genre\": \"玄幻 / 诸天文\", \"template_layers\": 3, \"template_warnings\": [], \"template_evidence_available\": true}",
+    "generation_snapshot_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620-rerun/artifacts/generation_snapshot.json",
+    "quality_summary_json": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620-rerun/quality-summary/summary.json",
+    "quality_summary_md": "/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-20260620-rerun/quality-summary/summary.md",
+    "quality_summary_status": "failed",
+    "quality_summary_run_id": "phase6-smoke-20260620-rerun-quality-summary"
+  },
+  "details": [],
+  "issues": [
+    {
+      "id": "SYSTEM_BUG-upload_source_materials",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "upload_source_materials",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "Server error '500 Internal Server Error' for url 'http://127.0.0.1:8000/api/novels/novel-56cc/documents/upload'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/500",
+      "evidence": [
+        "http_status=500",
+        "response_text=Internal Server Error"
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage upload_source_materials"
+    },
+    {
+      "id": "SYSTEM_BUG-export_contract",
+      "type": "SYSTEM_BUG",
+      "severity": "high",
+      "stage": "export_contract",
+      "is_external_blocker": false,
+      "real_llm": false,
+      "fake_rerun_status": null,
+      "message": "Exported novel file missing: exported_path not returned",
+      "evidence": [
+        "archived_chapter_count=0"
+      ],
+      "reproduce": "scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export"
+    },
+    {
+      "id": "SYNOPSIS-QUALITY-001",
+      "type": "GENERATION_QUALITY",
+      "severity": "high",
+      "stage": "brainstorm",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "总纲质量门禁未通过。",
+      "evidence": [
+        "passed=False",
+        "structure_score=60",
+        "marketability_score=60",
+        "conflict_score=45",
+        "character_arc_score=60",
+        "writability_score=45",
+        "blocking_issues[0]=总纲缺少具体对抗关系，需要写清谁与谁为了什么发生冲突。",
+        "warning_issues[0]=主要人物弧光转折不足，正文容易缺少人物选择。",
+        "warning_issues[1]=总纲可识别结构转折不足 4 个，当前识别到 0 个。",
+        "warning_issues[2]=缺少卷级承诺，卷纲生成时容易偏题。",
+        "repair_suggestions[0]=将 core_conflict 改成『主角 vs 具体阻力，为争夺具体目标』。",
+        "repair_suggestions[1]=为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。"
+      ],
+      "reproduce": "novel-dev-testing quality-summary --input-json <snapshot.json>"
+    }
+  ]
+}

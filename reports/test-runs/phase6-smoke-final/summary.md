@@ -1,0 +1,89 @@
+# Test Run phase6-smoke-final
+
+- Entrypoint: `scripts/verify_generation_real.sh`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real_then_fake_on_external_block`
+- Duration: `794.1s`
+
+## Artifacts
+
+- `fixture_title`: `Codex 最小生成验收`
+- `contract_scope`: `real-longform-volume1`
+- `acceptance_scope`: `real-longform-volume1`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `67`
+- `run_chapter_limit`: `67`
+- `chapter_target_word_count`: `1667`
+- `target_volume_word_count`: `111689`
+- `source_dir`: `/private/tmp/phase6-smoke-source`
+- `source_material_count`: `4`
+- `source_material_char_count`: `1340`
+- `source_material_byte_count`: `3165`
+- `source_materials_json`: `[{"filename": "世界观.md", "path": "/private/tmp/phase6-smoke-source/世界观.md", "pending_id": "pe_31dc9ca3", "status": "approved", "char_count": 325, "byte_count": 831}, {"filename": "力量体系.md", "path": "/private/tmp/phase6-smoke-source/力量体系.md", "pending_id": "pe_ae776c65", "status": "approved", "char_count": 308, "byte_count": 732}, {"filename": "道照诸天_brief.md", "path": "/private/tmp/phase6-smoke-source/道照诸天_brief.md", "pending_id": "pe_9af3bbfd", "status": "approved", "char_count": 305, "byte_count": 692}, {"filename": "金手指设计.md", "path": "/private/tmp/phase6-smoke-source/金手指设计.md", "pending_id": "pe_dd033c26", "status": "approved", "char_count": 402, "byte_count": 910}]`
+- `novel_id`: `novel-bcc6`
+- `genre_template_summary`: `{"genre": "玄幻 / 诸天文", "template_layers": 3, "template_warnings": [], "template_evidence_available": true}`
+- `source_material_uploaded_count`: `4`
+- `source_material_pending_ids`: `pe_31dc9ca3,pe_ae776c65,pe_9af3bbfd,pe_dd033c26`
+- `source_material_approved_count`: `4`
+- `setting_session_id`: `sgs_4f398f73ebff493793e0285e36731891`
+- `setting_session_status`: `ready_to_generate`
+- `setting_clarification_round`: `5`
+- `review_batch_id`: `b525d16975194890ad13910737660ada`
+- `generated_setting_change_count`: `21`
+- `generated_setting_approvable_change_count`: `21`
+- `generated_setting_conflict_change_count`: `0`
+- `generated_setting_rejected_conflict_change_count`: `0`
+- `generated_setting_approved_change_ids`: `1354db3605e94467ba856ba0e0045552,af1573d2dafa4ed1ae5bcfdf1ed16b5f,e743c51bcab54423a9cd8f7276db3a34,fd66423d3b77459d96615b28fac317c5,5e4668dd675b49e39d58cdcc98c86b51,f91be0cc1f994eb5abcd6fdb4d25de41,ef86e86a934a4c4096cab427819dc05e,5fb92dc5d1e04e1f968236f7003d43ac,d22da06c64414b85aebf8cf62ff941b7,ebe4c220691e4aa8b22219dd27901930,e830a4cf9a9c4a9787a5d399dc3bb9bc,d6adb42abe6647b8a90fdf8388f9c636,decaa9b651364ac49b223cd63b2b8310,489f99c311964494ac83178c32b5e4cb,c53ae785b3cb4e60af3c73a7d1015889,04271519b66d4bfeac8862a456c4ec56,addd1cf60fe547aaa46cee0f6596a6e2,e14cb265ae37428bac1e1b739271fe1d,9e9b188164d440cdb70c4a4dfa5b6a65,4fafdfdc6be94558943043bb9c62e7df,9b8dfccf3e6648dd9b164ddc35505eff`
+- `generated_setting_batch_status`: `approved`
+- `setting_consolidation_job_id`: `job_ef3d7994e98c`
+- `setting_consolidation_batch_id`: `1eeb3eb6c360475088093f19f8ecbe7c`
+- `consolidated_setting_change_count`: `0`
+- `consolidated_setting_approvable_change_count`: `0`
+- `consolidated_setting_conflict_change_count`: `0`
+- `consolidated_setting_rejected_conflict_change_count`: `0`
+- `consolidated_setting_batch_status`: `pending`
+- `generation_snapshot_json`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final/artifacts/generation_snapshot.json`
+- `quality_summary_json`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final/quality-summary/summary.json`
+- `quality_summary_md`: `/Users/linlin/Desktop/novel-dev/reports/test-runs/phase6-smoke-final/quality-summary/summary.md`
+- `quality_summary_status`: `failed`
+- `quality_summary_run_id`: `phase6-smoke-final-quality-summary`
+
+## Issues
+
+### SYSTEM_BUG-volume_plan `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `volume_plan`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: Client error '400 Bad Request' for url 'http://127.0.0.1:8000/api/novels/novel-bcc6/volume_plan'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+- Evidence: http_status=400, response_text={"detail":"Setting review is not complete: setting_review_batch:1eeb3eb6c360475088093f19f8ecbe7c:status=pending:source_type=consolidation"}
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage volume_plan`
+
+### SYSTEM_BUG-export_contract `SYSTEM_BUG`
+
+- Severity: `high`
+- Stage: `export_contract`
+- External blocker: `False`
+- Real LLM: `False`
+- Fake rerun status: `None`
+- Message: Exported novel file missing: exported_path not returned
+- Evidence: archived_chapter_count=0
+- Reproduce: `scripts/verify_generation_real.sh --acceptance-scope real-longform-volume1 --stage export`
+
+### SYNOPSIS-QUALITY-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `brainstorm`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 总纲质量门禁未通过。
+- Evidence: passed=False, structure_score=85, marketability_score=85, conflict_score=85, character_arc_score=60, writability_score=60, warning_issues[0]=主要人物弧光转折不足，正文容易缺少人物选择。, repair_suggestions[0]=为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

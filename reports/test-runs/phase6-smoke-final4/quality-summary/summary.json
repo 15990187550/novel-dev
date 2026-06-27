@@ -1,0 +1,223 @@
+{
+  "run_id": "phase6-smoke-final4-quality-summary",
+  "entrypoint": "novel-dev-testing quality-summary",
+  "status": "failed",
+  "duration_seconds": 0.0,
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "environment": {},
+  "artifacts": {
+    "novel_id": "novel-df44",
+    "chapter_count": "67",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "target_volume_word_count": "111689",
+    "chapter_target_word_count": "1667",
+    "generated_chapter_count": "67",
+    "generated_word_count": "6347",
+    "source_material_count": "4",
+    "source_material_approved_count": "4",
+    "source_material_char_count": "1340"
+  },
+  "details": [
+    {
+      "id": "LONGFORM-SCALE-DETAIL-001",
+      "stage": "longform_scale",
+      "title": "长篇目标规模与资料导入统计",
+      "evidence": [
+        "generated_chapter_count=67",
+        "generated_word_count=6347",
+        "source_material_count=4",
+        "source_material_approved_count=4",
+        "source_material_char_count=1340",
+        "target_volumes=18",
+        "target_chapters=1200",
+        "target_word_count=2000000",
+        "target_volume_number=1",
+        "target_volume_chapters=67",
+        "target_volume_word_count=111689",
+        "chapter_target_word_count=1667"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "SETTING-QUALITY-DETAIL-002",
+      "stage": "setting_generation",
+      "title": "世界观与设定质量详情",
+      "evidence": [
+        "passed=False",
+        "missing_sections[0]=worldview",
+        "review_batch_status=approved",
+        "review_batch_summary=第五轮澄清：因陈渊起步境界与家族仇敌身份两个关键锚点未由用户二选一确认，无法生成待审核设定批次。已耗尽最大澄清轮数(5)，按硬约束不得自行决定或引入题材惯例兜底，因此本批次不输出任何新增设定，仅返回待确认提示。"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "SYNOPSIS-QUALITY-DETAIL-003",
+      "stage": "brainstorm",
+      "title": "总纲质量详情",
+      "evidence": [
+        "passed=True",
+        "structure_score=85",
+        "marketability_score=85",
+        "conflict_score=85",
+        "character_arc_score=85",
+        "writability_score=85",
+        "core_conflict=凡人少年陈渊（持观天镜残片） vs 玄元圣地外门执事姜无恤（代表五大圣地'夺镜封口'派）与幽冥族渗透长老祭无咎（代表异族'取镜归位'派）——三方围绕观天镜残片归属、陈氏血脉秘密与天道异变前夜的情报窗口期展开绞杀：陈渊需在被两方猎杀之前完成关键推演、带出三千大世界真相，而姜、祭二人则分别要在圣地内部权力交接前夺镜灭口、在虚天界开启前将玉佩送回祖地。"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "VOLUME-QUALITY-DETAIL-004",
+      "stage": "volume_plan",
+      "title": "卷纲与跨阶段承接质量详情",
+      "evidence": [
+        "passed=True",
+        "chapters[0]={'chapter_id': 'vol_1_ch_1', 'chapter_number': 1, 'title': '太玄历末年，边陲陈氏旧宅少年陈渊整理', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[1]={'chapter_id': 'vol_1_ch_2', 'chapter_number': 2, 'title': \"陈渊夜读族谱残页，发现'观天'二字墨\", 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[2]={'chapter_id': 'vol_1_ch_3', 'chapter_number': 3, 'title': '城中散修药铺伙计讥讽陈氏落魄，陈渊按', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[3]={'chapter_id': 'vol_1_ch_4', 'chapter_number': 4, 'title': '陈渊偶见一名炼气散修为争摊位与凡人动', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[4]={'chapter_id': 'vol_1_ch_5', 'chapter_number': 5, 'title': '夜半玉佩再热，陈渊以指尖轻触，脑中闪过一帧模糊人影，心神一晃', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[5]={'chapter_id': 'vol_1_ch_6', 'chapter_number': 6, 'title': \"陈渊第一次有意识尝试'窥视'，看清散修气机深浅，代价是神识一阵刺痛\", 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[6]={'chapter_id': 'vol_1_ch_7', 'chapter_number': 7, 'title': '陈渊反复测试，悟出窥视硬上限：单次不过一炷香，连用便要折损神识', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[7]={'chapter_id': 'vol_1_ch_8', 'chapter_number': 8, 'title': '陈渊在市井中辨认数名炼气、筑基修士底细，默默记下却不敢声张', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[8]={'chapter_id': 'vol_1_ch_9', 'chapter_number': 9, 'title': '陈渊从散修闲谈中拼出本地宗门近来暗流', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[9]={'chapter_id': 'vol_1_ch_10', 'chapter_number': 10, 'title': '陈渊远眺城外来客车马，窥视中只觉深不', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[10]={'chapter_id': 'vol_1_ch_11', 'chapter_number': 11, 'title': '陈渊强撑再窥，强行辨出来客修为远超本', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[11]={'chapter_id': 'vol_1_ch_12', 'chapter_number': 12, 'title': '陈渊卧床养神，叮嘱幼妹近日莫近外人', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[12]={'chapter_id': 'vol_1_ch_13', 'chapter_number': 13, 'title': \"陈渊于市井再窥来客，只辨出'此人于本\", 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[13]={'chapter_id': 'vol_1_ch_14', 'chapter_number': 14, 'title': '本地宗门长老亲至陈氏旧宅募捐修缮祠堂', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[14]={'chapter_id': 'vol_1_ch_15', 'chapter_number': 15, 'title': '陈渊于暗处听见宗门弟子低声议论，提及', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[15]={'chapter_id': 'vol_1_ch_16', 'chapter_number': 16, 'title': '陈渊借送柴入宗门后院，窥视中隐约感觉', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[16]={'chapter_id': 'vol_1_ch_17', 'chapter_number': 17, 'title': '陈渊于宗门外茶棚旁听散修提到来客衣饰', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[17]={'chapter_id': 'vol_1_ch_18', 'chapter_number': 18, 'title': '陈渊夜半反复比对族谱与茶棚所见纹路', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[18]={'chapter_id': 'vol_1_ch_19', 'chapter_number': 19, 'title': '陈渊辗转难眠，玉佩裂纹深处似有古纹隐', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[19]={'chapter_id': 'vol_1_ch_20', 'chapter_number': 20, 'title': '陈渊从邻家老人口中听到一桩陈年旧闻：', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[20]={'chapter_id': 'vol_1_ch_21', 'chapter_number': 21, 'title': '陈渊将旧闻与族谱残页串起，第一次隐约', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[21]={'chapter_id': 'vol_1_ch_22', 'chapter_number': 22, 'title': '陈渊路过城南破庙，瞥见一名身负剑伤的', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[22]={'chapter_id': 'vol_1_ch_23', 'chapter_number': 23, 'title': '陈渊趁夜送饭食药草至破庙，散修含糊道', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[23]={'chapter_id': 'vol_1_ch_24', 'chapter_number': 24, 'title': '陈渊追问，散修已陷入昏厥，只在他手心', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[24]={'chapter_id': 'vol_1_ch_25', 'chapter_number': 25, 'title': '陈渊收好那道痕迹，心知自己已撞入看不', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': [], 'repair_suggestions': [], 'weak_beats': []}}",
+        "chapters[25]={'chapter_id': 'vol_1_ch_26', 'chapter_number': 26, 'title': \"陈渊在市井听到散修闲谈，隐约提及'五\", 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}",
+        "chapters[26]={'chapter_id': 'vol_1_ch_27', 'chapter_number': 27, 'title': '夜深，陈渊颈间玉佩闪过一缕异界灰光', 'report': {'passed': True, 'blocking_issues': [], 'warning_issues': ['最后一个 beat 缺少章末钩子。'], 'repair_suggestions': ['在最后一个 beat 增加源于当前线索的悬念、反转、风险逼近、信息暴露或赌注升级。'], 'weak_beats': []}}"
+      ],
+      "recommendation": []
+    },
+    {
+      "id": "CHAPTER-QUALITY-DETAIL-005",
+      "stage": "chapter_final_review",
+      "title": "章节具体质量评价",
+      "evidence": [
+        "chapter_id=vol_1_ch_2",
+        "quality_status=warn",
+        "final_review_score=82",
+        "overall=70",
+        "summary=本章最大问题是章末钩子疲软：'冷光还在'仅重复确认异常，未形成新的信息缺口或压力升级，读者对下一章的期待停留在'明天问二叔公'的可预测走向。其次，两处'跳得他自己都听得见'的原句复现和三次'蹭'动作堆砌，暴露了节奏控制上的松懈。第三，母亲的'守渊'一唤是亮点，但陈渊的克制反应偶有编排感，部分总结式表述（'他侧耳听了很久'）替读者完成了本该由场景传递的紧张。建议将结尾冷光与母亲梦呓建立更直接的因果悬念，并压缩重复动作。\n\n爽点缺失调整: 未达成爽点 1 项 (revelation), plot_tension 扣 5 分。",
+        "plot_tension=67",
+        "characterization=75",
+        "readability=71",
+        "consistency=78",
+        "humanity=70",
+        "hook_strength=58",
+        "plot_tension.beat=1.problem=beat1结尾'冷光还在'仅重复确认玉佩异常，未形成新的信息缺口或压力升级，读者已知'有异常'和'明天问二叔公'，结尾未制造更具体的下一章期待。",
+        "readability.beat=1.problem=beat0末尾'跳得他自己都听得见'与beat1开头'跳得他自己都听得见'几乎原句复现，造成节奏拖沓；'蹭了蹭''蹭掉''在裤腿上蹭'三处'蹭'动作密度过高，且功能重复（均为消除痕迹/气味）。",
+        "readability.beat=0.problem=连续比喻密度略高：'像随时会灭''像一根细针挑开血管外皮''像旧伤结痂''像被烫过之后不敢落下'四处比喻分布在不足两千字内，且'像'字结构雷同。",
+        "humanity.beat=1.problem=beat1中'他侧耳听了很久''他屏着气等了十几息'等总结式表述将本该由读者感知的紧张转化为作者替人物总结，削弱了沉浸感。",
+        "humanity.beat=0.problem=beat0中'他下意识把掌心按在粗布裤腿上蹭了蹭，蹭了两下，又低头闻指尖'一串动作过于细碎，像在刻意展示克制，反而显出编排感。",
+        "hook_strength.beat=1.problem=最后一个beat以'冷光还在'收束，是静态观察而非未完成动作，未形成新的危险、反转或更尖锐的问题，读者对下一章的期待停留在可预测的'明天问二叔公'。",
+        "editor_guard_warnings_count=0",
+        "quality_gate.ai_flavor=AI 腔或模板化表达未充分降低"
+      ],
+      "recommendation": [
+        "plot_tension.beat=1.suggestion=将结尾改写为：陈渊转身时听见母亲隔壁传来一声清晰的翻身，紧接着箱盖缝隙里的冷光突然熄灭——或突然变亮——迫使他在'立刻去查看母亲'和'先确认玉佩是否失控'之间做出紧迫选择，让结尾成为一个未完成的动作而非静态观察。",
+        "readability.beat=1.suggestion=beat1开头改为用身体反应承接：'他低头看左腕，那根青筋还在跳，跳得他袖口都跟着颤'，以视觉替换听觉避免重复；将三处'蹭'压缩为两处，beat1中'在裤腿上蹭掉'可改为'他把手心在裤缝上压了压'，以不同动词区分两次动作的功能差异。",
+        "readability.beat=0.suggestion=保留'细针挑开血管外皮'（最贴切），将'像旧伤结痂'改为触觉直写：'指腹擦过，纹路上有极细的凹凸，涩涩的'；将'像被烫过之后不敢落下'改为动作直写：'手指悬在半空，迟迟不落'。减少'像'字引导的明喻，增加触觉与动作的暗写。",
+        "humanity.beat=1.suggestion=改为具体动作与感官细节：'他把耳朵贴到板壁上，木板凉且糙，母亲的呼吸从缝隙里漏过来，粗重，断续——咳了两声，停了。他不敢动，膝头麻了也不敢换姿势，直到隔壁传来床板轻轻一响，像人翻了个身。'让读者通过动作和等待的体感自行感知紧张，而非被告知'等了十几息'。",
+        "humanity.beat=0.suggestion=压缩为更自然的应激反应：'他在裤腿上猛擦了两下，低头闻了闻指尖——没有父亲熏香的气味，只有玉佩留下的一丝冰凉。'保留'闻'这一揭示心理的动作，删除'下意识''蹭了蹭'等修饰，让动作更直接。",
+        "hook_strength.beat=1.suggestion=在'冷光还在'之前追加一个由本章已出现线索引发的紧迫选择：例如母亲隔壁突然传来清晰的脚步声（或她直接喊了一声'渊儿'），迫使陈渊必须在'立刻去安抚母亲'和'先处理玉佩异常'之间做出选择，且两种选择都有明确代价——让结尾成为一个被迫中断的动作，而非平静的回望。"
+      ]
+    },
+    {
+      "id": "CHAPTER-QUALITY-DETAIL-006",
+      "stage": "chapter_final_review",
+      "title": "章节具体质量评价",
+      "evidence": [
+        "chapter_id=vol_1_ch_3",
+        "quality_status=manual_review_required",
+        "final_review_score=72",
+        "overall=70",
+        "summary=本章最大问题是章末钩子疲软：'冷光还在'仅重复确认异常，未形成新的信息缺口或压力升级，读者对下一章的期待停留在'明天问二叔公'的可预测走向。其次，两处'跳得他自己都听得见'的原句复现和三次'蹭'动作堆砌，暴露了节奏控制上的松懈。第三，母亲的'守渊'一唤是亮点，但陈渊的克制反应偶有编排感，部分总结式表述（'他侧耳听了很久'）替读者完成了本该由场景传递的紧张。建议将结尾冷光与母亲梦呓建立更直接的因果悬念，并压缩重复动作。\n\n爽点缺失调整: 未达成爽点 1 项 (revelation), plot_tension 扣 5 分。",
+        "plot_tension=67",
+        "characterization=75",
+        "readability=71",
+        "consistency=78",
+        "humanity=70",
+        "hook_strength=58",
+        "plot_tension.beat=1.problem=beat1结尾'冷光还在'仅重复确认玉佩异常，未形成新的信息缺口或压力升级，读者已知'有异常'和'明天问二叔公'，结尾未制造更具体的下一章期待。",
+        "readability.beat=1.problem=beat0末尾'跳得他自己都听得见'与beat1开头'跳得他自己都听得见'几乎原句复现，造成节奏拖沓；'蹭了蹭''蹭掉''在裤腿上蹭'三处'蹭'动作密度过高，且功能重复（均为消除痕迹/气味）。",
+        "readability.beat=0.problem=连续比喻密度略高：'像随时会灭''像一根细针挑开血管外皮''像旧伤结痂''像被烫过之后不敢落下'四处比喻分布在不足两千字内，且'像'字结构雷同。",
+        "humanity.beat=1.problem=beat1中'他侧耳听了很久''他屏着气等了十几息'等总结式表述将本该由读者感知的紧张转化为作者替人物总结，削弱了沉浸感。",
+        "humanity.beat=0.problem=beat0中'他下意识把掌心按在粗布裤腿上蹭了蹭，蹭了两下，又低头闻指尖'一串动作过于细碎，像在刻意展示克制，反而显出编排感。",
+        "hook_strength.beat=1.problem=最后一个beat以'冷光还在'收束，是静态观察而非未完成动作，未形成新的危险、反转或更尖锐的问题，读者对下一章的期待停留在可预测的'明天问二叔公'。",
+        "editor_guard_warnings_count=0",
+        "quality_gate.final_review_score=成稿未达到自动归档质量线: 72",
+        "quality_gate.critical_dimension_score=关键维度 hook_strength 低于质量线: 62",
+        "quality_gate.critical_dimension_score=关键维度 humanity 低于质量线: 65",
+        "quality_gate.critical_dimension_score=关键维度 plot_tension 低于质量线: 73",
+        "quality_gate.ai_flavor=AI 腔或模板化表达未充分降低"
+      ],
+      "recommendation": [
+        "plot_tension.beat=1.suggestion=将结尾改写为：陈渊转身时听见母亲隔壁传来一声清晰的翻身，紧接着箱盖缝隙里的冷光突然熄灭——或突然变亮——迫使他在'立刻去查看母亲'和'先确认玉佩是否失控'之间做出紧迫选择，让结尾成为一个未完成的动作而非静态观察。",
+        "readability.beat=1.suggestion=beat1开头改为用身体反应承接：'他低头看左腕，那根青筋还在跳，跳得他袖口都跟着颤'，以视觉替换听觉避免重复；将三处'蹭'压缩为两处，beat1中'在裤腿上蹭掉'可改为'他把手心在裤缝上压了压'，以不同动词区分两次动作的功能差异。",
+        "readability.beat=0.suggestion=保留'细针挑开血管外皮'（最贴切），将'像旧伤结痂'改为触觉直写：'指腹擦过，纹路上有极细的凹凸，涩涩的'；将'像被烫过之后不敢落下'改为动作直写：'手指悬在半空，迟迟不落'。减少'像'字引导的明喻，增加触觉与动作的暗写。",
+        "humanity.beat=1.suggestion=改为具体动作与感官细节：'他把耳朵贴到板壁上，木板凉且糙，母亲的呼吸从缝隙里漏过来，粗重，断续——咳了两声，停了。他不敢动，膝头麻了也不敢换姿势，直到隔壁传来床板轻轻一响，像人翻了个身。'让读者通过动作和等待的体感自行感知紧张，而非被告知'等了十几息'。",
+        "humanity.beat=0.suggestion=压缩为更自然的应激反应：'他在裤腿上猛擦了两下，低头闻了闻指尖——没有父亲熏香的气味，只有玉佩留下的一丝冰凉。'保留'闻'这一揭示心理的动作，删除'下意识''蹭了蹭'等修饰，让动作更直接。",
+        "hook_strength.beat=1.suggestion=在'冷光还在'之前追加一个由本章已出现线索引发的紧迫选择：例如母亲隔壁突然传来清晰的脚步声（或她直接喊了一声'渊儿'），迫使陈渊必须在'立刻去安抚母亲'和'先处理玉佩异常'之间做出选择，且两种选择都有明确代价——让结尾成为一个被迫中断的动作，而非平静的回望。"
+      ]
+    }
+  ],
+  "issues": [
+    {
+      "id": "SETTING-QUALITY-001",
+      "type": "GENERATION_QUALITY",
+      "severity": "high",
+      "stage": "setting_generation",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "AI 自动生成/整合设定质量未通过。",
+      "evidence": [
+        "passed=False",
+        "missing_sections[0]=worldview"
+      ],
+      "reproduce": "novel-dev-testing quality-summary --input-json <snapshot.json>"
+    },
+    {
+      "id": "CHAPTER-QUALITY-001",
+      "type": "GENERATION_QUALITY",
+      "severity": "high",
+      "stage": "chapter_final_review",
+      "is_external_blocker": false,
+      "real_llm": true,
+      "fake_rerun_status": null,
+      "message": "章节质量门禁阻断或成稿未达到自动归档质量线。",
+      "evidence": [
+        "chapter_id=vol_1_ch_3",
+        "quality_status=manual_review_required",
+        "final_review_score=72",
+        "publishable_final_review_score=82",
+        "status=manual_review_required",
+        "warning_items[0]={'code': 'final_review_score', 'message': '成稿未达到自动归档质量线: 72', 'detail': {'score': 72, 'required': 82}}",
+        "warning_items[1]={'code': 'critical_dimension_score', 'message': '关键维度 hook_strength 低于质量线: 62', 'detail': {'dimension': 'hook_strength', 'score': 62, 'required': 75, 'comment': \"章末停在陆照合拢手指、碎石硌进皮肉的意象上，配合'三个月后。前十。内门。'的短句收束，有一定决心感，但缺少由本章已出现线索引发的新危险、反转或具体问题。周厉的出场只是擦肩而过，未形成实质冲突或悬念；识海青石的震颤和佛门气息的发烫是潜在钩子，但描写过于模糊，读者无法形成对下一章的具体期待。\"}}",
+        "warning_items[2]={'code': 'critical_dimension_score', 'message': '关键维度 humanity 低于质量线: 65', 'detail': {'dimension': 'humanity', 'score': 65, 'required': 75, 'comment': \"人物反应有真实感（张顺借丹时的窘迫、陆照被马管事标记后的警觉），但多处出现 AI 腔表达：'那声笑里没有温度，响了一声，便没了回音'属于作者替人物总结情绪；'像人看见路边的石子，不会想去踢，也不会想绕开'是典型的模板化心理描写；beat 3 结尾'他合拢手指，碎石硌进更深的皮肉里'重复使用同一意象，读感偏刻意。\"}}",
+        "warning_items[3]={'code': 'critical_dimension_score', 'message': '关键维度 plot_tension 低于质量线: 73', 'detail': {'dimension': 'plot_tension', 'score': 73, 'required': 75, 'comment': '三个 beat 有明确的事件推进（资源窘迫→选拔宣布→功法阁受辱），冲突逐级递进，但 beat 1 和 beat 2 之间的因果推动偏弱，张顺借丹的微型冲突被快速收掉，张力未充分释放；beat 2 中马管事的标记式问候是亮点，但选拔宣布的群像描写偏概括，缺少个体化的紧张升级。'}}",
+        "warning_items[4]={'code': 'ai_flavor', 'message': 'AI 腔或模板化表达未充分降低', 'detail': ['张顺借丹的对话推进了资源窘迫，但陆照拒绝后缺乏情绪收束，读感略突兀', '第二beat马管事当众标记陆照，信息释放自然，但陆照内心反应偏旁白，可加一个身体动作承载', '章末青石震颤+佛门气息对峙是好钩子，但碎石硌掌心的意象第三次出现，建议换一种触觉收尾']}",
+        "summary=存在需要人工确认的质量问题，停止自动归档。"
+      ],
+      "reproduce": "novel-dev-testing quality-summary --input-json <snapshot.json>"
+    }
+  ]
+}

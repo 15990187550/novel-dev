@@ -1,0 +1,88 @@
+# Test Run phase6-smoke-final-quality-summary
+
+- Entrypoint: `novel-dev-testing quality-summary`
+- Status: `failed`
+- Dataset: `minimal_builtin`
+- LLM mode: `real_then_fake_on_external_block`
+- Duration: `0.0s`
+
+## Artifacts
+
+- `novel_id`: `novel-bcc6`
+- `chapter_count`: `0`
+- `target_volumes`: `18`
+- `target_chapters`: `1200`
+- `target_word_count`: `2000000`
+- `target_volume_number`: `1`
+- `target_volume_chapters`: `67`
+- `target_volume_word_count`: `111689`
+- `chapter_target_word_count`: `1667`
+- `generated_chapter_count`: `0`
+- `generated_word_count`: `0`
+- `source_material_count`: `4`
+- `source_material_approved_count`: `4`
+- `source_material_char_count`: `1340`
+
+## Details
+
+### LONGFORM-SCALE-DETAIL-001
+
+- Stage: `longform_scale`
+- Title: 长篇目标规模与资料导入统计
+- Evidence: generated_chapter_count=0, generated_word_count=0, source_material_count=4, source_material_approved_count=4, source_material_char_count=1340, target_volumes=18, target_chapters=1200, target_word_count=2000000, target_volume_number=1, target_volume_chapters=67, target_volume_word_count=111689, chapter_target_word_count=1667
+- Recommendation: none
+
+### SETTING-QUALITY-DETAIL-002
+
+- Stage: `setting_generation`
+- Title: 世界观与设定质量详情
+- Evidence: passed=True, review_batch_status=approved, review_batch_summary=正式长篇设定生成批次：基于已导入资料（世界观.md / 力量体系.md / 道照诸天_brief.md / 金手指设计.md）生成纯骨架（A 形态）待审核设定批次。所有 10 项澄清点统一按用户最终口径'全部待确认'处理；产出形态=纯骨架，未支持细节一律写'待确认'，不带任何占位符（如不写'圣地甲'、'同行者·待定'等）。批次覆盖：世界观、力量体系、金手指、首卷剧情梗概、核心冲突、第一章可执行目标；同时按当前已生效设定上下文中既有的实体/关系给出 update（仅做与新生成设定对齐的字段补全，不引入新事实、不覆盖既有 ID 与关系拓扑），并按需新增 chapter-level 冲突落点 entity（均以 real_id 形式记录于 conflict_hints，待用户后续替换）。
+- Recommendation: none
+
+### SYNOPSIS-QUALITY-DETAIL-003
+
+- Stage: `brainstorm`
+- Title: 总纲质量详情
+- Evidence: passed=False, structure_score=85, marketability_score=85, conflict_score=85, character_arc_score=60, writability_score=60, warning_issues[0]=主要人物弧光转折不足，正文容易缺少人物选择。, repair_suggestions[0]=为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。, core_conflict=陈渊（凡人少年，持观天镜残片） vs 青冥圣地长老慕容晦及其门下"暗辰"派系 + 暗中勾连的异族渗透者。核心对抗：陈渊以残镜逐级追查家族覆灭真相，每进一步都直接撼动慕容晦在青冥圣地的权位与封口布局；青冥圣地则借宗门规矩与异族里应外合的双重绞杀，逼迫陈渊交出残镜或永绝后患。赌注：陈氏血仇能否昭雪、观天镜残片落入谁手、凡人界边陲数城生民。
+- Recommendation: none
+
+### VOLUME-QUALITY-DETAIL-004
+
+- Stage: `volume_plan`
+- Title: 卷纲与跨阶段承接质量详情
+- Evidence: story_contract.protagonist_goal=在家族覆灭危机中以观天镜Lv1窥视、初步拼出真相碎片，并带残余族人逃出边陲小城，踏入宗门或王朝庇护的入口。, story_contract.current_stage_goal=在家族覆灭危机中以观天镜Lv1窥视、初步拼出真相碎片，并带残余族人逃出边陲小城，踏入宗门或王朝庇护的入口。, story_contract.first_chapter_goal=# 第一章可执行目标（纯骨架版）
+
+## 第一章核心任务（保守推进）
+1. 完成世界观铺设：交代太玄历末年、天道异变前夜、玄元大陆·边陲小城的基本时空坐标。
+2. 完成主角起手：陈渊在边陲小城觉醒观天镜（具体触发事件待确认）。
+3. 完成金手指首秀：以'窥视 Lv1'应对一次可被资料支撑的小型危机（资料仅支撑'看穿修为/术法等级'，不支撑具体对手与事件形态）。
+4. 完成动机确立：表层动机（为家族复仇、证明自己）与深层动机（寻求天道真相）在第一章末同时埋下伏笔。
+5. 完成伏笔埋设：灵气潮汐暗涌 + 异族渗透异常传闻（仅以'异常现象/目击传闻'形式呈现，不正式登场）。
+
+## 第一章禁止事项（与资料边界对齐）
+- 不写五大圣地具体名号、立场、代表人物。
+- 不写王朝国号。
+- 不写异族正面冲突与具体形态。
+- 不写观天镜 Lv2 及以上能力。
+- 不写陈渊跨入炼气境界。
+- 不写家族覆灭具体经过（首卷起点事件形态待确认）。
+
+## 待确认（不补写）
+- 第一章是否直接以'家族覆灭之夜'开局。
+- 第一章是否出现女性同行者。
+- 第一章是否引入五大圣地/王朝具名势力。
+- 第一章首秀的对手层级。, story_contract.core_conflict=陈渊（凡人少年，持观天镜残片） vs 青冥圣地长老慕容晦及其门下"暗辰"派系 + 暗中勾连的异族渗透者。核心对抗：陈渊以残镜逐级追查家族覆灭真相，每进一步都直接撼动慕容晦在青冥圣地的权位与封口布局；青冥圣地则借宗门规矩与异族里应外合的双重绞杀，逼迫陈渊交出残镜或永绝后患。赌注：陈氏血仇能否昭雪、观天镜残片落入谁手、凡人界边陲数城生民。
+- Recommendation: none
+
+## Issues
+
+### SYNOPSIS-QUALITY-001 `GENERATION_QUALITY`
+
+- Severity: `high`
+- Stage: `brainstorm`
+- External blocker: `False`
+- Real LLM: `True`
+- Fake rerun status: `None`
+- Message: 总纲质量门禁未通过。
+- Evidence: passed=False, structure_score=85, marketability_score=85, conflict_score=85, character_arc_score=60, writability_score=60, warning_issues[0]=主要人物弧光转折不足，正文容易缺少人物选择。, repair_suggestions[0]=为主角和关键对手补齐至少 3 个会改变关系或信念的转折点。
+- Reproduce: `novel-dev-testing quality-summary --input-json <snapshot.json>`

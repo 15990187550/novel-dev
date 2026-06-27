@@ -1,0 +1,539 @@
+{
+  "run_id": "phase6-smoke-final3",
+  "novel_id": "novel-8299",
+  "dataset": "minimal_builtin",
+  "llm_mode": "real_then_fake_on_external_block",
+  "artifacts": {
+    "fixture_title": "Codex 最小生成验收",
+    "contract_scope": "real-longform-volume1",
+    "acceptance_scope": "real-longform-volume1",
+    "target_volumes": "18",
+    "target_chapters": "1200",
+    "target_word_count": "2000000",
+    "target_volume_number": "1",
+    "target_volume_chapters": "67",
+    "run_chapter_limit": "67",
+    "chapter_target_word_count": "1667",
+    "target_volume_word_count": "111689",
+    "source_dir": "/private/tmp/phase6-smoke-source",
+    "source_material_count": "4",
+    "source_material_char_count": "1340",
+    "source_material_byte_count": "3165",
+    "source_materials_json": "[{\"filename\": \"世界观.md\", \"path\": \"/private/tmp/phase6-smoke-source/世界观.md\", \"pending_id\": \"pe_e6ebfe38\", \"status\": \"approved\", \"char_count\": 325, \"byte_count\": 831}, {\"filename\": \"力量体系.md\", \"path\": \"/private/tmp/phase6-smoke-source/力量体系.md\", \"pending_id\": \"pe_f4f7869b\", \"status\": \"approved\", \"char_count\": 308, \"byte_count\": 732}, {\"filename\": \"道照诸天_brief.md\", \"path\": \"/private/tmp/phase6-smoke-source/道照诸天_brief.md\", \"pending_id\": \"pe_add8a1e5\", \"status\": \"approved\", \"char_count\": 305, \"byte_count\": 692}, {\"filename\": \"金手指设计.md\", \"path\": \"/private/tmp/phase6-smoke-source/金手指设计.md\", \"pending_id\": \"pe_1056c062\", \"status\": \"approved\", \"char_count\": 402, \"byte_count\": 910}]",
+    "novel_id": "novel-8299",
+    "genre_template_summary": "{\"genre\": \"玄幻 / 诸天文\", \"template_layers\": 3, \"template_warnings\": [], \"template_evidence_available\": true}",
+    "source_material_uploaded_count": "4",
+    "source_material_pending_ids": "pe_e6ebfe38,pe_f4f7869b,pe_add8a1e5,pe_1056c062",
+    "source_material_approved_count": "4",
+    "setting_session_id": "sgs_a6b5a08920234e2b8869ee019f9beb09",
+    "setting_session_status": "ready_to_generate",
+    "setting_clarification_round": "5",
+    "review_batch_id": "ed7503f6b6ca41098f2de3b943241869",
+    "generated_setting_change_count": "3",
+    "generated_setting_approvable_change_count": "3",
+    "generated_setting_conflict_change_count": "0",
+    "generated_setting_rejected_conflict_change_count": "0",
+    "generated_setting_approved_change_ids": "5c8fadca0cc648229330d91d6da3a832,b8be2710f9874ad186d5b94d0fbf4aee,9a247da317f04c3ebc3433fd8f8aea46",
+    "generated_setting_batch_status": "approved",
+    "setting_consolidation_job_id": "job_9d3681431fb4",
+    "setting_consolidation_batch_id": "65646e2122ae47fb85f9c8d0d60e6d35",
+    "consolidated_setting_change_count": "0",
+    "consolidated_setting_approvable_change_count": "0",
+    "consolidated_setting_conflict_change_count": "0",
+    "consolidated_setting_rejected_conflict_change_count": "0",
+    "consolidated_setting_batch_status": "pending"
+  },
+  "checkpoint": {
+    "novel_title": "世界观 长篇生成",
+    "genre": {
+      "primary_slug": "xuanhuan",
+      "primary_name": "玄幻",
+      "secondary_slug": "zhutian",
+      "secondary_name": "诸天文"
+    },
+    "synopsis_data": {
+      "title": "观天镜主陈渊：边陲小城的逆伐者",
+      "logline": "被诬为魔修的边陲少年陈渊凭祖传玉佩觉醒的上古残宝观天镜窥破术法与因果，要在五大圣地之一的追杀下抢在虚天界开启前拿到陷害家族的主谋口供——否则将永世背负魔修之名、连累被边缘化的盟友一同殒命。",
+      "core_conflict": "陈渊（持有观天镜Lv1的炼气低阶修士）vs 玄元圣地外门执法长老吕沉舟及其背后执意将陈家灭门的圣地内门主谋，二人围绕家族旧案真相与陈渊颈间玉佩（观天镜载体）的归属权展开明暗交锋。",
+      "themes": [
+        "以智代力，弱者亦可翻盘",
+        "真相与谎言的边界",
+        "家族与个人恩义的两难",
+        "秩序崩塌下的取舍",
+        "金手指的代价与克制",
+        "少年在乱世中的清醒成长"
+      ],
+      "character_arcs": [
+        {
+          "name": "陈渊",
+          "arc_summary": "边陲落魄世家的炼气低阶少年修士，凭祖传玉佩觉醒观天镜后，在被圣地诬为魔修的绝境中以Lv1窥视与Lv2追溯步步求生；其内心由保命自守的独行者，经身边人接连受伤的刺激，转为愿以己身犯险换取真相与盟友存亡的担责者，最终在虚天界入口处完成从独善其身到守心如一的内在转变。",
+          "key_turning_points": [
+            "颈间祖传玉佩异动、神识触发观天镜显化，凭Lv1窥视首次看穿圣地外门弟子修为底细，确立以信息差自保的行事底线",
+            "Lv2追溯发现家族当年一夜倾覆的主谋直接来自圣地内门，信念由避祸自保转为拼死追查真相",
+            "盟友宋戈因掩护陈渊而被吕沉舟弟子重创濒死，陈渊放弃更安全的脱身之策，押上尚未曝光的玉佩之力出手护他，第一次把他人性命摆在自己算计之前，完成从独行者到担责者的内在转变",
+            "面对圣地以庇护为筹码逼其交出玉佩的选择题，陈渊拒绝以观天镜献祭换取身份与地位，在Lv4推演预见代价的情况下仍携镜只身遁入虚天界入口，确立以凡人之心守本心的最终信念"
+          ]
+        },
+        {
+          "name": "宋戈（被边缘化的低阶盟友修士）",
+          "arc_summary": "原为玄元圣地外门弟子、因质疑家族旧案内情而被逐出师门的筑基初阶剑修，在陈渊逃亡途中与之短暂结盟；其弧光由只求洗刷自身冤屈的旁观者，转为愿以命相托与陈渊共担反围杀后果的同行者。",
+          "key_turning_points": [
+            "在废弃矿脉绝境中第一次见陈渊以Lv2追溯回溯七日因果，被其以智代力的手段折服，决定与陈渊互换情报、暂时结盟",
+            "为掩护陈渊带走旧案关键证据而被吕沉舟弟子重创濒死，信念由只求自保转为死保陈渊与证据不失",
+            "在边陲秘境目睹陈渊触发Lv3共鸣遭天道反噬折损寿元，仍选择与陈渊一同逃出秘境而非独自脱身",
+            "圣地高层集会反围杀前主动请缨担任内应，将自己重新暴露于圣地清算之下，完成由旁观者到共担者的内在转变"
+          ]
+        },
+        {
+          "name": "吕沉舟（玄元圣地外门执法长老）",
+          "arc_summary": "明面执掌玄元圣地外门执法、暗地主导当年陈家灭门旧案核心环节的金丹圆满修士；其弧光由将陈渊视为随手可捏死的小城落魄子，逐步升级为发现观天镜后的必得猎物，最终在陈渊以Lv4推演反围杀时被迫当众承认部分内情。",
+          "key_turning_points": [
+            "率外门弟子追缉所谓魔修至边陲小城，确认为家族旧案背后真正的施害者之一，将陈渊列入必杀名单",
+            "发现陈渊颈间玉佩与上古观天镜残片的关联，将其由顺手清除的棋子升级为必须掌控的猎物",
+            "在陈渊以Lv2追溯揭穿一桩嫁祸案后被迫短暂停手，与陈渊达成脆弱停战以应对更外层的威胁",
+            "天道异变加剧、虚天界入口将启时再度拔剑指向陈渊，逼其交出观天镜换取庇护，最终在反围杀中败露旧案内情"
+          ]
+        }
+      ],
+      "milestones": [
+        {
+          "act": "第一幕·启程",
+          "summary": "陈渊在边陲小城意外触发祖传玉佩、觉醒观天镜Lv1窥视，凭窥视之力解决本地一桩修为悬殊的小劫，随即被玄元圣地外门执法长老吕沉舟率外门弟子以追缉魔修为名锁定，被迫在是否当场暴露观天镜以求自保与弃家逃亡保全玉佩之间做出抉择。",
+          "climax_event": "陈渊在城外夜战中以Lv1窥视看穿吕沉舟大弟子术法等级与破绽、临阵反杀，但顾忌玉佩一旦在圣地眼前显化将招来灭门之祸，选择不暴露观天镜而背负魔修嫌疑弃城逃亡，第一次在'自证清白'与'保全观天镜'之间做出切割。"
+        },
+        {
+          "act": "第一幕·启程",
+          "summary": "逃亡途中陈渊偶遇被玄元圣地逐出师门的原外门弟子宋戈，二人因各自的冤屈暂时结盟；陈渊在废弃矿脉绝境中首次动用Lv2追溯七日因果，揭出家族一夜倾覆的主谋直接来自圣地内门，并与宋戈完成以情报换庇护的脆弱约定。",
+          "climax_event": "陈渊在废弃矿脉中以Lv2追溯回溯七日因果，亲眼看到吕沉舟弟子当年如何在旧案现场栽赃嫁祸，主谋的圣地内门线索浮出水面，陈渊由此立下誓要拿到主谋口供才肯罢休。"
+        },
+        {
+          "act": "第一幕·启程",
+          "summary": "边陲方向天道异变先兆初现，宋戈在掩护陈渊带走旧案证据时被吕沉舟弟子重创濒死，陈渊被迫在'独自脱身保全玉佩'与'暴露Lv2追溯救人'之间做出抉择，第一次把他人性命摆在自己算计之前，完成从独行者到担责者的内在转变。",
+          "climax_event": "宋戈重伤濒死、追兵将至，陈渊放弃更安全的独自脱身之策，当着吕沉舟亲传弟子的面动用Lv2追溯定位旧案证据藏匿点并拼死带宋戈突围，第一次为他人押上尚未曝光的镜力与身份。"
+        },
+        {
+          "act": "第二幕·周旋",
+          "summary": "陈渊携宋戈逃入边陲秘境，秘境异动触发天道异变先兆，陈渊在绝境中首次触及Lv3共鸣、得知虚天界将于不久后对外开启的天机，随即被循观天镜气息而来的异世界生物低阶投影围杀，付出修为倒退与寿元折损的代价才带宋戈脱身。",
+          "climax_event": "异世界生物循镜围杀而至，陈渊在重伤之下强行触发Lv3共鸣获取关键情报，却被天道之力反噬、修为倒退且寿元折损，与宋戈约定必须抢在虚天界开启前拿到主谋口供，否则永无翻身之日。"
+        },
+        {
+          "act": "第二幕·周旋",
+          "summary": "陈渊带伤返回修行界边缘，与同样被旧案牵连的散修何渡形成秘密联盟；陈渊以Lv2追溯与Lv3共鸣残影布局，将自身作为诱饵引出圣地内斗浮出水面，准备以Lv4推演完成反围杀。",
+          "climax_event": "陈渊以自身为饵引吕沉舟一脉与圣地内门另一派系在边陲正面交火，在混战中以Lv2追溯锁定旧案关键证人与吕沉舟的关联，逼迫吕沉舟不得不亲赴圣地高层集会以自辩。"
+        },
+        {
+          "act": "第三幕·翻盘",
+          "summary": "天道异变正式降临、虚天界对外开启前夕，陈渊在圣地高层集会中以Lv4推演布局反围杀，当众逼吕沉舟承认旧案内情、拿下当年陷害其家族的主谋之一为俘虏；随即拒绝以观天镜献祭换取圣地庇护的选择题，携镜只身逃入虚天界入口。",
+          "climax_event": "陈渊在Lv4推演预见的代价下拒绝交出观天镜换取身份与地位，携镜只身遁入虚天界入口，宋戈与何渡在入口外以性命为饵拖住圣地追兵，而陈渊在跨入入口的最后一瞬以Lv3共鸣残影窥见镜中那道一直未曾显形的'白衣持镜者'残影竟与自己五官一般无二——观天镜的真正持有者、与陈渊身世的最后一道封印，至此被一道锋利的新刀刃切开。"
+        }
+      ],
+      "estimated_volumes": 18,
+      "estimated_total_chapters": 1200,
+      "estimated_total_words": 2000000,
+      "volume_outlines": [
+        {
+          "volume_number": 1,
+          "title": "陈渊在边陲小城凭祖传玉佩觉醒观天镜",
+          "summary": "陈渊在边陲小城凭祖传玉佩觉醒观天镜，以Lv1窥视解决本地一桩修为悬殊的小劫，却因顾忌玉佩安危选择隐镜逃亡，在废弃矿脉与宋戈结盟后遭追杀，第一次为盟友押上镜力，信念由自保转为担责。",
+          "narrative_role": "启程卷：建立主角能力起点、势力认知与核心冲突的因果根源，奠定以智代力、隐镜自保的行事底色，并以盟友之伤完成第一次内在转变。",
+          "main_goal": "在隐镜逃亡的前提下拿到家族旧案的第一块证据碎片，并完成与宋戈的结盟。",
+          "main_conflict": "陈渊（持有观天镜Lv1的炼气低阶修士）vs 玄元圣地外门执法长老吕沉舟及其外门弟子，争夺陈渊颈间玉佩（观天镜载体）的归属权与小城事件的话语权。",
+          "start_state": "陈渊为边陲小城落魄世家的低阶修士，颈间祖传玉佩安静无异，对外界修行界与玄元圣地仅有耳闻，尚未觉醒观天镜。",
+          "end_state": "陈渊觉醒观天镜Lv1窥视并解锁Lv2追溯，与宋戈结盟逃出边陲，因掩护宋戈而第一次为他人押上镜力，信念由保命自守转为担责者，玉佩上的裂纹开始肉眼可见。",
+          "climax": "宋戈重伤濒死、追兵将至，陈渊放弃更安全的独自脱身之策，当着吕沉舟亲传弟子的面动用Lv2追溯定位旧案证据并拼死带宋戈突围，第一次为他人押上镜力与身份，完成从独行者到担责者的内在转变。",
+          "hook_to_next": "陈渊虽与宋戈结盟逃出边陲，吕沉舟却已暗中知会圣地内门，玉佩（观天镜载体）牵涉上古旧案的消息正悄然向修行界核心扩散，下一步必须在圣地更高层动手前拿到主谋口供。",
+          "key_entities": [
+            "陈渊",
+            "宋戈（原玄元圣地外门弟子）",
+            "吕沉舟（玄元圣地外门执法长老）",
+            "吕沉舟亲传弟子",
+            "祖传玉佩（观天镜载体）",
+            "废弃矿脉中的旧案关键证据",
+            "边陲小城陈氏旧宅"
+          ],
+          "relationship_shifts": [
+            "陈渊与宋戈由陌路互不信任转为以命相托的结盟共患难",
+            "陈渊与吕沉舟一脉由被追杀者转为被重点追缉的镜力持有者",
+            "陈渊与观天镜由未知家传之物转为以Lv1窥视自保、以Lv2追溯担责的主动使用",
+            "陈渊信念由保命自守的独行者转为愿为他人押上镜力的担责者"
+          ],
+          "foreshadowing_setup": [
+            "祖传玉佩内嵌的上古残片隐有异动，为Lv2追溯与Lv3共鸣埋下伏笔",
+            "宋戈被圣地逐出师门的真正原因，暗示其与陈家旧案有隐秘交集",
+            "吕沉舟亲传弟子所用的那件灵器来历不明，疑似指向家族旧案主谋",
+            "小城老人口中'陈家当年一夜倾覆'的残缺传说"
+          ],
+          "foreshadowing_payoff": [
+            "祖传玉佩正式显化观天镜残影，证实其为上古至宝碎片而非凡玉",
+            "吕沉舟亲传弟子在矿脉绝境中的口供坐实陈家旧案确与圣地外门相关",
+            "宋戈的逐门真相与陈渊母系一支的旧事轻轻擦边，为第三卷身世悬念埋伏笔",
+            "玉佩裂纹在陈渊为宋戈押上Lv2后留下第一道肉眼可见的痕迹"
+          ],
+          "target_chapter_range": "1-67"
+        },
+        {
+          "volume_number": 2,
+          "title": "陈渊与宋戈逃入边陲秘境再返修行界边缘",
+          "summary": "陈渊与宋戈逃入边陲秘境，在秘境异动触发天道异变先兆时强行触及Lv3共鸣得知虚天界将启的天机，被异世界生物低阶投影围杀、付出修为倒退与寿元折损的代价；伤后返回修行界边缘，与同样被旧案牵连的散修何渡秘密结盟，以Lv2追溯与Lv3共鸣残影布局反围杀前奏。",
+          "narrative_role": "周旋卷：扩大地图与势力接触面，将信息差升级为因果追溯，并以Lv3共鸣首次触碰天道异变先兆，确立代价意识；同时引入散修何渡形成反围杀联盟的雏形。",
+          "main_goal": "以Lv3共鸣确认虚天界开启时点，与何渡秘密结盟，为Lv4推演反围杀做情报与人力铺垫。",
+          "main_conflict": "陈渊（解锁Lv2追溯与初步触及Lv3共鸣的负伤低阶修士）vs 玄元圣地内门中意在玉佩的另一派系与循镜而来的异世界生物低阶投影，争夺旧案情报与反围杀的先手机会。",
+          "start_state": "陈渊重伤折寿逃出边陲秘境，与宋戈暂时落脚于修行界边缘，已解锁Lv2追溯并初步触及Lv3共鸣，旧案证据碎片在手但尚未公开，圣地内门已将其列入必得名单。",
+          "end_state": "陈渊与何渡秘密结盟，以Lv2追溯锁定旧案关键证人与吕沉舟的关联，将吕沉舟逼入圣地高层集会自辩，Lv4推演的前置情报与人心布局已就绪，但虚天界入口开启的倒计时与异世界生物的更高阶投影已成新的外部压力。",
+          "climax": "陈渊以自身为饵引吕沉舟一脉与圣地内门另一派系在边陲正面交火，在混战中以Lv2追溯锁定旧案关键证人与吕沉舟的关联，逼迫吕沉舟不得不亲赴圣地高层集会以自辩，为第三卷的反围杀主战场搬师回朝。",
+          "hook_to_next": "吕沉舟被迫亲赴高层集会自辩，圣地内斗的另一派系却在暗中将陈渊生母'当年未死于旧案'的消息压下不发，下一步陈渊必须在高层集会翻案与追查母亲下落之间做出抉择。",
+          "key_entities": [
+            "陈渊",
+            "宋戈",
+            "何渡（同样被旧案牵连的散修）",
+            "玄元圣地内门另一派系",
+            "循镜而来的异世界生物（低阶投影）",
+            "边陲秘境天道异变先兆",
+            "虚天界将启的传闻"
+          ],
+          "relationship_shifts": [
+            "陈渊与何渡由互闻其名转为反围杀秘密联盟",
+            "陈渊与宋戈由互不信任的临时盟友转为共命的担责同盟",
+            "陈渊与圣地内门另一派系由陌不相识转为被其暗中观察并利用的棋子",
+            "陈渊与观天镜由Lv1工具性使用转为承认Lv2追溯与Lv3共鸣皆需代价"
+          ],
+          "foreshadowing_setup": [
+            "天道异变先兆出现，预言虚天界将于不久后对外开启",
+            "异世界生物循镜而来的低阶投影，暗示更高阶存在已注意到观天镜",
+            "何渡提及圣地内斗不止一方觊觎玉佩，为后续反围杀埋伏笔",
+            "陈渊折损的寿元在玉佩内留下的裂纹残痕在Lv3共鸣时发出微光"
+          ],
+          "foreshadowing_payoff": [
+            "边陲秘境中以Lv2追溯拼死带宋戈突围，坐实宋戈'共命'地位",
+            "天道异变先兆与异世界生物的首次出现，坐实'异变期间各方皆动'的局势",
+            "何渡被旧案牵连的真正原因浮出水面，与陈家母系一支有旧恩"
+          ],
+          "target_chapter_range": "31-60"
+        },
+        {
+          "volume_number": 3,
+          "title": "陈渊以Lv4推演反围杀并遁入虚天界入口",
+          "summary": "天道异变正式降临、虚天界对外开启前夕，陈渊在圣地高层集会中以Lv4推演布局反围杀，当众逼吕沉舟承认旧案内情、拿下家族旧案主谋之一为俘虏；随即拒绝以观天镜献祭换取圣地庇护的选择题，携镜只身逃入虚天界入口，却在入口处窥见镜中白衣持镜者与自己五官一般无二的残影。",
+          "narrative_role": "翻盘卷：将信息差与因果追溯升级为未来推演的反围杀布局，迫使旧案内情曝光于众，并以拒绝献祭的选择题确立主角信念走向，同时以'镜中之我'的悬念撕开身世谜团。",
+          "main_goal": "以Lv4推演完成反围杀、逼主谋之一当众认罪，并拒绝以观天镜献祭换取庇护，携镜进入虚天界。",
+          "main_conflict": "陈渊（解锁Lv4推演的低阶修士）vs 吕沉舟与圣地内斗中意图夺取玉佩的另一派系，围绕旧案真相的话语权与观天镜的去留展开正面交锋；外部压力为天道异变正式降临与虚天界入口开启后的异世界高阶存在投影。",
+          "start_state": "陈渊重伤折寿逃出边陲秘境，与宋戈、何渡秘密结盟，已解锁Lv2追溯与初步触及Lv3共鸣，旧案证据碎片与人心布局已就绪，圣地将其列入必得名单，虚天界入口开启在即。",
+          "end_state": "陈渊在圣地高层集会中以Lv4推演布局反围杀成功，逼旧案主谋之一吕沉舟当众承认内情，拒绝以献祭观天镜换取圣地庇护，携镜只身遁入虚天界入口，窥见镜中白衣持镜者与自己五官一般无二的残影——身世与观天镜完整来历的最后一道封印被撕开。",
+          "climax": "陈渊在Lv4推演预见的代价下拒绝交出观天镜换取身份与地位，携镜只身遁入虚天界入口，宋戈与何渡在入口外以性命为饵拖住圣地追兵，而陈渊在跨入入口的最后一瞬以Lv3共鸣残影窥见镜中白衣持镜者与自己五官一般无二——观天镜的真正持有者与陈渊身世的最后一道封印，至此被一道锋利的新刀刃切开。",
+          "hook_to_next": "陈渊携镜遁入虚天界，旧案虽当众曝光却仍有主谋未服法；镜中白衣持镜者的残影与其身世之谜、圣地内斗另一派系暗中压下的'陈渊生母未死于旧案'之消息、异世界高阶存在循镜而来的步步紧逼，三道钩子同时拉满，留作续卷方向。",
+          "key_entities": [
+            "陈渊",
+            "宋戈",
+            "何渡",
+            "吕沉舟（玄元圣地外门执法长老）",
+            "玄元圣地内斗中的另一派系",
+            "家族旧案主谋之一（吕沉舟当众认罪）",
+            "虚天界入口与开启信物",
+            "镜中白衣持镜者残影",
+            "陈渊生母（'当年未死于旧案'的悬念人物）"
+          ],
+          "relationship_shifts": [
+            "陈渊与宋戈、何渡由秘密联盟转为以命相托的反围杀共担",
+            "陈渊与吕沉舟由被追缉转为当众逼其认罪、俘虏其一脉",
+            "陈渊与观天镜由依赖其能力转为承认代价并坚持不滥用、拒绝献祭",
+            "陈渊信念由为翻案自保转为愿以自由与地位换取真相与本心"
+          ],
+          "foreshadowing_setup": [
+            "观天镜完整来历与上古持有者之残影仅在Lv3共鸣中闪过残影",
+            "虚天界入口开启后传来更远处异世界的召唤声",
+            "圣地内斗另一派系暗中压下'陈渊生母未死于旧案'的消息",
+            "玉佩裂纹在Lv4推演后留下新的不可逆痕迹"
+          ],
+          "foreshadowing_payoff": [
+            "陈渊在圣地高层集会中以Lv4推演布局反围杀，拿下当年陷害其家族的主谋之一吕沉舟为俘虏，逼其当众承认旧案内情",
+            "天道异变正式降临与虚天界入口开启，兑现前两卷的异变先兆",
+            "观天镜的代价以寿元与修为倒退的形式被主角明确承认",
+            "镜中白衣持镜者残影显化，与陈渊五官一般无二，身世谜团撕开新口"
+          ],
+          "target_chapter_range": "61-90"
+        }
+      ],
+      "entity_highlights": {
+        "characters": [
+          "陈渊",
+          "宋戈（原玄元圣地外门弟子，被边缘化的低阶盟友修士）",
+          "何渡（同样被旧案牵连的散修）",
+          "吕沉舟（玄元圣地外门执法长老）",
+          "镜中白衣持镜者残影",
+          "陈渊生母（'当年未死于旧案'的悬念人物）"
+        ],
+        "factions": [
+          "玄元圣地",
+          "五大圣地中觊觎玉佩的其他派系",
+          "边陲散修圈",
+          "追杀陈渊的圣地内门势力",
+          "观天镜上古持有者之残影"
+        ],
+        "locations": [
+          "边陲小城",
+          "废弃矿脉",
+          "边陲秘境",
+          "边陲正面交火战场",
+          "圣地高层集会",
+          "虚天界入口",
+          "镜中白衣持镜者显化的残影空间"
+        ],
+        "items": [
+          "陈渊颈间祖传玉佩",
+          "观天镜上古残片",
+          "家族旧案关键证据碎片",
+          "虚天界开启信物",
+          "玉佩上肉眼可见的裂纹残痕"
+        ]
+      },
+      "relationship_highlights": [
+        "陈渊与宋戈由互不信任转为以命相托的结盟共患难",
+        "陈渊与何渡由互闻其名转为反围杀秘密联盟",
+        "陈渊与吕沉舟由被追杀者转为当众逼其认罪的对立面",
+        "陈渊与观天镜由工具性使用转为承认其代价并坚持不滥用、拒绝献祭",
+        "陈渊与镜中白衣持镜者残影由隐而不显转为身世悬念的锋利开口",
+        "被旧案牵连的散修何渡与陈渊因共同的仇敌与陈家母系旧恩形成秘密联盟"
+      ],
+      "review_status": {
+        "status": "accepted",
+        "reason": "总纲评分通过。",
+        "attempt": 2,
+        "score": {
+          "overall": 78,
+          "logline_specificity": 82,
+          "conflict_concreteness": 85,
+          "character_arc_depth": 82,
+          "structural_turns": 75,
+          "hook_strength": 88,
+          "summary_feedback": "亮点:核心对抗具体(陈渊 vs 吕沉舟及其背后圣地内门主谋,围绕玉佩归属与旧案口供),三层钩子(镜中白衣持镜者、生母未死、异世界高阶存在)拉满续作悬念。需改:①第一幕三段milestones堆在'启程'内,前30章节奏过密,Lv1觉醒→结盟→重伤担责转折过急,建议将结盟或担责转折后移至第二幕以拉开层次;②陈渊弧光四点虽齐但'独行者→担责者→守心如一'三阶之间缺乏外部新变量刺激,Lv4推演与拒绝献祭本质仍是内心独白,应加入外部强加的新两难(如盟友被俘、母亲现身)以兑现内在转变的代价;③structural_turns仅勉强过线,真正改变处境的硬转折(修为倒退折寿、被逼高层集会)集中在后1/3,前2/3多为信息获取型进展,需在第二幕中段加入一次'看似胜利实则失去某关键盟友/资源'的伪胜利转折以抬升节奏张力。"
+        },
+        "synopsis_quality_report": {
+          "passed": true,
+          "structure_score": 85,
+          "marketability_score": 85,
+          "conflict_score": 85,
+          "character_arc_score": 85,
+          "writability_score": 85,
+          "blocking_issues": [],
+          "warning_issues": [],
+          "repair_suggestions": []
+        },
+        "optimization_suggestion": "评审意见: 亮点:核心对抗具体(陈渊 vs 吕沉舟及其背后圣地内门主谋,围绕玉佩归属与旧案口供),三层钩子(镜中白衣持镜者、生母未死、异世界高阶存在)拉满续作悬念。需改:①第一幕三段milestones堆在'启程'内,前30章节奏过密,Lv1觉醒→结盟→重伤担责转折过急,建议将结盟或担责转折后移至第二幕以拉开层次;②陈渊弧光四点虽齐但'独行者→担责者→守心如一'三阶之间缺乏外部新变量刺激,Lv4推演与拒绝献祭本质仍是内心独白,应加入外部强加的新两难(如盟友被俘、母亲现身)以兑现内在转变的代价;③structural_turns仅勉强过线,真正改变处境的硬转折(修为倒退折寿、被逼高层集会)集中在后1/3,前2/3多为信息获取型进展,需在第二幕中段加入一次'看似胜利实则失去某关键盟友/资源'的伪胜利转折以抬升节奏张力。"
+      }
+    },
+    "synopsis_doc_id": "doc_02039e34",
+    "genre_template": {
+      "genre": {
+        "primary_slug": "xuanhuan",
+        "primary_name": "玄幻",
+        "secondary_slug": "zhutian",
+        "secondary_name": "诸天文"
+      },
+      "matched_templates": [
+        "builtin:global:*:*:*:v1",
+        "builtin:primary:xuanhuan:*:*:v1",
+        "builtin:secondary:zhutian:*:*:v1"
+      ],
+      "warnings": [],
+      "quality_config_summary": {
+        "modern_terms_policy": "block",
+        "foreign_terms_policy": "contextual",
+        "blocking_rules": {
+          "source_conflict": true,
+          "type_drift": true,
+          "source_domain_conflict": true
+        },
+        "required_setting_dimensions": [
+          "power_system",
+          "social_order",
+          "resource_rules",
+          "domain_boundaries",
+          "power_mapping"
+        ]
+      }
+    },
+    "acceptance_scope": "real-longform-volume1",
+    "longform_target": {
+      "target_volumes": 18,
+      "target_chapters": 1200,
+      "target_word_count": 2000000,
+      "target_volume_number": 1,
+      "target_volume_chapters": 67,
+      "run_chapter_limit": 67,
+      "chapter_target_word_count": 1667,
+      "target_volume_word_count": 111689
+    },
+    "story_contract": {
+      "protagonist_goal": "在隐镜逃亡的前提下拿到家族旧案的第一块证据碎片，并完成与宋戈的结盟。",
+      "current_stage_goal": "在隐镜逃亡的前提下拿到家族旧案的第一块证据碎片，并完成与宋戈的结盟。",
+      "first_chapter_goal": "（本轮澄清无新增内容，沿用 v4 已生效世界观；待用户就第一章目标、起步境界、复仇对象、圣地关系、异变时点、觉醒触发、配角伏笔 7 项给出明确确认后再行更新）",
+      "core_conflict": "陈渊（持有观天镜Lv1的炼气低阶修士）vs 玄元圣地外门执法长老吕沉舟及其背后执意将陈家灭门的圣地内门主谋，二人围绕家族旧案真相与陈渊颈间玉佩（观天镜载体）的归属权展开明暗交锋。",
+      "key_clues": [
+        "旧案",
+        "目标",
+        "真相",
+        "证据"
+      ],
+      "antagonistic_pressure": "玄元圣地外门执法长老吕沉舟及其背后执意将陈家灭门的圣地内门主谋，二人围绕家族旧案真相与陈渊颈间玉佩（观天镜载体）的归属权展开明暗交锋。",
+      "must_carry_forward": [
+        "旧案",
+        "目标",
+        "真相",
+        "证据"
+      ],
+      "source_status": {
+        "setting_review_batch_status": null,
+        "setting_change_count": 3
+      }
+    },
+    "cross_stage_quality": {
+      "passed": true,
+      "warnings": [],
+      "blocking_issues": [],
+      "contract_fields_present": [
+        "antagonistic_pressure",
+        "core_conflict",
+        "current_stage_goal",
+        "first_chapter_goal",
+        "key_clues",
+        "must_carry_forward",
+        "protagonist_goal"
+      ]
+    },
+    "current_phase": "volume_planning",
+    "current_volume_id": null,
+    "current_chapter_id": null
+  },
+  "chapters": [],
+  "acceptance_target": {
+    "target_volumes": 18,
+    "target_chapters": 1200,
+    "target_word_count": 2000000,
+    "target_volume_number": 1,
+    "target_volume_chapters": 67,
+    "target_volume_word_count": 111689,
+    "chapter_target_word_count": 1667
+  },
+  "source_materials": [
+    {
+      "filename": "世界观.md",
+      "path": "/private/tmp/phase6-smoke-source/世界观.md",
+      "pending_id": "pe_e6ebfe38",
+      "status": "approved",
+      "char_count": 325,
+      "byte_count": 831
+    },
+    {
+      "filename": "力量体系.md",
+      "path": "/private/tmp/phase6-smoke-source/力量体系.md",
+      "pending_id": "pe_f4f7869b",
+      "status": "approved",
+      "char_count": 308,
+      "byte_count": 732
+    },
+    {
+      "filename": "道照诸天_brief.md",
+      "path": "/private/tmp/phase6-smoke-source/道照诸天_brief.md",
+      "pending_id": "pe_add8a1e5",
+      "status": "approved",
+      "char_count": 305,
+      "byte_count": 692
+    },
+    {
+      "filename": "金手指设计.md",
+      "path": "/private/tmp/phase6-smoke-source/金手指设计.md",
+      "pending_id": "pe_1056c062",
+      "status": "approved",
+      "char_count": 402,
+      "byte_count": 910
+    }
+  ],
+  "setting_review_batch": {
+    "id": "ed7503f6b6ca41098f2de3b943241869",
+    "status": "approved",
+    "source_type": "ai_session",
+    "summary": "本轮为第 5 轮（最大）澄清回复的应答：用户仍未就 7 项资料未覆盖的子项（第一章目标、起步境界与观天镜初始等级、陈家落魄原因与复仇对象、五大圣地与边陲小城/陈家关系、异变时间锚点与异世界生物登场程度、玉佩觉醒触发情境与代价呈现、第一章配角与女性角色伏笔）给出明确「采纳/修改/维持待定」选择，亦未统一回复「全部采纳」。按照「资料不足时只提出澄清问题、禁止生成正式设定、澄清问题须避免重复」的原则，本助手在未取得用户对任一子项的明确确认前，不生成待审核设定批次；本批次仅作为「澄清轮次终止·等待最终确认」的占位空批次，不新增任何对导入资料的解读、补充或编造，亦不修改/删除任何已有设定卡、实体或关系。",
+    "input_snapshot": {
+      "setting_quality_report": {
+        "passed": true,
+        "missing_sections": [],
+        "conflicts": [],
+        "weaknesses": [],
+        "source_evidence_issues": [],
+        "repair_suggestions": []
+      }
+    },
+    "error_message": null
+  },
+  "setting_review_changes": [
+    {
+      "id": "5c8fadca0cc648229330d91d6da3a832",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "update",
+      "target_id": "doc_2e286068",
+      "status": "approved",
+      "before_snapshot": {
+        "doc_type": "worldview",
+        "title": "世界观",
+        "version": 4
+      },
+      "after_snapshot": {
+        "doc_type": "worldview",
+        "title": "世界观",
+        "content": "（本轮澄清无新增内容，沿用 v4 已生效世界观；待用户就第一章目标、起步境界、复仇对象、圣地关系、异变时点、觉醒触发、配角伏笔 7 项给出明确确认后再行更新）",
+        "pending_confirmations": [
+          "Q1 第一章可发布目标范围（a/b/c）",
+          "Q4 边陲小城管辖归属与陈家—圣地关系",
+          "Q5 天道异变在首卷的爆发时点与第一章异世界生物登场程度"
+        ]
+      },
+      "conflict_hints": [
+        {
+          "type": "source_gap",
+          "message": "世界观文档未指定首卷弧线、边陲小城管辖归属、异变爆发具体时点；待用户确认后再回填"
+        }
+      ]
+    },
+    {
+      "id": "b8be2710f9874ad186d5b94d0fbf4aee",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "setting",
+        "title": "修炼体系",
+        "content": "力量/能力体系基础：成长、资源、技术、身份权限或其他能力变化必须遵守已确认的阶段边界、消耗、代价和暴露风险。未在资料中确认的层级名称、能力效果、升级路径和高阶规则不得硬编，只能列为待确认或正文禁用项。\n可核参考：正式长篇设定生成\n已进入第 5 轮（最大）澄清。前 4 轮用户均以相同 7 项问题回填（第一章目标、起步境界与观天镜初始等级、陈家落魄原因与复仇对象、五大圣地与边陲小城/陈家关系、异变时间锚点与异世界生物登场程度、玉佩觉醒触发情境与代价呈现、第一章配角与女性角色伏笔），实质未对任一子项作出明确选择，也未明确同意\"保守推进+待确认\"标注方案。本轮（最终轮）助手最后一次以\"逐项给出最保守默认推进建议+待确认标注\"模式列出 7 项默认推进方案，请用户就 7 项逐条回复\"采纳/修改/维持待定\"（或统一回复\"全部采纳\"），否则不进入待审核设定批次草案生成阶段；助手绝不按题材惯例自行补写未在导入资料中出现的内容。\n请严格基于已导入资料生成本书待审核设定。\n不得使用测试夹具、模型记忆或通用题材套路补写资料未支持的世界观、人物、势力、能力体系或剧情事件。\n资料不足处请标记为待确认；第一章目标、核心冲突、角色动机和力量/规则边界都必须能回溯到导入资料。\n已导入资料清单：\n- 世界观.md（约 325 字）\n- 力量体系.md（约 308 字）\n- 道照诸天_brief.md（约 305 字）\n- 金手指设计.md（约 402 字）\n资料摘录：\n【世界观.md】\n# 世界观\n\n## 大背景\n凡人界之上有三千大世界,大世界之间以\"天道\"相连。天道运转不息,每隔一段岁月便有\"天道异变\"——届时大世界互通,"
+      },
+      "conflict_hints": [
+        {
+          "type": "quality_preflight_completion",
+          "message": "AI 设定草稿缺少必填项，系统补全 修炼体系 供审核。"
+        }
+      ]
+    },
+    {
+      "id": "9a247da317f04c3ebc3433fd8f8aea46",
+      "object_type": "setting_card",
+      "target_type": "setting_card",
+      "operation": "create",
+      "target_id": null,
+      "status": "approved",
+      "before_snapshot": null,
+      "after_snapshot": {
+        "doc_type": "character_profile",
+        "title": "主角目标与当前动机",
+        "content": "核心人物目标与当前动机：当前目标必须能落到可执行行动、明确阻力和失败代价上，不能只写抽象成长或情绪愿望。若资料没有说明具体目标、行动路径、风险来源或选择代价，应明确标注待确认，不补写固定追查/复仇/升级模板。\n可核参考：正式长篇设定生成\n已进入第 5 轮（最大）澄清。前 4 轮用户均以相同 7 项问题回填（第一章目标、起步境界与观天镜初始等级、陈家落魄原因与复仇对象、五大圣地与边陲小城/陈家关系、异变时间锚点与异世界生物登场程度、玉佩觉醒触发情境与代价呈现、第一章配角与女性角色伏笔），实质未对任一子项作出明确选择，也未明确同意\"保守推进+待确认\"标注方案。本轮（最终轮）助手最后一次以\"逐项给出最保守默认推进建议+待确认标注\"模式列出 7 项默认推进方案，请用户就 7 项逐条回复\"采纳/修改/维持待定\"（或统一回复\"全部采纳\"），否则不进入待审核设定批次草案生成阶段；助手绝不按题材惯例自行补写未在导入资料中出现的内容。\n请严格基于已导入资料生成本书待审核设定。\n不得使用测试夹具、模型记忆或通用题材套路补写资料未支持的世界观、人物、势力、能力体系或剧情事件。\n资料不足处请标记为待确认；第一章目标、核心冲突、角色动机和力量/规则边界都必须能回溯到导入资料。\n已导入资料清单：\n- 世界观.md（约 325 字）\n- 力量体系.md（约 308 字）\n- 道照诸天_brief.md（约 305 字）\n- 金手指设计.md（约 402 字）\n资料摘录：\n【世界观.md】\n# 世界观\n\n## 大背景\n凡人界之上有三千大世界,大世界之间以\"天道\"相连。天道运转不息,每隔一段岁月便有\"天道异变\"——届时大世界互通,"
+      },
+      "conflict_hints": [
+        {
+          "type": "quality_preflight_completion",
+          "message": "AI 设定草稿缺少必填项，系统补全 主角目标与当前动机 供审核。"
+        }
+      ]
+    }
+  ]
+}
