@@ -813,7 +813,7 @@ async def test_approve_review_batch_missing_batch_raises(async_session):
         await service.approve_review_batch("missing-batch", approve_all=True)
 
 
-async def test_approve_unsupported_change_marks_failed_and_batch_failed(async_session):
+async def test_approve_unsupported_change_marks_skipped_and_batch_approved(async_session):
     repo = SettingWorkbenchRepository(async_session)
     batch = await repo.create_review_batch(
         novel_id="novel-unsupported",
@@ -833,9 +833,9 @@ async def test_approve_unsupported_change_marks_failed_and_batch_failed(async_se
     updated_batch = await service.approve_review_batch(batch.id, change_ids=[change.id])
     updated_change = await repo.get_review_change(change.id)
 
-    assert updated_batch.status == "failed"
-    assert updated_change.status == "failed"
+    assert updated_change.status == "skipped"
     assert "暂不支持的设定审核变更" in updated_change.error_message
+    assert updated_batch.status == "approved"
 
 
 @pytest.mark.parametrize(

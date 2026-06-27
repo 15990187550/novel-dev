@@ -34,6 +34,16 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}{uuid.uuid4().hex}"
 
 
+_UNSUPPORTED_CHANGE_MARKERS = (
+    "Unsupported setting review",
+    "暂不支持的设定审核变更",
+)
+
+
+def _is_unsupported_change_error(msg: str) -> bool:
+    return any(marker in msg for marker in _UNSUPPORTED_CHANGE_MARKERS)
+
+
 class SettingWorkbenchService:
     MAX_CLARIFICATION_ROUNDS = 5
     GENERATE_BATCH_WALL_TIMEOUT_SECONDS = 540
@@ -457,6 +467,17 @@ class SettingWorkbenchService:
             try:
                 async with self.session.begin_nested():
                     await self._apply_change(novel_id, batch, change, snapshot)
+            except ValueError as exc:
+                msg = str(exc)
+                if _is_unsupported_change_error(msg):
+                    await self.repo.update_change_status(
+                        change.id, "skipped", error_message=msg
+                    )
+                    failed += 1
+                    continue
+                await self.repo.update_change_status(change.id, "failed", error_message=msg)
+                failed += 1
+                continue
             except Exception as exc:
                 await self.repo.update_change_status(change.id, "failed", error_message=str(exc))
                 failed += 1

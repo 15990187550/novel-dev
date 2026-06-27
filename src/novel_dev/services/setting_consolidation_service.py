@@ -13,6 +13,7 @@ from novel_dev.repositories.relationship_repo import RelationshipRepository
 from novel_dev.repositories.setting_workbench_repo import SettingWorkbenchRepository
 from novel_dev.services.entity_service import EntityService
 from novel_dev.services.log_service import log_service
+from novel_dev.services.setting_workbench_service import _is_unsupported_change_error
 
 
 class SettingConsolidationService:
@@ -219,6 +220,14 @@ class SettingConsolidationService:
             try:
                 async with self.session.begin_nested():
                     await self._apply_change(batch, change)
+            except ValueError as exc:
+                msg = str(exc)
+                if _is_unsupported_change_error(msg):
+                    await self.setting_repo.mark_change_status(
+                        change.id, "skipped", error_message=msg
+                    )
+                    continue
+                await self.setting_repo.mark_change_status(change.id, "failed", error_message=msg)
             except Exception as exc:
                 await self.setting_repo.mark_change_status(change.id, "failed", error_message=str(exc))
             else:
