@@ -38,12 +38,12 @@ embedding:
   dimensions: 1024
 agents:
   brainstorm_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 240
     retries: 3
     temperature: 0.9
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       timeout: 240
       temperature: 0.9
       retries: 1
@@ -60,7 +60,7 @@ agents:
       score_synopsis:
         temperature: 0.2
   volume_planner_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 240
     fallback:
       model: kimi-for-coding
@@ -99,7 +99,7 @@ agents:
     retries: 2
     temperature: 0.85
   setting_extractor_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 200
     fallback:
       model: minimax-2-7
@@ -115,12 +115,12 @@ agents:
     retries: 1
     temperature: 0.2
   setting_consolidation_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 240
     temperature: 0.1
     max_tokens: 65536
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.1
       timeout: 240
       retries: 1
@@ -132,41 +132,36 @@ agents:
         timeout: 240
         retries: 3
   style_profiler_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 60
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.5
       timeout: 60
       retries: 1
     retries: 2
     temperature: 0.5
   file_classifier:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 60
-    fallback:
-      model: minimax-2-7
-      temperature: 0.5
-      timeout: 60
-      retries: 1
     retries: 2
     temperature: 0.5
   entity_classifier_agent:
-    model: deepseek
+    model: minimax-2-7
     timeout: 60
     temperature: 0.2
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.2
       timeout: 60
       retries: 1
     retries: 2
   outline_workbench_service:
-    model: deepseek
+    model: minimax-2-7
     timeout: 180
     temperature: 0.5
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.5
       timeout: 180
       retries: 1
@@ -182,7 +177,7 @@ agents:
           retries: 1
           temperature: 0.5
   setting_workbench_service:
-    model: deepseek
+    model: minimax-2-7
     timeout: 180
     temperature: 0.55
     max_tokens: 12000
@@ -202,7 +197,7 @@ agents:
       enable_subtasks: true
       repairer_subtask: schema_repair
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.55
       timeout: 180
       retries: 1
@@ -227,19 +222,19 @@ agents:
       validator_subtask: location_context_quality
       repairer_subtask: schema_repair
     fallback:
-      model: deepseek
+      model: kimi-for-coding
       temperature: 0.45
       retries: 1
       timeout: 60
     retries: 2
     temperature: 0.45
   writer_agent:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 120
     temperature: 0.75
     fallback:
-      model: deepseek
-      temperature: 0.9
+      model: kimi-for-coding
+      temperature: 0.75
       timeout: 120
       retries: 1
     tasks:
@@ -260,11 +255,11 @@ agents:
           retries: 1
     retries: 2
   critic_agent:
-    model: deepseek
+    model: kimi-for-coding
     timeout: 180
     temperature: 0.3
     fallback:
-      model: kimi-for-coding
+      model: minimax-2-7
       temperature: 0.3
       timeout: 60
       retries: 1
@@ -276,11 +271,11 @@ agents:
         temperature: 0.2
     retries: 2
   editor_agent:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 120
     temperature: 0.6
     fallback:
-      model: deepseek
+      model: kimi-for-coding
       temperature: 0.6
       timeout: 120
       retries: 1
@@ -306,11 +301,11 @@ agents:
         max_tokens: 2048
     retries: 2
   fast_review_agent:
-    model: deepseek
+    model: kimi-for-coding
     timeout: 90
     temperature: 0.2
     fallback:
-      model: kimi-for-coding
+      model: minimax-2-7
       temperature: 0.2
       timeout: 60
       retries: 1
@@ -319,11 +314,11 @@ agents:
         temperature: 0.2
     retries: 2
   librarian_agent:
-    model: kimi-for-coding
+    model: minimax-2-7
     timeout: 180
     temperature: 0.2
     fallback:
-      model: minimax-2-7
+      model: kimi-for-coding
       temperature: 0.2
       timeout: 60
       retries: 1
@@ -345,7 +340,7 @@ quality_thresholds:
     major_repair_min_score: 70
     stop_after_attempts: 3
     pattern_issue_threshold: 3
-    max_auto_rewrites: 2              # Wave 3: enable automatic rewrite dispatch
+    max_auto_rewrites: 2
 issue_code_hints:
   AI_FLAVOR_HIGH:
     severity: warn
