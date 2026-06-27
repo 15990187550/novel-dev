@@ -1592,6 +1592,7 @@ class VolumePlannerAgent:
         constraint_context: ActiveConstraintContext,
         novel_id: str,
         target_chapters: Optional[int],
+        max_repair_attempts: int = 3,
     ) -> VolumePlanBlueprint:
         judgement = await self._judge_blueprint_semantic_conflicts(
             blueprint=blueprint,
@@ -1627,66 +1628,86 @@ class VolumePlannerAgent:
             if target_chapters
             else "必须保持 total_chapters 与 chapters 数组规模符合原输出规模要求。"
         )
-        retry_prompt = (
-            f"{base_prompt}\n\n"
-            "### LLM 语义设定裁判失败，必须重写卷纲骨架\n"
-            f"{chapter_rule}\n"
-            "绝对不得改变章节数量；如果返回章节数不符，系统会视为修复失败并做强制收缩。\n"
-            "以下是必须修复的 hard 设定冲突：\n"
-            + "\n".join(f"- {item}" for item in judgement.hard_conflicts)
-            + "\n以下是修复建议：\n"
-            + "\n".join(f"- {item}" for item in judgement.repair_suggestions[:8])
-            + "\n修正要求：不得与设定事实、阶段边界、伏笔限制、人物/势力关系冲突；"
-            "如果信息不足，降级为传闻、残痕、误判或待确认线索。"
-            "不要只把冲突词改成伏笔词，也不要保留原本高阶事件的实际胜负/接触/揭底效果；"
-            "必须保留原章节在卷内承担的因果功能，并替换成当前阶段可触达的事件承载，"
-            "例如代理人压力、局部证据、异常余波、误读线索、资源代价、关系试探或环境异变。"
-            "entity_highlights 与 relationship_highlights 也必须同步修正，"
-            "不能保留旧的高确定性表述；必要时直接删除冲突条目。"
-            "卷摘要与章节摘要也必须同步修正，避免正文线索已降级但摘要仍保留已证实口吻。"
-            "仍然只返回 VolumePlanBlueprint JSON。"
-        )
-        await self._release_connection_before_external_call()
-        repaired = await call_and_parse_model(
-            "VolumePlannerAgent", "generate_volume_plan", retry_prompt, VolumePlanBlueprint, max_retries=3, novel_id=novel_id
-        )
-        repaired = self._coerce_blueprint_to_target_chapters(
-            repaired,
-            target_chapters=target_chapters,
-            novel_id=novel_id,
-            repair_stage="generate_volume_plan semantic repair",
-        )
-        remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
-        if remaining_hard:
-            repaired = self._deterministic_repair_blueprint_sequence_constraints(
-                repaired,
-                constraint_context,
+
+        repaired = blueprint
+        for attempt in range(1, max_repair_attempts + 1):
+            retry_prompt = (
+                f"{base_prompt}\n\n"
+                f"### LLM 语义设定裁判失败（第 {attempt}/{max_repair_attempts} 次修复），必须重写卷纲骨架\n"
+                f"{chapter_rule}\n"
+                "绝对不得改变章节数量；如果返回章节数不符，系统会视为修复失败并做强制收缩。\n"
+                "以下是必须修复的 hard 设定冲突：\n"
+                + "\n".join(f"- {item}" for item in judgement.hard_conflicts)
+                + "\n以下是修复建议：\n"
+                + "\n".join(f"- {item}" for item in judgement.repair_suggestions[:8])
+                + "\n修正要求：不得与设定事实、阶段边界、伏笔限制、人物/势力关系冲突；"
+                "如果信息不足，降级为传闻、残痕、误判或待确认线索。"
+                "不要只把冲突词改成伏笔词，也不要保留原本高阶事件的实际胜负/接触/揭底效果；"
+                "必须保留原章节在卷内承担的因果功能，并替换成当前阶段可触达的事件承载，"
+                "例如代理人压力、局部证据、异常余波、误读线索、资源代价、关系试探或环境异变。"
+                "entity_highlights 与 relationship_highlights 也必须同步修正，"
+                "不能保留旧的高确定性表述；必要时直接删除冲突条目。"
+                "卷摘要与章节摘要也必须同步修正，避免正文线索已降级但摘要仍保留已证实口吻。"
+                "仍然只返回 VolumePlanBlueprint JSON。"
+            )
+            await self._release_connection_before_external_call()
+            repaired = await call_and_parse_model(
+                "VolumePlannerAgent",
+                "generate_volume_plan",
+                retry_prompt,
+                VolumePlanBlueprint,
+                max_retries=3,
                 novel_id=novel_id,
             )
-            remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
-        if remaining_hard:
-            raise ValueError("generate_volume_plan violates setting constraints after semantic repair: " + "；".join(remaining_hard[:8]))
-        second_judgement = await self._judge_blueprint_semantic_conflicts(
-            blueprint=repaired,
-            constraint_context=constraint_context,
-            novel_id=novel_id,
-        )
-        if not second_judgement.passed and second_judgement.hard_conflicts:
-            raise ValueError(
-                "generate_volume_plan semantic conflicts remain after repair: "
-                + "；".join(second_judgement.hard_conflicts[:8])
+            repaired = self._coerce_blueprint_to_target_chapters(
+                repaired,
+                target_chapters=target_chapters,
+                novel_id=novel_id,
+                repair_stage=f"generate_volume_plan semantic repair attempt {attempt}",
             )
-        log_service.add_log(
-            novel_id,
-            "VolumePlannerAgent",
-            "卷纲语义设定修正完成",
-            event="agent.progress",
-            status="succeeded",
-            node="volume_semantic_judge",
-            task="judge_volume_plan_semantics",
-            metadata=second_judgement.model_dump(),
-        )
-        return repaired
+            remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
+            if remaining_hard:
+                repaired = self._deterministic_repair_blueprint_sequence_constraints(
+                    repaired,
+                    constraint_context,
+                    novel_id=novel_id,
+                )
+                remaining_hard = self._validate_blueprint_constraints(repaired, constraint_context)
+            if remaining_hard:
+                raise ValueError("generate_volume_plan violates setting constraints after semantic repair: " + "；".join(remaining_hard[:8]))
+            second_judgement = await self._judge_blueprint_semantic_conflicts(
+                blueprint=repaired,
+                constraint_context=constraint_context,
+                novel_id=novel_id,
+            )
+            if second_judgement.passed or not second_judgement.hard_conflicts:
+                log_service.add_log(
+                    novel_id,
+                    "VolumePlannerAgent",
+                    f"卷纲语义设定裁判通过（第 {attempt} 次修复后），软警告 {len(second_judgement.soft_warnings)} 条",
+                    event="agent.progress",
+                    status="succeeded",
+                    node="volume_semantic_judge",
+                    task="judge_volume_plan_semantics",
+                    metadata=second_judgement.model_dump(),
+                )
+                return repaired
+            judgement = second_judgement
+            log_service.add_log(
+                novel_id,
+                "VolumePlannerAgent",
+                f"卷纲语义设定裁判仍失败（第 {attempt} 次修复），继续重试: " + "；".join(judgement.hard_conflicts[:6]),
+                level="warning",
+                event="agent.progress",
+                status="failed",
+                node="volume_semantic_judge",
+                task="judge_volume_plan_semantics",
+                metadata=judgement.model_dump(),
+            )
+        raise ValueError(
+            "generate_volume_plan semantic conflicts remain after repair: "
+                + "；".join(judgement.hard_conflicts[:8])
+            )
 
     async def _judge_blueprint_semantic_conflicts(
         self,
