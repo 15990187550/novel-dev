@@ -16,3 +16,7 @@ class LLMContentPolicyError(LLMError):
 
 class LLMConfigError(LLMError):
     """Missing or invalid configuration (API key, model name, etc.)."""
+
+
+class LLMAuthError(LLMError):
+    """Provider rejected our credentials (401/403). Recoverable via fallback."""

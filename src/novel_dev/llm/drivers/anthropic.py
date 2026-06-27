@@ -4,6 +4,7 @@ from anthropic import AsyncAnthropic
 
 from novel_dev.llm.drivers.base import BaseDriver
 from novel_dev.llm.exceptions import (
+    LLMAuthError,
     LLMConfigError,
     LLMContentPolicyError,
     LLMRateLimitError,
@@ -117,7 +118,7 @@ class AnthropicDriver(BaseDriver):
         if isinstance(exc, (anthropic.APITimeoutError, anthropic.APIConnectionError)):
             return LLMTimeoutError(str(exc))
         if isinstance(exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)):
-            return LLMConfigError(str(exc))
+            return LLMAuthError(str(exc))
         if isinstance(exc, httpx.TimeoutException):
             return LLMTimeoutError(str(exc))
         return exc

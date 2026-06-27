@@ -1,7 +1,12 @@
 import pytest
 from unittest.mock import AsyncMock
 
-from novel_dev.llm.exceptions import LLMConfigError, LLMRateLimitError, LLMTimeoutError
+from novel_dev.llm.exceptions import (
+    LLMAuthError,
+    LLMConfigError,
+    LLMRateLimitError,
+    LLMTimeoutError,
+)
 from novel_dev.llm.fallback_driver import FallbackDriver
 from novel_dev.llm.models import LLMResponse, TaskConfig
 
@@ -83,4 +88,26 @@ async def test_fallback_failure_propagates():
     fallback.acomplete.side_effect = LLMRateLimitError("fallback also failed")
     driver = FallbackDriver(primary, fallback, TaskConfig(provider="openai", model="gpt-4"))
     with pytest.raises(LLMRateLimitError):
+        await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))
+
+
+@pytest.mark.asyncio
+async def test_fallback_triggered_on_auth_error():
+    primary = AsyncMock()
+    primary.acomplete.side_effect = LLMAuthError("401 invalid api key")
+    fallback = AsyncMock()
+    fallback.acomplete.return_value = LLMResponse(text="fallback ok")
+    driver = FallbackDriver(primary, fallback, TaskConfig(provider="openai", model="gpt-4"))
+    response = await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))
+    assert response.text == "fallback ok"
+    assert primary.acomplete.call_count == 1
+    assert fallback.acomplete.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_auth_error_without_fallback_raises():
+    primary = AsyncMock()
+    primary.acomplete.side_effect = LLMAuthError("401 invalid api key")
+    driver = FallbackDriver(primary, None, None)
+    with pytest.raises(LLMAuthError):
         await driver.acomplete("hi", TaskConfig(provider="anthropic", model="claude"))

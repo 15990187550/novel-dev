@@ -5,6 +5,7 @@ from openai import AsyncOpenAI
 
 from novel_dev.llm.drivers.base import BaseDriver
 from novel_dev.llm.exceptions import (
+    LLMAuthError,
     LLMConfigError,
     LLMContentPolicyError,
     LLMRateLimitError,
@@ -130,7 +131,7 @@ class OpenAICompatibleDriver(BaseDriver):
         if isinstance(exc, (openai.APITimeoutError, openai.APIConnectionError)):
             return LLMTimeoutError(str(exc))
         if isinstance(exc, (openai.AuthenticationError, openai.PermissionDeniedError)):
-            return LLMConfigError(str(exc))
+            return LLMAuthError(str(exc))
         if isinstance(exc, openai.BadRequestError):
             msg = str(exc).lower()
             if "content_policy" in msg or "safety" in msg or "moderation" in msg:
