@@ -22,7 +22,6 @@ class SettingReadinessService:
     BLOCKING_PENDING_TYPES = {"processing", "setting"}
     REVIEW_STATUSES_REQUIRING_CHECK = {"pending", "ready_for_review", "partially_approved", "failed"}
     BLOCKING_REVIEW_STATUSES = {"failed"}
-    EMPTY_CHANGE_BLOCKING_REVIEW_STATUSES = {"pending", "ready_for_review"}
     BLOCKING_REVIEW_CHANGE_STATUSES = {"pending", "failed"}
 
     def __init__(self, session: AsyncSession):
@@ -63,10 +62,11 @@ class SettingReadinessService:
                 .order_by(SettingReviewChange.created_at.asc(), SettingReviewChange.id.asc())
             )
             changes = change_result.scalars().all()
-            if not changes and batch.status in self.EMPTY_CHANGE_BLOCKING_REVIEW_STATUSES:
-                blockers.append(
-                    f"setting_review_batch:{batch.id}:status={batch.status}:source_type={batch.source_type}"
-                )
+            if not changes:
+                if batch.source_type == "ai_session":
+                    blockers.append(
+                        f"setting_review_batch:{batch.id}:status={batch.status}:source_type={batch.source_type}"
+                    )
                 continue
 
             blocking_changes = [
